@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Usage } from "../types.js";
 
 type AnthropicUsagePayload = {
@@ -31,7 +32,7 @@ export type AnthropicIterationUsageResult =
   | { state: "valid"; usage: AnthropicIterationUsageSnapshot };
 
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(value);
 }
 
 export function readAnthropicCacheWriteUsage(

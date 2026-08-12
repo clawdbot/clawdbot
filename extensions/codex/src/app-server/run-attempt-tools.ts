@@ -1,6 +1,7 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
 
@@ -49,7 +50,7 @@ type CodexDynamicToolExecutionIdentity = Pick<
 >;
 
 export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolCallResponse>>();
+  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
   const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
     JSON.stringify([call.threadId, call.turnId, call.callId]);
 
@@ -59,7 +60,7 @@ export function createCodexDynamicToolExecutionRegistry() {
     },
     claim(
       call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolCallResponse>,
+      start: () => Promise<CodexDynamicToolRuntimeResponse>,
     ) {
       const existing = executions.get(keyFor(call));
       if (existing) {
@@ -86,6 +87,12 @@ export function resolveCodexDynamicToolDirectNames(
   }
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
+  }
+  // Restricted plugin runs replace Codex's native tool surface with an exact
+  // OpenClaw policy-filtered catalog. Keep the replacement planner visible in
+  // the initial context so Codex can maintain the same user-facing plan stream.
+  if (params.pluginHarnessToolPolicyRestricted === true) {
+    names.push("update_plan");
   }
   return names;
 }

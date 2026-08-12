@@ -547,7 +547,7 @@ async function copyRemoteArtifacts(params: {
   remoteOutputDir: string;
   runner: CommandRunner;
 }) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
+  const { host, sshArgs, sshUser } = await sshCommand(params);
   await runCommand({
     command: "rsync",
     args: [
@@ -727,7 +727,7 @@ export async function runMantisTelegramDesktopBuilder(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toMantisError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Telegram desktop builder did not report a live OpenClaw gateway.");
@@ -832,7 +832,7 @@ export async function runMantisTelegramDesktopBuilder(
   }
 }
 
-function toErrorObject(error: unknown): Error {
+function toMantisError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

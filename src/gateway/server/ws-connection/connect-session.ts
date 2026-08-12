@@ -13,7 +13,7 @@ import {
   captureAuthenticatedNodePairingState,
   type NodePairingGeneration,
   type NodePairingIdentity,
-} from "../../../infra/node-pairing-state.js";
+} from "../../../infra/device-pairing-node-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -32,6 +32,11 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../local-user-ingress.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -44,12 +49,12 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
-import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import type {
@@ -64,10 +69,6 @@ type AuthenticatedNodePairingAdmission = {
   authenticated: { nodeId: string; publicKey: string; token: string };
   identity: NodePairingIdentity;
   generation?: NodePairingGeneration;
-};
-
-type AuthenticatedUserProfileDisplay = NonNullable<GatewayWsClient["authenticatedUserProfile"]> & {
-  avatarRevision: string;
 };
 
 function isReleasedVersion(version: string): boolean {
@@ -119,7 +120,7 @@ export async function attachAuthenticatedGatewayConnect(
     maxProtocol,
     usesLegacyNodeProtocol,
     role,
-    scopes,
+    scopes: deviceScopes,
     device,
     devicePublicKey,
     deviceToken,
@@ -190,6 +191,23 @@ export async function attachAuthenticatedGatewayConnect(
     authResult.tailscaleIdentity &&
     classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
   );
+  // Device pairing owns persistent access. Verified identity grants only shape
+  // this connection, after device-less self-declared scopes have been cleared.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: authenticatedUserId,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    upgradeReq: context.handler.upgradeReq,
+  });
+  const scopes = effectiveScopes.scopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  if (authenticatedUserId && effectiveScopes.addedIdentityScopes.length > 0) {
+    logGateway.warn(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${effectiveScopes.addedIdentityScopes.join(",")} conn=${connId}`,
+    );
+  }
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -200,7 +218,7 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let authenticatedUserProfile: AuthenticatedUserProfileDisplay | undefined;
+  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
   if (authenticatedUserId) {
     try {
       const profile = authResult.tailscaleIdentity
@@ -294,14 +312,29 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
   const internal =
-    isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
       ? {
+          ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
             : {}),
         }
       : undefined;
+  const localUserIngress = prepareGatewayLocalUserIngress({
+    authMethod,
+    authenticatedUserExpected: Boolean(authenticatedUserId),
+    ...(authenticatedUserProfile
+      ? {
+          profile: {
+            profileId: authenticatedUserProfile.profileId,
+            displayName: authenticatedUserProfile.displayName,
+          },
+        }
+      : {}),
+    ...(device?.id ? { pairedDeviceId: device.id } : {}),
+    isLocalClient,
+  });
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
@@ -337,6 +370,7 @@ export async function attachAuthenticatedGatewayConnect(
       ? { pluginNodeCapabilitySurfaces }
       : {}),
   };
+  attachGatewayLocalUserIngress(nextClient, localUserIngress);
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,
@@ -461,32 +495,12 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  const buildAuthenticatedPresenceUser = () => {
-    if (!authenticatedUserId) {
-      return undefined;
-    }
-    if (!authenticatedUserProfile) {
-      return {
-        id: authenticatedUserId,
-        ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
-      };
-    }
-    return {
-      id: authenticatedUserProfile.profileId,
-      ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
-      ...(authenticatedUserProfile.displayName
-        ? { name: authenticatedUserProfile.displayName }
-        : {}),
-      // This authenticated route resolves the uploaded avatar first, then the
-      // gateway-side Gravatar proxy, so clients never need an email-hash URL.
-      // The revision changes when the profile avatar changes, so reconnecting
-      // viewers refetch instead of reusing a stale route response.
-      avatarUrl: formatUserProfileAvatarPath(
-        authenticatedUserProfile.profileId,
-        authenticatedUserProfile.avatarRevision,
-      ),
-    };
-  };
+  const currentAuthenticatedPresenceUser = () =>
+    buildAuthenticatedPresenceUser({
+      authenticatedUserId,
+      authenticatedUserIsTailscaleProvider,
+      authenticatedUserProfile: nextClient.authenticatedUserProfile,
+    });
 
   if (presenceKey) {
     upsertPresence(presenceKey, {
@@ -501,7 +515,7 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedUserId ? { user: buildAuthenticatedPresenceUser() } : {}),
+      ...(authenticatedUserId ? { user: currentAuthenticatedPresenceUser() } : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -580,7 +594,7 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  await sendGatewayHello(context, state, pluginSurfaceUrls);
+  await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
   const tailscaleProfileId = authenticatedUserProfile?.profileId;
@@ -603,7 +617,7 @@ export async function attachAuthenticatedGatewayConnect(
         if (isClosed() || !presenceKey) {
           return;
         }
-        upsertPresence(presenceKey, { user: buildAuthenticatedPresenceUser() });
+        upsertPresence(presenceKey, { user: currentAuthenticatedPresenceUser() });
         const requestContext = buildRequestContext();
         broadcastPresenceSnapshot({
           broadcast: requestContext.broadcast,

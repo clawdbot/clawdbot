@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
@@ -17,6 +18,7 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
 } from "../agents/auth-profiles/oauth-shared.js";
+import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
 import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
@@ -24,6 +26,7 @@ import {
   loadPersistedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -33,11 +36,7 @@ import {
   runAuthProfileWriteTransaction,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  isInheritedMainOAuthCredential,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,
@@ -49,7 +48,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { loadJsonFile } from "../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
@@ -115,10 +114,6 @@ type LegacyFlatAuthProfileRepairResult = {
 };
 
 const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function isSafeLegacyProviderKey(key: string): boolean {
   return key.trim().length > 0 && !UNSAFE_LEGACY_AUTH_PROFILE_KEYS.has(key);
@@ -893,7 +888,7 @@ function migrateLockedLegacyOAuthFile(params: {
   if (archivePreviouslyMigratedAuthProfileSource(receipt, params.result)) {
     return;
   }
-  const raw = loadJsonFile(params.oauthPath);
+  const raw = loadJsonFileThroughSymlink(params.oauthPath);
   const parsed = coerceLegacyOAuthFile(raw);
   const imported = parsed.store;
   if (!imported) {
@@ -1263,6 +1258,18 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               database,
             );
             const loaded = loadMigratedStore(candidate.agentDir, { database });
+            const mainAgentDir = resolveSharedMainAuthAgentDir(params.env);
+            const persistedStores = {
+              isMainStore:
+                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveAuthProfileDatabasePath(mainAgentDir),
+              localStore: loaded,
+              mainStore:
+                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveAuthProfileDatabasePath(mainAgentDir)
+                  ? loaded
+                  : loadPersistedAuthProfileStore(mainAgentDir),
+            };
             // A non-main store drops an OAuth credential the main store already
             // owns at the same or newer expiry. That dedup is intentional, so
             // verifying it as missing would abort a migration that lost nothing
@@ -1273,10 +1280,10 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                 return (
                   credential !== undefined &&
                   !loaded?.profiles[profileId] &&
-                  isInheritedMainOAuthCredential({
-                    agentDir: candidate.agentDir,
+                  isInheritedMainOAuthCredentialFromStores({
                     profileId,
                     credential,
+                    persistedStores,
                   })
                 );
               }),
@@ -1411,7 +1418,7 @@ function resolveAwsSdkAuthProfileMarkerStore(
   if (!fs.existsSync(candidate.authPath)) {
     return null;
   }
-  const raw = loadJsonFile(candidate.authPath);
+  const raw = loadJsonFileThroughSymlink(candidate.authPath);
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
@@ -1890,7 +1897,7 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
     if (!fs.existsSync(candidate.authPath)) {
       continue;
     }
-    const raw = loadJsonFile(candidate.authPath);
+    const raw = loadJsonFileThroughSymlink(candidate.authPath);
     if (!isRecord(raw) || !isRecord(raw.profiles)) {
       continue;
     }

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import {
   buildModelAliasIndex,
   legacyModelKey,
@@ -28,7 +29,10 @@ export type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  /** Authored/staged config used for route, auth, and persistence decisions. */
   config: OpenClawConfig;
+  /** Execution-only projection that admits the reserved OpenClaw agent. */
+  executionConfig?: OpenClawConfig;
   /** Execution identity used by the real OpenClaw turn. */
   agentId?: string;
   /** Default-agent owner whose model/runtime config is being selected. */
@@ -115,17 +119,30 @@ export function extractRunTerminalError(result: RunResult): string | undefined {
   );
 }
 
-export function extractRunWinnerError(
+export async function extractRunWinnerError(
   plan: SetupInferenceTestPlan,
   result: RunResult,
-): string | undefined {
+): Promise<string | undefined> {
   const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
   const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();
   if (!winnerProvider || !winnerModel) {
     return "The inference run did not report which provider and model produced its reply.";
   }
-  if (winnerProvider === plan.provider && winnerModel === plan.model) {
-    return undefined;
+  if (winnerProvider === plan.provider) {
+    if (winnerModel === plan.model) {
+      return undefined;
+    }
+    const { resolveDirectBundledProviderPolicySurface } =
+      await import("../plugins/provider-policy-surface.js");
+    if (
+      resolveDirectBundledProviderPolicySurface(plan.provider)?.isResponseModelEquivalent?.({
+        provider: plan.provider,
+        requestedModelId: plan.model,
+        responseModelId: winnerModel,
+      }) === true
+    ) {
+      return undefined;
+    }
   }
   return `The inference run answered through ${winnerProvider}/${winnerModel} instead of the requested ${plan.provider}/${plan.model}. Disable model-routing overrides or choose the working route directly, then retry.`;
 }
@@ -261,25 +278,31 @@ export function resolveSetupAgentRuntimeId(
   return undefined;
 }
 
+const SETUP_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
+
 export function mapFailoverReasonToSetupStatus(
   reason?: string | null,
 ): SetupInferenceFailureStatus {
-  if (reason === "auth" || reason === "auth_permanent") {
-    return "auth";
-  }
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "billing") {
-    return "billing";
-  }
-  if (reason === "timeout") {
-    return "timeout";
-  }
-  if (reason === "format" || reason === "model_not_found") {
-    return "format";
-  }
-  return "unknown";
+  return reason
+    ? (SETUP_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
+    : "unknown";
 }
 
 export function prepareManualAuthForActivation(params: {

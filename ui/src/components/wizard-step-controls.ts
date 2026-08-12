@@ -21,6 +21,7 @@ type WizardStepControlsProps = {
   presentation?: "channels";
   answerLabel?: string;
   confirmAffirmativeLabel?: string;
+  leadingAction?: TemplateResult;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
 };
@@ -98,8 +99,13 @@ function renderAnswerButton(
       ${props.answerLabel ?? label}
     </button>
   `;
-  return props.presentation === "channels"
-    ? html`<div class="channels-wizard__footer">${button}</div>`
+  if (props.presentation === "channels") {
+    return html`<div class="channels-wizard__footer">${button}</div>`;
+  }
+  return props.leadingAction
+    ? html`<div class="wizard-step__actions wizard-step__actions--split">
+        ${props.leadingAction}${button}
+      </div>`
     : button;
 }
 
@@ -170,6 +176,11 @@ function renderProgressStep(props: WizardStepControlsProps) {
       <span class="wizard-step__spinner" aria-hidden="true"></span>
       ${renderMessage(props)}
     </div>
+    ${props.leadingAction
+      ? html`<div class="wizard-step__actions wizard-step__actions--split">
+          ${props.leadingAction}
+        </div>`
+      : nothing}
   `;
 }
 
@@ -271,9 +282,15 @@ function renderOptionsStep(props: WizardStepControlsProps) {
 }
 
 function renderConfirmStep(props: WizardStepControlsProps) {
+  const actionClass = stepClass(props, props.presentation === "channels" ? "footer" : "actions");
   return html`
     ${renderMessage(props)}
-    <div class=${stepClass(props, props.presentation === "channels" ? "footer" : "actions")}>
+    <div
+      class=${props.presentation !== "channels" && props.leadingAction
+        ? `${actionClass} wizard-step__actions--split`
+        : actionClass}
+    >
+      ${props.presentation === "channels" ? nothing : (props.leadingAction ?? nothing)}
       ${[false, true].map(
         (answer) => html`<button
           type="button"
@@ -290,8 +307,9 @@ function renderConfirmStep(props: WizardStepControlsProps) {
 
 /**
  * Renders the interactive controls for one `WizardStep`. Container-agnostic on
- * purpose: no dialog chrome, no cancel row, no page state — callers place the
- * result wherever the step is being asked (modal, panel, or chat bubble).
+ * purpose: no dialog chrome or page state — callers place the result wherever
+ * the step is being asked (modal, panel, or chat bubble). A caller may supply a
+ * leading action so escape and answer controls share one footer row.
  */
 export function renderWizardStepControls(
   props: WizardStepControlsProps,

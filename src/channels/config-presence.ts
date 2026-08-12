@@ -5,7 +5,10 @@
  */
 import fs from "node:fs";
 import os from "node:os";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasBundledChannelPersistedAuthState,
@@ -13,13 +16,11 @@ import {
 } from "../channels/plugins/persisted-auth-state.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-catalog.js";
 import { isRecord } from "../utils.js";
+import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
-
-const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 export type AmbientEnvTriggerPolicy = "allow" | "suppress";
 
@@ -64,7 +65,9 @@ export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): 
   }
   return Object.entries(channels)
     .filter(([, value]) => isRecord(value) && value.enabled === false)
-    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+    .map(([channelId]) => channelId.trim())
+    .filter((channelId) => channelId && !isChannelConfigMetadataKey(channelId))
+    .map((channelId) => normalizeOptionalLowercaseString(channelId))
     .filter((channelId): channelId is string => Boolean(channelId));
 }
 
@@ -139,15 +142,20 @@ export function listPotentialConfiguredChannelPresenceSignals(
 ): ChannelPresenceSignal[] {
   const signals: ChannelPresenceSignal[] = [];
   const seenSignals = new Set<string>();
-  const addSignal = (channelId: string, source: ChannelPresenceSignalSource) => {
+  const configuredChannelIds = new Set<string>();
+  const addSignal = (rawChannelId: string, source: ChannelPresenceSignalSource) => {
+    const channelId = rawChannelId.trim();
+    if (!channelId || isChannelConfigMetadataKey(channelId)) {
+      return;
+    }
     const key = `${source}:${channelId}`;
     if (seenSignals.has(key)) {
       return;
     }
     seenSignals.add(key);
+    configuredChannelIds.add(channelId);
     signals.push({ channelId, source });
   };
-  const configuredChannelIds = new Set<string>();
   const channelIds = options.channelIds ?? listBundledChannelIds(env, options.discovery);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const scopedChannelIds = options.channelIds
@@ -163,13 +171,12 @@ export function listPotentialConfiguredChannelPresenceSignals(
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
-      if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
+      if (isChannelConfigMetadataKey(key)) {
         continue;
       }
       // Shared channel defaults are not concrete channel configuration; only per-channel entries
       // with meaningful settings should produce presence signals.
       if (hasMeaningfulChannelConfig(value)) {
-        configuredChannelIds.add(key);
         addSignal(key, "config");
       }
     }
@@ -182,13 +189,11 @@ export function listPotentialConfiguredChannelPresenceSignals(
       }
       for (const [prefix, channelId] of channelEnvPrefixes) {
         if (key.startsWith(prefix)) {
-          configuredChannelIds.add(channelId);
           addSignal(channelId, "env");
         }
       }
       for (const { channelId, envVars } of officialExternalChannelEnvVars) {
         if (envVars.includes(key)) {
-          configuredChannelIds.add(channelId);
           addSignal(channelId, "env");
         }
       }
@@ -200,7 +205,6 @@ export function listPotentialConfiguredChannelPresenceSignals(
     // when the state directory exists to keep startup/status checks cheap.
     for (const channelId of listPersistedAuthStateChannelIds(options)) {
       if (hasPersistedAuthState({ channelId, cfg, env, options })) {
-        configuredChannelIds.add(channelId);
         addSignal(channelId, "persisted-auth");
       }
     }

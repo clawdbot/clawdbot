@@ -22,7 +22,7 @@ import {
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderDeleteButton, renderRewindButton } from "./chat-message-confirmation.ts";
+import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
   renderMessageActionButtons,
   renderReplyButton,
@@ -55,6 +55,8 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
+type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
+
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -84,6 +86,7 @@ type RenderMessageGroupOptions = {
   userName?: string | null;
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
+  showAssistantAvatar?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
@@ -92,8 +95,11 @@ type RenderMessageGroupOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
-  onDelete?: () => void;
   onReply?: (target: MessageReplyTarget) => void;
+  resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+  onResolveReply?: (replyToId: string) => void;
+  onOpenReply?: (replyToId: string) => void;
+  replyNavigationId?: string | null;
   onRewind?: () => void;
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
@@ -119,11 +125,8 @@ function buildGroupedMessageRenderOptions(
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
     assistantMessageDisclosure = {
-      expanded: expansion?.status === "loaded" && expansion.expanded,
+      expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
-      loading: expansion?.status === "loading",
-      error: expansion?.status === "error",
-      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
     };
   }
   return {
@@ -161,6 +164,10 @@ function buildGroupedMessageRenderOptions(
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    resolveReplyPreview: opts.resolveReplyPreview,
+    onResolveReply: opts.onResolveReply,
+    onOpenReply: opts.onOpenReply,
+    replyNavigationId: opts.replyNavigationId,
   };
 }
 
@@ -253,9 +260,10 @@ export function renderActivityGroup(
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
-      data-chat-row-keys=${JSON.stringify(groups.map((group) => group.key))}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter &&
+      (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
+        opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             firstGroup.role,
             {
@@ -323,17 +331,16 @@ export function renderActivityGroup(
       <div class="chat-group-footer">
         <span class="chat-sender-name">${t("chat.messages.activity")}</span>
         ${renderChatTimestamp(firstGroup.timestamp)}
-        ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
       </div>
     </div>
   `;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+export function resolveMessageGroupSenderLabel(
+  group: MessageGroup,
+  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
+): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -342,20 +349,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const userLabel = group.senderLabel?.trim();
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
   const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
-  const who =
-    normalizedRole === "user"
-      ? isCurrentUser
-        ? resolvedUserName
-        : (userLabel ?? resolvedUserName)
-      : normalizedRole === "assistant"
-        ? (userLabel ?? assistantName)
-        : normalizedRole === "tool"
-          ? "Tool"
-          : isWorkspaceConflict
-            ? t("chat.workspaceConflict.eventSender")
-            : normalizedRole;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+  return normalizedRole === "user"
+    ? isCurrentUser
+      ? resolvedUserName
+      : (userLabel ?? resolvedUserName)
+    : normalizedRole === "assistant"
+      ? (userLabel ?? assistantName)
+      : normalizedRole === "tool"
+        ? "Tool"
+        : group.messages.every((item) =>
+              Boolean(workspaceResultConflictFromTranscript(item.message)),
+            )
+          ? t("chat.workspaceConflict.eventSender")
+          : normalizedRole;
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const isWorkspaceConflict = group.messages.every((item) =>
+    Boolean(workspaceResultConflictFromTranscript(item.message)),
+  );
+  const assistantName = opts.assistantName ?? "Assistant";
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -366,6 +382,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? "workspace-conflict"
             : "other";
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -393,11 +411,20 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       senderLabel: who,
     }),
   );
+  for (const details of messageActionDetails) {
+    if (
+      details?.shouldFetchFullMessage &&
+      details.messageId &&
+      !opts.getAssistantMessageExpansion?.(details.messageId)
+    ) {
+      opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    }
+  }
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onDelete || opts.onRewind);
+    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -417,7 +444,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             group.role,
             {
@@ -487,9 +514,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   ${footerActionDetails?.replyTarget && opts.onReply
                     ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
                     : nothing}
-                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
                   ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
                     : nothing}
                 </div>
               `
@@ -500,21 +526,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>
-        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
+        ${normalizedRole !== "user" && footerActionDetails
           ? html`
               <div
                 class="chat-group-footer-actions"
                 data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
               >
-                ${footerActionDetails
-                  ? renderMessageActionButtons(
-                      footerActionDetails,
-                      opts,
-                      normalizedRole !== "user" ? opts.onDelete : undefined,
-                    )
-                  : opts.onDelete
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
+                ${renderMessageActionButtons(footerActionDetails, opts)}
               </div>
             `
           : nothing}

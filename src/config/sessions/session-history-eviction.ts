@@ -17,13 +17,13 @@ import {
   type SessionDiskBudgetSweepResult,
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
-  collectSqliteSessionStateIdsForEntry,
-  deleteMaterializedSqliteSessionStatePlans,
-  planSqliteSessionStateDeleteIfUnreferenced,
-  readReferencedSqliteSessionIds,
+  collectSessionStateIdsForEntry,
+  deleteMaterializedSessionStatePlans,
+  planSessionStateDeleteIfUnreferenced,
+  readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   getSessionKysely,
@@ -32,7 +32,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -108,7 +108,7 @@ function collectProtectedHistoricalSessionIds(params: {
   database: OpenClawAgentDatabase;
   storePath: string;
 }): Set<string> {
-  const protectedSessionIds = readReferencedSqliteSessionIds(params.database);
+  const protectedSessionIds = readReferencedSessionIds(params.database);
   for (const sessionId of collectAdmissionProtectedSessionIds(params)) {
     protectedSessionIds.add(sessionId);
   }
@@ -144,9 +144,9 @@ export function collectAdmissionProtectedSessionIds(params: {
       continue;
     }
     protectedSessionIds.add(row.current_session_id);
-    const entry = parseSqliteSessionEntryJson(row);
+    const entry = parseSessionEntryJson(row);
     if (entry) {
-      for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
+      for (const sessionId of collectSessionStateIdsForEntry(entry)) {
         protectedSessionIds.add(sessionId);
       }
     }
@@ -320,7 +320,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
   let removedEntries = 0;
   let removedFiles = 0;
   if (usage.totalBytes > highWaterBytes) {
-    // Archive pruning shares the session write lock so a concurrent
+    // Archive pruning shares the SQLite writer queue so a concurrent
     // reset/delete cannot race its archive file against the unlink pass.
     const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
       pruneSessionTranscriptArchivesToHighWater({
@@ -352,7 +352,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
             database,
             storePath: params.storePath,
           });
-          const candidate = planSqliteSessionStateDeleteIfUnreferenced({
+          const candidate = planSessionStateDeleteIfUnreferenced({
             archiveDirectory,
             archiveTranscript: true,
             database,
@@ -370,17 +370,16 @@ async function enforceSessionHistoryMaintenanceSerialized(
         }
         // Extract-before-delete is the retention invariant. The lifecycle hold
         // fences admission while the store writer is released for archive I/O.
-        const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+        const materialized = await materializeSessionStateDeletePlans([plan]);
         const committedArchives = await runExclusiveSqliteSessionWrite(resolved, async () => {
           let deleted = false;
-          let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
-            [];
+          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
           runOpenClawAgentWriteTransaction((transactionDb) => {
             const protectedAtDelete = collectProtectedHistoricalSessionIds({
               database: transactionDb,
               storePath: params.storePath,
             });
-            archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+            archivedTranscripts = deleteMaterializedSessionStatePlans(
               transactionDb,
               materialized,
               protectedAtDelete,
@@ -421,7 +420,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
       continue;
     }
     removedEntries += 1;
-    emitArchivedSqliteTranscriptUpdates(eviction.archivedTranscripts);
+    emitArchivedTranscriptUpdates(eviction.archivedTranscripts);
     usage = eviction.usage;
     if (usage.totalBytes > highWaterBytes) {
       // Reclaim archives (oldest first, including ones this pass committed)

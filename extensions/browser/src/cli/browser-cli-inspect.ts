@@ -2,8 +2,10 @@
  * Browser CLI inspection commands for screenshots and snapshots.
  */
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -179,12 +181,14 @@ export function registerBrowserInspectCommands(
         );
 
         if (opts.out) {
-          if (result.format === "ai") {
-            await fs.writeFile(opts.out, result.snapshot, "utf8");
-          } else {
-            const payload = JSON.stringify(result, null, 2);
-            await fs.writeFile(opts.out, payload, "utf8");
-          }
+          const payload =
+            result.format === "ai" ? result.snapshot : JSON.stringify(result, null, 2);
+          await writeExternalFileWithinOutputRoot({
+            path: path.resolve(opts.out),
+            write: async (tempPath) => {
+              await fs.writeFile(tempPath, payload, "utf8");
+            },
+          });
           if (parent?.json) {
             defaultRuntime.writeJson({
               ok: true,

@@ -1,12 +1,12 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_STATE,
-  resolveClawHubBaseUrl,
   searchClawHubSkills,
   type ClawHubSkillSearchResult,
   type ClawHubSkillsShTrustState,
-} from "../../infra/clawhub.js";
+} from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import {

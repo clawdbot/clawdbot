@@ -38,6 +38,7 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
@@ -289,14 +290,21 @@ export async function processMessage(params: {
     }
   }
 
-  // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
+  // Frame transcript provenance in the agent-facing body; raw text stays in
+  // context.Transcript and the original payload remains authoritative for commands.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
   const msgForAgent: AdmittedWebInboundMessage =
     audioTranscript !== undefined
-      ? { ...params.msg, payload: { ...params.msg.payload, body: audioTranscript } }
+      ? {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: formatWhatsAppAudioTranscriptForAgent(audioTranscript),
+          },
+        }
       : params.msg;
   const visibleReplyTo = resolveVisibleWhatsAppReplyContext({
     msg: params.msg,

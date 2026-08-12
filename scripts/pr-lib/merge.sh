@@ -454,53 +454,38 @@ merge_run() {
   local repo_nwo
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
-  local landed_sha_url=""
-  if gh api repos/:owner/:repo/commits/"$landed_sha" >/dev/null 2>&1; then
-    landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
-  else
-    echo "Landed commit is not resolvable via repository commit endpoint: $landed_sha"
-    exit 1
-  fi
-
-  local prep_sha_url=""
-  if gh api repos/:owner/:repo/commits/"$PREP_HEAD_SHA" >/dev/null 2>&1; then
-    prep_sha_url="https://github.com/$repo_nwo/commit/$PREP_HEAD_SHA"
-  else
-    local pr_commit_count
-    pr_commit_count=$(gh pr view "$pr" --json commits --jq "[.commits[].oid | select(. == \"$PREP_HEAD_SHA\")] | length")
-    if [ "${pr_commit_count:-0}" -gt 0 ]; then
-      prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
-    fi
-  fi
-  if [ -z "$prep_sha_url" ]; then
-    echo "Prepared head SHA is not resolvable in repo commits or PR commit list: $PREP_HEAD_SHA"
-    exit 1
-  fi
+  local landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
+  local prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
 
   local ok=0
-  local comment_output=""
+  local comment_body
+  printf -v comment_body \
+    'Merged via %s.\n\n- Prepared head SHA: [%s](%s)\n- Landed commit: [%s](%s)' \
+    "$merge_label" \
+    "$PREP_HEAD_SHA" \
+    "$prep_sha_url" \
+    "$landed_sha" \
+    "$landed_sha_url"
+  local comment_url=""
+  local comment_err_file
+  comment_err_file=$(mktemp)
   local attempt
   for attempt in 1 2 3; do
-    if comment_output=$(
-      {
-        echo "Merged via $merge_label."
-        echo
-        echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
-        echo "- Landed commit: [$landed_sha]($landed_sha_url)"
-      } | gh_plain pr comment "$pr" -F - 2>&1
-    ); then
+    if comment_url=$(
+      gh_plain api \
+        --method POST \
+        "repos/{owner}/{repo}/issues/$pr/comments" \
+        --raw-field "body=$comment_body" \
+        --jq '.html_url // empty' \
+        2>"$comment_err_file"
+    ) && [ -n "$comment_url" ]; then
       ok=1
       break
     fi
     sleep 2
   done
+  rm -f "$comment_err_file"
   [ "$ok" -eq 1 ] || { echo "Failed to post PR comment after retries"; exit 1; }
-
-  local comment_url=""
-  comment_url=$(printf '%s\n' "$comment_output" | rg -o 'https://github.com/[^ ]+/pull/[0-9]+#issuecomment-[0-9]+' -m1 || true)
-  if [ -z "$comment_url" ]; then
-    comment_url="unresolved"
-  fi
 
   local root
   root=$(repo_root)

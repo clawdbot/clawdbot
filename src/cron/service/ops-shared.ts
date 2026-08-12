@@ -3,10 +3,10 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { ensureLoaded, persist } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -74,13 +74,28 @@ export async function ensureLoadedForRead(state: CronServiceState) {
   }
   // Use the maintenance-only version so that read-only operations never
   // advance a past-due nextRunAtMs without executing the job (#16156).
-  const rollbackSnapshot = snapshotStoreForRollback(state);
+  // These are the only fields recomputeNextRunsForMaintenance and
+  // normalizeJobTickState may mutate. Keep this rollback shape aligned so a
+  // failed read repair preserves the live store and job object identities.
+  const rollbackJobs = state.store.jobs.map((job) => ({
+    job,
+    fields: structuredClone({ enabled: job.enabled, schedule: job.schedule, state: job.state }),
+  }));
   const postPersistNotifications: DeferredCronNotifications = [];
   const changed = recomputeNextRunsForMaintenance(state, {
     deferredNotifications: postPersistNotifications,
   });
   if (changed) {
-    await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
+    try {
+      if (!(await persist(state, { postPersistNotifications }))) {
+        throw new Error("cron: durable store write did not complete");
+      }
+    } catch (error) {
+      for (const { job, fields } of rollbackJobs) {
+        Object.assign(job, fields);
+      }
+      throw error;
+    }
   }
 }
 

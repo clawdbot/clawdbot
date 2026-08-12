@@ -13,7 +13,6 @@ import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/sc
 import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -35,12 +34,16 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
-  classifySessionKind,
+  classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
@@ -66,6 +69,7 @@ const SessionsListToolSchema = Type.Object({
 const SessionListRowOutputSchema = Type.Object(
   {
     key: Type.String(),
+    sessionId: Type.Optional(Type.String()),
     agentId: Type.String(),
     kind: Type.Union([
       Type.Literal("main"),
@@ -122,7 +126,7 @@ const SessionsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
@@ -177,13 +181,13 @@ export function createSessionsListTool(opts?: {
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
-      const label = readStringParam(params, "label");
-      const agentId = readStringParam(params, "agentId");
-      const search = readStringParam(params, "search");
+      const label = readToolStringParam(params, "label");
+      const agentId = readToolStringParam(params, "agentId");
+      const search = readToolStringParam(params, "search");
       const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
-      const gatewayCall = opts?.callGateway ?? callGateway;
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
@@ -281,7 +285,7 @@ export function createSessionsListTool(opts?: {
         }
 
         const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
-        const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
+        const kind = classifySessionListKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
         }
@@ -358,6 +362,7 @@ export function createSessionsListTool(opts?: {
           : undefined;
         const row: SessionListRow = {
           key: displayKey,
+          ...(sessionId ? { sessionId } : {}),
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,

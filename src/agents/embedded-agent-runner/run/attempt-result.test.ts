@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
 
 function completeResult(params?: {
+  successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
@@ -42,6 +43,7 @@ function completeResult(params?: {
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
+      getLatestMcpConnectAction: () => undefined,
       getMessagingToolSentMediaUrls: () => [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
@@ -58,6 +60,7 @@ function completeResult(params?: {
       terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
+      successfulNestedToolNames: params?.successfulNestedToolNames,
       yieldDetected: false,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
@@ -77,6 +80,33 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
+  it("carries the newest MCP presentation state across retry attempts", () => {
+    const carryover = createMcpAttemptCarryover();
+    const first = {
+      latestMcpAppChannelView: { viewId: "view-first" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/first",
+      },
+    };
+    const retry: Parameters<typeof carryover.apply>[0] = {};
+    const latest = {
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/latest",
+      },
+    };
+
+    carryover.apply(first);
+    carryover.apply(retry);
+    carryover.apply(latest);
+
+    expect(retry).toEqual(first);
+    expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
+    expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
+  });
+
   it("keeps completed client tool calls in reserved source order", () => {
     expect(
       completeResult({
@@ -126,6 +156,13 @@ describe("attempt result projection", () => {
         asyncTaskId: "task-1",
       },
     ]);
+  });
+
+  it("projects successful nested tool names from settled attempt state", () => {
+    expect(
+      completeResult({ successfulNestedToolNames: ["read", "memory_search"] })
+        .successfulNestedToolNames,
+    ).toEqual(["read", "memory_search"]);
   });
 
   it("projects pending media and voice fields", () => {

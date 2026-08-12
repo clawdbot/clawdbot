@@ -20,6 +20,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -93,6 +94,19 @@ async function holdUiProof(page: Page, durationMs = 600) {
   }
 }
 
+async function setThemeMode(page: Page, mode: "dark" | "light") {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+}
+
 async function openSidebarTestPage() {
   const context = await suite.browser.newContext({
     locale: "en-US",
@@ -107,6 +121,71 @@ async function openSidebarTestPage() {
 }
 
 suite.define(() => {
+  it("uses catalog labels in the hidden-section recovery rows", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
+      key: hiddenSessionCatalogsStorageKey,
+      value: ["claude", "offline-catalog"],
+    });
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
+      const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
+      const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
+      await expect.poll(() => recovery.textContent()).toContain("Claude Code");
+      await expect.poll(() => recovery.textContent()).toContain("offline-catalog");
+      expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await recovery.scrollIntoViewIfNeeded();
+        for (const theme of ["light", "dark"] as const) {
+          await setThemeMode(page, theme);
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
+          });
+          await recovery.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
+          });
+        }
+      }
+
+      await row.getByRole("button", { name: "Show" }).click();
+      await expect.poll(() => row.count()).toBe(0);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe('["offline-catalog"]');
+    } finally {
+      await context.close();
+    }
+  });
+
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
@@ -288,6 +367,7 @@ suite.define(() => {
           "Advanced",
           "Debug",
           "Logs",
+          "Updates",
           "About",
           "Appearance",
           "Notifications",

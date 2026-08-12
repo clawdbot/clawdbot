@@ -24,9 +24,9 @@ export const execSchema = Type.Object({
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
+  timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds; kills process on expiry.",
+      description: "Timeout in seconds.",
     }),
   ),
   pty: Type.Optional(
@@ -65,7 +65,7 @@ export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
-  timeout: execSchema.properties.timeout,
+  timeoutSeconds: execSchema.properties.timeoutSeconds,
   host: optionalStringEnum(["node"] as const, {
     description: "Exec target. Only node is available on this tool surface.",
   }),

@@ -18,14 +18,11 @@ import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
 } from "./oauth-test-utils.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resolveApiKeyForProvider: typeof import("../model-auth.js").resolveApiKeyForProvider;
+let resolveApiKeyForProviderCore: typeof import("../model-auth.js").resolveApiKeyForProviderCore;
 let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableAuthForProvider;
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
 type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
@@ -162,7 +159,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-    ({ hasAvailableAuthForProvider, resolveApiKeyForProvider } = await import("../model-auth.js"));
+    ({ hasAvailableAuthForProvider, resolveApiKeyForProviderCore } =
+      await import("../model-auth.js"));
     ({ markAuthProfileSuccess } = await import("./profiles.js"));
   });
 
@@ -686,7 +684,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         store: ensureAuthProfileStore(agentDir),
         profileId,
@@ -779,7 +777,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     );
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         agentDir,
       }),
@@ -811,7 +809,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-responses",
         agentDir,
@@ -833,7 +831,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     );
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-responses",
         profileId,
@@ -1112,7 +1110,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       );
     });
 
-    const resolved = await resolveApiKeyForProvider({
+    const resolved = await resolveApiKeyForProviderCore({
       provider: "openai",
       store: ensureAuthProfileStore(agentDir),
       agentDir,

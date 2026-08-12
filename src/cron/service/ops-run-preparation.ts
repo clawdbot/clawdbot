@@ -5,17 +5,18 @@ import type { CronJob, CronPayload, CronRunErrorClassification } from "../types.
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
-  assertSupportedJobSpec,
   findJobOrThrow,
   hasActiveCronRun,
   isJobDue,
   isJobEnabled,
   recomputeNextRunsForMaintenance,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
+import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
 import { markManualCronJobActive, ownsStreamSource } from "./ops-shared.js";
 import {
   activateQueuedCronRun,
+  cleanupQueuedCronRunReservations,
   clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
@@ -74,6 +75,8 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
 
 export type ManualRunOptions = {
   runId?: string;
+  /** Revalidates the admitted caller immediately before reserving durable work. */
+  commitGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
@@ -335,6 +338,7 @@ export async function prepareManualRun(
     if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
+    opts?.commitGuard?.();
     const reservationAt = state.deps.nowMs();
     if (!isJobDue(job, reservationAt, { forced: mode === "force" })) {
       return { ok: true, ran: false, reason: "not-due" as const };
@@ -559,20 +563,9 @@ export async function releasePreparedManualReservationAfterReloadWithRetry(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
 ): Promise<void> {
-  const attempt = async () => {
-    await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      await releasePreparedManualReservation(state, prepared);
-    });
-  };
-  try {
-    await attempt();
-  } catch {
-    try {
-      await attempt();
-    } catch (error) {
-      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
-      throw error;
-    }
-  }
+  await cleanupQueuedCronRunReservations({
+    state,
+    reservations: [prepared],
+    restoreLastError: false,
+  });
 }

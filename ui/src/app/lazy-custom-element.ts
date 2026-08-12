@@ -56,6 +56,12 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const DESKTOP_PANEL_ELEMENT = {
+  tagName: "openclaw-desktop-panel",
+  label: "desktop panel",
+  loadModule: () => import("../components/desktop/desktop-panel.ts"),
+} satisfies OptionalCustomElement;
+
 export const CUSTODIAN_PANEL_ELEMENT = {
   tagName: "openclaw-custodian-panel",
   label: "custodian panel",
@@ -79,6 +85,14 @@ export const EXEC_APPROVAL_ELEMENT = {
   // This diagnostic uses the tag rather than user-facing copy.
   label: EXEC_APPROVAL_TAG,
   loadModule: () => import("../components/exec-approval.ts"),
+} satisfies OptionalCustomElement;
+
+const DEVICE_PAIR_SETUP_TAG = "openclaw-device-pair-setup";
+
+export const DEVICE_PAIR_SETUP_ELEMENT = {
+  tagName: DEVICE_PAIR_SETUP_TAG,
+  label: DEVICE_PAIR_SETUP_TAG,
+  loadModule: () => import("../pages/devices/view-pairing.ts"),
 } satisfies OptionalCustomElement;
 
 const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();

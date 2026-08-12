@@ -8,10 +8,6 @@ const gatewayCallRuntimeLoader = createLazyImportLoader(
   () => import("../../gateway/call.runtime.js"),
 );
 
-async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
-  return await gatewayCallRuntimeLoader.load();
-}
-
 export type CronRunSessionCleanupOutcome =
   | "not-requested"
   | "deleted"
@@ -33,7 +29,7 @@ export async function cleanupCronRunSessionAfterRun(params: {
   }
   params.beforeDelete?.();
   try {
-    const { callGateway } = await loadGatewayCallRuntime();
+    const { callGateway } = await gatewayCallRuntimeLoader.load();
     const result = await callGateway<{ deleted?: boolean }>({
       method: "sessions.delete",
       params: {

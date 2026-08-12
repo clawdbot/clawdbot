@@ -27,7 +27,7 @@ import {
   stepIdleTimeoutBreaker,
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
-import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
+import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -162,11 +162,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
   const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
+  // Current-attempt evidence is newest. The session assistant is only a transcript fallback
+  // and can predate a carried attempt snapshot after transcript rewrites or compaction.
   const callUsage = resolveLatestCallUsage({
     currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    // The latest assistant sentinel must invalidate stale carried usage; reversing this order
-    // would resurrect a prior exact value after the runtime reports context as unavailable.
-    carriedCandidates: [lastAssistantUsage, input.lastRunPromptUsage],
+    carriedUsage: input.lastRunPromptUsage,
+    transcriptFallback: lastAssistantUsage,
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
@@ -245,6 +246,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
         provider: activeErrorContext.provider,
+        providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,
         authMode: runtime.lastProfileId
           ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type

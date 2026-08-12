@@ -14,13 +14,13 @@ import {
   restoreRuntimePack,
   rewriteWorkspaceDependencyVersions,
   runPreparedRuntimePack,
-} from "../../scripts/ocm-npm-workspace-deps.mjs";
+} from "../../scripts/ocm-npm-workspace-deps.mts";
 import { restorePrepackArtifacts } from "../../scripts/openclaw-postpack.mjs";
 import { preparePackageChangelog } from "../../scripts/package-changelog.mjs";
 import { preparePackageDocsMap } from "../../scripts/package-docs-map.mjs";
 
 const adapterPath = fileURLToPath(
-  new URL("../../scripts/ocm-npm-workspace-deps.mjs", import.meta.url),
+  new URL("../../scripts/ocm-npm-workspace-deps.mts", import.meta.url),
 );
 const packageDocsMapPath = fileURLToPath(
   new URL("../../scripts/package-docs-map.mjs", import.meta.url),
@@ -270,16 +270,30 @@ describe("OCM npm workspace dependency adapter", () => {
     });
   });
 
-  it("installs a packed root with a local workspace dependency", () => {
+  it("rejects package archives with an unconfigured workspace dependency", () => {
+    const packageJson = {
+      dependencies: {
+        "@openclaw/normalization-core": "workspace:*",
+      },
+    };
+
+    expect(() => rewriteWorkspaceDependencyVersions(packageJson, [])).toThrow(
+      "package archive references unconfigured workspace dependency: @openclaw/normalization-core",
+    );
+  });
+
+  it("installs a packed root with transitive local workspace dependencies", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-adapter-test-"));
     try {
       const archiveRoot = join(root, "archive");
       const packagedRoot = join(archiveRoot, "package");
       const workspaceDir = join(root, "ai");
+      const transitiveWorkspaceDir = join(root, "normalization-core");
       const installDir = join(root, "install");
       const rootArchive = join(root, "openclaw.tgz");
       mkdirSync(packagedRoot, { recursive: true });
       mkdirSync(workspaceDir, { recursive: true });
+      mkdirSync(transitiveWorkspaceDir, { recursive: true });
       writeFileSync(
         join(packagedRoot, "package.json"),
         `${JSON.stringify({
@@ -294,9 +308,19 @@ describe("OCM npm workspace dependency adapter", () => {
           name: "@openclaw/ai",
           version: "1.0.0",
           main: "index.js",
+          dependencies: { "@openclaw/normalization-core": "workspace:*" },
         })}\n`,
       );
       writeFileSync(join(workspaceDir, "index.js"), "export const ready = true;\n");
+      writeFileSync(
+        join(transitiveWorkspaceDir, "package.json"),
+        `${JSON.stringify({
+          name: "@openclaw/normalization-core",
+          version: "1.0.0",
+          main: "index.js",
+        })}\n`,
+      );
+      writeFileSync(join(transitiveWorkspaceDir, "index.js"), "export const normalized = true;\n");
       execFileSync("tar", ["-czf", rootArchive, "-C", archiveRoot, "package"]);
 
       execFileSync(
@@ -315,7 +339,9 @@ describe("OCM npm workspace dependency adapter", () => {
           env: {
             ...process.env,
             OPENCLAW_OCM_REAL_NPM_BIN: process.platform === "win32" ? "npm.cmd" : "npm",
-            OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: workspaceDir,
+            OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: [workspaceDir, transitiveWorkspaceDir].join(
+              delimiter,
+            ),
             npm_config_audit: "false",
             npm_config_cache: join(root, "npm-cache"),
             npm_config_fund: "false",
@@ -331,6 +357,18 @@ describe("OCM npm workspace dependency adapter", () => {
       expect(
         JSON.parse(readFileSync(join(installDir, "node_modules/@openclaw/ai/package.json"), "utf8"))
           .version,
+      ).toBe("1.0.0");
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(installDir, "node_modules/@openclaw/normalization-core/package.json"),
+            "utf8",
+          ),
+        ).version,
+      ).toBe("1.0.0");
+      expect(
+        JSON.parse(readFileSync(join(installDir, "node_modules/@openclaw/ai/package.json"), "utf8"))
+          .dependencies["@openclaw/normalization-core"],
       ).toBe("1.0.0");
     } finally {
       rmSync(root, { force: true, recursive: true });

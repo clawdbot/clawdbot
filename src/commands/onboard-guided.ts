@@ -638,24 +638,11 @@ async function runGuidedOnboardingFlow(
     });
     const recommendedConfig = recommendationOutcome.config;
     if (recommendedConfig !== persistedConfig) {
-      const latestSnapshot = await readConfigFileSnapshot();
-      if (!latestSnapshot.valid) {
-        throw new Error("App recommendations could not update an invalid OpenClaw config.");
-      }
-      const latestConfig = latestSnapshot.sourceConfig ?? latestSnapshot.config;
-      const { mergeWizardConfigOntoLatest, writeWizardConfigFile } =
-        await import("../wizard/setup.shared.js");
-      const mergedConfig = mergeWizardConfigOntoLatest(
-        latestConfig,
-        persistedConfig,
-        recommendedConfig,
-      );
-      await writeWizardConfigFile(mergedConfig, {
+      const { writeWizardConfigFile } = await import("../wizard/setup.shared.js");
+      persistedConfig = await writeWizardConfigFile(recommendedConfig, {
         allowConfigSizeDrop: false,
-        ...(latestSnapshot.hash ? { baseHash: latestSnapshot.hash } : {}),
-        migrationBaseConfig: latestConfig,
+        mergeBase: persistedConfig,
       });
-      persistedConfig = mergedConfig;
     }
     recommendationOutcome.commitResult();
   }
@@ -715,16 +702,13 @@ async function launchHatchTui(workspace: string): Promise<void> {
   try {
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
-    await launchTuiCli(
-      {
-        local: true,
-        deliver: false,
-        // Seed the first-run hatch only when the workspace bootstrap exists;
-        // re-runs against an established agent open a plain chat instead.
-        ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
-      },
-      {},
-    );
+    await launchTuiCli({
+      local: true,
+      deliver: false,
+      // Seed the first-run hatch only when the workspace bootstrap exists;
+      // re-runs against an established agent open a plain chat instead.
+      ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
+    });
   } finally {
     restoreTerminalState("post guided hatch tui", { resumeStdinIfPaused: false });
   }

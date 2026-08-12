@@ -149,7 +149,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
     renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
-    tailscaleRaw: normalizeOptionalString(raw.tailscale),
+    tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
   };
@@ -171,10 +171,21 @@ function gmailOptionsFromCommon(
     includeBody: common.includeBody,
     maxBytes: common.maxBytes,
     renewEveryMinutes: common.renewEveryMinutes,
-    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscale: common.tailscale,
     tailscalePath: common.tailscalePath,
     tailscaleTarget: common.tailscaleTarget,
   };
+}
+
+function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const mode = normalizeOptionalString(value);
+  if (mode === "funnel" || mode === "serve" || mode === "off") {
+    return mode;
+  }
+  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
 }
 
 function numberOption(value: unknown, label: string): number | undefined {

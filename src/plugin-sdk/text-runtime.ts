@@ -13,10 +13,56 @@ export * from "../../packages/markdown-core/src/render-aware-chunking.js";
 export * from "../../packages/markdown-core/src/render.js";
 export * from "../../packages/markdown-core/src/tables.js";
 export { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
-export * from "../../packages/normalization-core/src/record-coerce.js";
+// Public compatibility: this explicit list intentionally keeps isRecord on text-runtime.
+export {
+  asNullableObjectRecord,
+  asNullableRecord,
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  asRecord,
+  isRecord,
+  readStringField,
+} from "../../packages/normalization-core/src/record-coerce.js";
 export * from "../shared/scoped-expiring-id-cache.js";
-export * from "../../packages/normalization-core/src/string-coerce.js";
-export * from "../../packages/normalization-core/src/string-normalization.js";
+export {
+  hasNonEmptyString,
+  localeLowercasePreservingWhitespace,
+  lowercasePreservingWhitespace,
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+  normalizeOptionalThreadValue,
+  normalizeStringifiedEntries,
+  normalizeStringifiedOptionalString,
+  readStringValue,
+  resolvePrimaryStringValue,
+  type FastMode,
+} from "../../packages/normalization-core/src/string-coerce.js";
+// Public compatibility: keep this legacy barrel's existing normalization surface
+// without promoting new normalization-core helpers into the Plugin SDK.
+export {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
+  normalizeHyphenSlug,
+  normalizeOptionalTrimmedStringList,
+  normalizeSingleOrTrimmedStringList,
+  normalizeSortedUniqueStringEntries,
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
+  normalizeUniqueSingleOrTrimmedStringList,
+  normalizeUniqueStringEntries,
+  normalizeUniqueStringEntriesLower,
+  normalizeUniqueTrimmedStringList,
+  sortUniqueStrings,
+  uniqueStrings,
+  uniqueValues,
+} from "../../packages/normalization-core/src/string-normalization.js";
 export * from "../shared/string-sample.js";
 export * from "../shared/text/assistant-visible-text.js";
 export * from "../shared/text/auto-linked-file-ref.js";
@@ -31,17 +77,6 @@ export * from "../utils/fetch-timeout.js";
 export * from "../utils/reaction-level.js";
 export * from "../utils/with-timeout.js";
 export {
-  hasNonEmptyString,
-  localeLowercasePreservingWhitespace,
-  lowercasePreservingWhitespace,
-  normalizeLowercaseStringOrEmpty,
-  normalizeNullableString,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-  readStringValue,
-} from "../../packages/normalization-core/src/string-coerce.js";
-export {
   CONFIG_DIR,
   clamp,
   clampInt,
@@ -50,13 +85,12 @@ export {
   displayString,
   ensureDir,
   escapeRegExp,
-  isRecord,
   normalizeE164,
   pathExists,
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
-  safeParseJson,
+  tryParseJson as safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,

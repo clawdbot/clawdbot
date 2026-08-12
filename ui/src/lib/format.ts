@@ -10,6 +10,12 @@ import { i18n, t } from "../i18n/index.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
 
+export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
+  const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  const minutes = String(Math.floor(totalSeconds / 60));
+  return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
 type FormatTimeAgoOptions = {
   suffix?: boolean;
   fallback?: string;
@@ -20,10 +26,6 @@ type FormatRelativeTimestampOptions = {
   timezone?: string;
   fallback?: string;
   suffix?: boolean;
-};
-
-type FormatDurationCompactOptions = {
-  spaced?: boolean;
 };
 
 function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
@@ -95,11 +97,8 @@ export function formatRelativeTimestamp(
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
 }
 
-export function formatDurationCompact(
-  ms?: number | null,
-  options: FormatDurationCompactOptions = {},
-): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, options);
+export function formatDurationCompact(ms?: number | null): string | undefined {
+  const coreValue = formatDurationCompactCore(ms, { spaced: true });
   if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
     return coreValue;
   }
@@ -118,7 +117,7 @@ export function formatDurationCompact(
     if (seconds > 0) {
       parts.push(formatUnit(seconds, "second"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const hours = Math.floor(totalMinutes / 60);
   if (hours >= 24) {
@@ -128,14 +127,14 @@ export function formatDurationCompact(
     if (remainingHours > 0) {
       parts.push(formatUnit(remainingHours, "hour"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const minutes = totalMinutes % 60;
   const parts = [formatUnit(hours, "hour")];
   if (minutes > 0) {
     parts.push(formatUnit(minutes, "minute"));
   }
-  return parts.join(options.spaced ? " " : "");
+  return parts.join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {

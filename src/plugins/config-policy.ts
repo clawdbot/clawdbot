@@ -1,20 +1,17 @@
 // Evaluates plugin config policy without activating plugin runtime code.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
-  hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   identityNormalizePluginId,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
-  normalizePluginsConfigWithResolver as normalizePluginsConfigWithResolverShared,
+  normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
-import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type PluginActivationState = PluginActivationStateLike;
@@ -49,7 +46,6 @@ function resolvePluginActivationState(params: {
     }),
   );
 }
-export const hasExplicitPluginConfig = hasExplicitPluginConfigShared;
 
 const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
 
@@ -64,17 +60,8 @@ type PolicyEffectiveActivationParams = {
   autoEnabledReason?: string;
 };
 
-export function resolveEffectivePluginActivationState(
+export function resolvePolicyPluginActivationState(
   params: PolicyEffectiveActivationParams,
 ): PluginActivationState {
   return resolvePluginActivationState(params);
-}
-
-export function resolveMemorySlotDecision(params: {
-  id: string;
-  kind?: PluginKind | PluginKind[];
-  slot: string | null | undefined;
-  selectedId: string | null;
-}): { enabled: boolean; reason?: string; selected?: boolean } {
-  return resolveMemorySlotDecisionShared(params);
 }

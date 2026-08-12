@@ -1,10 +1,17 @@
 import path from "node:path";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+} from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -15,6 +22,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   emitPluginAuditSecurityEvent,
@@ -413,7 +421,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     });
   }
 
-  const installRes = await runtime.installPackageDir({
+  const packageInstallParams = {
     sourceDir: params.sourceDir,
     targetDir,
     mode: params.mode,
@@ -424,7 +432,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
-    afterInstall: async (installedDir) => {
+    afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
       if (!postInstallResult) {
         return { ok: true as const };
@@ -435,7 +443,12 @@ export async function installPluginDirectoryIntoExtensions(params: {
         ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
       };
     },
-  });
+  };
+  const installRes = await runtime.installPackageDir(
+    isPluginInstallCommitDeferred(params)
+      ? requestDeferredPackageDirInstall(packageInstallParams)
+      : packageInstallParams,
+  );
   if (!installRes.ok) {
     return {
       ok: false,
@@ -444,14 +457,18 @@ export async function installPluginDirectoryIntoExtensions(params: {
     };
   }
 
-  return buildDirectoryInstallResult({
-    pluginId: params.pluginId,
-    targetDir,
-    manifestName: params.manifestName,
-    version: params.version,
-    extensions: params.extensions,
-    setup: params.setup,
-  });
+  const result = {
+    ...buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    }),
+  };
+  const transaction = resolvePackageDirInstallTransaction(installRes);
+  return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }
 
 async function resolvePluginInstallTarget(params: {

@@ -401,6 +401,48 @@ describe("codex conversation controls", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
+  it("drops an incompatible pinned auth profile when selecting another provider", async () => {
+    const sessionKey = "agent:main:model-provider-switch";
+    const sessionId = "session-provider-switch";
+    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        updatedAt: Date.now(),
+        authProfileOverride: "lmstudio:work",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-provider-switch",
+        cwd: tempDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+      },
+    });
+
+    await expect(
+      setCodexConversationModelImpl({
+        identity,
+        bindingStore: testCodexAppServerBindingStore,
+        model: "openai/gpt-5.5",
+      }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
+
+    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      liveModelSwitchPending: true,
+    });
+    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+  });
+
   it("escapes requested model names before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {

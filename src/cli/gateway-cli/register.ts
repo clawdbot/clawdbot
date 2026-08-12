@@ -27,6 +27,7 @@ import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
+import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
@@ -590,6 +591,54 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             defaultRuntime.writeJson(result);
           },
           "Gateway call failed",
+          { json: Boolean(opts.json) },
+        );
+      }),
+  );
+
+  gatewayCallOpts(
+    gateway
+      .command("suspend")
+      .description("Prepare the Gateway for cooperative host suspension")
+      .option("--request-id <id>", "Stable suspension request id")
+      .option("--wait <seconds>", "Wait up to this many seconds for active work to drain")
+      .option("--port <port>", "Local Gateway port")
+      .action(async (opts, command) => {
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            await runGatewaySuspend(
+              {
+                rpcOpts,
+                requestId: opts.requestId,
+                waitSeconds: opts.wait,
+                json: Boolean(rpcOpts.json),
+              },
+              { callGateway: callGatewayCli, runtime: defaultRuntime },
+            );
+          },
+          "Gateway suspend failed",
+          { json: Boolean(opts.json) },
+        );
+      }),
+  );
+
+  gatewayCallOpts(
+    gateway
+      .command("resume")
+      .description("Release a cooperative Gateway suspension")
+      .argument("<suspensionId>", "Suspension id returned by gateway suspend")
+      .option("--port <port>", "Local Gateway port")
+      .action(async (suspensionId, opts, command) => {
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            await runGatewayResume(
+              { rpcOpts, suspensionId: String(suspensionId), json: Boolean(rpcOpts.json) },
+              { callGateway: callGatewayCli, runtime: defaultRuntime },
+            );
+          },
+          "Gateway resume failed",
           { json: Boolean(opts.json) },
         );
       }),

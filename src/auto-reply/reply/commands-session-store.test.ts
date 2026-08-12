@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { persistAbortTargetEntry, persistSessionEntry } from "./commands-session-store.js";
+import { persistAbortTargetEntry, persistCommandSession } from "./commands-session-store.js";
 
 async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-session-store-"));
@@ -27,7 +27,7 @@ describe("commands session store persistence", () => {
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           allowCreateSessionEntry: true,
           sessionEntry: entry,
           sessionStore,
@@ -60,7 +60,7 @@ describe("commands session store persistence", () => {
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           sessionEntry: entry,
           sessionStore,
           sessionKey,
@@ -88,7 +88,7 @@ describe("commands session store persistence", () => {
         delivery: { kind: "none" },
       };
       const seedEntry = { ...entry };
-      await persistSessionEntry({
+      await persistCommandSession({
         allowCreateSessionEntry: true,
         sessionEntry: seedEntry,
         sessionStore: { [sessionKey]: seedEntry },
@@ -99,7 +99,7 @@ describe("commands session store persistence", () => {
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           sessionEntry: entry,
           sessionStore,
           sessionKey,
@@ -147,7 +147,7 @@ describe("commands session store persistence", () => {
         label: "After rename",
         pinnedAt: undefined,
       };
-      await persistSessionEntry({
+      await persistCommandSession({
         allowCreateSessionEntry: true,
         sessionEntry: concurrentEntry,
         sessionStore: { [sessionKey]: concurrentEntry },
@@ -160,7 +160,7 @@ describe("commands session store persistence", () => {
 
       try {
         await expect(
-          persistSessionEntry({
+          persistCommandSession({
             sessionEntry: entry,
             sessionStore,
             sessionKey,
@@ -214,7 +214,7 @@ describe("commands session store persistence", () => {
       const sessionStore = { [sessionKey]: sessionEntry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           initialSessionEntry: initialEntry,
           sessionEntry,
           sessionStore,
@@ -246,7 +246,7 @@ describe("commands session store persistence", () => {
       const sessionStore = { [sessionKey]: sessionEntry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           initialSessionEntry: initialEntry,
           sessionEntry,
           sessionStore,
@@ -286,7 +286,7 @@ describe("commands session store persistence", () => {
       const sessionStore = { [sessionKey]: sessionEntry };
 
       await expect(
-        persistSessionEntry({
+        persistCommandSession({
           initialSessionEntry: initialEntry,
           sessionEntry,
           sessionStore,

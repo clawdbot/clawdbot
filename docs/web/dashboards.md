@@ -21,7 +21,9 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to see every thread whose preferred face is Dashboard, with
 the most recently updated thread first. Open any row to go directly to that
-thread's `/dashboard/<agent>/<sessionRef>` URL.
+thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
+as threads are renamed, archived, deleted, or switched between Chat and
+Dashboard, including after a Gateway reconnect.
 
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.

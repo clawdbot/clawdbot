@@ -6,12 +6,11 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   getModelRefStatus as getNarrowModelRefStatus,
-  resolveAllowedModelRef as resolveNarrowAllowedModelRef,
+  resolveAllowedModelRefCore as resolveNarrowAllowedModelRef,
 } from "./model-selection-resolve.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
   getModelRefStatus,
@@ -937,45 +936,6 @@ describe("model-selection", () => {
       expect(
         providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
       ).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("buildConfiguredAllowlistKeys", () => {
-    it("resolves per-agent policy aliases to the enforcement key", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-          },
-          list: [
-            {
-              id: "research",
-              models: {
-                "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-              },
-              modelPolicy: { allow: ["sonnet"] },
-            },
-          ],
-        },
-      } as OpenClawConfig;
-
-      const keys = buildConfiguredAllowlistKeys({
-        cfg,
-        defaultProvider: "openai",
-        agentId: "research",
-      });
-      const policy = createModelVisibilityPolicy({
-        cfg,
-        catalog: [],
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        agentId: "research",
-      });
-
-      expect(keys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
-      expect(keys?.has("openai/sonnet")).toBe(false);
-      expect(policy.allowsKey("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(policy.allowsKey("openai/sonnet")).toBe(false);
     });
   });
 

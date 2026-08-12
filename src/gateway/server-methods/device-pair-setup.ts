@@ -53,6 +53,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         env: process.env,
         publicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
+        localTlsFingerprint: context.gatewayTlsFingerprint,
         ...(params.bootstrapProfile
           ? {
               bootstrapProfile:
@@ -89,6 +90,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           auth: resolved.authLabel,
           urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
           access: resolved.access,
+          expiresAtMs: resolved.expiresAtMs,
           ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
         },
         undefined,

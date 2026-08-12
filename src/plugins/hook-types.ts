@@ -65,12 +65,14 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundMessageMetadata,
+  PluginHookLocation,
   PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookProviderUpdate,
 } from "./hook-message.types.js";
 export {
   PluginApprovalResolutions,
@@ -564,6 +566,7 @@ export type PluginHookReplyDispatchEvent = {
   originatingThreadId?: string | number;
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
+  shouldSendFullToolDetails: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;
 };

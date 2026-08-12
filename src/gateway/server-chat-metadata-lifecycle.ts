@@ -11,7 +11,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
-  const { createGatewayChatMetadataRuntime } =
+  const { ChatMetadataSnapshotUnavailableError, createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: params.getConfig,
@@ -46,11 +46,15 @@ export async function createGatewayChatMetadataLifecycle(params: {
     if (params.minimalTestGateway) {
       return undefined;
     }
-    const [{ registerPreparedModelRuntimePublicationListener }, { registerSkillsChangeListener }] =
-      await Promise.all([
-        import("../agents/prepared-model-runtime.js"),
-        import("../skills/runtime/refresh.js"),
-      ]);
+    const [
+      { registerRuntimeAuthProfileStoreMutationListener },
+      { registerPreparedModelRuntimePublicationListener },
+      { registerSkillsChangeListener },
+    ] = await Promise.all([
+      import("../agents/auth-profiles/runtime-snapshots.js"),
+      import("../agents/prepared-model-runtime.js"),
+      import("../skills/runtime/refresh.js"),
+    ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "invalidated") {
@@ -67,8 +71,14 @@ export async function createGatewayChatMetadataLifecycle(params: {
       runtime.invalidate();
       refreshLogged();
     });
+    const unregisterRuntimeAuthProfileStoreMutation =
+      registerRuntimeAuthProfileStoreMutationListener(() => {
+        runtime.invalidate();
+        refreshLogged();
+      });
     return {
       stop: async () => {
+        unregisterRuntimeAuthProfileStoreMutation();
         unregisterPreparedModelRuntimePublication();
         unregisterSkillsChange();
       },
@@ -84,6 +94,14 @@ export async function createGatewayChatMetadataLifecycle(params: {
       const sidecar = await registerRefreshListeners();
       if (sidecar) {
         sidecars.push(sidecar);
+        // Publications that complete before listener registration would otherwise be missed.
+        // During ordinary startup the owner is published after attachment, so an unavailable
+        // snapshot here is expected and the publication listener performs the first refresh.
+        await runtime.refresh().catch((error: unknown) => {
+          if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+            params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+          }
+        });
       }
     },
     read: runtime.read,

@@ -53,7 +53,7 @@ describeControlUiE2e("session discussion toggle", () => {
     await server?.close();
   });
 
-  it("opens and closes the sidebar from the same header action", async () => {
+  it("keeps an existing discussion closed until the header action opens it", async () => {
     const context = await browser.newContext({
       ...(captureUiProof
         ? { recordVideo: { dir: proofDir, size: { height: 720, width: 1280 } } }
@@ -73,7 +73,10 @@ describeControlUiE2e("session discussion toggle", () => {
         },
       ],
       methodResponses: {
-        "session.discussion.info": { state: "available" },
+        "session.discussion.info": {
+          openUrl: "https://discussion.example/session",
+          state: "open",
+        },
         "session.discussion.open": {
           openUrl: "https://discussion.example/session",
           state: "open",
@@ -88,6 +91,9 @@ describeControlUiE2e("session discussion toggle", () => {
     const showDiscussion = page.getByRole("button", { name: "Show discussion" });
     await expect.poll(() => showDiscussion.isVisible()).toBe(true);
     await expect.poll(() => showDiscussion.getAttribute("aria-pressed")).toBe("false");
+    if (captureUiProof) {
+      await page.screenshot({ path: path.join(proofDir, "discussion-initial-closed.png") });
+    }
 
     await showDiscussion.click();
 
@@ -95,7 +101,7 @@ describeControlUiE2e("session discussion toggle", () => {
     const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
     await expect.poll(() => hideDiscussion.getAttribute("aria-pressed")).toBe("true");
     await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
-    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(1);
+    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-open.png") });
     }
@@ -104,7 +110,7 @@ describeControlUiE2e("session discussion toggle", () => {
 
     await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
     await expect.poll(() => showDiscussion.getAttribute("aria-pressed")).toBe("false");
-    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(1);
+    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-closed.png") });
     }

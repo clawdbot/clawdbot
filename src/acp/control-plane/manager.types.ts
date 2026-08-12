@@ -7,6 +7,7 @@ import type {
   AcpRuntimePromptMode,
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
+  AcpRuntimeTurnAttachment,
 } from "@openclaw/acp-core/runtime/types";
 import type {
   SessionAcpIdentity,
@@ -54,13 +55,12 @@ export type AcpInitializeSessionInput = {
   backendId?: string;
 };
 
-export type AcpTurnAttachment = {
-  mediaType: string;
-  data: string;
-};
+export type AcpTurnAttachment = AcpRuntimeTurnAttachment;
 
 /** Input for one ACP prompt turn routed through the manager. */
 export type AcpRunTurnInput = {
+  /** Private admitted execution context supplied by the owning host ingress. */
+  admittedRunContext: import("../../agents/admitted-run-context.js").AdmittedRunContext;
   cfg: OpenClawConfig;
   sessionKey: string;
   provenance: "human" | "agent" | "system";

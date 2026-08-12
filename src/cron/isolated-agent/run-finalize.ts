@@ -1,10 +1,13 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber as resolvePositiveContextTokens,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
-import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -13,7 +16,6 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -21,11 +23,7 @@ import {
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
-import {
-  isHeartbeatOnlyResponse,
-  resolveCronPayloadOutcome,
-  resolveHeartbeatAckMaxChars,
-} from "./helpers.js";
+import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import { adoptCronRunSessionMetadata } from "./run-session-state.js";
@@ -37,27 +35,12 @@ import {
   setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
 type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
-
-async function loadCronContextRuntime() {
-  return await cronContextRuntimeLoader.load();
-}
-
-function resolvePositiveContextTokens(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-async function loadCliRunnerRuntime() {
-  return await import("../../agents/cli-runner.runtime.js");
-}
-
-async function loadUsageFormatRuntime() {
-  return await import("../../utils/usage-format.js");
-}
 
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
@@ -71,6 +54,18 @@ export async function finalizeCronRun(params: {
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
   let telemetry: CronRunTelemetry | undefined;
+  const cleanupRunSession = async (reason: string) => {
+    await cleanupCronRunSessionAfterRun({
+      job: prepared.input.job,
+      agentSessionKey: prepared.agentSessionKey,
+      sessionId: prepared.currentRunSessionId(),
+      lifecycleRevision: prepared.cronSession.lifecycleRevision,
+      sessionUpdatedAt: prepared.cronSession.sessionEntry.updatedAt,
+      beforeDelete: params.beforeSessionDelete,
+      reason,
+    });
+    params.markCronRunSessionCleanupAttempted();
+  };
 
   // Late aborted results may still contain billable usage. Recheck before each
   // metadata mutation because lazy runtime loads below can yield to the timeout.
@@ -98,7 +93,7 @@ export async function finalizeCronRun(params: {
     execution.liveSelection.provider;
   const contextTokens =
     resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
-    (await loadCronContextRuntime()).lookupContextTokens(modelUsed, {
+    (await cronContextRuntimeLoader.load()).lookupContextTokens(modelUsed, {
       allowAsyncLoad: false,
     }) ??
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
@@ -114,19 +109,20 @@ export async function finalizeCronRun(params: {
       const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
-        const { clearCliSession } = await loadCliRunnerRuntime();
+        const { clearCliSession } = await import("../../agents/cli-runner.runtime.js");
         clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
       } else if (cliSessionBinding?.sessionId?.trim()) {
-        const { setCliSessionBinding } = await loadCliRunnerRuntime();
+        const { setCliSessionBinding } = await import("../../agents/cli-runner.runtime.js");
         setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
       } else if (cliSessionId) {
-        const { setCliSessionId } = await loadCliRunnerRuntime();
+        const { setCliSessionId } = await import("../../agents/cli-runner.runtime.js");
         setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
       }
     }
   }
   if (hasNonzeroUsage(usage)) {
-    const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
+    const { estimateUsageCost, resolveModelCostConfig } =
+      await import("../../utils/usage-format.js");
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const cacheRead = usage.cacheRead ?? 0;
@@ -145,7 +141,7 @@ export async function finalizeCronRun(params: {
       model: modelUsed,
       config: prepared.cfgWithAgentDefaults,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({ usage, cost: costConfig }),
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
@@ -202,7 +198,7 @@ export async function finalizeCronRun(params: {
         diagnosticUsage?.output !== undefined ||
         diagnosticUsage?.cacheRead !== undefined ||
         diagnosticUsage?.cacheWrite !== undefined;
-      const diagnosticEstimatedCostUsd = resolveNonNegativeNumber(
+      const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
         estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
       );
       const contextUsedTokens = deriveContextPromptTokens({
@@ -276,17 +272,7 @@ export async function finalizeCronRun(params: {
   if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
     const error = metaErrorMessage ?? "cron isolated agent run aborted";
-    const { cleanupDirectCronSession } = await loadCronDeliveryRuntime();
-    await cleanupDirectCronSession({
-      job: prepared.input.job,
-      agentSessionKey: prepared.agentSessionKey,
-      sessionId: prepared.currentRunSessionId(),
-      lifecycleRevision: prepared.cronSession.lifecycleRevision,
-      sessionUpdatedAt: prepared.cronSession.sessionEntry.updatedAt,
-      beforeSessionDelete: params.beforeSessionDelete,
-      retireReason: "cron-delete-after-run-aborted",
-    });
-    params.markCronRunSessionCleanupAttempted();
+    await cleanupRunSession("cron-delete-after-run-aborted");
     return prepared.withRunSession({
       status: "error",
       error,
@@ -299,6 +285,7 @@ export async function finalizeCronRun(params: {
     });
   }
   const {
+    deliveryDisposition,
     deliveryPayloadHasStructuredContent,
     hasFatalStructuredErrorPayload,
     pendingPresentationWarningError,
@@ -355,16 +342,11 @@ export async function finalizeCronRun(params: {
 
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const heartbeatOnlyResponse =
-    prepared.deliveryRequested &&
-    !hasFatalErrorPayload &&
-    isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =
     heartbeatOnlyResponse &&
-    deliveryPayloads.every(
-      (payload) =>
-        stripHeartbeatToken(payload.text, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip ||
-        isSilentReplyPayloadText(payload.text, HEARTBEAT_TOKEN),
-    );
+    (deliveryDisposition.kind === "empty" ||
+      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
     (heartbeatControlOnlyResponse ||
@@ -430,17 +412,7 @@ export async function finalizeCronRun(params: {
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
-    const { cleanupDirectCronSession } = await loadCronDeliveryRuntime();
-    await cleanupDirectCronSession({
-      job: prepared.input.job,
-      agentSessionKey: prepared.agentSessionKey,
-      sessionId: prepared.currentRunSessionId(),
-      lifecycleRevision: prepared.cronSession.lifecycleRevision,
-      sessionUpdatedAt: prepared.cronSession.sessionEntry.updatedAt,
-      beforeSessionDelete: params.beforeSessionDelete,
-      retireReason: "cron-delete-after-run-fatal-error",
-    });
-    params.markCronRunSessionCleanupAttempted();
+    await cleanupRunSession("cron-delete-after-run-fatal-error");
     const deliveryTrace = buildCronDeliveryTrace({
       deliveryPlan: prepared.deliveryPlan,
       resolvedDelivery: prepared.resolvedDelivery,

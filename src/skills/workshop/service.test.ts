@@ -40,6 +40,7 @@ import {
   readSkillProposalRollback,
   updateSkillProposalRecord,
 } from "./store.js";
+import { withSkillCollectionLock } from "./target-lock.js";
 import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -457,6 +458,58 @@ describe("skill workshop proposals", () => {
         content: "# Empty Skill\n",
       }),
     ).rejects.toThrow("Skill already exists");
+  });
+
+  it("reconciles pending create proposals when their target skills are created manually", async () => {
+    const workspaceDir = await makeWorkspace();
+    const listed = await proposeCreateSkill({
+      workspaceDir,
+      name: "Listed Manual Skill",
+      description: "Becomes stale before proposal listing.",
+      content: "# Listed Manual Skill\n",
+    });
+    const inspected = await proposeCreateSkill({
+      workspaceDir,
+      name: "Inspected Manual Skill",
+      description: "Becomes stale before proposal inspection.",
+      content: "# Inspected Manual Skill\n",
+    });
+    await fs.mkdir(listed.record.target.skillDir, { recursive: true });
+    await fs.writeFile(
+      listed.record.target.skillFile,
+      stripProposalFrontmatterForSkill(listed.content),
+      "utf8",
+    );
+    await writeSkill({
+      dir: inspected.record.target.skillDir,
+      name: "inspected-manual-skill",
+      description: "Installed without the proposal.",
+      body: "# Inspected Manual Skill\n\nAlready active.\n",
+    });
+
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+      proposals: expect.arrayContaining([
+        expect.objectContaining({
+          id: listed.record.id,
+          status: "stale",
+        }),
+      ]),
+    });
+    await expect(
+      inspectSkillProposal(inspected.record.id, { workspaceDir }),
+    ).resolves.toMatchObject({
+      record: {
+        id: inspected.record.id,
+        status: "stale",
+        statusReason: "Target skill was created after proposal creation.",
+      },
+    });
+    await expect(
+      resolvePendingSkillProposal({
+        name: listed.record.target.skillKey,
+        workspaceDir,
+      }),
+    ).rejects.toThrow("No pending skill proposal matched");
   });
 
   it("revises pending proposals in place before approval", async () => {
@@ -976,7 +1029,7 @@ describe("skill workshop proposals", () => {
     expect(manifest.proposals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: proposal.record.id, status: "applied" }),
-        expect.objectContaining({ id: sibling.record.id, status: "pending" }),
+        expect.objectContaining({ id: sibling.record.id, status: "stale" }),
       ]),
     );
     await expect(
@@ -1007,7 +1060,33 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(supportFile, "Partial support.\n", "utf8");
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+    let settled = false;
+    const listing = listSkillProposals({ workspaceDir }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).toBe(false);
+    releaseLock?.();
+    await heldLock;
+    await expect(listing).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
     await expect(fs.access(supportFile)).rejects.toThrow();

@@ -32,7 +32,7 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
   return {
     ...actual,
-    resolveStorePath: mocks.resolveStorePath,
+    resolveSessionStorePathCore: mocks.resolveStorePath,
   };
 });
 

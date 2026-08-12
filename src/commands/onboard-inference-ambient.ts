@@ -1,4 +1,4 @@
-export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
+export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-5";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-5";
 export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";

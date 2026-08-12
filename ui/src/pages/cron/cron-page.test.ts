@@ -1,10 +1,14 @@
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
-import type { CronJob } from "../../api/types.ts";
+import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { CronState } from "../../lib/cron/index.ts";
 import "./cron-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
@@ -23,17 +27,6 @@ type TestGateway = ApplicationContext["gateway"] & {
   emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   emitRetiredEvent: (event: Parameters<GatewayEventListener>[0]) => void;
 };
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred callback to be initialized");
-  }
-  return { promise, resolve };
-}
 
 function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   const snapshot: ApplicationGatewaySnapshot = {
@@ -139,10 +132,22 @@ function createPage(context: ApplicationContext, options: { render?: boolean } =
   return page;
 }
 
+function cronListResponse(jobs: CronJob[]): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "cron-page-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+  };
+}
+
 function createRequest() {
   return vi.fn(async (method: string) => {
     if (method === "cron.list") {
-      return { jobs: [], total: 0, offset: 0, hasMore: false };
+      return cronListResponse([]);
     }
     if (method === "cron.runs") {
       return { entries: [], total: 0, offset: 0, hasMore: false };
@@ -156,6 +161,7 @@ function createRequest() {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -181,7 +187,7 @@ describe("CronPage editor state sync", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
-        return { jobs: [job], total: 1, offset: 0, hasMore: false };
+        return cronListResponse([job]);
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, offset: 0, hasMore: false };
@@ -326,7 +332,7 @@ describe("CronPage editor state sync", () => {
         return { id: "job-fresh" };
       }
       if (method === "cron.list") {
-        return { jobs: [], total: 0, offset: 0, hasMore: false };
+        return cronListResponse([]);
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, offset: 0, hasMore: false };
@@ -381,7 +387,7 @@ describe("CronPage editor state sync", () => {
   });
 
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
-    const job = {
+    const job: CronJob = {
       id: "job-1",
       name: "Nightly digest",
       enabled: true,
@@ -396,12 +402,7 @@ describe("CronPage editor state sync", () => {
     let removed = false;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "cron.list") {
-        return {
-          jobs: removed ? [] : [{ ...job, enabled: serverEnabled }],
-          total: removed ? 0 : 1,
-          offset: 0,
-          hasMore: false,
-        };
+        return cronListResponse(removed ? [] : [{ ...job, enabled: serverEnabled }]);
       }
       if (method === "cron.update") {
         const patch = (params as { patch?: { enabled?: boolean } }).patch;
@@ -446,13 +447,14 @@ describe("CronPage editor state sync", () => {
     const removeButton = Array.from(page.querySelectorAll(".cron-job-menu__item")).find(
       (item) => item.textContent?.trim() === "Remove",
     ) as HTMLButtonElement;
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
     removeButton.click();
     await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));
   });
 
   it("renders read-only controls and rejects a stale admin action after a scope downgrade", async () => {
-    const job = {
+    const job: CronJob = {
       id: "job-1",
       name: "Nightly digest",
       enabled: true,
@@ -465,7 +467,7 @@ describe("CronPage editor state sync", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
-        return { jobs: [job], total: 1, offset: 0, hasMore: false };
+        return cronListResponse([job]);
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, offset: 0, hasMore: false };
@@ -555,7 +557,7 @@ describe("CronPage lifecycle", () => {
         return modelRequestCount === 1 ? staleModels.promise : { models: [{ id: "fresh/model" }] };
       }
       if (method === "cron.list") {
-        return { jobs: [], total: 0, offset: 0, hasMore: false };
+        return cronListResponse([]);
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, offset: 0, hasMore: false };

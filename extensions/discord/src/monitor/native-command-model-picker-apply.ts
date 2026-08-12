@@ -65,6 +65,7 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        pluginCommandDispatch: { kind: "non-plugin" },
       }),
       12000,
     );

@@ -22,13 +22,13 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { chatHandlers } from "./chat.js";
 import { resolveGatewayInflightRequest, type GatewayInflightResult } from "./inflight.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
@@ -193,7 +193,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadSessionEntryReadOnly(createdKey);
+  const loaded = loadGatewaySessionEntryReadOnly(createdKey);
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -396,7 +396,7 @@ async function handleSessionSend(params: {
         isWebchatConnect: params.isWebchatConnect,
       };
       if (onAdmissionOwned) {
-        await handleChatSend(options, onAdmissionOwned);
+        await handleDirectExternalChatSend(options, onAdmissionOwned);
         return;
       }
       await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);

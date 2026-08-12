@@ -11,7 +11,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
-import { loadJsonFile } from "../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
@@ -415,7 +415,7 @@ function readPortalCliOauthCredentials<TProvider extends string>(
   credPath: string,
   provider: TProvider,
 ): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
-  const raw = loadJsonFile(credPath);
+  const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -430,7 +430,7 @@ function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCr
 
 function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCredential | null {
   const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
-  const raw = loadJsonFile(credPath);
+  const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -477,7 +477,7 @@ function readClaudeCliKeychainCredentials(
 }
 
 function readClaudeCliUserApiKeyHelperCredential(homeDir?: string): ClaudeCliCredential | null {
-  const raw = loadJsonFile(resolveClaudeCliUserSettingsPath(homeDir));
+  const raw = loadJsonFileThroughSymlink(resolveClaudeCliUserSettingsPath(homeDir));
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
   }
@@ -497,7 +497,7 @@ function readClaudeCliUserApiKeyHelperCredential(homeDir?: string): ClaudeCliCre
 // later account switch could mislabel another credential's quota.
 function readClaudeCliAccountEmail(homeDir?: string): string | undefined {
   const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  const raw = loadJsonFile(path.join(baseDir, ".claude.json"));
+  const raw = loadJsonFileThroughSymlink(path.join(baseDir, ".claude.json"));
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
@@ -547,7 +547,7 @@ function readClaudeCliCredentials(options?: {
   }
 
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
-  const raw = loadJsonFile(credPath);
+  const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -624,7 +624,7 @@ export function readCodexCliActiveApiKey(options?: {
 
   const candidates: CodexCliApiKeyCredential[] = [];
   const authPath = path.join(codexHome, CODEX_CLI_AUTH_FILENAME);
-  const raw = loadJsonFile(authPath);
+  const raw = loadJsonFileThroughSymlink(authPath);
   if (raw && typeof raw === "object") {
     const fileCredential = parseCodexApiKeyCredential(raw as Record<string, unknown>);
     if (fileCredential) {
@@ -684,7 +684,7 @@ function readCodexCliCredentials(options?: {
   }
 
   const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
-  const raw = loadJsonFile(authPath);
+  const raw = loadJsonFileThroughSymlink(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }

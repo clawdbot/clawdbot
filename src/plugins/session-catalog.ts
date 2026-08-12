@@ -34,12 +34,22 @@ export type SessionCatalogContinueProviderParams = Omit<
 };
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
+export type SessionCatalogStartTerminalProviderParams = {
+  agentId: string;
+  cwd: string;
+  initialMessage?: string;
+  /** Present only when the caller selected a catalog host backed by this node. */
+  nodeId?: string;
+};
+
 export type SessionCatalogTerminalPlan =
   | {
       kind: "local";
       argv: string[];
       cwd?: string;
       title?: string;
+      /** Bounded command-specific environment overrides. */
+      env?: Record<string, string>;
       /** PATH that resolved argv[0], needed by env-based script interpreters. */
       pathEnv?: string;
     }
@@ -154,6 +164,9 @@ export type SessionCatalogProvider = {
     hostId: string;
     threadId: string;
   }) => Promise<SessionCatalogTerminalPlan>;
+  startTerminalSession?: (
+    request: SessionCatalogStartTerminalProviderParams,
+  ) => Promise<SessionCatalogTerminalPlan>;
 };
 
 type SessionCatalogAdoptedSource = { hostId: string; threadId: string };

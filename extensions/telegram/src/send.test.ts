@@ -30,7 +30,12 @@ import {
 } from "./poll-answer-context.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+import {
+  countInputRichBlockMedia,
+  countInputRichBlocks,
+  inputRichBlocksToPlainText,
+  type InputRichBlock,
+} from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -44,12 +49,11 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
+import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  recordSentMessage,
-  wasSentByBot,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 
 installTelegramSendTestHooks();
 
@@ -106,11 +110,11 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: {
-  blocks?: InputRichBlock[];
-  markdown?: string;
-  html?: string;
-}): string {
+type RichMessageTestPayload = Parameters<
+  NonNullable<NonNullable<RichRawTextTestApi["raw"]>["sendRichMessage"]>
+>[0]["rich_message"];
+
+function richTextForTest(richMessage: RichMessageTestPayload): string {
   if (richMessage.blocks) {
     return inputRichBlocksToPlainText(richMessage.blocks);
   }
@@ -183,7 +187,7 @@ function markdownTable(columns: number): string {
 }
 
 function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
-  return blocks?.length ?? 0;
+  return countInputRichBlocks(blocks ?? []);
 }
 
 beforeEach(() => {
@@ -1108,6 +1112,34 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("invalidates the projection cursor when a later chunk fails terminally", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-terminal-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    const invalidate = vi.spyOn(cursor, "invalidate");
+    botApi.sendMessage
+      .mockResolvedValueOnce({
+        message_id: 1601,
+        date: 1_779_394_745,
+        chat: { id: "123", type: "private" },
+        from: { id: 42, is_bot: true, first_name: "Kelaw" },
+        text: "page one",
+      })
+      .mockRejectedValueOnce(new Error("400: Bad Request: chat not found"));
+
+    await expect(
+      sendMessageTelegram("123", "A".repeat(4200), {
+        cfg,
+        token: "tok",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      }),
+    ).rejects.toThrow();
+
+    expect(invalidate).toHaveBeenCalled();
+  });
+
   it("records transcript projection metadata for native locations", async () => {
     const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
@@ -1416,6 +1448,53 @@ describe("sendMessageTelegram", () => {
       .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
       .join("\n");
     expect(plain).toContain("paragraph 500");
+  });
+
+  it("keeps recursive list and album payloads within Telegram transport limits", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
+    const photos = Array.from(
+      { length: 51 },
+      (_, index) => `<img src="https://example.com/${index}.jpg"/>`,
+    ).join("");
+
+    await sendMessageTelegram(
+      "123",
+      `${list}\n\n<tg-collage>${photos}<figcaption>Album</figcaption></tg-collage>`,
+      {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      },
+    );
+
+    const requests: Array<RichMessageTestPayload | undefined> =
+      botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    const blocks = requests.flatMap((request) => request?.blocks ?? []);
+    const items = blocks.flatMap((block) => (block.type === "list" ? block.items : []));
+    const albums = blocks.filter((block) => block.type === "collage");
+
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((request) => countInputRichBlocks(request?.blocks ?? []) <= 500)).toBe(
+      true,
+    );
+    expect(
+      requests.every(
+        (request) =>
+          (request?.blocks ?? []).reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ) <= 50,
+      ),
+    ).toBe(true);
+    expect(items.map((item) => item.value)).toEqual(
+      Array.from({ length: 250 }, (_, index) => index + 1),
+    );
+    expect(albums.flatMap((album) => album.blocks)).toHaveLength(51);
+    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+      "Album",
+    ]);
   });
 
   it("applies rich entity detection skip to every chunk of the document", async () => {
@@ -5266,6 +5345,23 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to plain text when an HTML edit renders empty", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "<b>visible</b>", {
+      token: "tok",
+      cfg: {},
+      textMode: "html",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(1, "123", 1, "<b>visible</b>", {
+      parse_mode: "HTML",
+    });
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(2, "123", 1, "visible");
+  });
+
   it("uses editMessageCaption when requested for media captions", async () => {
     botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
@@ -5466,7 +5562,12 @@ describe("editMessageTelegram", () => {
   ])("refreshes cached $name from Telegram's authoritative edit response", async (testCase) => {
     const storePath = `/tmp/openclaw-telegram-edited-context-${process.pid}-${Date.now()}-${testCase.name}.json`;
     const cfg = { session: { store: storePath } };
-    const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
+    const chat = {
+      id: -100123,
+      type: "supergroup" as const,
+      title: "Ops",
+      is_forum: true as const,
+    };
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
@@ -5734,10 +5835,79 @@ describe("sendPollTelegram", () => {
             is_forum: true,
           },
           messageId: 123,
-          messageThreadId: 99,
+          threadSpec: { scope: "forum", id: 99 },
           question: "Ready?",
           options: ["Yes", "No"],
         }),
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "base private chat",
+      to: "555",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      expected: { scope: "dm" as const },
+    },
+    {
+      name: "bot-private topic",
+      to: "555:topic:42",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      messageThreadId: 42,
+      expected: { scope: "dm" as const, id: 42 },
+    },
+    {
+      name: "regular group",
+      to: "-100555",
+      chat: { id: -100555, type: "supergroup" as const, title: "Reviewers" },
+      expected: { scope: "none" as const },
+    },
+  ])("records the canonical $name poll scope", async (testCase) => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 126,
+      ...(testCase.messageThreadId === undefined
+        ? {}
+        : { message_thread_id: testCase.messageThreadId }),
+      chat: testCase.chat,
+      poll: { id: `poll-${testCase.expected.scope}` },
+    });
+
+    await expect(
+      sendPollTelegram(
+        testCase.to,
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: testCase.expected }),
+      }),
+    ]);
+  });
+
+  it("preserves the accepted General forum scope when Telegram omits its thread id", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 127,
+      chat: { id: -100556, type: "supergroup", title: "Forum", is_forum: true },
+      poll: { id: "poll-general" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-100556:topic:1",
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: { scope: "forum", id: 1 } }),
       }),
     ]);
   });
@@ -5902,6 +6072,7 @@ describe("sendPollTelegram", () => {
       pollId: "poll-fast-answer",
       chat: { id: -1001234567890, type: "supergroup" as const, title: "Reviewers" },
       messageId: 125,
+      threadSpec: { scope: "none" as const },
       question: "Ready?",
       options: ["Yes", "No"],
     };
@@ -5968,7 +6139,7 @@ describe("sendPollTelegram", () => {
     const api = {
       sendPoll: vi.fn(async () => ({
         message_id: 123,
-        chat: { id: 555, type: "private" },
+        chat: { id: 555, type: "private", first_name: "Ada" },
         poll: { id: "poll-anonymous" },
       })),
     };
@@ -6011,7 +6182,7 @@ describe("sendPollTelegram", () => {
     const api = {
       sendPoll: vi.fn(async () => ({
         message_id: 123,
-        chat: { id: 555, type: "private" },
+        chat: { id: 555, type: "private", first_name: "Ada" },
         poll: { id: "poll-write-error" },
       })),
     };

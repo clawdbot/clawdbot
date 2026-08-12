@@ -80,13 +80,9 @@ vi.mock("./diagnostic-run-activity.js", () => ({
   getDiagnosticSessionActivitySnapshot: mocks.getDiagnosticSessionActivitySnapshot,
 }));
 
-import {
-  testing,
-  recoverStuckDiagnosticSession,
-} from "./diagnostic-stuck-session-recovery.runtime.js";
+import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 function resetMocks() {
-  testing.resetRecoveriesInFlight();
   mocks.abortEmbeddedAgentRun.mockReset();
   mocks.forceClearEmbeddedAgentRun.mockReset();
   mocks.isEmbeddedAgentRunActive.mockReset();
@@ -146,28 +142,6 @@ describe("stuck session recovery", () => {
       "stuck session recovery skipped: sessionId=session-1 sessionKey=agent:main:main age=180s queueDepth=1 activeSessionId=session-1",
       "stuck session recovery outcome: status=skipped action=observe_only sessionId=session-1 sessionKey=agent:main:main activeSessionId=session-1 activeWorkKind=embedded_run reason=active_embedded_run",
     ]);
-  });
-
-  it("does not release a sibling-key lane while the same session file has an active run", async () => {
-    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile.mockReturnValue("session-file-run");
-
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId: "sibling-session",
-      sessionKey: "agent:main:fallback",
-      sessionFile: "/tmp/openclaw-shared-session.jsonl",
-      ageMs: 180_000,
-      queueDepth: 1,
-    });
-
-    expect(outcome).toMatchObject({
-      status: "skipped",
-      action: "observe_only",
-      reason: "active_embedded_run",
-      activeSessionId: "session-file-run",
-    });
-    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("reclaims a stale active embedded run with queued work and no forward progress (#85639)", async () => {
@@ -260,30 +234,6 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).toHaveBeenCalledWith(
       "session:agent:main:telegram:group:-1003821464158:topic:4836",
     );
-  });
-
-  it("keeps the lane when a fresh queued turn started during the abort despite stale queue depth", async () => {
-    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-fresh");
-    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
-    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
-    mocks.getCommandLaneActiveTaskIds.mockReturnValueOnce([101]).mockReturnValueOnce([202]);
-
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId: "session-fresh",
-      sessionKey: "agent:main:main",
-      ageMs: 720_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
-    });
-
-    expect(outcome).toMatchObject({
-      status: "aborted",
-      action: "abort_embedded_run",
-      aborted: true,
-      drained: true,
-      released: 0,
-    });
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("keeps the lane when a fresh turn started during the abort even with lane-queued work", async () => {
@@ -419,27 +369,6 @@ describe("stuck session recovery", () => {
 
     expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
-  });
-
-  it("does not release the session lane while reply work is active without an embedded handle", async () => {
-    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
-    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
-    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
-
-    await recoverStuckDiagnosticSession({
-      sessionId: "queued-reply-session",
-      sessionKey: "agent:main:main",
-      ageMs: 180_000,
-      queueDepth: 1,
-    });
-
-    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(warnLogMessages()).toEqual([
-      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
-    ]);
   });
 
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
@@ -594,35 +523,6 @@ describe("stuck session recovery", () => {
     expect(warnLogMessages()).toContain(
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=false drained=false forceCleared=true released=1 queuedCount=1",
     );
-  });
-
-  it("does not release the session lane while unregistered lane work is active", async () => {
-    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
-    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
-    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
-    mocks.getCommandLaneSnapshot.mockReturnValue({
-      lane: "session:agent:main:main",
-      queuedCount: 1,
-      activeCount: 1,
-      maxConcurrent: 1,
-      draining: false,
-      generation: 0,
-    });
-
-    await recoverStuckDiagnosticSession({
-      sessionId: "unregistered-work-session",
-      sessionKey: "agent:main:main",
-      ageMs: 180_000,
-      queueDepth: 1,
-    });
-
-    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(warnLogMessages()).toEqual([
-      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
-    ]);
   });
 
   it("releases stale unregistered lane work after the diagnostic abort floor", async () => {

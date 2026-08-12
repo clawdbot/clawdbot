@@ -41,6 +41,8 @@ type SlackSelfFilterArgs = {
   context?: {
     botId?: string;
     botUserId?: string;
+    teamId?: string;
+    enterpriseId?: string;
     isEnterpriseInstall?: boolean;
   };
   event?: unknown;
@@ -330,7 +332,7 @@ export function createSlackBoltApp(params: {
   clientOptions: Record<string, unknown>;
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
-  onContextIdentity?: (identity: SlackContextIdentity) => void;
+  onContextIdentity?: (identity: SlackContextIdentity) => void | Promise<void>;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -374,7 +376,7 @@ export function createSlackBoltApp(params: {
     ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
-    params.onContextIdentity?.(args.context ?? {});
+    await params.onContextIdentity?.(args.context ?? {});
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
       return;
     }

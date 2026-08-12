@@ -515,7 +515,5 @@ export const testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
-export { testing as __testing };

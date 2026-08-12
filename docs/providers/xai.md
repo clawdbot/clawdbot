@@ -268,8 +268,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "xai/grok-imagine-video",
+          mediaModels: {
+            video: {
+              primary: "xai/grok-imagine-video",
+            },
           },
         },
       },
@@ -309,8 +311,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "xai/grok-imagine-image",
+          mediaModels: {
+            image: {
+              primary: "xai/grok-imagine-image",
+            },
           },
         },
       },
@@ -389,13 +393,15 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     {
       tools: {
         media: {
+          models: [
+            {
+              type: "provider",
+              provider: "xai",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
-            models: [
-              {
-                type: "provider",
-                provider: "xai",
-              },
-            ],
+            enabled: true,
           },
         },
       },
@@ -491,7 +497,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
           },
         },
       },
-      env: { XAI_API_KEY: "xai-..." },
+      env: { vars: { XAI_API_KEY: "xai-..." } },
     }
     ```
 

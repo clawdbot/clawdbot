@@ -96,6 +96,7 @@ const SECTION_DOCS_URLS = {
 const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",

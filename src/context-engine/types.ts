@@ -430,6 +430,7 @@ export interface ContextEngine {
 
   /**
    * Atomically and idempotently commit one accepted durable transcript turn.
+   * Messages span the admitted user entry through the accepted terminal entry.
    * Hosts may retry the same advancement key after process or plugin failure.
    */
   commitTurn?(params: {
@@ -437,7 +438,6 @@ export interface ContextEngine {
     admission: import("../config/sessions/transcript-entry-anchor.js").TranscriptTurnAdmission;
     terminal: import("../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
     messages: AgentMessage[];
-    prePromptMessageCount: number;
     sessionId: string;
     sessionKey?: string;
     sessionTarget?: ContextEngineSessionTarget;

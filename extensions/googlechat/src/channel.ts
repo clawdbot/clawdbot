@@ -75,6 +75,16 @@ export const googlechatPlugin = createChatChannelPlugin({
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
       targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeGoogleChatTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        if (isGoogleChatUserTarget(target)) {
+          return "direct";
+        }
+        return isGoogleChatSpaceTarget(target) ? "group" : undefined;
+      },
       resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: (raw, normalized) => {

@@ -650,6 +650,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
+    commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
     ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     channels: {
@@ -740,6 +741,22 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
             type: "string",
             title: "Response prefix",
             description: "Optional text prepended to outbound replies.",
+          },
+        },
+      },
+      commands: {
+        type: "object",
+        title: "Commands",
+        properties: {
+          native: {
+            title: "Native Commands",
+            default: "auto",
+            anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
+          },
+          nativeSkills: {
+            title: "Native Skill Commands",
+            default: "auto",
+            anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
           },
         },
       },
@@ -1306,7 +1323,6 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
-      icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
       category: "Research",
@@ -1337,7 +1353,6 @@ async function createChatPickerScenario(
       execCwd: "/Users/peter/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
-      icon: "🛠️",
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
       kind: "group",
@@ -1454,19 +1469,37 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    // Advertised Gateway methods gate session actions (see
+    // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
+    // every session context-menu row disabled, so the harness could not show
+    // the menu operators actually see. browser.request/terminal.open likewise
+    // gate the chat header's panel toggles, which stayed invisible here.
     featureMethods: [
+      "browser.request",
       "chat.metadata",
       "chat.startup",
       "question.list",
       "openclaw.changes.list",
       "openclaw.chat",
       "openclaw.chat.history",
+      "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
+      "sessions.fork",
+      "sessions.groups.delete",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.patch",
+      "sessions.patchMany",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "system.info",
+      "terminal.open",
     ],
+    // Terminal has a second gate beyond the advertised method (see
+    // ui/src/lib/terminal-availability.ts).
+    terminalEnabled: true,
     historyMessages: buildScrollableChatHistory(baseTime),
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2409,6 +2442,10 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
         res.end(bootstrapBody);
       });
     },
+    // ui/vite.config.ts registers a placeholder bootstrap-config middleware and
+    // config-file plugins load first, so without "pre" its stub answers every
+    // request and the scenario's bootstrap fields never reach the app.
+    enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       return html.replace(
@@ -2477,6 +2514,8 @@ const server = await createServer({
       commit: "0123456789abcdef0123456789abcdef01234567",
       commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
       release: false,
       buildId: "mock",
     }),

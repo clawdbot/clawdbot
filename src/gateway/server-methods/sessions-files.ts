@@ -25,13 +25,13 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  readSessionTranscriptVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -144,20 +144,12 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
   });
 }
 
-function normalizePathValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function readPathArg(args: Record<string, unknown>): string | undefined {
   return (
-    normalizePathValue(args.path) ??
-    normalizePathValue(args.file_path) ??
-    normalizePathValue(args.filePath) ??
-    normalizePathValue(args.file)
+    normalizeOptionalString(args.path) ??
+    normalizeOptionalString(args.file_path) ??
+    normalizeOptionalString(args.filePath) ??
+    normalizeOptionalString(args.file)
   );
 }
 
@@ -196,11 +188,11 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
   for (const changeValue of changes) {
     const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizePathValue(change?.path), "modified");
+    addTouchedFile(files, normalizeOptionalString(change?.path), "modified");
     const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
-      normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
+      normalizeOptionalString(kind?.move_path) ?? normalizeOptionalString(kind?.movePath),
       "modified",
     );
   }
@@ -257,7 +249,7 @@ async function foldSqliteTouchedFiles(
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
   while (true) {
-    const delta = readSessionTranscriptVisibleMessageDelta(scope, {
+    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
       ...(cursor ? { cursor } : {}),
       maxBytes,
       maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
@@ -526,7 +518,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
@@ -536,12 +528,12 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(loaded.cfg),
   );
-  const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const spawnedCwd = normalizeOptionalString(loaded.entry.spawnedCwd);
+  const spawnedWorkspaceDir = normalizeOptionalString(loaded.entry.spawnedWorkspaceDir);
   const configuredWorkspaceDir =
     spawnedCwd || spawnedWorkspaceDir
       ? undefined
-      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+      : normalizeOptionalString(resolveAgentWorkspaceDir(loaded.cfg, agentId));
   // Keep this cwd precedence aligned with sessions.diff so the advertised
   // checkout state cannot disagree with the panel's fallback result.
   const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
@@ -553,6 +545,24 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
   };
+}
+
+/**
+ * Canonical workspace root of a session that lives on this Gateway's own disk.
+ * Workspace identity surfaces must name the same directory the file routes
+ * open, so they read it from here instead of re-deriving the precedence.
+ *
+ * An exec-node session's directory only exists on the remote host, while the
+ * precedence below falls back to the local agent workspace — returning that
+ * would describe the wrong machine. `sessions.files.reveal` refuses the same
+ * case; callers here get "no local root" and their own absent-workspace path.
+ */
+export function resolveLocalSessionWorkspaceRoot(params: {
+  sessionKey: string;
+  agentId?: string;
+}): string | undefined {
+  const loaded = loadSessionFileRoot(params);
+  return loaded.entry?.execNode ? undefined : loaded.root;
 }
 
 function resolveSessionFileCandidates(params: {
@@ -651,7 +661,7 @@ async function buildBrowserResult(params: {
   if (!params.root) {
     return undefined;
   }
-  const search = normalizePathValue(params.search);
+  const search = normalizeOptionalString(params.search);
   const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   if (search) {
     const result = await searchBrowserEntries({

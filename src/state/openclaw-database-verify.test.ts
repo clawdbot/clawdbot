@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,6 +45,39 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
         cleanup();
       }
     }
+  });
+});
+
+async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise<Error> {
+  return await runDatabaseVerifyWorker([], {
+    onWorker: (worker) => {
+      if (!worker) {
+        return;
+      }
+      worker.send = ((...args: unknown[]) => {
+        const callback = args.at(-1);
+        if (typeof callback === "function") {
+          callback(failure);
+        }
+        return true;
+      }) as ChildProcess["send"];
+    },
+  }).then(
+    () => {
+      throw new Error("expected database verification worker failure");
+    },
+    (rejection: unknown) => rejection as Error,
+  );
+}
+
+describe("database verification error coercion", () => {
+  it("preserves structured send failures across the database-worker boundary", async () => {
+    const failure = { code: "SQLITE_IOERR", database: "state" };
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(error).toMatchObject({ message: "[object Object]", code: "SQLITE_IOERR" });
+    expect(error.cause).toBe(failure);
   });
 });
 

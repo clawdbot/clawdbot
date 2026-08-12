@@ -21,6 +21,9 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+    channels:
+      - qa-channel
+      - telegram
     summary: Run the shared channel canary through QA Channel, Crabline, or a live adapter.
     transportPolicy:
       requireGroupMention: true

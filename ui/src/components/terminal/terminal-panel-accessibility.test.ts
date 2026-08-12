@@ -46,6 +46,45 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
+  it("labels the terminal placement switcher and all three modes", async () => {
+    const panel = createPanel(createPickerClient());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+
+    const switcher = panel.renderRoot.querySelector('[role="group"]');
+    expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
+    expect(
+      ["Dock to bottom", "Dock to right", "Fill main content area"].every((label) =>
+        switcher?.querySelector(`[aria-label="${label}"]`),
+      ),
+    ).toBe(true);
+  });
+
+  it("opens the base-mounted full-screen terminal in an isolated tab", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const panel = createPanel(createPickerClient());
+    panel.basePath = "/openclaw";
+    await waitForFast(() =>
+      expect(
+        panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]'),
+      ).not.toBeNull(),
+    );
+
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('[aria-label="Open full-screen terminal"]')
+      ?.click();
+
+    expect(open).toHaveBeenCalledWith(
+      "http://localhost:3000/openclaw/terminal",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    panel.fullscreen = true;
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]')).toBeNull();
+    open.mockRestore();
+  });
+
   afterEach(async () => {
     document.body.replaceChildren();
     localStorage.clear();

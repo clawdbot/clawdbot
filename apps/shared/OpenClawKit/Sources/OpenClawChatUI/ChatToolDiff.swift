@@ -21,9 +21,16 @@ struct ChatToolDiffLine: Equatable, Sendable {
     }
 }
 
-struct ChatToolDiffStat: Equatable, Sendable {
+struct ChatToolDiffStat: Equatable, Hashable, Sendable {
+    let files: Int?
     let added: Int
     let removed: Int
+
+    init(files: Int? = nil, added: Int, removed: Int) {
+        self.files = files
+        self.added = added
+        self.removed = removed
+    }
 }
 
 enum ChatToolDiff {

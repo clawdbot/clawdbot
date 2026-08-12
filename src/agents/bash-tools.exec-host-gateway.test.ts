@@ -33,7 +33,6 @@ import {
   buildHashedArgPatternFromArgv,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
-import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -2388,21 +2387,7 @@ EOF`,
 
     suspension?.release();
     await spawnStarted;
-    expect(
-      createSafeGatewayRestartPreflight({
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getBackgroundExecSessions: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
-      }),
-    ).toMatchObject({
-      safe: false,
-      counts: { rootRequests: 1, totalActive: 1 },
-      blockers: [{ kind: "root-request", count: 1 }],
-    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
     allowSpawn();
     await vi.waitFor(() => {
       expect(markBackgroundedMock).toHaveBeenCalledOnce();

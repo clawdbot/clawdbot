@@ -18,8 +18,13 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  isGatewayWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -31,6 +36,7 @@ import {
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+  CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
@@ -38,6 +44,7 @@ import {
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -64,7 +71,7 @@ import {
   type PluginRoutePathContext,
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
@@ -89,6 +96,7 @@ type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -111,6 +119,9 @@ const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
 );
 const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+const getWorkspaceIconHttpModule = createLazyRuntimeModule(
+  () => import("./workspace-icon-http.js"),
+);
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
 const getOpenResponsesHttpModule = createLazyRuntimeModule(() => import("./openresponses-http.js"));
@@ -175,7 +186,46 @@ function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathConte
   );
 }
 
-/** Handles live/ready probe endpoints before normal gateway routing. */
+async function shouldIncludeGatewayProbeDetails(params: {
+  req: IncomingMessage;
+  resolvedAuth: ResolvedGatewayAuth;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
+}): Promise<boolean> {
+  if (isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback)) {
+    return true;
+  }
+  if (params.resolvedAuth.mode === "none") {
+    return false;
+  }
+  const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
+  const bearerToken = getBearerToken(params.req);
+  return (
+    await authorizeHttpGatewayConnect({
+      auth: params.resolvedAuth,
+      connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+      req: params.req,
+      trustedProxies: params.trustedProxies,
+      allowRealIpFallback: params.allowRealIpFallback,
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
+    })
+  ).ok;
+}
+
+function startupProbeBody(result: StartupResult, includeDetails: boolean): string {
+  if (!includeDetails) {
+    return JSON.stringify({ ok: result.ok, status: result.status });
+  }
+  return JSON.stringify({
+    ok: result.ok,
+    status: result.status,
+    version: resolveRuntimeServiceVersion(process.env),
+    uptimeMs: result.uptimeMs,
+    ...(result.status === "starting" ? { pendingReason: result.pendingReason } : {}),
+  });
+}
+
+/** Handles live/ready/startup probe endpoints before normal gateway routing. */
 async function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -184,6 +234,7 @@ async function handleGatewayProbeRequest(
   trustedProxies: string[],
   allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
+  getStartup?: StartupChecker,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
   if (status === "namespace" || status === "outside") {
@@ -207,21 +258,12 @@ async function handleGatewayProbeRequest(
   if (status === "ready" && getReadiness) {
     // Readiness details expose subsystem names, so only local direct or authenticated
     // callers receive them; unauthenticated remote probes get the aggregate boolean.
-    let includeDetails = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
-    if (!includeDetails && resolvedAuth.mode !== "none") {
-      const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
-      const bearerToken = getBearerToken(req);
-      includeDetails = (
-        await authorizeHttpGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
-          req,
-          trustedProxies,
-          allowRealIpFallback,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-        })
-      ).ok;
-    }
+    const includeDetails = await shouldIncludeGatewayProbeDetails({
+      req,
+      resolvedAuth,
+      trustedProxies,
+      allowRealIpFallback,
+    });
     try {
       const result = getReadiness();
       statusCode = result.ready ? 200 : 503;
@@ -231,6 +273,27 @@ async function handleGatewayProbeRequest(
       body = JSON.stringify(
         includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
       );
+    }
+  } else if (status === "startup") {
+    const includeDetails = await shouldIncludeGatewayProbeDetails({
+      req,
+      resolvedAuth,
+      trustedProxies,
+      allowRealIpFallback,
+    });
+    try {
+      const result = getStartup?.() ?? { ok: true, status: "started", uptimeMs: 0 };
+      statusCode = result.ok ? 200 : 503;
+      body = startupProbeBody(result, includeDetails);
+    } catch {
+      const result: StartupResult = {
+        ok: false,
+        status: "starting",
+        uptimeMs: 0,
+        pendingReason: "internal",
+      };
+      statusCode = 503;
+      body = startupProbeBody(result, includeDetails);
     }
   } else {
     statusCode = 200;
@@ -326,6 +389,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -335,6 +399,7 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
+  getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
@@ -357,6 +422,7 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     getReadiness,
+    getStartup,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
@@ -409,6 +475,7 @@ export function createGatewayHttpServer(opts: {
           [],
           false,
           getReadiness,
+          getStartup,
         );
         return;
       }
@@ -460,11 +527,8 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               getReadiness,
+              getStartup,
             ),
-        },
-        {
-          name: "hooks",
-          run: () => handleHooksRequest(req, res),
         },
       ];
       const addRequestStage = (
@@ -486,6 +550,17 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
+      // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
+      // this exact GET and 405 every provider redirect. The claim is exact-path
+      // and config-gated, so preceding hooks cannot shadow any hook route.
+      addAdmittedStage(
+        "mcp-oauth-callback",
+        req.method === "GET" &&
+          scopedRequestPath === "/oauth/mcp/callback" &&
+          Boolean(opts.handleMcpOAuthCallbackRequest),
+        () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
+      );
+      addRequestStage("hooks", true, () => handleHooksRequest(req, res));
       addAdmittedStage(
         "watch-node",
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),
@@ -710,6 +785,19 @@ export function createGatewayHttpServer(opts: {
             controlUiRouteOptions,
           ),
       );
+      addRequestStage(
+        "control-ui-workspace-icon",
+        controlUiEnabled &&
+          scopedRequestPath.startsWith(
+            `${controlUiRouteBasePath}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`,
+          ),
+        async () =>
+          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
+            req,
+            res,
+            controlUiRouteOptions,
+          ),
+      );
       addRequestStage("control-ui-assistant-media", controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
@@ -755,7 +843,12 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
-  if (isGatewayWorkAdmissionClosed()) {
+  if (
+    isGatewayWorkAdmissionClosed() &&
+    (ingressName === "Worker" ||
+      isGatewayRestartDraining() ||
+      getGatewaySuspendAdmissionPhase() !== "prepared")
+  ) {
     writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     socket.destroy();
     return;
@@ -813,6 +906,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  desktopSessionRegistry?: DesktopSessionRegistry;
 }) {
   const {
     httpServer,
@@ -912,9 +1006,28 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
+      if (requestPath === "/desktop/observe") {
+        if (!opts.desktopSessionRegistry) {
+          writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
+          socket.destroy();
+          return;
+        }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");
+        handleDesktopObserveUpgrade(req, socket, head, {
+          registry: opts.desktopSessionRegistry,
+        });
+        return;
+      }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
-      // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
-      // untracked pre-connect socket after suspension or restart admission closes.
+      // Core Gateway control connections remain reachable while suspension is prepared.
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,

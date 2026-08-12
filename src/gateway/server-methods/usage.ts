@@ -11,7 +11,7 @@ import {
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -66,7 +66,10 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
+import {
+  loadCombinedSessionStoreForGatewayCore,
+  loadGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -132,7 +135,7 @@ function resolveSessionUsageTarget(
   config: OpenClawConfig,
   agentIdHint?: string,
 ): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadSessionEntryReadOnly(
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
     key,
     agentIdHint ? { agentId: agentIdHint } : undefined,
   );
@@ -153,7 +156,7 @@ function resolveSessionUsageTarget(
     : resolveExistingUsageSessionFile({
         agentId,
         sessionId,
-        sessionFile: resolveSessionFilePath(
+        sessionFile: resolveSessionFilePathCore(
           sessionId,
           undefined,
           resolveSessionFilePathOptions({ storePath, agentId }),
@@ -1127,20 +1130,14 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseDateParts,
   parseUtcOffsetToMinutes,
-  resolveDateInterpretation,
   parseDateToMs,
   parseDays,
   resolveDateRange,
-  discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
-  loadSessionsUsageResultCached,
   sessionsUsageCache,
-  sessionsUsageCacheKey,
 };
-export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
@@ -1236,7 +1233,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-          const { store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
+          const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
           const scopedStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
