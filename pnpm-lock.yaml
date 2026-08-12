@@ -2167,9 +2167,6 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.5.0
         version: 2.5.0(@opentelemetry/api@1.9.1)
-      '@openclaw/normalization-core':
-        specifier: workspace:*
-        version: link:../normalization-core
       openai:
         specifier: 6.49.0
         version: 6.49.0(@aws-sdk/credential-provider-node@3.972.72)(@smithy/hash-node@4.4.14)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
@@ -2179,6 +2176,10 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-client:
     dependencies:
