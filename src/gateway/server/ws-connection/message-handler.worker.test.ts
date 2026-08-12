@@ -223,9 +223,10 @@ function attachHarness(
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
-    ingress: options.ingress,
-    rateLimiter: options.rateLimiter,
-    rateLimitClientIp: options.rateLimiter ? "203.0.113.10" : undefined,
+    publicAdmission:
+      options.ingress === "public"
+        ? { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter }
+        : undefined,
     send: (frame) => responses.push(frame),
     close,
     isClosed: () => false,
@@ -300,8 +301,8 @@ describe("dedicated worker websocket protocol", () => {
   it.each(["invalid-credential", "environment-mismatch"] as const)(
     "projects public %s failures to one opaque reason",
     async (internalReason) => {
-      const recordFailureAndDelay = vi.fn(async () => {});
-      const rateLimiter = createRateLimiter({ recordFailureAndDelay });
+      const recordFailure = vi.fn();
+      const rateLimiter = createRateLimiter({ recordFailure });
       const harness = attachHarness({
         admissionFailure: internalReason,
         ingress: "public",
@@ -310,17 +311,17 @@ describe("dedicated worker websocket protocol", () => {
       harness.sendConnect();
 
       await waitForWorkerProtocol(() =>
-        expect(harness.close).toHaveBeenCalledWith(1008, "admission-rejected"),
+        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
       );
       expect(harness.responses[0]).toMatchObject({
         ok: false,
-        error: { details: { reason: "admission-rejected" } },
+        error: { details: { reason: "invalid-handshake" } },
       });
       expect(harness.logWsControl.warn).toHaveBeenCalledWith(
         `worker admission rejected reason=${internalReason}`,
       );
       expect(harness.setCloseCause).toHaveBeenCalledWith(internalReason);
-      expect(recordFailureAndDelay).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+      expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
     },
   );
 
@@ -332,14 +333,12 @@ describe("dedicated worker websocket protocol", () => {
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "admission-rejected"),
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
     );
     expect(harness.responses[0]).toMatchObject({
       ok: false,
       error: {
-        details: { reason: "admission-rejected" },
-        retryable: true,
-        retryAfterMs: 12_000,
+        details: { reason: "invalid-handshake" },
       },
     });
     expect(harness.service.admitWorker).not.toHaveBeenCalled();
@@ -355,10 +354,10 @@ describe("dedicated worker websocket protocol", () => {
     expect(reset).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
   });
 
-  it("keeps public ownership failures opaque without charging the credential budget", async () => {
+  it("keeps public ownership failures opaque and charges the admission budget", async () => {
     const reset = vi.fn();
-    const recordFailureAndDelay = vi.fn(async () => {});
-    const rateLimiter = createRateLimiter({ reset, recordFailureAndDelay });
+    const recordFailure = vi.fn();
+    const rateLimiter = createRateLimiter({ reset, recordFailure });
     const harness = attachHarness({
       ingress: "public",
       rateLimiter,
@@ -367,13 +366,13 @@ describe("dedicated worker websocket protocol", () => {
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "admission-rejected"),
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
     );
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(
       "worker admission rejected reason=credential-replaced",
     );
-    expect(reset).toHaveBeenCalledOnce();
-    expect(recordFailureAndDelay).not.toHaveBeenCalled();
+    expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it.each([
