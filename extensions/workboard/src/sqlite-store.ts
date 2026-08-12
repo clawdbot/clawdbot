@@ -141,6 +141,32 @@ function legacyAssociationKey(linkId: string): string {
   return `legacy_${createHash("sha256").update(linkId).digest("base64url")}`;
 }
 
+function opaqueExternalLinkId(legacyId: string, collision: number): string {
+  return `external:${createHash("sha256")
+    .update(`workboard-legacy-external-link\u0000${legacyId}\u0000${collision}`)
+    .digest("base64url")}`;
+}
+
+function migrateLegacyExternalLinkIds(db: DatabaseSync): void {
+  const links = db
+    .prepare(
+      `SELECT id FROM workboard_card_links
+       WHERE id LIKE 'external:%' AND length(id) != 52`,
+    )
+    .all() as Array<{ id: string }>;
+  const exists = db.prepare("SELECT 1 AS found FROM workboard_card_links WHERE id = ?");
+  const update = db.prepare("UPDATE workboard_card_links SET id = ? WHERE id = ?");
+  for (const link of links) {
+    let collision = 0;
+    let replacement = opaqueExternalLinkId(link.id, collision);
+    while (exists.get(replacement)) {
+      collision += 1;
+      replacement = opaqueExternalLinkId(link.id, collision);
+    }
+    update.run(replacement, link.id);
+  }
+}
+
 const WORKBOARD_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS workboard_schema_migrations (
       id TEXT PRIMARY KEY,
@@ -398,14 +424,21 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   for (const link of legacyLinks) {
     updateLegacyAssociationKey.run(legacyAssociationKey(link.id), link.id);
   }
+  migrateLegacyExternalLinkIds(db);
   db.exec(
     `UPDATE workboard_card_links
      SET last_source_observation_request_json = json_set(
-       json_remove(last_source_observation_request_json, '$.expectedRevision'),
+       json_remove(last_source_observation_request_json, '$.expectedRevision', '$.idempotencyKey'),
        '$.reconciliationAssociationKey', reconciliation_association_key
      )
      WHERE last_source_observation_request_json IS NOT NULL
        AND json_valid(last_source_observation_request_json)`,
+  );
+  db.exec(
+    `UPDATE workboard_card_links
+     SET last_source_observation_request_json = NULL
+     WHERE last_source_observation_request_json IS NOT NULL
+       AND NOT json_valid(last_source_observation_request_json)`,
   );
   ensureColumn(
     db,

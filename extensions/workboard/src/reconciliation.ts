@@ -1,5 +1,5 @@
 // Workboard reconciliation facade accepts safe external execution observations.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardCard,
   WorkboardExternalExecutionLink,
@@ -90,13 +90,22 @@ function isProtected(card: WorkboardCard): boolean {
 
 function redactReconciliationApplyKey(card: WorkboardCard): WorkboardCard {
   const automation = card.metadata?.automation;
-  if (!automation?.idempotencyKey) return card;
-  const { idempotencyKey: _idempotencyKey, ...safeAutomation } = automation;
+  const links = card.metadata?.links?.map((link) =>
+    link.id.startsWith("external:")
+      ? {
+          ...link,
+          id: `external:${createHash("sha256").update(link.id).digest("base64url")}`,
+        }
+      : link,
+  );
+  if (!automation?.idempotencyKey && !links) return card;
+  const { idempotencyKey: _idempotencyKey, ...safeAutomation } = automation ?? {};
   return {
     ...card,
     metadata: {
       ...card.metadata,
-      automation: safeAutomation,
+      ...(automation ? { automation: safeAutomation } : {}),
+      ...(links ? { links } : {}),
     },
   };
 }
@@ -281,7 +290,10 @@ export class WorkboardReconciler {
   ): Promise<WorkboardReconciliationApplyResult> {
     const projected = projectReconciliationObservation(observation);
     const link = linkFor(projected);
-    return await this.store.applyReconciliation(projected, link);
+    const result = await this.store.applyReconciliation(projected, link);
+    const { idempotencyKey: _idempotencyKey, ...safeLink } =
+      result.link as WorkboardExternalExecutionLink;
+    return { ...result, card: redactReconciliationApplyKey(result.card), link: safeLink };
   }
 
   async observeSource(

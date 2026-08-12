@@ -644,7 +644,7 @@ describe("WorkboardReconciler", () => {
         sourceUrl: "https://example.test/legacy",
         tenant: "acme",
         objectiveKey: "deploy-api",
-        idempotencyKey: "legacy",
+        idempotencyKey: "legacy-original-apply-key",
         sourceUpdatedAt: 1,
         card: { title: "Legacy replay" },
       });
@@ -679,7 +679,10 @@ describe("WorkboardReconciler", () => {
           .prepare(
             "UPDATE workboard_card_links SET last_source_observation_request_json = ? WHERE card_id = ?",
           )
-          .run(JSON.stringify(observation), created.card.id);
+          .run(
+            JSON.stringify({ ...observation, idempotencyKey: "legacy-original-apply-key" }),
+            created.card.id,
+          );
         legacy
           .prepare("UPDATE workboard_card_links SET id = ? WHERE url = ? AND card_id = ?")
           .run(`external:${"x".repeat(2000)}`, "https://example.test/legacy/max", created.card.id);
@@ -694,13 +697,15 @@ describe("WorkboardReconciler", () => {
           tenant: "acme",
         });
         const links = listed.cards[0]?.metadata?.links ?? [];
+        expect(JSON.stringify(listed)).not.toContain("legacy-original-apply-key");
+        expect(links.every((link) => !link.id.includes("legacy-original-apply-key"))).toBe(true);
         const key = links.find(
           (link) => link.url === observation.sourceUrl,
         )?.reconciliationAssociationKey;
         expect(key).toMatch(/^legacy_[A-Za-z0-9_-]{16,160}$/);
         expect(key?.length).toBeLessThanOrEqual(160);
-        expect(links.find((link) => link.id.length > 1000)?.reconciliationAssociationKey).toMatch(
-          /^legacy_[A-Za-z0-9_-]{16,160}$/,
+        expect(links.find((link) => link.url?.endsWith("/max"))?.id).toMatch(
+          /^external:[A-Za-z0-9_-]{43}$/,
         );
         const replay = await new WorkboardReconciler(
           new WorkboardStore(migrated.cards),
@@ -710,6 +715,28 @@ describe("WorkboardReconciler", () => {
           expectedRevision: first.revision + 1,
         });
         expect(replay.revision).toBe(first.revision);
+        expect(JSON.stringify(replay)).not.toContain("legacy-original-apply-key");
+        const applied = await new WorkboardReconciler(new WorkboardStore(migrated.cards)).apply({
+          cardId: created.card.id,
+          sourceUrl: "https://example.test/legacy/new",
+          tenant: "acme",
+          objectiveKey: "deploy-api",
+          idempotencyKey: "legacy-original-apply-key",
+          sourceUpdatedAt: 3,
+          expectedRevision: replay.card.updatedAt,
+        });
+        expect(JSON.stringify(applied)).not.toContain("legacy-original-apply-key");
+        const verified = openNodeSqliteDatabase(dbPath);
+        try {
+          const persisted = verified
+            .prepare(
+              "SELECT id, last_source_observation_request_json FROM workboard_card_links WHERE card_id = ?",
+            )
+            .all(created.card.id);
+          expect(JSON.stringify(persisted)).not.toContain("legacy-original-apply-key");
+        } finally {
+          verified.close();
+        }
         await expect(
           new WorkboardReconciler(new WorkboardStore(migrated.cards)).observeSource({
             ...observation,
@@ -923,7 +950,6 @@ describe("WorkboardReconciler", () => {
     expect(replayed.link).toEqual({
       sourceUrl: "https://example.test/runs/17/a",
       tenant: "acme",
-      idempotencyKey: "run-17-a",
       sourceUpdatedAt: 100,
       reconciliationAssociationKey: first.link.reconciliationAssociationKey,
       title: "First association",
@@ -990,7 +1016,6 @@ describe("WorkboardReconciler", () => {
     expect(replayed.link).toEqual({
       sourceUrl: "https://example.test/b",
       tenant: "acme",
-      idempotencyKey: "b",
       sourceUpdatedAt: 200,
       reconciliationAssociationKey: persisted.link.reconciliationAssociationKey,
       title: "Persisted B",

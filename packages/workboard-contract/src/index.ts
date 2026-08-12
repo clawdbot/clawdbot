@@ -455,5 +455,5 @@ export type WorkboardReconciliationPage = {
 export type WorkboardReconciliationApplyResult = {
   card: WorkboardCard;
   applied: boolean;
-  link: WorkboardExternalExecutionLink;
+  link: Omit<WorkboardExternalExecutionLink, "idempotencyKey">;
 };
