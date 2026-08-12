@@ -1010,8 +1010,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),

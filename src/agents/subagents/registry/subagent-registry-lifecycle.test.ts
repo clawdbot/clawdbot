@@ -2794,6 +2794,50 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it.each([
+    {
+      name: "persists steer_dropped when announce mapping preserves a live-queue refusal",
+      delivery: {
+        delivered: false as const,
+        path: "none" as const,
+        reason: "steer_dropped" as const,
+      },
+      lastDropReason: "steer_dropped",
+      lastError: "steer_dropped",
+    },
+    {
+      name: "persists sink_unavailable when announce mapping reports no viable requester",
+      delivery: {
+        delivered: false as const,
+        path: "none" as const,
+      },
+      lastDropReason: "sink_unavailable",
+      lastError: "delivery path none did not complete",
+    },
+  ])("$name", async ({ delivery, lastDropReason, lastError }) => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.(delivery);
+        return "retryable" as const;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+
+    await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe(lastDropReason));
+    expect(entry.delivery?.lastError).toBe(lastError);
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(persist).toHaveBeenCalledWith(entry.runId);
+  });
+
   it("persists identified completion delivery before stalled announce bookkeeping settles", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

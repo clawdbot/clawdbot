@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "requester_abandoned"
   | "source_owner_changed"
+  | "steer_dropped"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
@@ -74,6 +75,15 @@ function mapSteerOutcomeToDeliveryResult(
       error: "subagent source lifecycle changed before completion delivery",
       terminal: true,
       disposition: "intentional_non_delivery",
+    };
+  }
+  // Dropped is a live-queue refusal, not a terminal ownership loss. Marking it
+  // terminal would replace a completion direct failure with this steer result.
+  if (outcome.status === "dropped") {
+    return {
+      delivered: false,
+      path: "none",
+      reason: "steer_dropped",
     };
   }
   return {

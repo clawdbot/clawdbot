@@ -598,7 +598,11 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       if (delivery.path === "none" && delivery.disposition !== "intentional_non_delivery") {
-        ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
+        // Live-queue refusals keep steer_dropped so monitors can tell them
+        // from no viable requester. Collapsing both to sink_unavailable
+        // erases the only durable distinction.
+        ensureDeliveryState(entry).lastDropReason =
+          delivery.reason === "steer_dropped" ? "steer_dropped" : "sink_unavailable";
       }
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
       if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {

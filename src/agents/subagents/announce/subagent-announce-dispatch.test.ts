@@ -28,6 +28,7 @@ describe("runSubagentAnnounceDispatch", () => {
     expect(direct).toHaveBeenCalledTimes(1);
     expect(result.delivered).toBe(true);
     expect(result.path).toBe("direct");
+    expect(result.reason).toBeUndefined();
     expect(result.phases).toEqual([
       { phase: "steer-primary", delivered: false, path: "none", error: undefined },
       { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
@@ -170,28 +171,55 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
-  it("returns direct failure when completion fallback steering cannot deliver", async () => {
-    const steer = vi.fn(async () => ({ status: "none" }) as const);
-    const direct = vi.fn(async () => ({
-      delivered: false,
-      path: "direct" as const,
-      error: "failed",
-    }));
+  it.each([
+    {
+      name: "cannot deliver",
+      steerStatus: "none" as const,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        error: undefined,
+      },
+    },
+    {
+      name: "drops the new item",
+      steerStatus: "dropped" as const,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        reason: "steer_dropped" as const,
+        error: undefined,
+      },
+    },
+  ])(
+    "returns direct failure when completion fallback steering $name",
+    async ({ steerStatus, fallbackPhase }) => {
+      const steer = vi.fn(async () => ({ status: steerStatus }));
+      const direct = vi.fn(async () => ({
+        delivered: false,
+        path: "direct" as const,
+        error: "failed",
+      }));
 
-    const result = await runSubagentAnnounceDispatch({
-      expectsCompletionMessage: true,
-      steer,
-      direct,
-    });
+      const result = await runSubagentAnnounceDispatch({
+        expectsCompletionMessage: true,
+        steer,
+        direct,
+      });
 
-    expect(result.delivered).toBe(false);
-    expect(result.path).toBe("direct");
-    expect(result.error).toBe("failed");
-    expect(result.phases).toEqual([
-      { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
-      { phase: "steer-fallback", delivered: false, path: "none", error: undefined },
-    ]);
-  });
+      expect(result.delivered).toBe(false);
+      expect(result.path).toBe("direct");
+      expect(result.error).toBe("failed");
+      expect(result.reason).toBeUndefined();
+      expect(result.terminal).toBeUndefined();
+      expect(result.phases).toEqual([
+        { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
+        fallbackPhase,
+      ]);
+    },
+  );
 
   it("returns terminal source ownership loss from completion fallback steering", async () => {
     const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
@@ -230,7 +258,16 @@ describe("runSubagentAnnounceDispatch", () => {
     expect(result).toEqual({
       delivered: false,
       path: "none",
-      phases: [{ phase: "steer-primary", delivered: false, path: "none", error: undefined }],
+      reason: "steer_dropped",
+      phases: [
+        {
+          phase: "steer-primary",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
     });
   });
 
