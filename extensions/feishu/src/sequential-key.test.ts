@@ -7,6 +7,8 @@ function createTextEvent(params: {
   text: string;
   messageId?: string;
   chatId?: string;
+  chatType?: "p2p" | "group" | "topic_group";
+  mentions?: Array<{ key: string; name: string; id: { open_id?: string; user_id?: string } }>;
 }): FeishuMessageEvent {
   return {
     sender: {
@@ -19,9 +21,10 @@ function createTextEvent(params: {
     message: {
       message_id: params.messageId ?? "om_message_1",
       chat_id: params.chatId ?? "oc_dm_chat",
-      chat_type: "p2p",
+      chat_type: params.chatType ?? "p2p",
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
+      mentions: params.mentions,
     },
   } as FeishuMessageEvent;
 }
@@ -57,6 +60,45 @@ describe("getFeishuSequentialKey", () => {
         event: second,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  it("does not classify a p2p mention-forwarded /stop as a control command", () => {
+    // p2p keeps non-bot mentions for mention forwarding (the command owner
+    // strips mentions only in groups), so "@Bot @Alice /stop" must stay on the
+    // base lane instead of entering :control (ClawSweeper P2 on #119243).
+    const event = createTextEvent({
+      text: "@Alice /stop",
+      chatType: "p2p",
+      mentions: [{ key: "@Alice", name: "Alice", id: { open_id: "ou_alice" } }],
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot",
+        botName: "Bot",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
+
+  it("classifies a group @Bot /stop as a control command", () => {
+    // Group content keeps the bot's own <at> tag (#72504); the sequential key
+    // strips it so the :control lane still matches dispatch.
+    const event = createTextEvent({
+      text: "@Bot /stop",
+      chatType: "group",
+      mentions: [{ key: "@Bot", name: "Bot", id: { open_id: "ou_bot" } }],
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot",
+        botName: "Bot",
+      }),
+    ).toBe("feishu:default:oc_dm_chat:control");
   });
 
   it("falls back to a stable btw lane when the message id is unavailable", () => {
