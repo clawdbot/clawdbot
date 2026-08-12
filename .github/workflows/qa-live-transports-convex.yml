@@ -58,6 +58,11 @@ on:
         required: false
         default: false
         type: boolean
+      issue53932_proof:
+        description: Run the temporary Slack byte-preservation proof only
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA scenarios
@@ -100,6 +105,11 @@ on:
         description: Optional comma-separated Slack scenario ids
         required: false
         type: string
+      issue53932_proof:
+        description: Run the temporary Slack byte-preservation proof only
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   pull-requests: read
@@ -237,7 +247,7 @@ jobs:
   run_mock_parity:
     name: Run QA Lab mock parity lane
     needs: [validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_mock_parity
+    if: inputs.issue53932_proof != true && (inputs.expected_sha == '' || inputs.run_mock_parity)
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
@@ -419,7 +429,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_matrix
+    if: inputs.issue53932_proof != true && (inputs.expected_sha == '' || inputs.run_matrix)
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 90
     environment: qa-live-shared
@@ -480,7 +490,7 @@ jobs:
   run_live_buzz:
     name: Run Buzz live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.run_buzz
+    if: inputs.issue53932_proof != true && inputs.run_buzz
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     concurrency:
@@ -618,7 +628,7 @@ jobs:
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_telegram
+    if: inputs.issue53932_proof != true && (inputs.expected_sha == '' || inputs.run_telegram)
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -715,7 +725,7 @@ jobs:
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_discord
+    if: inputs.issue53932_proof != true && (inputs.expected_sha == '' || inputs.run_discord)
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -790,7 +800,7 @@ jobs:
   run_live_whatsapp:
     name: Run WhatsApp live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_whatsapp
+    if: inputs.issue53932_proof != true && (inputs.expected_sha == '' || inputs.run_whatsapp)
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     concurrency:
@@ -868,7 +878,7 @@ jobs:
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_slack
+    if: inputs.issue53932_proof == true || inputs.expected_sha == '' || inputs.run_slack
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -902,11 +912,18 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+          INPUT_ISSUE53932_PROOF: ${{ inputs.issue53932_proof }}
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_scenario || '' }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/slack-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "${INPUT_ISSUE53932_PROOF}" == "true" ]]; then
+            echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+            ISSUE53932_PROOF_OUTPUT="${output_dir}/issue53932-slack-byte-proof.json" \
+              pnpm exec tsx .github/scripts/issue53932-slack-byte-proof.mts
+            exit 0
+          fi
           scenario_args=()
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
