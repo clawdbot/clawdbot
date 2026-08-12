@@ -213,10 +213,12 @@ command but cannot install, enable, or add a marketplace.
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched
 before agent invocation, so a model-generated recommendation does not count as
-installation approval. `install` calls the Codex app-server and records the
-explicit plugin policy only after installation succeeds. `enable` and `disable`
-change OpenClaw's persisted policy; qualified identities and existing
-configuration keys are both accepted.
+installation approval. For a plugin that Codex has not installed yet, `install`
+calls the Codex app-server and records the explicit plugin policy only after
+installation succeeds. If Codex confirms that the plugin is already installed
+and enabled, the same command records its authorization without installing it
+again. `enable` and `disable` change OpenClaw's persisted policy; qualified
+identities and existing configuration keys are both accepted.
 
 Installing or enabling a configured plugin also turns on the global
 `codexPlugins.enabled` switch without enabling `allow_all_plugins`. If a plugin
