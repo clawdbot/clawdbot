@@ -737,7 +737,10 @@ describe("exec tool backgrounding", () => {
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
+          // Poll returns only newly captured output, so an earlier poll can drain
+          // the command's output before the terminal status arrives. Accumulate
+          // instead of keeping the last slice, which may be "(no new output)".
+          output += pollResult.output ?? "";
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);
