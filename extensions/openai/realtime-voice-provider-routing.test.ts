@@ -2,174 +2,60 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
-
-function readInternalRealtimeVoiceProviderApi(provider: object) {
-  return Reflect.get(provider, INTERNAL_REALTIME_VOICE_PROVIDER) as {
-    isBrowserSessionConfigured: (ctx: {
-      cfg?: object;
-      providerConfig: Record<string, unknown>;
-      agentId?: string;
-    }) => boolean;
-    isGatewayRelayConfigured: (ctx: {
-      cfg?: object;
-      providerConfig: Record<string, unknown>;
-      agentId?: string;
-    }) => boolean | undefined;
-    resolveBrowserSessionCapabilities: (ctx: {
-      cfg?: object;
-      providerConfig: Record<string, unknown>;
-      model?: string;
-    }) => {
-      handlesAgentConsult?: boolean;
-      supportsToolCalls?: boolean;
-      supportsVideoFrames?: boolean;
-      supportsGatewayControl?: boolean;
-      transports?: string[];
-    };
-    resolveGatewayRelayCapabilities: (ctx: {
-      cfg?: object;
-      providerConfig: Record<string, unknown>;
-      model?: string;
-    }) => {
-      handlesAgentConsult?: boolean;
-      supportsToolCalls?: boolean;
-      transports?: string[];
-    };
-    validateGatewayRelayLaunch: (ctx: {
-      cfg?: object;
-      providerConfig: Record<string, unknown>;
-      model?: string;
-      autoRespondToAudio?: boolean;
-    }) => string | undefined;
-    cancelBrowserSession: (request: Record<string, unknown>, session: object) => Promise<void>;
-  };
-}
-
+const mocks = await vi.hoisted(async () => {
+  const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
+  return createOpenAIRealtimeMockState();
+});
 const {
-  FakeWebSocket,
   execFileSyncMock,
   fetchWithSsrFGuardMock,
   isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKeyMock,
-} = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-    terminated = false;
-    deferClose = false;
-    deferredClose: (() => void) | undefined;
-    args: unknown[];
-
-    constructor(...args: unknown[]) {
-      this.args = args;
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-      if (this.deferClose) {
-        this.deferredClose = emitClose;
-        return;
-      }
-      emitClose();
-    }
-
-    terminate(): void {
-      this.terminated = true;
-      this.close(1006, "terminated");
-    }
-
-    emitDeferredClose(): void {
-      const emitClose = this.deferredClose;
-      this.deferredClose = undefined;
-      emitClose?.();
-    }
-  }
-
-  return {
-    FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
-  };
-});
+} = mocks;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    execFileSync: execFileSyncMock,
+    execFileSync: mocks.execFileSyncMock,
   };
 });
 
 vi.mock("ws", () => ({
-  default: FakeWebSocket,
+  default: mocks.FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
 const {
-  createJsonResponse,
   requireRecord,
   requireFetchJsonBody,
   createRealtimeTool,
   createUnreadableToolName,
   createMalformedToolName,
   createTestJwt,
-} = createOpenAIRealtimeTestSupport({ FakeWebSocket, fetchWithSsrFGuardMock });
+  resetTestState,
+  restoreTestEnvironment,
+  readInternalRealtimeVoiceProviderApi,
+  mockRealtimeClientSecretResponse,
+  createQuicksilverBrowserBrokerFixture,
+} = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice provider routing", () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubEnv("OPENAI_API_KEY", "");
-    execFileSyncMock.mockReset();
-    fetchWithSsrFGuardMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    resolveProviderAuthProfileApiKeyMock.mockReset();
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+    resetTestState();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    restoreTestEnvironment();
   });
 
   it("declares realtime Talk capabilities for catalog selection", () => {
@@ -207,18 +93,9 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it("advertises quicksilver capabilities only for curated /v1/live models", () => {
-    const quicksilverBroker = {
-      capabilities: {
-        transports: ["webrtc" as const],
-        handlesAgentConsult: true as const,
-        supportsToolCalls: false,
-        supportsVideoFrames: false,
-      },
-      createBrowserSession: vi.fn(),
-      cancelBrowserSession: vi.fn(),
-    };
+    const { broker } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: quicksilverBroker,
+      quicksilverBrowserSessionBroker: broker,
     });
     const internalApi = readInternalRealtimeVoiceProviderApi(provider);
 
@@ -258,10 +135,7 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it("omits unsupported OpenAI tool names from browser sessions", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({ client_secret: { value: "client-secret-123" } }),
-      release: vi.fn(async () => undefined),
-    });
+    mockRealtimeClientSecretResponse();
     const provider = buildOpenAIRealtimeVoiceProvider();
     if (!provider.createBrowserSession) {
       throw new Error("expected OpenAI realtime provider to support browser sessions");
@@ -304,23 +178,9 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it("routes gpt-live Platform sessions through the native quicksilver broker", async () => {
-    const createBrowserSession = vi.fn(async (_request: unknown, _auth: unknown) => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    }));
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: {
-          transports: ["webrtc" as const],
-          handlesAgentConsult: true as const,
-          supportsToolCalls: false,
-          supportsVideoFrames: false,
-        },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
     const request = {
       providerConfig: { apiKey: "test-api-key-platform" },
@@ -353,23 +213,9 @@ describe("OpenAI realtime voice provider routing", () => {
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
     );
-    const createBrowserSession = vi.fn(async () => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    }));
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: {
-          transports: ["webrtc" as const],
-          handlesAgentConsult: true as const,
-          supportsToolCalls: false,
-          supportsVideoFrames: false,
-        },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
     const cfg = { agents: { defaults: {} } } as never;
     const request = {
@@ -521,18 +367,9 @@ describe("OpenAI realtime voice provider routing", () => {
       async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") ? oauthToken : undefined,
     );
-    const createBrowserSession = vi.fn(async () => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    }));
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: { handlesAgentConsult: true as const },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
 
     await provider.createBrowserSession?.({
@@ -556,12 +393,9 @@ describe("OpenAI realtime voice provider routing", () => {
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
     );
+    const { broker } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: { handlesAgentConsult: true as const },
-        createBrowserSession: vi.fn(),
-        cancelBrowserSession: vi.fn(async () => undefined),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
     expect(
       readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
@@ -584,18 +418,11 @@ describe("OpenAI realtime voice provider routing", () => {
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
     );
-    const createBrowserSession = vi.fn(async () => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: "broker-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    }));
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
+      session: { clientSecret: "broker-token" },
+    });
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: { handlesAgentConsult: true as const },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
     const cfg = { agents: { defaults: {} } } as never;
     const request = {
@@ -628,23 +455,9 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it("passes configured gpt-live model and voice to the native broker", async () => {
-    const createBrowserSession = vi.fn(async (_request: unknown, _auth: unknown) => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    }));
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: {
-          transports: ["webrtc" as const],
-          handlesAgentConsult: true as const,
-          supportsToolCalls: false,
-          supportsVideoFrames: false,
-        },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
 
     await provider.createBrowserSession?.({
@@ -679,18 +492,9 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it("explains both gpt-live authentication options when neither is available", async () => {
-    const createBrowserSession = vi.fn();
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: {
-        capabilities: {
-          transports: ["webrtc" as const],
-          handlesAgentConsult: true as const,
-          supportsToolCalls: false,
-          supportsVideoFrames: false,
-        },
-        createBrowserSession,
-        cancelBrowserSession: vi.fn(),
-      },
+      quicksilverBrowserSessionBroker: broker,
     });
 
     await expect(
