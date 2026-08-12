@@ -7,10 +7,7 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import {
-  getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
