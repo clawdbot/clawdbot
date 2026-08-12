@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { bm25RankToScore, buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
-import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
+import { MemoryProviderRecovery } from "./manager-provider-recovery.js";
 import {
   resolveExactPathSpecificity,
   searchKeyword,
@@ -71,7 +71,7 @@ function compareKeywordSearchHits(
   return a.path.localeCompare(b.path) || a.startLine - b.startLine || a.id.localeCompare(b.id);
 }
 
-export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
+export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
     results: T[],
     maxResults: number,
