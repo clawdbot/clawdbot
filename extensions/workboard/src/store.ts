@@ -136,8 +136,7 @@ function sourceObservationRequestJson(
     tenant: observation.tenant,
     objectiveKey: observation.objectiveKey,
     sourceUrl: observation.sourceUrl,
-    idempotencyKey: observation.idempotencyKey,
-    reconciliationAssociationKey: observation.reconciliationAssociationKey ?? null,
+    reconciliationAssociationKey: observation.reconciliationAssociationKey,
     observationId: observation.observationId,
     sourceState: observation.sourceState,
     staleAfterMisses: observation.staleAfterMisses,
@@ -157,7 +156,6 @@ function canonicalSourceObservationRequestJson(
       tenant: request.tenant,
       objectiveKey: request.objectiveKey,
       sourceUrl: request.sourceUrl,
-      idempotencyKey: request.idempotencyKey,
       reconciliationAssociationKey:
         typeof request.reconciliationAssociationKey === "string"
           ? request.reconciliationAssociationKey
@@ -185,10 +183,7 @@ function sourceObservationResult(
       tenant: observation.tenant,
       objectiveKey: observation.objectiveKey,
       sourceUrl: observation.sourceUrl,
-      idempotencyKey: observation.idempotencyKey,
-      ...(observation.reconciliationAssociationKey === undefined
-        ? {}
-        : { reconciliationAssociationKey: observation.reconciliationAssociationKey }),
+      reconciliationAssociationKey: observation.reconciliationAssociationKey,
     },
     observationId: observation.observationId,
     revision: evidence.lastSourceObservationRevision ?? card.updatedAt,
@@ -377,12 +372,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
       ) {
         throw new Error("source observation does not match card.");
       }
-      const linkId = externalLinkId({
-        sourceUrl: "",
-        tenant: observation.tenant,
-        idempotencyKey: observation.idempotencyKey,
-        sourceUpdatedAt: 0,
-      });
       const links = card.metadata?.links ?? [];
       const index = links.findIndex(
         (link) => link.reconciliationAssociationKey === observation.reconciliationAssociationKey,
@@ -390,7 +379,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       if (index === -1)
         throw new Error("source observation does not match an external association.");
       const current = links[index]!;
-      if (current.id !== linkId || current.url !== observation.sourceUrl) {
+      if (!current.id.startsWith("external:") || current.url !== observation.sourceUrl) {
         throw new Error("source observation does not match an external association.");
       }
       const requestJson = sourceObservationRequestJson(observation);
@@ -447,7 +436,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
         },
         { updatedAt: acknowledgementRevision },
       );
-      const evidence = updated.metadata?.links?.find((link) => link.id === linkId);
+      const evidence = updated.metadata?.links?.find(
+        (link) => link.reconciliationAssociationKey === observation.reconciliationAssociationKey,
+      );
       if (!evidence) throw new Error("source observation evidence was not persisted.");
       return sourceObservationResult(updated, observation, evidence);
     });

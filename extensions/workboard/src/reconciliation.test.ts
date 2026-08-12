@@ -95,7 +95,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: a?.reconciliationAssociationKey,
       observationId: "a-present",
       sourceState: "present",
@@ -108,7 +107,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/b",
-      idempotencyKey: "b",
       reconciliationAssociationKey: b?.reconciliationAssociationKey,
       observationId: "b-present",
       sourceState: "present",
@@ -117,6 +115,47 @@ describe("WorkboardReconciler", () => {
       expectedRevision: firstObservation.revision,
     });
     expect(secondObservation.evidence.lastSourceObservationId).toBe("b-present");
+  });
+
+  it("observes a listed opaque association in a later batch without its original apply key", async () => {
+    const firstBatch = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const applied = await firstBatch.apply({
+      sourceUrl: "https://example.test/runs/later-batch",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "private-apply-key",
+      sourceUpdatedAt: 100,
+      card: { title: "Later batch association" },
+    });
+    const listed = await firstBatch.list({ tenant: "acme" });
+    const associationKey = listed.cards[0]?.metadata?.links?.find((link) =>
+      link.id.startsWith("external:"),
+    )?.reconciliationAssociationKey;
+    const secondBatch = new WorkboardReconciler(
+      (firstBatch as unknown as { store: WorkboardStore }).store,
+    );
+
+    const result = await secondBatch.observeSource({
+      cardId: applied.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/later-batch",
+      reconciliationAssociationKey: associationKey!,
+      observationId: "later-batch-present",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 101,
+      expectedRevision: listed.cards[0]!.updatedAt,
+    });
+
+    expect(result.association).toEqual({
+      cardId: applied.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/later-batch",
+      reconciliationAssociationKey: associationKey,
+    });
+    expect(JSON.stringify(result)).not.toContain("private-apply-key");
   });
 
   it("keeps matching objective keys isolated by tenant and fails closed for an explicit mismatch", async () => {
@@ -251,7 +290,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-200",
       sourceState: "missing-after-successful-full-scan",
@@ -267,7 +305,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-300",
       sourceState: "missing-after-successful-full-scan",
@@ -281,7 +318,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-400",
       sourceState: "dependency-failed",
@@ -295,7 +331,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-500",
       sourceState: "present",
@@ -323,7 +358,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/replay",
-      idempotencyKey: "replay",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-42:replay:missing",
       sourceState: "missing-after-successful-full-scan" as const,
@@ -342,7 +376,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/runs/replay",
-        idempotencyKey: "replay",
       },
       evidence: { consecutiveSuccessfulFullScanMisses: 1 },
     });
@@ -367,7 +400,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/evidence",
-      idempotencyKey: "evidence",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       staleAfterMisses: 2,
       expectedRevision: created.card.updatedAt,
@@ -440,7 +472,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/ack",
-      idempotencyKey: "ack",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "ack-1",
       sourceState: "missing-after-successful-full-scan" as const,
@@ -481,7 +512,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/runs/frozen",
-        idempotencyKey: "frozen",
         reconciliationAssociationKey: created.link.reconciliationAssociationKey,
         observationId: "frozen-1",
         sourceState: "missing-after-successful-full-scan",
@@ -496,7 +526,6 @@ describe("WorkboardReconciler", () => {
           tenant: "acme",
           objectiveKey: "deploy-api",
           sourceUrl: "https://example.test/runs/frozen",
-          idempotencyKey: "frozen",
           reconciliationAssociationKey: created.link.reconciliationAssociationKey,
           observationId: "frozen-2",
           sourceState: "missing-after-successful-full-scan",
@@ -534,7 +563,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/one",
-      idempotencyKey: "one",
       reconciliationAssociationKey: firstLink.link.reconciliationAssociationKey,
       observationId: "chain-one",
       sourceState: "present",
@@ -547,7 +575,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/two",
-      idempotencyKey: "two",
       reconciliationAssociationKey: secondLink.link.reconciliationAssociationKey,
       observationId: "chain-two",
       sourceState: "present",
@@ -578,7 +605,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/runs/sqlite",
-        idempotencyKey: "sqlite",
         reconciliationAssociationKey: created.link.reconciliationAssociationKey,
         observationId: "sqlite-scan-1",
         sourceState: "missing-after-successful-full-scan" as const,
@@ -636,7 +662,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/legacy",
-        idempotencyKey: "legacy",
         reconciliationAssociationKey: created.link.reconciliationAssociationKey,
         observationId: "legacy-ack",
         sourceState: "present" as const,
@@ -715,7 +740,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy",
       sourceUrl: "https://attacker.test/a",
-      idempotencyKey: "a",
       reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "wrong-source",
       staleAfterMisses: 1,
@@ -757,7 +781,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
-        idempotencyKey: "a",
         observationId: "strict",
         sourceState: "present",
         staleAfterMisses: 2,
@@ -773,7 +796,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
-        idempotencyKey: "a",
         reconciliationAssociationKey: "safe-key",
         sourceState: "present",
         staleAfterMisses: 2,
@@ -787,7 +809,6 @@ describe("WorkboardReconciler", () => {
         tenant: "acme",
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
-        idempotencyKey: "a",
         reconciliationAssociationKey: "safe-key",
         observationId: "x".repeat(201),
         sourceState: "present",
@@ -804,7 +825,6 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/a",
-      idempotencyKey: "a",
       observationId: "strict-address",
       sourceState: "present",
       staleAfterMisses: 2,
@@ -816,6 +836,24 @@ describe("WorkboardReconciler", () => {
     expect(() =>
       projectReconciliationSourceObservation({ ...base, reconciliationAssociationKey: "safe-key" }),
     ).toThrow("expectedRevision must be a non-negative timestamp.");
+  });
+
+  it("rejects a caller-supplied apply idempotency key from source observations", () => {
+    expect(() =>
+      projectReconciliationSourceObservation({
+        cardId: "card",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/a",
+        reconciliationAssociationKey: "safe-key",
+        idempotencyKey: "private-apply-key",
+        observationId: "strict-key",
+        sourceState: "present",
+        staleAfterMisses: 2,
+        observedAt: 1,
+        expectedRevision: 1,
+      }),
+    ).toThrow("source observation.idempotencyKey is not allowed.");
   });
   it("returns stable ID-ordered pages and rejects limits outside 1 through 100", async () => {
     const store = new WorkboardStore(createMemoryStore());

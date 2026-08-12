@@ -424,7 +424,6 @@ export type WorkboardReconciliationSourceObservation = {
   tenant: string;
   objectiveKey: string;
   sourceUrl: string;
-  idempotencyKey: string;
   /** Opaque association address returned by reconciliation.list. */
   reconciliationAssociationKey: string;
   observationId: string;
@@ -438,12 +437,7 @@ export type WorkboardReconciliationSourceObservationResult = {
   card: WorkboardCard;
   association: Pick<
     WorkboardReconciliationSourceObservation,
-    | "cardId"
-    | "tenant"
-    | "objectiveKey"
-    | "sourceUrl"
-    | "idempotencyKey"
-    | "reconciliationAssociationKey"
+    "cardId" | "tenant" | "objectiveKey" | "sourceUrl" | "reconciliationAssociationKey"
   >;
   observationId: string;
   revision: number;

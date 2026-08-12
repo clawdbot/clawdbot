@@ -88,6 +88,19 @@ function isProtected(card: WorkboardCard): boolean {
   return RECONCILIATION_PROTECTED_STATUSES.has(card.status);
 }
 
+function redactReconciliationApplyKey(card: WorkboardCard): WorkboardCard {
+  const automation = card.metadata?.automation;
+  if (!automation?.idempotencyKey) return card;
+  const { idempotencyKey: _idempotencyKey, ...safeAutomation } = automation;
+  return {
+    ...card,
+    metadata: {
+      ...card.metadata,
+      automation: safeAutomation,
+    },
+  };
+}
+
 function linkFor(observation: WorkboardReconciliationObservation): WorkboardExternalExecutionLink {
   return {
     sourceUrl: readRequiredString(observation.sourceUrl, "sourceUrl"),
@@ -118,7 +131,6 @@ const SOURCE_OBSERVATION_FIELDS = new Set([
   "tenant",
   "objectiveKey",
   "sourceUrl",
-  "idempotencyKey",
   "reconciliationAssociationKey",
   "observationId",
   "sourceState",
@@ -218,7 +230,6 @@ export function projectReconciliationSourceObservation(
     tenant: readBoundedString(input.tenant, "tenant", 80),
     objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
-    idempotencyKey: readBoundedString(input.idempotencyKey, "idempotencyKey", 160),
     reconciliationAssociationKey: readBoundedString(
       input.reconciliationAssociationKey,
       "reconciliationAssociationKey",
@@ -260,7 +271,7 @@ export class WorkboardReconciler {
     );
     const last = page.at(-1);
     return {
-      cards: page,
+      cards: page.map(redactReconciliationApplyKey),
       ...(last && start + page.length < cards.length ? { cursor: encodeCursor(last.id) } : {}),
     };
   }
@@ -276,8 +287,9 @@ export class WorkboardReconciler {
   async observeSource(
     value: WorkboardReconciliationSourceObservation,
   ): Promise<WorkboardReconciliationSourceObservationResult> {
-    return await this.store.applyReconciliationSourceObservation(
+    const result = await this.store.applyReconciliationSourceObservation(
       projectReconciliationSourceObservation(value),
     );
+    return { ...result, card: redactReconciliationApplyKey(result.card) };
   }
 }
