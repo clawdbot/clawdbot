@@ -86,6 +86,17 @@ describe("backup run records", () => {
     });
   });
 
+  it("treats an older same-version database without backup_runs as no recorded backups", async () => {
+    const env = await testEnv({ bootstrap: true });
+    withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env });
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = await import("node:sqlite");
+    const raw = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    raw.exec("DROP TABLE backup_runs");
+    raw.close();
+    expect(readBackupFreshness(env)).toEqual({});
+  });
+
   it("keeps absent status reads read-only and formats none, failed, fresh, and stale states", async () => {
     const env = await testEnv();
     expect(readBackupFreshness(env)).toEqual({});

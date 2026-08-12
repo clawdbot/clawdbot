@@ -1,5 +1,6 @@
 /** Redaction policy surface: Git snapshots may omit these credential-bearing tables. */
 export const STATE_SECRET_TABLE_NAMES = [
+  "audit_identity_keys",
   "auth_profile_state",
   "auth_profile_stores",
   "apns_registrations",
@@ -10,6 +11,7 @@ export const STATE_SECRET_TABLE_NAMES = [
   "device_identities",
   "device_pairing_paired",
   "gateway_origin_device_tokens",
+  "mcp_oauth_pending_authorizations",
   "mcp_oauth_stores",
   "native_hook_relay_bridges",
   "node_host_config",

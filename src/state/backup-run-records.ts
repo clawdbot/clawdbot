@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -124,6 +125,12 @@ export function recordBackupRunOutcome(params: {
 }
 
 function readBackupRun(database: DatabaseSync, status?: "ok"): BackupRunRecord | undefined {
+  // backup_runs is same-version additive: an older v6 database may not have it
+  // until a writable open converges the schema. Read-only freshness paths must
+  // treat that as "no recorded backups", never as an error.
+  if (!tableExists(database, "backup_runs")) {
+    return undefined;
+  }
   const kysely = getNodeSqliteKysely<BackupRunDatabase>(database);
   let query = kysely.selectFrom("backup_runs").selectAll();
   if (status) {
