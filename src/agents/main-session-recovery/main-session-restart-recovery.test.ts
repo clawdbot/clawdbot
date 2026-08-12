@@ -77,6 +77,7 @@ import {
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
+import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
@@ -571,6 +572,53 @@ describe("main-session-restart-recovery", () => {
     });
 
     expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+  });
+
+  it("dispatches a bare fixed-store recovery under its persisted owner", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    await writeStorePath(storePath, {
+      global: mainSessionEntry({
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    });
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await expect(
+      recoverStore({
+        cfg,
+        gatewayRuntime: mockRecoveryRuntime,
+        resumedSessionKeys: new Set(),
+        storePath,
+      }),
+    ).resolves.toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
+  });
+
+  it("dispatches a config-less bare recovery under the legacy implicit owner", async () => {
+    const storePath = path.join(tmpDir, "legacy-shared", "sessions.json");
+    await writeStorePath(storePath, {
+      global: mainSessionEntry({
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    });
+
+    await expect(
+      recoverStore({
+        gatewayRuntime: mockRecoveryRuntime,
+        resumedSessionKeys: new Set(),
+        storePath,
+      }),
+    ).resolves.toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({ agentId: "main", sessionKey: "global" });
   });
 
   it("persists abort-registry runs after their event context was cleared", async () => {

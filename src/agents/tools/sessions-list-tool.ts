@@ -15,9 +15,9 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -40,6 +40,7 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
@@ -143,6 +144,7 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
 /** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -164,6 +166,11 @@ export function createSessionsListTool(opts?: {
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const requesterAgentId = resolveSessionAgentIds({
+        config: cfg,
+        sessionKey: effectiveRequesterKey,
+        agentId: opts?.requesterAgentIdOverride,
+      }).sessionAgentId;
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
@@ -190,7 +197,7 @@ export function createSessionsListTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const defaultAgentId = resolveDefaultAgentId(cfg);
+      const defaultAgentId = requesterAgentId;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         defaultAgentId,
@@ -200,6 +207,7 @@ export function createSessionsListTool(opts?: {
       });
       const sessions: GatewaySessionListRow[] = [];
       const seenKeys = new Set<string>();
+      const resolvedAgentIdsByKey = new Map<string, string>();
       const outputLimit = limit ?? 100;
       let offset = 0;
       let storePath: string | undefined;
@@ -240,9 +248,27 @@ export function createSessionsListTool(opts?: {
           if (isIncognitoSessionKey(key)) {
             continue;
           }
+          if (classifySessionKeyShape(key) === "malformed_agent") {
+            // A malformed scoped key is not an unscoped fixed-store row. Treating
+            // it as bare would let the compatibility owner adopt invalid input.
+            continue;
+          }
+          let resolvedAgentId: string;
+          try {
+            resolvedAgentId = resolveSessionToolTargetAgentId({
+              cfg,
+              targetSessionKey: key,
+              resolvedAgentId:
+                typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined,
+              requesterAgentId,
+            });
+          } catch {
+            // An unowned fixed-store row is unavailable rather than adopted by the requester.
+            continue;
+          }
           const access = visibilityGuard.check({
             key,
-            agentId: typeof entry.agentId === "string" ? entry.agentId : undefined,
+            agentId: resolvedAgentId,
             ownerSessionKey:
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
                 ? (entry as { ownerSessionKey?: string }).ownerSessionKey
@@ -258,6 +284,7 @@ export function createSessionsListTool(opts?: {
             (key !== "global" || alias === "global") &&
             (!allowedKinds || allowedKinds.has(kind))
           ) {
+            resolvedAgentIdsByKey.set(key, resolvedAgentId);
             sessions.push(entry);
             if (sessions.length === outputLimit) {
               break;
@@ -287,14 +314,9 @@ export function createSessionsListTool(opts?: {
       const stateVersions = getSessionStateVersions(
         sessions.flatMap((entry) => {
           const key = entry.key;
-          let stateAgentId =
-            typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
+          const stateAgentId = resolvedAgentIdsByKey.get(key);
           if (!stateAgentId) {
-            try {
-              stateAgentId = resolveAgentIdFromSessionKey(key, defaultAgentId);
-            } catch {
-              return [];
-            }
+            return [];
           }
           return [{ sessionKey: key, agentId: stateAgentId }];
         }),
@@ -312,6 +334,10 @@ export function createSessionsListTool(opts?: {
 
       for (const entry of sessions) {
         const key = entry.key;
+        const resolvedAgentId = resolvedAgentIdsByKey.get(key);
+        if (!resolvedAgentId) {
+          continue;
+        }
         const kind = classifySessionListKind(entry);
         const displayKey = resolveDisplaySessionKey({
           key,
@@ -336,7 +362,6 @@ export function createSessionsListTool(opts?: {
         const sessionId = readStringValue(entry.sessionId);
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
-        const resolvedAgentId = resolveAgentIdFromSessionKey(key, defaultAgentId);
         // Version lookup keys on the store-owning agent (gateway row agentId), not the
         // key-derived agent: bare "global" keys parse to the default agent id.
         const stateVersionAgentId =
@@ -474,7 +499,11 @@ export function createSessionsListTool(opts?: {
           async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
-              params: { sessionKey: target.resolvedKey, limit: messageLimit },
+              params: {
+                sessionKey: target.resolvedKey,
+                agentId: target.row.agentId,
+                limit: messageLimit,
+              },
             });
             const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
             const filtered = stripToolMessages(rawMessages);

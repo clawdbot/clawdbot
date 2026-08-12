@@ -156,10 +156,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       restrictions.disabled = true;
       return;
     }
-    const activeAgentIds = new Set([
-      ...listAgentIds(activeConfig),
-      resolveDefaultAgentId(activeConfig),
-    ]);
+    const activeAgentIds = new Set(listAgentIds(activeConfig));
     for (const agentId of activeAgentIds) {
       const candidate = resolveForConfig(config, agentId);
       if (!candidate.ok) {

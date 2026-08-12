@@ -28,6 +28,7 @@ import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
@@ -520,6 +521,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     try {
       const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
         sessionKey,
+        agentId: resolveChatAgentId(state),
       });
       // A reconnect supersedes in-flight probes; a stale result must not
       // overwrite the new source's cache (e.g. an old "none" hiding the action).
@@ -570,6 +572,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         }
         return await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
           sessionKey: key,
+          agentId: resolveChatAgentId(state),
         });
       },
       openDiscussion: async (key) => {
@@ -578,6 +581,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         }
         return await state.client.request<SessionDiscussionInfo>("session.discussion.open", {
           sessionKey: key,
+          agentId: resolveChatAgentId(state),
         });
       },
       onStateChange: (key, discussionState, openUrl) => {

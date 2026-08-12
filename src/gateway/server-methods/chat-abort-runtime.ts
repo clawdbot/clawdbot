@@ -66,10 +66,7 @@ export async function persistAbortedPartials(params: {
     return;
   }
   for (const snapshot of params.snapshots) {
-    const sessionLoadOptions =
-      params.sessionKey === "global" && snapshot.agentId
-        ? { agentId: snapshot.agentId }
-        : undefined;
+    const sessionLoadOptions = snapshot.agentId ? { agentId: snapshot.agentId } : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
@@ -113,7 +110,7 @@ function resolveAuthorizedQueuedTurnsForSession(params: {
   sessionKeys: string[];
   sessionId?: string;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
 }) {
   const matches = listQueuedChatTurnsForSession({
@@ -137,7 +134,7 @@ type SessionAbortOwnerParams = {
   sessionKeys: string[];
   sessionId?: string;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
 };
 
 /** Authoritative active, pending, or queued Gateway owner for an exact session. */
@@ -207,7 +204,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   agentId?: string;
   sessionId?: string;
   persistSessionKey?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;

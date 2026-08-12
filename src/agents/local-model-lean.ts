@@ -6,7 +6,8 @@
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -63,14 +64,17 @@ function resolveLocalModelLeanAgentId(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
-  if (explicitAgentId) {
-    return explicitAgentId;
+  if (params.config) {
+    return resolveSessionAgentIds({
+      config: params.config,
+      agentId: explicitAgentId,
+      sessionKey: params.sessionKey,
+    }).sessionAgentId;
   }
   const parsedSessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
-  if (parsedSessionAgentId) {
-    return normalizeAgentId(parsedSessionAgentId);
-  }
-  return params.config ? resolveDefaultAgentId(params.config) : undefined;
+  return (
+    explicitAgentId ?? (parsedSessionAgentId ? normalizeAgentId(parsedSessionAgentId) : undefined)
+  );
 }
 
 /** Returns true when local-model lean mode is enabled for the selected agent. */

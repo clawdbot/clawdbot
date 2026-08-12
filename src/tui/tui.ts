@@ -12,11 +12,18 @@ import {
 } from "@earendil-works/pi-tui";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
-import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
@@ -204,16 +211,73 @@ export function resolveTuiSessionKey(params: {
   });
 }
 
+export function resolveTuiSessionSelection(params: {
+  raw?: string;
+  cfg: OpenClawConfig;
+  sessionScope: SessionScope;
+  currentAgentId: string;
+  sessionMainKey: string;
+}): { key: string; agentId: string } {
+  const trimmed = (params.raw ?? "").trim();
+  const parsed = parseAgentSessionKey(trimmed);
+  const persistedOwner = trimmed
+    ? resolvePersistedSessionStoreOwnerForKey(params.cfg, trimmed)
+    : undefined;
+  const agentId = parsed?.agentId
+    ? normalizeAgentId(parsed.agentId)
+    : persistedOwner?.kind === "configured"
+      ? persistedOwner.agentId
+      : trimmed
+        ? resolveSessionAgentId({
+            config: params.cfg,
+            sessionKey: trimmed,
+            fallbackAgentId: params.currentAgentId,
+          })
+        : params.currentAgentId;
+  const mainKey = normalizeMainKey(params.sessionMainKey);
+  const keepDurableBareKey =
+    !parsed &&
+    persistedOwner?.kind === "configured" &&
+    trimmed !== "global" &&
+    trimmed !== "unknown" &&
+    trimmed.toLowerCase() !== "main" &&
+    trimmed.toLowerCase() !== mainKey;
+  return {
+    key: keepDurableBareKey
+      ? trimmed
+      : resolveTuiSessionKey({
+          raw: trimmed,
+          sessionScope: params.sessionScope,
+          currentAgentId: agentId,
+          sessionMainKey: params.sessionMainKey,
+        }),
+    agentId,
+  };
+}
+
 export function resolveInitialTuiAgentId(params: {
   cfg: OpenClawConfig;
-  fallbackAgentId: string;
+  fallbackAgentId?: string;
   initialSessionInput?: string;
   agentId?: string;
   cwd?: string;
 }) {
+  const initialSessionInput = (params.initialSessionInput ?? "").trim();
   const explicitAgentId = resolveExplicitInitialTuiAgentId(params);
   if (explicitAgentId) {
     return explicitAgentId;
+  }
+  const effectiveUnscopedSessionKey = initialSessionInput
+    ? initialSessionInput
+    : params.cfg.session?.scope === "global"
+      ? "global"
+      : undefined;
+  if (effectiveUnscopedSessionKey) {
+    return resolveSessionAgentId({
+      config: params.cfg,
+      sessionKey: effectiveUnscopedSessionKey,
+      fallbackAgentId: params.fallbackAgentId,
+    });
   }
 
   const cwd = params.cwd ?? tryProcessCwd();
@@ -222,7 +286,14 @@ export function resolveInitialTuiAgentId(params: {
     return inferredFromWorkspace;
   }
 
-  return normalizeAgentId(params.fallbackAgentId);
+  return normalizeAgentId(
+    params.fallbackAgentId ??
+      tryResolveLegacyCompatibilityAgentId(params.cfg) ??
+      resolveDefaultAgentId(params.cfg, {
+        surface: "TUI startup",
+        hint: "Pass an agent-scoped --session key.",
+      }),
+  );
 }
 
 function resolveExplicitInitialTuiAgentId(params: {
@@ -656,17 +727,14 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const initialSessionInput = (opts.session ?? "").trim();
   const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   const sessionMainKey = normalizeMainKey(config.session?.mainKey);
-  const agentDefaultId = resolveDefaultAgentId(config);
-  const initialSessionAgentId = resolveExplicitInitialTuiAgentId({
-    initialSessionInput,
-    agentId: opts.agentId,
-  });
+  const configuredDefaultAgentId = tryResolveDefaultAgentId(config);
   let currentAgentId = resolveInitialTuiAgentId({
     cfg: config,
-    fallbackAgentId: agentDefaultId,
+    fallbackAgentId: configuredDefaultAgentId,
     initialSessionInput,
     agentId: opts.agentId,
   });
+  const agentDefaultId = configuredDefaultAgentId ?? currentAgentId;
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
   let rememberedSessionApplied = false;
@@ -928,16 +996,17 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return name ? `${id} (${name})` : id;
   };
 
-  const resolveSessionKey = (raw?: string) => {
-    return resolveTuiSessionKey({
+  const resolveSessionSelection = (raw?: string) => {
+    return resolveTuiSessionSelection({
       raw,
+      cfg: config,
       sessionScope: state.sessionScope,
       currentAgentId: state.currentAgentId,
       sessionMainKey: state.sessionMainKey,
     });
   };
 
-  currentSessionKey = resolveSessionKey(initialSessionInput);
+  currentSessionKey = resolveSessionSelection(initialSessionInput).key;
 
   const buildLastSessionScopeKeyFor = (sessionKey = currentSessionKey) => {
     const parsed = parseAgentSessionKey(sessionKey);
@@ -973,12 +1042,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     ) {
       return;
     }
-    const rememberedKey = remembered ? resolveSessionKey(remembered) : null;
+    const rememberedSelection = remembered ? resolveSessionSelection(remembered) : null;
+    const rememberedKey = rememberedSelection?.key ?? null;
     if (!rememberedKey || rememberedKey === currentSessionKey) {
       rememberedSessionApplied = true;
       return;
     }
-    const rememberedAgent = parseAgentSessionKey(rememberedKey)?.agentId;
+    const rememberedAgent = rememberedSelection?.agentId;
     if (rememberedAgent && normalizeAgentId(rememberedAgent) !== state.currentAgentId) {
       rememberedSessionApplied = true;
       return;
@@ -1312,6 +1382,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     },
   };
 
+  const initialSessionAgentId = (() => {
+    if (!initialSessionInput) {
+      return null;
+    }
+    return currentAgentId;
+  })();
   const sessionActions = createSessionActions({
     client,
     chatLog,
@@ -1322,7 +1398,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     agentNames,
     initialSessionInput,
     initialSessionAgentId,
-    resolveSessionKey,
+    resolveSessionSelection,
     updateHeader,
     updateFooter,
     updateAutocompleteProvider,

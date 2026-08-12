@@ -54,6 +54,7 @@ import {
 import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
+  assertOpenClawStateDatabaseV6ForMigration,
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -66,6 +67,7 @@ import {
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
+  migrateRetiredCommitmentsSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
@@ -170,11 +172,18 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
+        } else if (previousVersion === 6) {
+          assertOpenClawStateDatabaseV6ForMigration(db, { pathname });
+        } else if (previousVersion === 5) {
+          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);
+        if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
+          applied.push("Retired shared state commitments table and indexes");
+        }
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -353,10 +362,13 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
+        } else if (previousVersion === 6) {
+          assertOpenClawStateDatabaseV6ForMigration(db, { pathname });
         } else if (previousVersion === 5) {
           assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
         }
         dropLegacyStateTables(db);
+        migrateRetiredCommitmentsSchema(db, previousVersion);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);

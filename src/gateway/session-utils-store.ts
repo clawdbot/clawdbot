@@ -32,6 +32,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
+import type { GatewayAgentOwnership } from "./agent-list.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
@@ -99,8 +101,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
   directKeys.add(params.sessionKey);
 
   for (const directKey of directKeys) {
+    const agentId =
+      parseAgentSessionKey(directKey)?.agentId ??
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, directKey);
     const acpMeta = readAcpSessionMetaForEntry({
       sessionKey: directKey,
+      ...(agentId ? { agentId } : {}),
       entry: params.entry ?? undefined,
     });
     if (acpMeta) {
@@ -113,8 +119,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
     candidateSessionKeys: directKeys,
     entry: params.entry ?? undefined,
   });
+  const finalAgentId =
+    parseAgentSessionKey(params.sessionKey)?.agentId ??
+    tryResolveSessionCompatibilityOwnerAgentId(params.cfg, params.sessionKey);
   return readAcpSessionMetaForEntry({
     sessionKey: params.sessionKey,
+    ...(finalAgentId ? { agentId: finalAgentId } : {}),
     entry: params.entry ?? undefined,
   });
 }
@@ -149,6 +159,7 @@ function loadSessionEntryWithMode(
       : canonicalMatch?.entry;
   return {
     cfg,
+    agentId: target.agentId,
     storePath,
     store,
     entry,
@@ -301,6 +312,8 @@ export function listAgentsForGateway(
   },
 ): {
   defaultId: string;
+  ownership: GatewayAgentOwnership;
+  selectionRequired: boolean;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
@@ -372,5 +385,12 @@ export function listAgentsForGateway(
       model ? { model } : {},
     );
   });
-  return { defaultId: basic.defaultId, mainKey: basic.mainKey, scope: basic.scope, agents };
+  return {
+    defaultId: basic.defaultId,
+    ownership: basic.ownership!,
+    selectionRequired: basic.selectionRequired!,
+    mainKey: basic.mainKey,
+    scope: basic.scope,
+    agents,
+  };
 }

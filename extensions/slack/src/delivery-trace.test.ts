@@ -22,7 +22,8 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
 
 type RecordedWireCall = {
@@ -638,4 +639,70 @@ describe("slack delivery trace goldens", () => {
       });
     });
   }
+
+  it("removes a progress card detached by a later human message", async () => {
+    let progressEvents = 0;
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "progress-session-card-detached",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "tool-progress", name: "read", phase: "start" },
+          { kind: "advance", ms: 2000 },
+          { kind: "tool-progress", name: "write", phase: "start" },
+          { kind: "advance", ms: 2000 },
+          { kind: "final", text: "The replacement session card is complete." },
+          { kind: "idle" },
+        ],
+      },
+      setup: async (recorder) => {
+        const dispatch = await setupSlackTrace(recorder, "progress-session-card");
+        return async (step) => {
+          if (step.kind === "tool-progress") {
+            progressEvents += 1;
+            if (progressEvents === 2) {
+              traceState.tsCounter += 1;
+              noteSlackDraftConversationMessage({
+                accountId: "default",
+                channelId: CHANNEL_ID,
+                threadTs: INBOUND_TS,
+                messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
+                userId: "U_SECOND",
+                botUserId: "UBOT",
+              });
+            }
+          }
+          await dispatch(step);
+        };
+      },
+      normalize: createSlackTsNormalizer(),
+    });
+
+    const workingPosts = events.filter(
+      (event) =>
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
+    );
+    expect(workingPosts).toHaveLength(2);
+    const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
+      ?.ts;
+    const secondCardId = (workingPosts[1]?.data as { result?: { ts?: string } } | undefined)?.result
+      ?.ts;
+    expect(firstCardId).toBeTruthy();
+    expect(secondCardId).toBeTruthy();
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "chat.delete" &&
+          (event.data as { target?: string } | undefined)?.target === firstCardId,
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "chat.update" &&
+          (event.data as { target?: string } | undefined)?.target === secondCardId &&
+          JSON.stringify(event.data).includes("✅ *Working*"),
+      ),
+    ).toBe(true);
+  });
 });

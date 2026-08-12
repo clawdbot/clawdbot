@@ -153,10 +153,12 @@ test("sessions.resolve returns short-id ambiguity as a protocol-success result",
     ok: false,
     candidates: [
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
         displayName: "Newer",
       },
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
         displayName: "Older",
       },

@@ -1,4 +1,5 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
@@ -372,6 +373,8 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
 }
 
 async function registerBundledSetupPlugin(channelId: string): Promise<void> {
+  // Exercise the checked-in declarations, not a stale local dist tree left by an earlier build.
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
     "../channels/plugins/bundled.js",
   );

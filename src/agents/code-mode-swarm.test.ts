@@ -351,13 +351,17 @@ describe("Code Mode swarm host bridge", () => {
       1,
       `${replayId}:bridge:1`,
       "global",
+      undefined,
     );
     expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
       2,
       `${replayId}:bridge:1`,
       "global",
+      undefined,
     );
     expect(waitForCollectorCompletion).toHaveBeenCalledWith({
+      config: globalAliasContext.config,
+      currentAgentId: undefined,
       runId: "collector-1",
       currentSessionKeys: new Set(["main", "global"]),
       signal: undefined,

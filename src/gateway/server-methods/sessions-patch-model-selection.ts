@@ -26,7 +26,7 @@ export function persistSessionPatchModelSelection(params: {
   const agentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: params.sessionKey,
-    ...(params.sessionKey === "global" ? { agentId: params.targetAgentId } : {}),
+    agentId: params.targetAgentId,
   });
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
   persistStickyModelSelectionBestEffort({

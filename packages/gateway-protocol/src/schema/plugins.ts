@@ -47,6 +47,7 @@ export const PluginsSessionActionParamsSchema = closedObject({
   pluginId: NonEmptyString,
   actionId: NonEmptyString,
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
   payload: Type.Optional(PluginJsonValueSchema),
 });
 

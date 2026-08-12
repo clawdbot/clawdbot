@@ -463,12 +463,17 @@ export async function prepareEmbeddedAttemptHistory(input: {
         agentId: input.sessionAgentId,
       });
       const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
+        agentId: input.sessionAgentId,
         storePath,
         sessionKey: attempt.sessionKey,
       });
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
-        const subagents = listSessionEntriesReadOnly({ storePath, clone: false })
+        const subagents = listSessionEntriesReadOnly({
+          agentId: input.sessionAgentId,
+          storePath,
+          clone: false,
+        })
           .map(({ entry }) => entry)
           .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
           .map((entry) => ({
@@ -483,7 +488,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
           }),
         );
         await updateSessionEntry(
-          { storePath, sessionKey: attempt.sessionKey },
+          { agentId: input.sessionAgentId, storePath, sessionKey: attempt.sessionKey },
           async (entry) => {
             if (entry.quotaSuspension?.state !== "resuming") {
               return null;
@@ -503,6 +508,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
         cfg: attempt.config,
         controllerSessionKey: attempt.sessionKey,
+        controllerAgentId: input.sessionAgentId,
         hasSessionsYield: input.capabilityToolNames.has("sessions_yield"),
       });
       if (activeSubagentPromptAddition) {
@@ -577,6 +583,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         contextEngine: input.activeContextEngine,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
+        agentId: input.sessionAgentId,
         messages: activeSession.messages,
         tokenBudget: messageBudget,
         availableTools: new Set(input.capabilityToolNames),

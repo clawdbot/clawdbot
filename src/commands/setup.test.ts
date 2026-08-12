@@ -78,7 +78,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
-          entries: { main: { default: true, workspace } },
+          entries: { main: {} },
         },
         gateway: {
           mode: "local",
@@ -155,7 +155,8 @@ describe("setupCommand", () => {
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
-      expect(config.agents?.entries?.main?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.defaults?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.entries?.main).toEqual({});
     });
   });
 
@@ -391,7 +392,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.entries).toEqual({ main: { default: true } });
+      expect(config.agents?.entries).toEqual({ main: {} });
     });
   });
 

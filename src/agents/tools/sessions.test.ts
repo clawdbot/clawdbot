@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
@@ -405,6 +406,195 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
+it("fails closed for cross-agent and resolution-derived bare keys", async () => {
+  const bareKey = "b0d79b63-0f73-4bc9-a6b5-6d8e20f42c3c";
+  const config = {
+    agents: { ownership: "explicit" as const, entries: { main: {}, other: {} } },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const send = async (retained: boolean) =>
+    requireDetails(
+      await createSessionsSendTool({
+        agentId: "main",
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        config: retained ? retainLegacyDefaultAgentId(config, "main") : config,
+      }).execute("authorization", {
+        sessionKey: bareKey,
+        message: "status?",
+        timeoutSeconds: 0,
+      }),
+    );
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve" ? { key: "incident-42", agentId: "other" } : {},
+    );
+  expect(await send(false)).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string; params?: Record<string, string> }) => {
+      if (request.method !== "sessions.resolve") {
+        return {};
+      }
+      if (request.params?.key) {
+        throw new Error("not a session key");
+      }
+      return request.params?.sessionId ? { key: "incident-42" } : {};
+    });
+  expect(await send(true)).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Upgrade the gateway"),
+  });
+});
+
+it("authorizes literal sentinels against their persisted fixed-store owner", async () => {
+  const config = {
+    session: { store: "/tmp/shared-sessions.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const createTool = (ownerAgentId: string) =>
+    createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: { sessionStore: { agentId: ownerAgentId } },
+        },
+      },
+    });
+
+  const denied = requireDetails(
+    await createTool("ops").execute("foreign-global", {
+      sessionKey: "global",
+      message: "status?",
+      timeoutSeconds: 0,
+    }),
+  );
+  expect(denied).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  expect(callGatewayMock.mock.calls).not.toContainEqual([
+    expect.objectContaining({ method: "agent" }),
+  ]);
+
+  callGatewayMock.mockReset().mockResolvedValue({ runId: "self-global", acceptedAt: 1 });
+  const allowed = requireDetails(
+    await createTool("research").execute("self-global", {
+      sessionKey: "global",
+      message: "note",
+      timeoutSeconds: 0,
+    }),
+  );
+  expect(allowed.status).toBe("accepted");
+});
+
+it("authorizes a custom main alias against its persisted fixed-store owner", async () => {
+  const config = {
+    session: { mainKey: "work", store: "/tmp/custom-main-shared.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const createTool = (ownerAgentId: string) =>
+    createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:work",
+      config: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: { sessionStore: { agentId: ownerAgentId } },
+        },
+      },
+    });
+
+  callGatewayMock.mockImplementation(async (request: { method?: string }) =>
+    request.method === "sessions.resolve" ? { key: "work", agentId: "ops" } : {},
+  );
+  expect(
+    requireDetails(
+      await createTool("ops").execute("foreign-work", {
+        sessionKey: "work",
+        message: "status?",
+        timeoutSeconds: 0,
+      }),
+    ),
+  ).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve"
+        ? { key: "work", agentId: "research" }
+        : { runId: "self-work", acceptedAt: 1 },
+    );
+  expect(
+    requireDetails(
+      await createTool("research").execute("self-work", {
+        sessionKey: "work",
+        message: "note",
+        timeoutSeconds: 0,
+      }),
+    ).status,
+  ).toBe("accepted");
+});
+
+it("authorizes an arbitrary bare key against its persisted fixed-store owner", async () => {
+  const config = {
+    session: { store: "/tmp/arbitrary-shared.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve"
+        ? { key: "incident-42" }
+        : { runId: "arbitrary-bare", acceptedAt: 1 },
+    );
+
+  const result = requireDetails(
+    await createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config,
+    }).execute("foreign-arbitrary", {
+      sessionKey: "incident-42",
+      message: "status?",
+      timeoutSeconds: 0,
+    }),
+  );
+
+  expect(result).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  expect(callGatewayMock.mock.calls).not.toContainEqual([
+    expect.objectContaining({ method: "agent" }),
+  ]);
+});
+
 describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
@@ -750,7 +940,7 @@ describe("sessions_list gating", () => {
 
     expect(callGatewayMock).toHaveBeenLastCalledWith({
       method: "chat.history",
-      params: { sessionKey: "current", limit: 1 },
+      params: { sessionKey: "current", agentId: "main", limit: 1 },
     });
   });
 });
@@ -1158,8 +1348,7 @@ describe("sessions_send gating", () => {
       error: "sessions_send cannot target the calling session; use your own reply instead",
       sessionKey: "current",
     });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock).not.toHaveBeenCalled();
     expect(callGatewayMock.mock.calls).not.toContainEqual([
       expect.objectContaining({ method: "agent" }),
     ]);

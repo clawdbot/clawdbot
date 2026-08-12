@@ -253,6 +253,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
     "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
+  "agents.ownership":
+    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
@@ -323,6 +325,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Target settings for ambient OpenClaw system-agent and Custodian inference.",
   "agents.defaults.systemAgent.agentId":
     "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+  "agents.defaults.authInheritance":
+    "Upgrade compatibility owner for the inherited credential store until credentials are relocated per agent.",
+  "agents.defaults.authInheritance.agentId":
+    "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
+  "agents.defaults.sessionStore":
+    "Upgrade compatibility owner for a fixed legacy session store until its SQLite database records ownership.",
+  "agents.defaults.sessionStore.agentId":
+    "Agent that owns unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
   "talk.agentId":
     "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

@@ -1,5 +1,6 @@
 import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -132,7 +133,10 @@ describe("prepared model runtime snapshots", () => {
 
   it("does not let a read-only draft replace a configured gateway owner", async () => {
     mocks.configuredAgentIds = ["default"];
-    const configured = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    const configured = retainLegacyDefaultAgentId(
+      { agents: { defaults: { model: "openai/gpt-5.5" }, entries: { default: {} } } },
+      "default",
+    );
     await refreshPreparedModelRuntimeSnapshots(configured, {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
@@ -550,7 +554,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("reuses the configured owner at canonical gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
-    const config = {};
+    const config = retainLegacyDefaultAgentId({ agents: { entries: { default: {} } } }, "default");
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
@@ -561,7 +565,6 @@ describe("prepared model runtime snapshots", () => {
       config,
       agentDir: "/tmp/unused-agent",
       inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir: "/tmp/gateway-launch-workspace",
     });
 
     expect(lease.snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
@@ -572,7 +575,6 @@ describe("prepared model runtime snapshots", () => {
         config,
         agentDir: "/tmp/unused-agent",
         inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/gateway-launch-workspace",
       }),
     ).resolves.toBe(lease.snapshot);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();

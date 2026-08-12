@@ -11,6 +11,22 @@ type CreateStaticCatalogResolver =
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
+  pluginMetadataSnapshot: {
+    plugins: [],
+    pluginIds: [],
+    index: { plugins: [] },
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+  },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
   preparedAuthMaterializations:
     [] as import("./auth-profiles/runtime-materializations.js").RuntimeAuthMaterialization[],
@@ -62,6 +78,12 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   >(),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: () => true,
+  loadPluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
+}));
+
 vi.mock("./model-catalog.js", () => ({
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
@@ -103,6 +125,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     preparedModelRuntimeMocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
+  tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -114,6 +137,10 @@ vi.mock("./agent-scope.js", () => ({
     defaultAgentId: "default",
     sessionAgentId: agentId ?? "default",
   }),
+}));
+
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
 }));
 
 vi.mock("./auth-profiles/runtime-materializations.js", () => ({

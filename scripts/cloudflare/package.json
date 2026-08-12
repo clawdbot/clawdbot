@@ -1,0 +1,16 @@
+{
+  "name": "openclaw-cloudflare-template",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "wrangler": "4.122.0"
+  }
+}

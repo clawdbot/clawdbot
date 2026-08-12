@@ -51,11 +51,13 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
+  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
+} from "./diagnostic.js";
+import {
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
-  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
-} from "./diagnostic.js";
+} from "./diagnostic.test-support.js";
 
 function startDiagnosticHeartbeat(
   config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],

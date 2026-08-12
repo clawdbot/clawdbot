@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 6,
+      "state": 7,
       "agent": 17
     }
   },
@@ -451,10 +451,6 @@
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
     },
-    "./plugin-sdk/channel-streaming": {
-      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
-      "default": "./dist/plugin-sdk/channel-streaming.js"
-    },
     "./plugin-sdk/channel-streaming-config": {
       "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming-config.js"
@@ -704,10 +700,6 @@
     "./plugin-sdk/thread-bindings-session-runtime": {
       "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
     },
-    "./plugin-sdk/text-runtime": {
-      "types": "./dist/plugin-sdk/text-runtime.d.ts",
-      "default": "./dist/plugin-sdk/text-runtime.js"
-    },
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
@@ -744,10 +736,6 @@
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
-    },
-    "./plugin-sdk/channel-secret-runtime": {
-      "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-secret-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
@@ -881,10 +869,6 @@
     "./plugin-sdk/account-resolution-runtime": {
       "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
-    "./plugin-sdk/agent-config-primitives": {
-      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
-      "default": "./dist/plugin-sdk/agent-config-primitives.js"
-    },
     "./plugin-sdk/access-groups": {
       "default": "./dist/plugin-sdk/access-groups.js"
     },
@@ -946,10 +930,6 @@
     "./plugin-sdk/discord": {
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1019,10 +999,6 @@
     "./plugin-sdk/channel-inbound-debounce": {
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
-    },
-    "./plugin-sdk/channel-logging": {
-      "types": "./dist/plugin-sdk/channel-logging.d.ts",
-      "default": "./dist/plugin-sdk/channel-logging.js"
     },
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
@@ -1124,10 +1100,6 @@
     },
     "./plugin-sdk/group-activation": {
       "default": "./dist/plugin-sdk/group-activation.js"
-    },
-    "./plugin-sdk/group-access": {
-      "types": "./dist/plugin-sdk/group-access.d.ts",
-      "default": "./dist/plugin-sdk/group-access.js"
     },
     "./plugin-sdk/global-singleton": {
       "default": "./dist/plugin-sdk/global-singleton.js"
@@ -1472,10 +1444,6 @@
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
     },
-    "./plugin-sdk/zod": {
-      "types": "./dist/plugin-sdk/zod.d.ts",
-      "default": "./dist/plugin-sdk/zod.js"
-    },
     "./plugin-sdk/agent-core": {
       "default": "./dist/plugin-sdk/agent-core.js"
     },
@@ -1583,7 +1551,7 @@
     "deadcode:exports": "node --import tsx scripts/check-deadcode-exports.mts",
     "deadcode:full": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
-    "deadcode:report": "pnpm deadcode:full; pnpm deadcode:exports",
+    "deadcode:report": "pnpm deadcode:full && pnpm deadcode:exports",
     "deadcode:unused-files": "node --import tsx scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import tsx scripts/root-dependency-ownership-audit.mts",
     "deps:root-ownership:check": "node --import tsx scripts/root-dependency-ownership-audit.mts --check",
@@ -1695,7 +1663,6 @@
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\"",
     "lint:web-fetch-provider-boundaries": "node --import tsx scripts/check-web-fetch-provider-boundaries.mts",
-    "lint:web-search-provider-boundaries": "node --import tsx scripts/check-web-search-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import tsx scripts/check-webhook-auth-body-order.mts",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",

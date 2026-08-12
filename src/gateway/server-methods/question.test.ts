@@ -29,7 +29,10 @@ async function call(method: string, params: Record<string, unknown>) {
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: { broadcast } as unknown as GatewayRequestHandlerOptions["context"],
+    context: {
+      broadcast,
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestHandlerOptions["context"],
   });
   const response = calls[0];
   if (!response) {

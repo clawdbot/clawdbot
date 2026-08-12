@@ -150,9 +150,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     ```json5
     {
       agents: {
+        ownership: "explicit",
         entries: {
           coder: {
-            default: true,
             model: "xiaomi/mimo-v2.5-pro",
             thinkingDefault: "high",
             params: { temperature: 0.1 },

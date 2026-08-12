@@ -369,39 +369,6 @@ export interface CommandLogEntries {
   timestamp_ms: number;
 }
 
-export interface Commitments {
-  account_id: string | null;
-  agent_id: string;
-  attempts: number;
-  channel: string;
-  confidence: number;
-  created_at_ms: number;
-  dedupe_key: string;
-  dismissed_at_ms: number | null;
-  due_earliest_ms: number;
-  due_latest_ms: number;
-  due_timezone: string;
-  expired_at_ms: number | null;
-  id: string;
-  kind: string;
-  last_attempt_at_ms: number | null;
-  reason: string;
-  recipient_id: string | null;
-  record_json: string;
-  sender_id: string | null;
-  sensitivity: string;
-  sent_at_ms: number | null;
-  session_key: string;
-  snoozed_until_ms: number | null;
-  source: string;
-  source_message_id: string | null;
-  source_run_id: string | null;
-  status: string;
-  suggested_text: string;
-  thread_id: string | null;
-  updated_at_ms: number;
-}
-
 export interface ConfigHealthEntries {
   config_path: string;
   last_known_good_json: string | null;
@@ -509,6 +476,11 @@ export interface CronJobs {
   trigger_script: string | null;
   updated_at: number;
   wake_mode: string;
+}
+
+export interface CronStoreEpochs {
+  store_epoch: Generated<number>;
+  store_key: string;
 }
 
 export interface CurrentConversationBindings {
@@ -972,6 +944,27 @@ export interface NodeHostConfig {
   token: string | null;
   updated_at_ms: number;
   version: number;
+}
+
+export interface NodeWorkerLaunches {
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  environment_id: string;
+  error_text: string | null;
+  gateway_namespace: string;
+  launch_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_hash: string;
+  result_json: string | null;
+  run_id: string;
+  session_id: string;
+  state: string;
+  supervisor_pid: number;
+  supervisor_start_time: number;
+  updated_at_ms: number;
+  worker_pid: number | null;
+  worker_start_time: number | null;
 }
 
 export interface OfficialExternalPluginCatalogSnapshots {
@@ -1710,12 +1703,12 @@ export interface DB {
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
-  commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
   cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
+  cron_store_epochs: CronStoreEpochs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1751,6 +1744,7 @@ export interface DB {
   model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
+  node_worker_launches: NodeWorkerLaunches;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;

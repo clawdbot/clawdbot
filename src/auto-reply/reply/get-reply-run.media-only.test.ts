@@ -62,6 +62,13 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
 }));
 
+// Provider policy projection belongs to its adapter and provider-local suites. These tests
+// exercise prepared reply orchestration and supply their own model/thinking facts.
+vi.mock("../../plugins/provider-policy-surface.js", () => ({
+  resolveDirectBundledProviderPolicySurface: () => null,
+  resolveTrustedExternalProviderPolicySurface: () => null,
+}));
+
 vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
@@ -828,6 +835,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("does not borrow target-session silence for native commands sent from direct chats", async () => {
     await runPrepared({
+      agentId: "main",
       sessionKey: "agent:main:telegram:group:target",
       ctx: {
         ...createInboundBody(""),
@@ -928,6 +936,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
     const params = baseParams({
+      agentId: "main",
       sessionKey: `agent:main:${channel}:direct:steer-smoke`,
     });
     params.ctx = {
@@ -2494,6 +2503,7 @@ describe("runPreparedReply media-only handling", () => {
     previousRun.setPhase("running");
 
     const runPromise = runPrepared({
+      agentId: "main",
       isNewSession: false,
       sessionId: "session-before-wait",
       sessionKey: dispatchSessionKey,
@@ -3859,6 +3869,7 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     await runPrepared({
+      agentId: "main",
       ctx: createInboundBody("report queued reactions"),
       opts: withReplySystemEventSessionKey({}, "agent:main:slack:channel:c123"),
       provider: "",

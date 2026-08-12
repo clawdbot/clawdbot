@@ -128,13 +128,13 @@ describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
 
     expect(
       imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 

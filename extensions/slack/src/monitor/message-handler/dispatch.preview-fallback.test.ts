@@ -280,6 +280,7 @@ function createDraftStreamStub() {
     seal: vi.fn(noopAsync),
     stop: vi.fn(noop),
     forceNewMessage: vi.fn(),
+    dropDetachedMessages: vi.fn(noopAsync),
     finalizeMessage: vi.fn(async (_messageId: string, editFinal: () => Promise<void>) => {
       await editFinal();
       return true;
@@ -809,6 +810,7 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
+  isReplyPayloadNonTerminalToolErrorWarning: () => false,
   buildTtsSupplementMediaPayload: (payload: {
     text?: string;
     mediaUrl?: string;
@@ -869,13 +871,11 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
-  const { asOptionalRecord, isRecord } =
-    await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
   const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
   const readMockOptionalString = (value?: string) => value;
   return {
-    asOptionalRecord,
-    isRecord,
+    ...actual,
     normalizeOptionalLowercaseString: normalizeMockLowercaseString,
     normalizeOptionalString: readMockOptionalString,
   };
@@ -901,6 +901,9 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
+  clearSlackThreadFailureNotice: () => {},
+  hasSlackThreadParticipation: () => false,
+  recordSlackThreadFailureNotice: () => true,
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
@@ -3881,6 +3884,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectLastDraftUpdateText(draftStream, "Working\n\n• queued turn");
   });
 
+  it("clears re-armed queued progress when the followup settles without a final delivery", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "silent turn" }];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      }),
+    );
+    await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
+    await requireCapturedItemEventHandler()({ progressText: "queued turn" });
+    const clearCallsBeforeSettlement = draftStream.clear.mock.calls.length;
+    const dropCallsBeforeSettlement = draftStream.dropDetachedMessages.mock.calls.length;
+    await capturedReplyOptions?.onQueuedFollowupSettled?.();
+
+    expectLastDraftUpdateText(draftStream, "Working\n\n• queued turn");
+    expect(draftStream.clear).toHaveBeenCalledTimes(clearCallsBeforeSettlement + 1);
+    expect(draftStream.clear.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      draftStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+    );
+    expect(draftStream.dropDetachedMessages).toHaveBeenCalledTimes(dropCallsBeforeSettlement + 1);
+    expect(draftStream.dropDetachedMessages.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      draftStream.clear.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
   it("forces a new draft message on assistant boundaries in partial mode", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -3896,6 +3929,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    // Detached-message cleanup is card-only: a rotated partial preview still
+    // holds streamed assistant text and must survive dispatch closeout.
+    expect(draftStream.dropDetachedMessages).not.toHaveBeenCalled();
   });
 
   it("starts a new draft delivery target when a queued followup is admitted", async () => {

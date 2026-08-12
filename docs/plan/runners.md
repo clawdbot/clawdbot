@@ -13,22 +13,22 @@ Proposal, revision 2. Supersedes revision 1 in place (2026-08-11, operator
 decision). Implementation in progress; update this table in every PR that
 advances a milestone.
 
-| #   | Milestone                                                  | Status      | PRs                       |
-| --- | ---------------------------------------------------------- | ----------- | ------------------------- |
-| 0   | This plan (revision 2)                                     | landed      | #122454                   |
-| 1a  | Naming: session copy revert                                | landed      | #120667                   |
-| 1b  | Naming: devices consolidation                              | landed      | #120689                   |
-| 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                   |
-| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664                   |
-| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499          |
-| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635 |
-| F   | Real-wire session boundary harness                         | landed      | #121212                   |
-| 5   | Public worker ingress path                                 | landed      | #122578, #122643          |
-| 6   | Node worker provider (device runners)                      | in progress | #122683                   |
-| 7   | Bundle push consent + runner updates                       | not started | —                         |
-| 8   | Stop-and-continue moves                                    | not started | —                         |
-| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                         |
-| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                         |
+| #   | Milestone                                                  | Status      | PRs                                |
+| --- | ---------------------------------------------------------- | ----------- | ---------------------------------- |
+| 0   | This plan (revision 2)                                     | landed      | #122454                            |
+| 1a  | Naming: session copy revert                                | landed      | #120667                            |
+| 1b  | Naming: devices consolidation                              | landed      | #120689                            |
+| 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                            |
+| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664                            |
+| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                   |
+| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774 |
+| F   | Real-wire session boundary harness                         | landed      | #121212                            |
+| 5   | Public worker ingress path                                 | landed      | #122578, #122643                   |
+| 6   | Node worker provider (device runners)                      | in progress | #122683, #122829                   |
+| 7   | Bundle push consent + runner updates                       | not started | —                                  |
+| 8   | Stop-and-continue moves                                    | not started | —                                  |
+| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                  |
+| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                  |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
 vocabulary, the naming rulings, and the milestone skeleton after a

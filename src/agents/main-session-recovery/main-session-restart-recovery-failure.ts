@@ -8,7 +8,6 @@ import {
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
@@ -112,6 +111,7 @@ async function claimMainRestartRecoveryTombstone(params: {
 }
 
 export async function tombstoneMainRestartRecoveryWithNotice(params: {
+  agentId: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   gatewayRuntime: GatewayRecoveryRuntime;
@@ -142,7 +142,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       }
       const now = Date.now();
       const notice = await writeRestartRecoveryTombstoneNotice({
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: params.agentId,
         entry,
         expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
         sessionKey: params.sessionKey,

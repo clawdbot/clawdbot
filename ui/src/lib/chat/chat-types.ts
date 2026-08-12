@@ -143,7 +143,6 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
-  turnSucceeded?: boolean;
 };
 
 /** Content item types in a normalized message */
