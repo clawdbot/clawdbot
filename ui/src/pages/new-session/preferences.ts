@@ -1,7 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.new-session.preferences.v1:";

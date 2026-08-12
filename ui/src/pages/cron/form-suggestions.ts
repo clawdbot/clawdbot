@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
@@ -7,7 +8,6 @@ import {
   resolveConfiguredCronModelSuggestions,
   type CronState,
 } from "../../lib/cron/index.ts";
-import { sortUniqueStrings } from "../../lib/string-coerce.ts";
 import { resolveCronTimezoneSuggestions } from "./timezone-suggestions.ts";
 
 export const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];

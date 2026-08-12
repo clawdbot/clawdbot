@@ -232,7 +232,6 @@ async function run(
     transport?: "sse" | "websocket" | "websocket-cached" | "auto";
     sessionId?: string;
     timeoutMs?: number;
-    onPayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
     headers?: Record<string, string>;
   } = {},
 ): Promise<AssistantMessage> {
@@ -242,7 +241,6 @@ async function run(
     transport: overrides.transport ?? "websocket-cached",
     reasoningEffort: "low",
     timeoutMs: overrides.timeoutMs,
-    onPayload: overrides.onPayload,
     headers: overrides.headers,
   } as never);
   return stream.result();

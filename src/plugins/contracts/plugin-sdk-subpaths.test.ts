@@ -28,6 +28,14 @@ import type {
 } from "openclaw/plugin-sdk/reply-runtime";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import {
+  buildPluginSdkPackageExports,
+  deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
+  pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+  publicPluginSdkSubpaths as pluginSdkSubpaths,
+} from "../../../scripts/lib/plugin-sdk-entries.mts";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
   BaseProbeResult,
@@ -51,13 +59,6 @@ import type {
 } from "../../plugin-sdk/channel-plugin-common.js";
 import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
-import {
-  buildPluginSdkPackageExports,
-  deprecatedPublicPluginSdkEntrypoints,
-  pluginSdkEntrypoints,
-  privateLocalOnlyPluginSdkEntrypoints,
-  publicPluginSdkSubpaths as pluginSdkSubpaths,
-} from "../../plugin-sdk/entrypoints.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
@@ -519,10 +520,19 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("private-local entries explicitly");
 
     for (const subpath of pluginSdkSubpaths) {
-      expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`);
+      expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
+        types: `./dist/plugin-sdk/${subpath}.d.ts`,
+        default: `./dist/plugin-sdk/${subpath}.js`,
+      });
     }
+    const packagedPrivateSubpaths = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
     for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
-      expect(packageExports).not.toHaveProperty(`./plugin-sdk/${subpath}`);
+      const packageExport = packageExports[`./plugin-sdk/${subpath}`];
+      if (packagedPrivateSubpaths.has(subpath)) {
+        expect(packageExport).toEqual({ default: `./dist/plugin-sdk/${subpath}.js` });
+      } else {
+        expect(packageExport).toBeUndefined();
+      }
     }
     for (const subpath of deprecatedPublicPluginSdkEntrypoints) {
       expect(pluginSdkSubpaths).toContain(subpath);

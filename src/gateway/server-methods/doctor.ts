@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listAgentIds,
@@ -31,7 +32,6 @@ import {
   repairDreamingArtifacts,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
-import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
@@ -518,14 +518,14 @@ function isManagedDreamingJob(
   job: ManagedCronJobLike,
   params: { name: string; tag: string; payloadText: string },
 ): boolean {
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (description?.includes(params.tag)) {
     return true;
   }
   // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
-  const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
+  const name = normalizeOptionalString(job.name);
+  const payloadKind = normalizeOptionalString(job.payload?.kind)?.toLowerCase();
+  const payloadText = normalizeOptionalString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText
   );
@@ -735,7 +735,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
+      const workspaceDir = normalizeOptionalString(
+        (status as Record<string, unknown>).workspaceDir,
+      );
       const configuredWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]

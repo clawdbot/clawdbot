@@ -1,5 +1,5 @@
 // Control UI module implements usage helpers behavior.
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type UsageQueryTerm = {
   key?: string;

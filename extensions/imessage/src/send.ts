@@ -12,6 +12,7 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   extractOriginalFilename,
@@ -22,7 +23,10 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString as stringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
@@ -40,7 +44,11 @@ import {
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
-import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import {
+  createIMessageRpcClient,
+  IMessageRpcRequestError,
+  type IMessageRpcClient,
+} from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
@@ -500,6 +508,29 @@ function resolveIMessageSendFailure(result: Record<string, unknown>): string | n
     : "iMessage action failed";
 }
 
+function normalizeIMessageRpcSendError(error: unknown): unknown {
+  if (!(error instanceof IMessageRpcRequestError)) {
+    return error;
+  }
+  const data = asOptionalRecord(error.data);
+  return data?.disposition === "not_started" && data.retry_safe === true
+    ? new PlatformMessageNotDispatchedError(error.message, { cause: error })
+    : error;
+}
+
+async function requestIMessageRpcSend(
+  client: IMessageRpcClient,
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  try {
+    return await client.request<Record<string, unknown>>(method, params, { timeoutMs });
+  } catch (error) {
+    throw normalizeIMessageRpcSendError(error);
+  }
+}
+
 function isIMessageRpcSendTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /imsg rpc timeout \(send\)/i.test(message);
@@ -909,7 +940,7 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost });
     try {
-      return await rpcClient.request<Record<string, unknown>>(method, rpcParams, { timeoutMs });
+      return await requestIMessageRpcSend(rpcClient, method, rpcParams, timeoutMs);
     } finally {
       await rpcClient.stop();
     }
@@ -1031,7 +1062,7 @@ export async function sendMessageIMessage(
   };
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
-      await client.request<Record<string, unknown>>("send", nativeParams, { timeoutMs });
+      await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs);
     const response = filePath
       ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) => {
           if (remoteHost) {

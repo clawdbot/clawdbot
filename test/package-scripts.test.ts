@@ -152,12 +152,6 @@ describe("package scripts", () => {
     );
   });
 
-  it("exposes the strict production plugin normalization boundary command", () => {
-    expect(readPackageJson().scripts["lint:extensions:no-normalization-core-bypass"]).toBe(
-      "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
-    );
-  });
-
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
       "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",

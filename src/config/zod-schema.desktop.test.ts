@@ -7,10 +7,17 @@ describe("OpenClawSchema desktop config", () => {
   it("round-trips the host Labs config and rejects unknown or unsafe fields", () => {
     expect(
       OpenClawSchema.parse({
-        desktop: { host: { enabled: true, port: 5901, passwordFile: "/run/vnc/passwd" } },
+        desktop: {
+          host: {
+            enabled: true,
+            managed: true,
+            port: 5901,
+            passwordFile: "/run/vnc/passwd",
+          },
+        },
       }).desktop,
     ).toStrictEqual({
-      host: { enabled: true, port: 5901, passwordFile: "/run/vnc/passwd" },
+      host: { enabled: true, managed: true, port: 5901, passwordFile: "/run/vnc/passwd" },
     });
     expect(
       OpenClawSchema.safeParse({ desktop: { host: { enabled: true, port: 0 } } }).success,

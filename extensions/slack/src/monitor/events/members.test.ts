@@ -145,32 +145,6 @@ describe("registerSlackMemberEvents", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
-  it("records and propagates member handler failures", async () => {
-    const harness = initSlackHarness();
-    const runtimeError = vi.fn();
-    const failure = new Error("users.info temporarily unavailable");
-    harness.ctx.runtime.error = runtimeError;
-    harness.ctx.resolveUserName = async () => {
-      throw failure;
-    };
-    registerSlackMemberEvents({ ctx: harness.ctx });
-    const handler = harness.getHandler("member_joined_channel");
-    if (!handler) {
-      throw new Error("expected Slack member joined handler");
-    }
-
-    await expect(
-      handler({
-        event: makeMemberEvent(),
-        body: { event_id: "Ev-member-failure" },
-      }),
-    ).rejects.toBe(failure);
-
-    expect(runtimeError).toHaveBeenCalledWith(
-      expect.stringContaining("slack joined handler failed: users.info temporarily unavailable"),
-    );
-  });
-
   it("keys each queued event by the envelope occurrence", async () => {
     await runMemberCase({ body: { event_id: "Ev-member-2" } });
 
@@ -178,6 +152,33 @@ describe("registerSlackMemberEvents", () => {
       "Slack: alice joined #direct.",
       expect.objectContaining({
         contextKey: "slack:member:joined:D1:U1:Ev-member-2",
+      }),
+    );
+  });
+
+  it("uses the stable user ID when the post-auth name lookup fails", async () => {
+    const harness = initSlackHarness({
+      channelType: "channel",
+      channelUsers: ["U1"],
+    });
+    const resolveUserName = vi.fn(async () => ({ error: new Error("users.info failed") }));
+    harness.ctx.resolveUserName = resolveUserName;
+    registerSlackMemberEvents({ ctx: harness.ctx });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    await handler({
+      event: makeMemberEvent({ channel: "C1", user: "U1" }),
+      body: { event_id: "Ev-member-id-fallback" },
+    });
+
+    expect(resolveUserName).toHaveBeenCalledOnce();
+    expect(memberMocks.enqueue).toHaveBeenCalledWith(
+      "Slack: U1 joined #general.",
+      expect.objectContaining({
+        contextKey: "slack:member:joined:C1:U1:Ev-member-id-fallback",
       }),
     );
   });

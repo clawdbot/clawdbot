@@ -128,7 +128,10 @@ describe("desktop gateway methods", () => {
     );
     const context = {
       getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
-      hostDesktopService: { observe },
+      hostDesktopService: {
+        observe,
+        status: async () => ({ enabled: true, state: "attached", port: 5900, security: "VncAuth" }),
+      },
     };
     const [firstOk, , firstError] = await invoke(
       "desktop.observe",

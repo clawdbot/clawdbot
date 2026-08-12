@@ -42,6 +42,28 @@ describe("status-overview-rows", () => {
     );
   });
 
+  it("shows managed host desktop coordinates", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows({
+      ...params,
+      summary: {
+        ...params.summary,
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "running",
+          display: 99,
+          port: 46_001,
+          security: "VncAuth",
+        },
+      },
+    });
+
+    expect(findRowValue(rows, "Host desktop")).toBe(
+      "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
+    );
+  });
+
   it("shows update restart state in fast status output", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({

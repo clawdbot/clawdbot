@@ -250,6 +250,7 @@ export async function uploadSlackFile(params: {
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  optimizeImages?: boolean;
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
@@ -261,6 +262,7 @@ export async function uploadSlackFile(params: {
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
+    ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
   });
   // Slack classifies previews by filename even when the upload body has a MIME type.
   const uploadFileName =

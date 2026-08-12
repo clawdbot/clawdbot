@@ -659,6 +659,7 @@ export class ComposedGatewayHarness {
           return result;
         },
       } as workerServer.WorkerConnectionService,
+      ingress: "loopback",
       send: (frame) => this.send(socket, frame),
       close: (code = 1000, reason = "") => socket.close(code, reason),
       isClosed: () => closed || socket.readyState === WebSocket.CLOSED,

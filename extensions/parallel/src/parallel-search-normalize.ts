@@ -12,7 +12,10 @@ import {
   resolveSiteName,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
@@ -29,6 +32,11 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 export const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
+
+export const normalizeParallelSessionId: (
+  value: string | undefined,
+  maxLength: number,
+) => string | undefined = normalizeBoundedOptionalString;
 
 type ParallelSearchResult = {
   title?: unknown;
@@ -91,14 +99,6 @@ export function resolveParallelSearchCount(
     min: 1,
     max: PARALLEL_MAX_SEARCH_COUNT,
   });
-}
-
-export function normalizeParallelSessionId(
-  value: string | undefined,
-  maxLength: number,
-): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 export function normalizeParallelObjective(value: string | undefined): string | undefined {

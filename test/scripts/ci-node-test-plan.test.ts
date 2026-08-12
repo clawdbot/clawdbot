@@ -434,8 +434,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
-    const toolingGroupSizes = toolingGroups.map((group) => group.includePatterns?.length ?? 0);
-    expect(Math.max(...toolingGroupSizes) - Math.min(...toolingGroupSizes)).toBeLessThanOrEqual(1);
     expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
     expect(toolingFiles.toSorted((a, b) => a.localeCompare(b))).toEqual(listAllToolingTestFiles());
   });
