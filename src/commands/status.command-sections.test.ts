@@ -434,6 +434,6 @@ describe("status.command-sections", () => {
       resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
       resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" }),
     });
-    expect(value).toContain("warn(vector unavailable)");
+    expect(value).toContain("warn(vector store unavailable)");
   });
 });

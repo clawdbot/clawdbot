@@ -759,15 +759,19 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       })),
       close: vi.fn(async () => {}),
     };
+    const resolveMemoryConfig = vi.fn(() => ({
+      store: { databasePath: `/tmp/openclaw-status-semantic-throw-${process.pid}.sqlite` },
+    }));
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: { memory: { search: { provider: "local" } } },
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-core" },
-      resolveMemoryConfig: vi.fn(() => null),
+      resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultDatabasePath: vi.fn(),
+      requireDefaultDatabasePath: () =>
+        `/tmp/openclaw-status-semantic-throw-default-${process.pid}.sqlite`,
     });
 
     expect(manager.probeVectorAvailability).toHaveBeenCalled();
