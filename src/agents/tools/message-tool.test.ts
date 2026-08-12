@@ -4427,6 +4427,42 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.message).toBe(message);
   });
 
+  it.each([
+    {
+      field: "text" as const,
+      channel: "signal" as const,
+      target: "signal:+15551234567",
+    },
+    {
+      field: "content" as const,
+      channel: "discord" as const,
+      target: "discord:123",
+    },
+    {
+      field: "message" as const,
+      channel: "telegram" as const,
+      target: "telegram:123",
+    },
+  ])(
+    "strips <internal> reflection blocks in $field before sending so model reasoning does not leak (#122623)",
+    async ({ channel, target, field }) => {
+      mockSendResult({ channel, to: target });
+
+      const call = await executeSend({
+        action: {
+          target,
+          [field]: [
+            "<internal>",
+            "Just a self-reply from the user again, confirming they want me to keep going.",
+            "</internal>",
+            "Here is the visible answer.",
+          ].join("\n"),
+        },
+      });
+      expect(call?.params?.[field]).toBe("Here is the visible answer.");
+    },
+  );
+
   it("strips internal-runtime-context blocks from poll creation text before dispatch", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 

@@ -31,11 +31,13 @@ const REASONING_TAG_PREFIXES = [
   "<thought",
   "<antthinking",
   "<mm:think",
+  "<internal",
   "</think",
   "</thinking",
   "</thought",
   "</antthinking",
   "</mm:think",
+  "</internal",
 ];
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
@@ -75,13 +77,30 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   if (trimmed.includes(">")) {
     return false;
   }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
+  const normalized = trimmed.replace(/^<\s+/, "<");
+  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(normalized));
 }
 
 type TelegramReasoningSplit = {
   reasoningText?: string;
   answerText?: string;
 };
+
+const INTERNAL_TAG_RE = /<\s*internal\b[^<>]*>/gi;
+
+function textContainsInternalTagOutsideCode(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const codeRegions = findCodeRegions(text);
+  INTERNAL_TAG_RE.lastIndex = 0;
+  for (const match of text.matchAll(INTERNAL_TAG_RE)) {
+    if (!isInsideCode(match.index ?? 0, codeRegions)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function splitTelegramReasoningText(
   text?: string,
@@ -97,6 +116,9 @@ export function splitTelegramReasoningText(
 
   const trimmed = text.trim();
   if (isPartialReasoningTagPrefix(trimmed)) {
+    return {};
+  }
+  if (textContainsInternalTagOutsideCode(text)) {
     return {};
   }
   if (REASONING_MESSAGE_RE.test(trimmed)) {
@@ -117,10 +139,12 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
+  if (!taggedReasoning && !strippedAnswer) {
+    return {};
+  }
+
   return {
-    reasoningText: markReasoningMessage(
-      formatReasoningMessage(taggedReasoning || strippedAnswer || text),
-    ),
+    reasoningText: markReasoningMessage(formatReasoningMessage(taggedReasoning || strippedAnswer)),
   };
 }
 

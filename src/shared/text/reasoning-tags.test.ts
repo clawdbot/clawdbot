@@ -77,6 +77,31 @@ describe("stripReasoningTagsFromText", () => {
         expected: "Real answer.",
       },
       {
+        name: "strips internal reflection blocks",
+        input: "Before <internal>secret reflection</internal> after",
+        expected: "Before  after",
+      },
+      {
+        name: "strips internal block preserving visible answer",
+        input: "<internal>hidden reasoning</internal>Visible answer.",
+        expected: "Visible answer.",
+      },
+      {
+        name: "does not recover unclosed internal as visible text",
+        input: "<internal>secret reflection",
+        expected: "",
+      },
+      {
+        name: "does not recover unclosed internal with multi-line content",
+        input: "<internal>secret\nmore reflection",
+        expected: "",
+      },
+      {
+        name: "recovers unclosed thinking as visible text (non-privacy tag)",
+        input: "<thinking>visible thought",
+        expected: "visible thought",
+      },
+      {
         name: "strips multiple reasoning blocks",
         input: "<think>first</think>A<think>second</think>B",
         expected: "AB",
@@ -111,6 +136,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         name: "preserves final tags inside code examples",
         input: "Use `<final>` for final answers in code:\n```\n<final>42</final>\n```",
+      },
+      {
+        name: "preserves literal internal tags inside code examples",
+        input: "Use `<internal>` in code:\n```\n<internal>example</internal>\n```",
       },
       {
         name: "preserves mixed literal think tags and code blocks",

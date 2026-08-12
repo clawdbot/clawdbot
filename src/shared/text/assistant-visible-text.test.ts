@@ -39,6 +39,16 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Visible",
     },
     {
+      name: "strips internal reflection blocks from visible replies",
+      input: [
+        "<internal>",
+        "Just a self-reply from the user again, confirming they want me to keep going.",
+        "</internal>",
+        "Here is the actual answer.",
+      ].join("\n"),
+      expected: "Here is the actual answer.",
+    },
+    {
       name: "strips relevant-memories scaffolding blocks",
       input: [
         "<relevant-memories>",

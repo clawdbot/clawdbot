@@ -21,8 +21,10 @@ export const REASONING_TAG_NAMES = [
   "mm:thinking",
   "mm:thought",
   "mm:reasoning",
+  "internal",
 ] as const;
 export const REASONING_TAG_NAME_SET = new Set<string>(REASONING_TAG_NAMES);
+const NON_RECOVERABLE_TAG_NAMES = new Set<string>(["internal"]);
 const DISABLE_HTML_MARKDOWN = {
   disable: { null: ["htmlFlow", "htmlText"] },
 };
@@ -253,6 +255,7 @@ export type ReductionState = {
   pending?: {
     content: string;
     openTag: string;
+    tagName: string;
     protectedClose: boolean;
     visibleBefore: boolean;
   };
@@ -353,9 +356,11 @@ export function reduceReasoningText(
         break;
       }
       if (state.depth === 0) {
+        const tagNameMatch = /^<\s*\/?\s*([^\s/>]+)/.exec(tag.text);
         state.pending = {
           content: "",
           openTag: tag.text,
+          tagName: tagNameMatch?.[1]?.toLowerCase() ?? "",
           protectedClose: false,
           visibleBefore: state.visibleEver,
         };
@@ -393,10 +398,12 @@ export function reduceReasoningText(
   append(text.slice(cursor));
   if (options.final && state.depth > 0 && state.pending) {
     const pending = state.pending;
+    const isNonRecoverable = NON_RECOVERABLE_TAG_NAMES.has(pending.tagName);
     const recoverAsText =
-      options.mode === "static-preserve" ||
-      (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
-      (options.mode === "visible" && !pending.protectedClose);
+      !isNonRecoverable &&
+      (options.mode === "static-preserve" ||
+        (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
+        (options.mode === "visible" && !pending.protectedClose));
     if (recoverAsText) {
       const value =
         options.mode === "visible" && pending.visibleBefore

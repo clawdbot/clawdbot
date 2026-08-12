@@ -47,4 +47,73 @@ describe("splitTelegramReasoningText", () => {
       answerText: text,
     });
   });
+
+  it("suppresses <internal> reflection blocks in reasoning payloads (#122623)", () => {
+    expect(
+      splitTelegramReasoningText(
+        "<internal>\nSelf-reply detected. The user's reply_to_id matches their own message.\n</internal>",
+        true,
+      ),
+    ).toStrictEqual({});
+  });
+
+  it("suppresses pure <internal> blocks with no visible answer (#122623)", () => {
+    expect(
+      splitTelegramReasoningText("<internal>hidden reasoning only</internal>", true),
+    ).toStrictEqual({});
+  });
+
+  it("suppresses <internal> reasoning with visible answer in reasoning lane (#122623)", () => {
+    const result = splitTelegramReasoningText(
+      "<internal>Self-reply analysis</internal>Here is the answer.",
+      true,
+    );
+    expect(result).toStrictEqual({});
+  });
+
+  it("does not fall back to raw text when stripped answer is empty (#122623)", () => {
+    const result = splitTelegramReasoningText("<internal>secret</internal>", true);
+    expect(result).toStrictEqual({});
+    expect(result.reasoningText).toBeUndefined();
+    expect(result.answerText).toBeUndefined();
+  });
+
+  it("recognizes <internal as a partial reasoning tag prefix (#122623)", () => {
+    expect(splitTelegramReasoningText("  <interna", true)).toStrictEqual({});
+  });
+
+  it("suppresses unclosed <internal> streaming snapshots (#122623)", () => {
+    expect(splitTelegramReasoningText("<internal>secret", true)).toStrictEqual({});
+  });
+
+  it("suppresses unclosed <internal> with multi-line content (#122623)", () => {
+    expect(
+      splitTelegramReasoningText("<internal>\nSelf-reply analysis\ncontinuing...", true),
+    ).toStrictEqual({});
+  });
+
+  it("preserves literal <internal> inside code in reasoning payloads (#122623)", () => {
+    const text = "```xml\n<internal>example</internal>\n```";
+    const result = splitTelegramReasoningText(text, true);
+    expect(result.reasoningText).toContain("🧠");
+    expect(result.reasoningText).toContain("internal");
+  });
+
+  it("suppresses <internal> opening tag even with attributes (#122623)", () => {
+    expect(splitTelegramReasoningText('<internal type="reflection">content', true)).toStrictEqual(
+      {},
+    );
+  });
+
+  it("suppresses whitespace-form incomplete internal tags (#122623)", () => {
+    expect(splitTelegramReasoningText("< internal", true)).toStrictEqual({});
+  });
+
+  it("suppresses whitespace-form unclosed internal snapshots (#122623)", () => {
+    expect(splitTelegramReasoningText("< internal>secret", true)).toStrictEqual({});
+  });
+
+  it("suppresses multi-whitespace incomplete internal prefix (#122623)", () => {
+    expect(splitTelegramReasoningText("  <  internal", true)).toStrictEqual({});
+  });
 });

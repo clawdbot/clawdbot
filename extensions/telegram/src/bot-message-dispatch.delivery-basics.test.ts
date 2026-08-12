@@ -664,4 +664,27 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       }
     },
   );
+
+  it("does not deliver raw <internal> reflection payload when splitter suppresses (#122623)", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<internal>secret reflection</internal>", isReasoning: true },
+        { kind: "final" },
+      );
+    });
+
+    await deliverInboundReplyWithMessageSendContext();
+
+    const calls = deliverReplies.mock.calls;
+    for (const call of calls) {
+      const replies = (call[0] as { replies?: unknown }).replies;
+      if (Array.isArray(replies)) {
+        for (const reply of replies as Array<Record<string, unknown>>) {
+          const text = typeof reply.text === "string" ? reply.text : "";
+          expect(text).not.toContain("secret");
+          expect(text).not.toContain("<internal>");
+        }
+      }
+    }
+  });
 });

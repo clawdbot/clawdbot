@@ -312,6 +312,7 @@ export function splitTextIntoLaneSegments(
   if (split.answerText) {
     splitSegments.push({ lane: "answer", text: split.answerText });
   }
+  const splitterSuppressed = isReasoning === true && !split.reasoningText && !split.answerText;
   return {
     segments: splitSegments.map((segment) => ({
       lane: segment.lane,
@@ -322,7 +323,9 @@ export function splitTextIntoLaneSegments(
         ...(update.isReasoningSnapshot ? { isReasoningSnapshot: true } : {}),
       },
     })),
-    suppressedReasoningOnly: Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
+    suppressedReasoningOnly:
+      splitterSuppressed ||
+      (Boolean(split.reasoningText) && suppressReasoning && !split.answerText),
   };
 }
 
