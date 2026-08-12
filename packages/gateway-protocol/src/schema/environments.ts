@@ -14,6 +14,10 @@ export const EnvironmentStatusSchema = Type.String({
   enum: ["available", "unavailable", "starting", "stopping", "error"],
 });
 
+const EnvironmentTrustSchema = Type.String({
+  enum: ["persistent", "disposable"],
+});
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -65,6 +69,9 @@ function createEnvironmentSummarySchema() {
     type: NonEmptyString,
     label: Type.Optional(NonEmptyString),
     status: EnvironmentStatusSchema,
+    platform: Type.Optional(NonEmptyString),
+    sessionHost: Type.Optional(Type.Boolean()),
+    trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
   });
@@ -80,6 +87,7 @@ export const EnvironmentsListParamsSchema = closedObject({});
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
+  trust: Type.Optional(EnvironmentTrustSchema),
 });
 
 /** List response containing all gateway-visible environment summaries. */

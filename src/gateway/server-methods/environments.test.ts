@@ -208,6 +208,9 @@ describe("environment gateway methods", () => {
           type: "local",
           label: "Gateway local",
           status: "available",
+          platform: process.platform,
+          sessionHost: true,
+          trust: "persistent",
           capabilities: ["agent.run", "sessions", "tools", "workspace"],
         },
         {
@@ -215,6 +218,9 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Live Node",
           status: "available",
+          platform: "ios",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
         {
@@ -222,6 +228,8 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Offline Node",
           status: "unavailable",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera.snap", "screen"],
         },
       ],
@@ -243,8 +251,8 @@ describe("environment gateway methods", () => {
     expect(ok).toBe(true);
     expect(payload).toMatchObject({
       profiles: [
-        { id: "aws", providerId: "crabbox" },
-        { id: "zeta", providerId: "static-ssh" },
+        { id: "aws", providerId: "crabbox", trust: "disposable" },
+        { id: "zeta", providerId: "static-ssh", trust: "disposable" },
       ],
       environments: [
         { id: "gateway", type: "local" },
@@ -254,6 +262,7 @@ describe("environment gateway methods", () => {
           id: "worker-1",
           type: "worker",
           status: "available",
+          trust: "disposable",
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
@@ -324,6 +333,9 @@ describe("environment gateway methods", () => {
       type: "node",
       label: "Live Node",
       status: "available",
+      platform: "ios",
+      sessionHost: false,
+      trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
   });
@@ -341,6 +353,7 @@ describe("environment gateway methods", () => {
     expect(payload).toMatchObject({
       id: "worker-1",
       status: "available",
+      trust: "disposable",
       worker: { state: "attached", ageMs: 9_000 },
     });
     expect(get).toHaveBeenCalledWith("worker-1");
