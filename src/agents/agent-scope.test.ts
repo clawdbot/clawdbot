@@ -8,7 +8,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
-  hasLegacyAutoFallbackWithoutOrigin,
   markAutoFallbackPrimaryProbe,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
@@ -616,36 +615,6 @@ describe("resolveAgentConfig", () => {
         probeState: new Map(),
       }),
     ).toBeUndefined();
-  });
-
-  it("identifies legacy auto fallback overrides without origin metadata", () => {
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "anthropic",
-        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-      }),
-    ).toBe(false);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: " ",
-        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-      }),
-    ).toBe(true);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "anthropic",
-      }),
-    ).toBe(true);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "user",
-      }),
-    ).toBe(false);
-    expect(hasLegacyAutoFallbackWithoutOrigin({})).toBe(false);
-    expect(hasLegacyAutoFallbackWithoutOrigin(undefined)).toBe(false);
   });
 
   it("recognizes recovered auto fallback provenance without a source marker", () => {
