@@ -723,8 +723,8 @@ defineDiscordVoiceTests(
       let resolveConnect!: () => void;
       realtimeSessionMock.connect.mockImplementationOnce(
         async () =>
-          await new Promise<void>((resolve) => {
-            resolveConnect = resolve;
+          await new Promise<undefined>((resolve) => {
+            resolveConnect = () => resolve(undefined);
           }),
       );
       const player = createAudioPlayerMock();
@@ -785,7 +785,7 @@ defineDiscordVoiceTests(
       bridgeParams.onEvent?.({ direction: "client", type: "session.continuity.reset" });
       resolveConsult({ payloads: [{ text: "stale consult completion" }] });
       await consult;
-      bridgeParams.onResponseDone?.({ status: "completed", message: "done" });
+      bridgeParams.onResponseDone?.({ status: "completed" });
       await Promise.resolve();
       await Promise.resolve();
 

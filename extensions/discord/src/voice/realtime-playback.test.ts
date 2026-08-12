@@ -1,3 +1,4 @@
+import type { PassThrough } from "node:stream";
 import type {
   RealtimeVoiceAgentControlResult,
   RealtimeVoiceSessionHarness,
@@ -11,7 +12,6 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
   ({
-    PassThrough,
     expect,
     it,
     vi,
