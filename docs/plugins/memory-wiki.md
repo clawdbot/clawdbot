@@ -284,13 +284,14 @@ includes compact `Claim:` and `Evidence:` lines when available.
 
 ## Agent tools
 
-| Tool          | Purpose                                                                                                                                                       |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wiki_status` | current vault mode and scope, resolved agent, health, Obsidian CLI availability                                                                               |
-| `wiki_search` | search wiki pages and, when configured, the shared memory corpus; accepts `mode` for person lookup, question routing, source evidence, or raw claim drilldown |
-| `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
-| `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
-| `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                            |
+| Tool              | Purpose                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wiki_status`     | current vault mode and scope, resolved agent, health, Obsidian CLI availability                                                                               |
+| `wiki_search`     | search wiki pages and, when configured, the shared memory corpus; accepts `mode` for person lookup, question routing, source evidence, or raw claim drilldown |
+| `wiki_get`        | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
+| `wiki_apply`      | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
+| `wiki_lint`       | structural checks, provenance gaps, contradictions, open questions                                                                                            |
+| `wiki_open_items` | list unresolved open questions, contradictions, and low-confidence pages or claims with their text and page location                                          |
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory

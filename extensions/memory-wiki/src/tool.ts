@@ -1,7 +1,8 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
-import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -11,7 +12,17 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import {
+  collectMemoryWikiOpenItems,
+  countMemoryWikiOpenItems,
+  WIKI_OPEN_ITEM_KINDS,
+} from "./open-items.js";
+import {
+  createWikiPageVisibilityFilter,
+  getMemoryWikiPage,
+  searchMemoryWiki,
+  WIKI_SEARCH_MODES,
+} from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -81,6 +92,30 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+// Bound wiki_open_items output: an omitted `limit` must not flush an entire
+// vault's unresolved items into model context. The default keeps typical output
+// under the repo's model-visible-text budget; the schema maximum is a hard cap
+// so even an explicit caller cannot request an unbounded listing.
+const WIKI_OPEN_ITEMS_DEFAULT_LIMIT = 20;
+const WIKI_OPEN_ITEMS_MAX_LIMIT = 100;
+// OpenClaw's provider conversion truncates tool-result text at 8,000
+// characters. Keep the *combined* rendered text and structured details well
+// below that boundary so the selected items stay intact in both representations.
+const WIKI_OPEN_ITEMS_RESULT_MAX_CHARS = 7_000;
+// Bound individual model-visible fields as well as the number of returned
+// items. This prevents a single malformed or unusually long question/claim
+// from consuming an unbounded share of an agent's context window.
+const WIKI_OPEN_ITEM_TEXT_MAX_CHARS = 500;
+const WIKI_OPEN_ITEM_VARIANTS_MAX_COUNT = 10;
+const WIKI_OPEN_ITEM_RELATED_PATHS_MAX_COUNT = 20;
+const WikiOpenItemsSchema = Type.Object(
+  {
+    kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: WIKI_OPEN_ITEMS_MAX_LIMIT })),
+  },
+  { additionalProperties: false },
+);
+type WikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
 const WikiApplySchema = Type.Object(
   {
     op: Type.Union([
@@ -115,6 +150,94 @@ type WikiToolMemoryContext = {
   sandboxed?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
 };
+
+function truncateOpenItemText(value: string): string {
+  if (value.length <= WIKI_OPEN_ITEM_TEXT_MAX_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, WIKI_OPEN_ITEM_TEXT_MAX_CHARS - 1)}…`;
+}
+
+function boundMemoryWikiOpenItem<
+  T extends {
+    kind: WikiOpenItemKind;
+    text: string;
+    pagePath: string;
+    pageTitle: string;
+    claimId?: string;
+    variants?: Array<{
+      text: string;
+      status: string;
+      pagePath: string;
+      pageTitle: string;
+      confidence?: number;
+    }>;
+    relatedPagePaths?: string[];
+  },
+>(item: T): T {
+  return {
+    ...item,
+    text: truncateOpenItemText(item.text),
+    pagePath: truncateOpenItemText(item.pagePath),
+    pageTitle: truncateOpenItemText(item.pageTitle),
+    ...(item.claimId ? { claimId: truncateOpenItemText(item.claimId) } : {}),
+    ...(item.variants
+      ? {
+          variants: item.variants.slice(0, WIKI_OPEN_ITEM_VARIANTS_MAX_COUNT).map((variant) => ({
+            text: truncateOpenItemText(variant.text),
+            status: truncateOpenItemText(variant.status),
+            pagePath: truncateOpenItemText(variant.pagePath),
+            pageTitle: truncateOpenItemText(variant.pageTitle),
+            ...(typeof variant.confidence === "number" ? { confidence: variant.confidence } : {}),
+          })),
+        }
+      : {}),
+    ...(item.relatedPagePaths
+      ? {
+          relatedPagePaths: item.relatedPagePaths
+            .slice(0, WIKI_OPEN_ITEM_RELATED_PATHS_MAX_COUNT)
+            .map(truncateOpenItemText),
+        }
+      : {}),
+  };
+}
+
+function renderMemoryWikiOpenItems(
+  items: Array<{
+    kind: string;
+    text: string;
+    pagePath: string;
+    claimId?: string;
+    confidence?: number;
+  }>,
+): string {
+  return items.length === 0
+    ? "No open wiki items."
+    : items
+        .map((item, index) => {
+          const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
+          const confidenceSuffix =
+            typeof item.confidence === "number"
+              ? ` (confidence ${item.confidence.toFixed(2)})`
+              : "";
+          return `${index + 1}. [${item.kind}] ${item.text}\nPage: ${item.pagePath}${claimSuffix}${confidenceSuffix}`;
+        })
+        .join("\n\n");
+}
+
+function hasMemoryWikiOpenItemsResultBudget(
+  items: ReturnType<typeof boundMemoryWikiOpenItem>[],
+  vaultCounts: ReturnType<typeof countMemoryWikiOpenItems>,
+): boolean {
+  const text = renderMemoryWikiOpenItems(items);
+  const details = {
+    counts: countMemoryWikiOpenItems(items),
+    vaultCounts,
+    items,
+    truncated: false,
+  };
+  return text.length + JSON.stringify(details).length <= WIKI_OPEN_ITEMS_RESULT_MAX_CHARS;
+}
 
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
@@ -227,6 +350,64 @@ export function createWikiLintTool(
           issues: result.issues,
           issuesByCategory: result.issuesByCategory,
           reportPath,
+        },
+      };
+    },
+  };
+}
+
+export function createWikiOpenItemsTool(
+  config: ResolvedMemoryWikiConfig,
+  appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
+): AnyAgentTool {
+  return {
+    name: "wiki_open_items",
+    label: "Wiki Open Items",
+    description:
+      "List unresolved wiki items — open questions, contradictions, and low-confidence pages or claims — with their text and page location so they can be reviewed or resolved.",
+    parameters: WikiOpenItemsSchema,
+    execute: async (_toolCallId, rawParams) => {
+      const params = rawParams as { kinds?: WikiOpenItemKind[]; limit?: number };
+      await syncImportedSourcesIfNeeded(config, appConfig);
+      const result = await collectMemoryWikiOpenItems(
+        config.vault.path,
+        undefined,
+        createWikiPageVisibilityFilter({
+          appConfig,
+          agentId: memoryContext.agentId,
+          agentSessionKey: memoryContext.agentSessionKey,
+          sandboxed: memoryContext.sandboxed,
+        }),
+      );
+      const kindFilter = params.kinds && params.kinds.length > 0 ? new Set(params.kinds) : null;
+      let items = kindFilter
+        ? result.items.filter((item) => kindFilter.has(item.kind))
+        : result.items;
+      // Always cap output: apply the conservative default when `limit` is
+      // omitted so a normal call cannot render (or retain in details.items) an
+      // entire vault. The schema maximum bounds explicit callers.
+      const limit = params.limit ?? WIKI_OPEN_ITEMS_DEFAULT_LIMIT;
+      items = items.slice(0, limit);
+      const boundedItems: ReturnType<typeof boundMemoryWikiOpenItem>[] = [];
+      for (const item of items) {
+        const candidate = [...boundedItems, boundMemoryWikiOpenItem(item)];
+        if (!hasMemoryWikiOpenItemsResultBudget(candidate, result.counts)) {
+          break;
+        }
+        boundedItems.push(candidate.at(-1)!);
+      }
+      const truncated = boundedItems.length < items.length;
+      const text = renderMemoryWikiOpenItems(boundedItems);
+      return {
+        content: [{ type: "text", text }],
+        // counts describe the returned (filtered/limited) items; vaultCounts is
+        // the unfiltered whole-vault tally so callers can tell the two apart.
+        details: {
+          counts: countMemoryWikiOpenItems(boundedItems),
+          vaultCounts: result.counts,
+          items: boundedItems,
+          truncated,
         },
       };
     },

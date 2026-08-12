@@ -5,7 +5,21 @@ import { describe, expect, it } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
+import { createWikiApplyTool, createWikiLintTool, createWikiOpenItemsTool } from "./tool.js";
+
+async function writeSynthesisPage(
+  rootDir: string,
+  relativePath: string,
+  frontmatterLines: string[],
+): Promise<void> {
+  const absolutePath = path.join(rootDir, relativePath);
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  await fs.writeFile(
+    absolutePath,
+    ["---", "pageType: synthesis", ...frontmatterLines, "---", "", "Body."].join("\n"),
+    "utf8",
+  );
+}
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -99,5 +113,209 @@ describe("memory-wiki tools", () => {
     const lintResult = await lintMemoryWikiVault(config);
     expect(path.isAbsolute(lintResult.reportPath)).toBe(true);
     expect(lintResult.reportPath).toContain(rootDir);
+  });
+
+  it("exposes a provider-safe flat string enum for the wiki_open_items kinds filter", () => {
+    const tool = createWikiOpenItemsTool({} as ResolvedMemoryWikiConfig);
+    const properties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const kindsSchema = asSchemaObject(properties.kinds);
+    const itemSchema = asSchemaObject(kindsSchema.items);
+
+    // Must be a flat { type: "string", enum: [...] }, not an anyOf union that
+    // some provider tool-schema validators reject.
+    expect(itemSchema.type).toBe("string");
+    expect(itemSchema).not.toHaveProperty("anyOf");
+    expect(itemSchema).not.toHaveProperty("oneOf");
+    expect((itemSchema.enum as string[]).toSorted()).toEqual([
+      "claim-contradiction",
+      "low-confidence-claim",
+      "low-confidence-page",
+      "open-question",
+      "page-contradiction",
+    ]);
+  });
+
+  it("enumerates open items and surfaces competing claim statements through the registered tool", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    await writeSynthesisPage(rootDir, path.join("syntheses", "a.md"), [
+      "id: synth-a",
+      "title: Alpha",
+      "confidence: 0.3",
+      "questions:",
+      "  - Is the March deadline still correct?",
+      "claims:",
+      "  - id: c1",
+      "    text: deadline is March 15",
+      "    status: supported",
+    ]);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "b.md"), [
+      "id: synth-b",
+      "title: Beta",
+      "claims:",
+      "  - id: c1",
+      "    text: deadline is April 1",
+      "    status: supported",
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-call", {});
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+    const vaultCounts = asSchemaObject(details.vaultCounts);
+
+    // The claim-contradiction item must carry the real competing statements.
+    expect(text).toContain("deadline is March 15");
+    expect(text).toContain("deadline is April 1");
+    expect(text).not.toContain("[claim-contradiction] c1");
+    expect(vaultCounts["open-question"]).toBe(1);
+    expect(vaultCounts["low-confidence-page"]).toBe(1);
+    expect(vaultCounts["claim-contradiction"]).toBe(1);
+    expect(vaultCounts.total).toBe(3);
+    expect(JSON.stringify(details)).not.toContain(rootDir);
+  });
+
+  it("filters by kind and limit, and reports counts that match the returned items", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    await writeSynthesisPage(rootDir, path.join("syntheses", "q.md"), [
+      "id: synth-q",
+      "title: Questions",
+      "questions:",
+      "  - First open question?",
+      "  - Second open question?",
+      "confidence: 0.2",
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+
+    const filtered = await tool.execute("open-items-filtered", { kinds: ["open-question"] });
+    const filteredDetails = asSchemaObject(filtered.details);
+    const filteredCounts = asSchemaObject(filteredDetails.counts);
+    const filteredVaultCounts = asSchemaObject(filteredDetails.vaultCounts);
+    expect(filteredCounts.total).toBe(2);
+    expect(filteredCounts["open-question"]).toBe(2);
+    expect(filteredCounts["low-confidence-page"]).toBe(0);
+    // vaultCounts still reflects the whole vault (2 questions + 1 low-confidence page).
+    expect(filteredVaultCounts.total).toBe(3);
+    expect(filteredVaultCounts["low-confidence-page"]).toBe(1);
+
+    const limited = await tool.execute("open-items-limited", { limit: 1 });
+    const limitedCounts = asSchemaObject(asSchemaObject(limited.details).counts);
+    expect(limitedCounts.total).toBe(1);
+  });
+
+  it("caps output at a conservative default when limit is omitted", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    // Seed more open questions than the default cap so an omitted `limit`
+    // cannot render (or retain in details.items) the entire vault.
+    const questions = Array.from({ length: 25 }, (_, index) => `  - Open question ${index + 1}?`);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "many.md"), [
+      "id: synth-many",
+      "title: Many Questions",
+      "questions:",
+      ...questions,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-default-cap", {});
+    const details = asSchemaObject(result.details);
+    const counts = asSchemaObject(details.counts);
+    const vaultCounts = asSchemaObject(details.vaultCounts);
+
+    // Returned + rendered set is capped at the default (20); vaultCounts still
+    // reports the true whole-vault total (25) so callers can detect truncation.
+    expect((details.items as unknown[]).length).toBe(20);
+    expect(counts.total).toBe(20);
+    expect(vaultCounts.total).toBe(25);
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("20. ");
+    expect(text).not.toContain("21. ");
+  });
+
+  it("caps oversized open-item fields in both rendered text and details", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const oversizedQuestion = "x".repeat(2_000);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "oversized.md"), [
+      "id: synth-oversized",
+      "title: Oversized",
+      "questions:",
+      `  - ${oversizedQuestion}`,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-oversized", {});
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+    const [item] = details.items as Array<Record<string, unknown>>;
+
+    expect(text).toContain(`${"x".repeat(499)}…`);
+    expect(text).not.toContain("x".repeat(500));
+    expect(item?.text).toBe(`${"x".repeat(499)}…`);
+    expect(String(item?.text)).toHaveLength(500);
+  });
+
+  it("enforces one aggregate budget across rendered text and structured details", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const questions = Array.from({ length: 100 }, (_, index) => `  - ${"x".repeat(500)} ${index}`);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "large.md"), [
+      "id: synth-large",
+      "title: Large",
+      "questions:",
+      ...questions,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-aggregate-budget", { limit: 100 });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+
+    expect(details.truncated).toBe(true);
+    expect((details.items as unknown[]).length).toBeLessThan(100);
+    expect(text.length + JSON.stringify(details).length).toBeLessThanOrEqual(7_000);
+  });
+
+  it("excludes foreign and unowned bridge-page items for sandboxed callers", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const writeBridgeQuestion = async (slug: string, agentIds: string[], question: string) => {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `${slug}.md`),
+        [
+          "---",
+          "pageType: source",
+          `id: source.${slug}`,
+          `title: ${slug}`,
+          "sourceType: memory-bridge",
+          "bridgeAgentIds:",
+          ...agentIds.map((agentId) => `  - ${agentId}`),
+          "questions:",
+          `  - ${question}`,
+          "---",
+          "",
+          "Body.",
+        ].join("\n"),
+        "utf8",
+      );
+    };
+    await writeBridgeQuestion("owned", ["main"], "owned open question");
+    await writeBridgeQuestion("foreign", ["secondary"], "foreign open question");
+    await writeBridgeQuestion("unowned", [], "unowned open question");
+
+    const tool = createWikiOpenItemsTool(config, undefined, {
+      agentId: "main",
+      sandboxed: true,
+    });
+    const result = await tool.execute("open-items-sandboxed", { kinds: ["open-question"] });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+
+    expect(text).toContain("owned open question");
+    expect(text).not.toContain("foreign open question");
+    expect(text).not.toContain("unowned open question");
+  });
+
+  it("declares a bounded limit with a schema maximum", () => {
+    const tool = createWikiOpenItemsTool({} as ResolvedMemoryWikiConfig);
+    const properties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const limit = asSchemaObject(properties.limit);
+    expect(limit.minimum).toBe(1);
+    expect(limit.maximum).toBe(100);
   });
 });

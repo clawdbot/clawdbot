@@ -31,6 +31,7 @@ const toolMocks = vi.hoisted(() => {
     createWikiApplyTool: createTool("wiki_apply"),
     createWikiGetTool: createTool("wiki_get"),
     createWikiLintTool: createTool("wiki_lint"),
+    createWikiOpenItemsTool: createTool("wiki_open_items"),
     createWikiSearchTool: createTool("wiki_search"),
     createWikiStatusTool: createTool("wiki_status"),
   };
@@ -82,15 +83,17 @@ describe("memory-wiki plugin", () => {
       "wiki.obsidian.command",
       "wiki.obsidian.daily",
     ]);
-    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerTool).toHaveBeenCalledTimes(6);
     expect(registerTool.mock.calls.map((call) => call[1]?.name)).toEqual([
       "wiki_status",
       "wiki_lint",
+      "wiki_open_items",
       "wiki_apply",
       "wiki_search",
       "wiki_get",
     ]);
     expect(registerTool.mock.calls.map((call) => typeof call[0])).toEqual([
+      "function",
       "function",
       "function",
       "function",
@@ -146,7 +149,7 @@ describe("memory-wiki plugin", () => {
           vault: { scope: "agent", path: path.join(rootDir, "marketing") },
         },
       });
-      if (registration.name === "wiki_status") {
+      if (registration.name === "wiki_status" || registration.name === "wiki_open_items") {
         expect(supportTool).toMatchObject({ testMemoryContext: { agentId: "support" } });
         expect(marketingTool).toMatchObject({ testMemoryContext: { agentId: "marketing" } });
       }
