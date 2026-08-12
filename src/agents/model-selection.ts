@@ -320,6 +320,12 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
   modelOverride?: unknown;
   defaultProvider?: string;
   includeAgentPrimary?: boolean;
+  /**
+   * Spawn runtime discriminator forwarded to the configured-model resolver.
+   * When "acp", per-agent and default `subagents.acpModel` are consulted ahead
+   * of `subagents.model`. Undefined or "subagent" preserves the prior chain.
+   */
+  runtime?: "acp" | "subagent";
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
@@ -327,6 +333,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       includeAgentPrimary: params.includeAgentPrimary,
+      runtime: params.runtime,
     });
   if (!raw) {
     return undefined;

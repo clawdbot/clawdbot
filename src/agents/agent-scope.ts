@@ -438,7 +438,12 @@ function resolveFirstModelFallbacksOverride(
   return undefined;
 }
 
-export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
+export type SubagentModelConfigSelectionSource =
+  | "subagent"
+  | "default-subagent"
+  | "acp-runtime"
+  | "default-acp"
+  | "agent";
 
 export type SubagentModelConfigSelectionResult = {
   raw: AgentModelConfig;
@@ -449,13 +454,33 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
+  /**
+   * Spawn runtime discriminator. When "acp", the resolver prefers per-agent and
+   * default `subagents.acpModel` over `subagents.model`, so harness-correct vendor
+   * refs (e.g. openai/* for Codex ACP) can be set independently of the global
+   * subagent default. Undefined or "subagent" preserves the prior chain.
+   */
+  runtime?: "acp" | "subagent";
 }): SubagentModelConfigSelectionResult | undefined {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
   // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
-  // then the global subagent default, then agent-primary inheritance.
+  // then the global subagent default, then agent-primary inheritance. For ACP
+  // runtime the ACP-specific fields are checked first so a vendor-correct ref wins
+  // without affecting non-ACP defaults.
   const candidates: SubagentModelConfigSelectionResult[] = [
+    ...(params.runtime === "acp" && agentConfig?.subagents?.acpModel
+      ? [{ raw: agentConfig.subagents.acpModel, source: "acp-runtime" as const }]
+      : []),
+    ...(params.runtime === "acp" && params.cfg.agents?.defaults?.subagents?.acpModel
+      ? [
+          {
+            raw: params.cfg.agents.defaults.subagents.acpModel,
+            source: "default-acp" as const,
+          },
+        ]
+      : []),
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),

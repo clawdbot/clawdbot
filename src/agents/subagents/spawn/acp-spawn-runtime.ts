@@ -102,6 +102,11 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
+    // Pass runtime so the resolver consults per-agent and default
+    // subagents.acpModel ahead of subagents.model. Without this, ACP harness
+    // spawns inherit the outer subagents.model (often an openrouter/* ref
+    // that the harness rejects as the wrong shape). See issue #122708.
+    runtime: "acp",
   });
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({

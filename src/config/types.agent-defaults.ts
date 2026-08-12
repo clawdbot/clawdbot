@@ -342,6 +342,13 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /**
+     * Default model for ACP harness spawns (sessions_spawn with runtime: "acp", no explicit model).
+     * Codex/Claude/... ACP harnesses reject openrouter/* refs as the wrong shape; use this to set a
+     * harness-correct vendor ref (e.g. openai/<model>) without affecting non-ACP defaults.
+     * Falls back to `model` when unset.
+     */
+    acpModel?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */

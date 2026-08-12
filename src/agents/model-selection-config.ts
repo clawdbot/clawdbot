@@ -45,9 +45,21 @@ export function resolveSubagentConfiguredModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
   includeAgentPrimary?: boolean;
+  /**
+   * Spawn runtime discriminator. When "acp", consult per-agent and default
+   * `subagents.acpModel` ahead of `subagents.model` so a harness-correct vendor
+   * ref (e.g. openai/* for Codex ACP) can be set independently. Undefined or
+   * "subagent" preserves the prior chain.
+   */
+  runtime?: "acp" | "subagent";
 }): string | undefined {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+  const acpPreferred = params.runtime === "acp";
   return (
+    (acpPreferred ? normalizeModelSelection(agentConfig?.subagents?.acpModel) : undefined) ??
+    (acpPreferred
+      ? normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.acpModel)
+      : undefined) ??
     normalizeModelSelection(agentConfig?.subagents?.model) ??
     normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
     (params.includeAgentPrimary === false ? undefined : normalizeModelSelection(agentConfig?.model))
