@@ -101,6 +101,9 @@ describe("workboard gateway methods", () => {
     expect(methods.get("workboard.reconciliation.apply")?.opts).toEqual({
       scope: "operator.write",
     });
+    expect(methods.get("workboard.reconciliation.observeSource")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("workboard.cards.diagnostics")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.diagnostics.refresh")?.opts).toEqual({
       scope: "operator.write",

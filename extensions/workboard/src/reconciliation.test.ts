@@ -101,6 +101,38 @@ describe("WorkboardReconciler", () => {
     ).toHaveLength(3);
   });
 
+  it("rejects an explicit card when its idempotency association belongs to another card", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const owned = await reconciler.apply({
+      sourceUrl: "https://example.test/a",
+      tenant: "acme",
+      objectiveKey: "a",
+      idempotencyKey: "shared",
+      sourceUpdatedAt: 1,
+      card: { title: "A" },
+    });
+    const named = await reconciler.apply({
+      sourceUrl: "https://example.test/b",
+      tenant: "acme",
+      objectiveKey: "b",
+      idempotencyKey: "other",
+      sourceUpdatedAt: 1,
+      card: { title: "B" },
+    });
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/a",
+        tenant: "acme",
+        objectiveKey: "b",
+        idempotencyKey: "shared",
+        sourceUpdatedAt: 2,
+        cardId: named.card.id,
+        card: { title: "forged" },
+      }),
+    ).rejects.toThrow("idempotency association does not match card.");
+    expect(owned.card.id).not.toBe(named.card.id);
+  });
+
   it("updates stale source evidence on the link without changing protected manual state", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const reconciler = new WorkboardReconciler(store);
@@ -162,6 +194,51 @@ describe("WorkboardReconciler", () => {
     expect(link(present)?.consecutiveSuccessfulFullScanMisses).toBe(0);
     expect(link(present)?.staleAt).toBeUndefined();
     expect(present.status).toBe("blocked");
+  });
+
+  it("rejects a mismatched source for every source-evidence mode and retains the threshold timestamp", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/a",
+      tenant: "acme",
+      objectiveKey: "deploy",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 1,
+      card: { title: "A" },
+    });
+    const base = {
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy",
+      sourceUrl: "https://attacker.test/a",
+      idempotencyKey: "a",
+      staleAfterMisses: 1,
+      observedAt: 2,
+    } as const;
+    for (const sourceState of [
+      "present",
+      "missing-after-successful-full-scan",
+      "dependency-failed",
+    ] as const) {
+      await expect(reconciler.observeSource({ ...base, sourceState })).rejects.toThrow(
+        "external association",
+      );
+    }
+    const stale = await reconciler.observeSource({
+      ...base,
+      sourceUrl: "https://example.test/a",
+      sourceState: "missing-after-successful-full-scan",
+    });
+    const later = await reconciler.observeSource({
+      ...base,
+      sourceUrl: "https://example.test/a",
+      sourceState: "missing-after-successful-full-scan",
+      observedAt: 3,
+    });
+    const link = (card: typeof stale) =>
+      card.metadata?.links?.find((entry) => entry.id.startsWith("external:"));
+    expect(link(stale)?.staleAt).toBe(2);
+    expect(link(later)?.staleAt).toBe(2);
   });
 
   it("rejects untrusted fields in the strict source-evidence observation", () => {

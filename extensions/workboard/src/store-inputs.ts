@@ -27,7 +27,6 @@ type WorkboardCardInput = {
   boardId?: unknown;
   createdByCardId?: unknown;
   idempotencyKey?: unknown;
-  objectiveKey?: unknown;
   skills?: unknown;
   workspace?: unknown;
   /** Trusted mutation provenance; not accepted from public tool schemas. */

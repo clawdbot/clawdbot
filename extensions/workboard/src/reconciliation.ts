@@ -206,11 +206,11 @@ export function projectReconciliationSourceObservation(
     throw new Error("staleAfterMisses must be between 1 and 1000.");
   }
   return {
-    cardId: readRequiredString(input.cardId, "cardId"),
-    tenant: readRequiredString(input.tenant, "tenant"),
+    cardId: readBoundedString(input.cardId, "cardId", 120),
+    tenant: readBoundedString(input.tenant, "tenant", 80),
     objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
-    idempotencyKey: readRequiredString(input.idempotencyKey, "idempotencyKey"),
+    idempotencyKey: readBoundedString(input.idempotencyKey, "idempotencyKey", 160),
     sourceState,
     staleAfterMisses: input.staleAfterMisses as number,
     observedAt: readTimestamp(input.observedAt, "observedAt"),

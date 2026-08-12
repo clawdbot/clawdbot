@@ -49,7 +49,6 @@ export function normalizeCardAutomation(input: WorkboardLinkedCreateInput) {
       boardId: input.boardId,
       createdByCardId: input.createdByCardId,
       idempotencyKey: input.idempotencyKey,
-      objectiveKey: input.objectiveKey,
       skills: input.skills,
       workspace: input.workspace,
       maxRuntimeSeconds: input.maxRuntimeSeconds,

@@ -114,6 +114,20 @@ function objectiveKeyFor(card: WorkboardCard): string | undefined {
   return card.metadata?.automation?.objectiveKey;
 }
 
+async function persistObjectiveKey(
+  store: { register: (key: string, value: { version: 1; card: WorkboardCard }) => Promise<void> },
+  card: WorkboardCard,
+  objectiveKey: string | undefined,
+): Promise<WorkboardCard> {
+  if (objectiveKey === undefined || objectiveKeyFor(card) === objectiveKey) return card;
+  const next: WorkboardCard = {
+    ...card,
+    metadata: { ...card.metadata, automation: { ...card.metadata?.automation, objectiveKey } },
+  };
+  await store.register(next.id, { version: 1, card: next });
+  return next;
+}
+
 function reconciliationResult(
   card: WorkboardCard,
   applied: boolean,
@@ -152,6 +166,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
             hasExternalLink(card, link)),
       );
       if (duplicate) {
+        if (explicit && duplicate.id !== explicit.id) {
+          throw new Error("idempotency association does not match card.");
+        }
         return reconciliationResult(duplicate, true, reconciliationLinkFor(duplicate, link));
       }
 
@@ -224,16 +241,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
         sourceUrl: link.sourceUrl,
         tenant: link.tenant,
         idempotencyKey: link.idempotencyKey,
-        ...(observation.objectiveKey === undefined
-          ? {}
-          : { objectiveKey: observation.objectiveKey }),
         metadata: {
           automation: {
             tenant: link.tenant,
             idempotencyKey: link.idempotencyKey,
-            ...(observation.objectiveKey === undefined
-              ? {}
-              : { objectiveKey: observation.objectiveKey }),
           },
           lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
           links: [
@@ -248,7 +259,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
           ],
         },
       });
-      return reconciliationResult(created, true, reconciliationLinkFor(created, link));
+      const canonical = await persistObjectiveKey(this.store, created, observation.objectiveKey);
+      return reconciliationResult(canonical, true, reconciliationLinkFor(canonical, link));
     });
   }
 
@@ -276,11 +288,11 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const index = links.findIndex((link) => link.id === linkId);
       if (index === -1)
         throw new Error("source observation does not match an external association.");
-      if (observation.sourceState === "dependency-failed") return card;
       const current = links[index]!;
       if (current.url !== observation.sourceUrl) {
         throw new Error("source observation does not match an external association.");
       }
+      if (observation.sourceState === "dependency-failed") return card;
       const misses =
         observation.sourceState === "present"
           ? 0
@@ -290,7 +302,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         consecutiveSuccessfulFullScanMisses: misses,
         ...(observation.sourceState === "present"
           ? { staleAt: undefined, staleState: undefined }
-          : misses >= observation.staleAfterMisses
+          : current.staleAt === undefined && misses >= observation.staleAfterMisses
             ? { staleAt: observation.observedAt, staleState: "stale" as const }
             : {}),
       };

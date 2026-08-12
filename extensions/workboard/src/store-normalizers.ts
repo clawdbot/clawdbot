@@ -427,12 +427,8 @@ export function normalizeAutomation(
     160,
     "idempotency key",
   );
-  const objectiveKey = normalizeBoundedString(
-    record.objectiveKey,
-    fallback.objectiveKey,
-    160,
-    "objective key",
-  );
+  // objectiveKey is reconciliation-owned durable state. Generic metadata cannot mint or alter it.
+  const objectiveKey = fallback.objectiveKey;
   const summary = normalizeBoundedString(record.summary, fallback.summary, 2000, "summary");
   const skills = Object.hasOwn(record, "skills")
     ? normalizeStringList(record.skills, "skills")
