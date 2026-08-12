@@ -25,7 +25,11 @@ import {
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
-import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
+import {
+  catalogError,
+  CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+  parseCatalogPage,
+} from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   requireCatalogEligibleThread,
@@ -53,6 +57,17 @@ const tempDirs: string[] = [];
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
+const enumerateCodexSessionHistory = (
+  codexSessionCatalogRuntime as typeof codexSessionCatalogRuntime & {
+    enumerateHistory?: (params: {
+      runtime: PluginRuntime;
+      nodeId: string;
+      clientScopes?: readonly string[];
+      archived: boolean;
+      limit?: number;
+    }) => Promise<unknown>;
+  }
+).enumerateHistory;
 const listCodexSessionCatalog = codexSessionCatalogRuntime.list;
 const readCodexSessionTranscript = codexSessionCatalogRuntime.readTranscript;
 const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
@@ -219,6 +234,25 @@ function createEligibleControl(overrides: Partial<CodexSessionCatalogControl> = 
       sessions: [{ threadId: "thread-1", status: "idle", source: "cli", archived: false as const }],
     })),
     ...overrides,
+  });
+}
+
+async function enumerateHistory(params: {
+  runtime: PluginRuntime;
+  nodeId?: string;
+  clientScopes?: readonly string[];
+  archived: boolean;
+  limit?: number;
+}) {
+  if (!enumerateCodexSessionHistory) {
+    throw new Error("Codex history enumeration is not registered");
+  }
+  return await enumerateCodexSessionHistory({
+    runtime: params.runtime,
+    nodeId: params.nodeId ?? "devbox",
+    ...(params.clientScopes ? { clientScopes: params.clientScopes } : {}),
+    archived: params.archived,
+    ...(params.limit ? { limit: params.limit } : {}),
   });
 }
 
@@ -1231,6 +1265,173 @@ describe("Codex supervision catalog", () => {
         }),
       ],
     });
+  });
+
+  it("keeps the separately authorized history command out of ordinary catalog listing", async () => {
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({ sessions: [] }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [
+            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+            CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+          ],
+          invocableCommands: [
+            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+            CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+          ],
+        },
+      ],
+      invoke,
+    });
+
+    const result = await listCodexSessionCatalog({
+      bindingStore: createCodexTestBindingStore(),
+      config,
+      runtime,
+      control: createControl(),
+    });
+
+    expect(result.hosts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          hostId: "node:devbox",
+          sessions: [],
+        }),
+      ]),
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ command: CODEX_APP_SERVER_THREADS_LIST_COMMAND }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({ command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND }),
+    );
+  });
+
+  it("enumerates each explicit archived history partition with bounded pages for an admin", async () => {
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
+      const params = request.params as { archived: boolean; cursor?: string };
+      if (!params.cursor) {
+        return {
+          payloadJSON: JSON.stringify({
+            sessions: [
+              {
+                threadId: params.archived ? "archived-1" : "active-1",
+                status: "idle",
+                archived: params.archived,
+              },
+            ],
+            nextCursor: `${params.archived ? "archived" : "active"}-page-2`,
+          }),
+        };
+      }
+      return {
+        payloadJSON: JSON.stringify({
+          sessions: [
+            {
+              threadId: params.archived ? "archived-2" : "active-2",
+              status: "idle",
+              archived: params.archived,
+            },
+          ],
+        }),
+      };
+    });
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+          invocableCommands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+    await expect(
+      enumerateHistory({ runtime, clientScopes: ["operator.admin"], archived: false, limit: 1 }),
+    ).resolves.toEqual({
+      sessions: [
+        { threadId: "active-1", status: "idle", archived: false },
+        { threadId: "active-2", status: "idle", archived: false },
+      ],
+    });
+    await expect(
+      enumerateHistory({ runtime, clientScopes: ["operator.admin"], archived: true, limit: 1 }),
+    ).resolves.toEqual({
+      sessions: [
+        { threadId: "archived-1", status: "idle", archived: true },
+        { threadId: "archived-2", status: "idle", archived: true },
+      ],
+    });
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+        params: { archived: false, limit: 1 },
+        scopes: ["operator.admin"],
+      }),
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+        params: { archived: true, limit: 1 },
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("fails closed for non-admin callers, cursor loops, and nodes without the exact history capability", async () => {
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({ sessions: [], nextCursor: "loop" }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+          invocableCommands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+
+    await expect(enumerateHistory({ runtime, archived: true })).rejects.toThrow(
+      "requires operator.admin",
+    );
+    expect(invoke).not.toHaveBeenCalled();
+
+    await expect(
+      enumerateHistory({ runtime, clientScopes: ["operator.admin"], archived: true }),
+    ).rejects.toThrow("Codex history is unavailable");
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    const { runtime: nonInvocableRuntime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+          invocableCommands: [],
+        },
+      ],
+      invoke,
+    });
+    await expect(
+      enumerateHistory({
+        runtime: nonInvocableRuntime,
+        clientScopes: ["operator.admin"],
+        archived: true,
+      }),
+    ).rejects.toThrow("Codex history is unavailable");
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it("omits the Gateway's same-install node host from native discovery", async () => {

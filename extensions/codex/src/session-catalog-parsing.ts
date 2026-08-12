@@ -12,11 +12,14 @@ import type {
   CodexSessionCatalogPageParams,
   CodexSessionCatalogParams,
   CodexSessionCatalogSession,
+  CodexSessionHistoryPageParams,
 } from "./session-catalog-types.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
+export const CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND =
+  "codex.appServer.threads.history.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
@@ -228,6 +231,22 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
+export function readHistoryPageParams(value: unknown): CodexSessionHistoryPageParams {
+  if (!isRecord(value)) {
+    throw new CatalogParamsError("Codex history parameters must be an object");
+  }
+  requireOnlyKeys(value, new Set(["archived", "cursor", "limit"]));
+  if (typeof value.archived !== "boolean") {
+    throw new CatalogParamsError("Codex history archived partition must be explicit");
+  }
+  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  return {
+    archived: value.archived,
+    limit: normalizeLimit(value.limit, "limit"),
+    ...(cursor ? { cursor } : {}),
+  };
+}
+
 export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
@@ -325,14 +344,14 @@ function parseOptionalCatalogString(
 
 function parseCatalogSession(
   value: unknown,
-  options: { allowSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean; expectedArchived?: boolean } = {},
 ): CodexSessionCatalogSession {
   if (
     !isRecord(value) ||
     typeof value.threadId !== "string" ||
     !value.threadId.trim() ||
     value.threadId.length > MAX_SESSION_ID_LENGTH ||
-    value.archived !== false
+    value.archived !== (options.expectedArchived ?? false)
   ) {
     throw new Error("Codex session catalog returned an invalid session");
   }
@@ -410,7 +429,7 @@ function parseCatalogSession(
 
 export function parseCatalogPage(
   value: unknown,
-  options: { allowSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean; expectedArchived?: boolean } = {},
 ): CodexSessionCatalogPage {
   if (
     !isRecord(value) ||

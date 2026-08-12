@@ -45,11 +45,19 @@ export type CodexSessionCatalogPageParams = {
   forceRefresh?: boolean;
 };
 
+/** Explicit native history partition; never part of the ordinary session catalog. */
+export type CodexSessionHistoryPageParams = {
+  archived: boolean;
+  cursor?: string;
+  limit?: number;
+};
+
 export type CodexSessionCatalogControl = {
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
+  listHistoryPage(params: CodexSessionHistoryPageParams): Promise<CodexSessionCatalogPage>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
   forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;

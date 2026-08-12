@@ -69,6 +69,7 @@ import {
   catalogError,
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_CAPABILITY,
+  CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
@@ -76,6 +77,7 @@ import {
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
   MAX_CURSOR_LENGTH,
+  MAX_ACTION_CATALOG_PAGES,
   MAX_HOST_COUNT,
   MAX_SESSION_ID_LENGTH,
   MAX_TITLE_SEARCH_CATALOG_PAGES,
@@ -87,6 +89,7 @@ import {
   parseTranscriptPage,
   readControlCursor,
   readGatewayParams,
+  readHistoryPageParams,
   readOptionalString,
   readPageParams,
   requireBoundThread,
@@ -236,6 +239,35 @@ function createCodexSessionCatalogControlFromRequests(params: {
       }
       return {
         sessions,
+        ...(nextCursor ? { nextCursor } : {}),
+        ...(backwardsCursor ? { backwardsCursor } : {}),
+      };
+    },
+    async listHistoryPage(pageParams) {
+      const limit = normalizeLimit(pageParams.limit, "limit");
+      const cursor = readControlCursor(pageParams.cursor, "history request");
+      const requests = params.createRequestSnapshot();
+      const response = await requests.listThreads(
+        {
+          archived: pageParams.archived,
+          limit,
+          modelProviders: [],
+          sortKey: "updated_at",
+          sortDirection: "desc",
+          ...(cursor ? { cursor } : {}),
+        },
+        requests.requestTimeoutMs,
+      );
+      const nextCursor = readControlCursor(response.nextCursor, "history next response");
+      const backwardsCursor = readControlCursor(
+        response.backwardsCursor,
+        "history backwards response",
+      );
+      return {
+        sessions: response.data.flatMap((thread) => {
+          const session = toCatalogSession(thread, pageParams.archived);
+          return session ? [session] : [];
+        }),
         ...(nextCursor ? { nextCursor } : {}),
         ...(backwardsCursor ? { backwardsCursor } : {}),
       };
@@ -666,6 +698,67 @@ async function listCodexSessionCatalog(params: {
   return { hosts: await Promise.all([...localHosts, ...nodeHosts]) };
 }
 
+async function enumerateCodexSessionHistory(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  clientScopes?: readonly string[];
+  archived: boolean;
+  limit?: number;
+}): Promise<CodexSessionCatalogPage> {
+  if (params.clientScopes?.includes("operator.admin") !== true) {
+    throw new CatalogParamsError("Codex history enumeration requires operator.admin");
+  }
+  if (typeof params.archived !== "boolean") {
+    throw new CatalogParamsError("Codex history archived partition must be explicit");
+  }
+  const nodeId = params.nodeId.trim();
+  const limit = normalizeLimit(params.limit, "limit");
+  try {
+    const node = (await params.runtime.nodes.list()).nodes.find(
+      (candidate) => candidate.nodeId === nodeId,
+    );
+    if (
+      !node ||
+      node.connected !== true ||
+      node.commands?.includes(CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND) !== true ||
+      node.invocableCommands?.includes(CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND) !== true
+    ) {
+      throw new Error("history command unavailable");
+    }
+    const sessions: CodexSessionCatalogSession[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+      const raw = await params.runtime.nodes.invoke({
+        nodeId,
+        command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+        params: { archived: params.archived, limit, ...(cursor ? { cursor } : {}) },
+        timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+        scopes: ["operator.admin"],
+      });
+      const page = parseCatalogPage(unwrapNodeInvokePayload(raw), {
+        expectedArchived: params.archived,
+      });
+      sessions.push(...page.sessions);
+      const nextCursor = page.nextCursor?.trim();
+      if (!nextCursor) {
+        return { sessions };
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error("history cursor loop");
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    throw new Error("history page limit exceeded");
+  } catch (error) {
+    if (error instanceof CatalogParamsError) {
+      throw error;
+    }
+    throw new Error("Codex history is unavailable");
+  }
+}
+
 /** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
   control: CodexSessionCatalogControl,
@@ -687,6 +780,26 @@ export function createCodexSessionCatalogNodeHostCommands(
         } catch {
           // App-server stderr and transport details stay on the node boundary.
           throw new Error("Codex app-server catalog is unavailable");
+        }
+      },
+    },
+    {
+      command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
+      cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
+      dangerous: false,
+      handle: async (paramsJSON) => {
+        const pageParams = readHistoryPageParams(parseJsonParams(paramsJSON));
+        try {
+          return JSON.stringify(
+            parseCatalogPage(await control.listHistoryPage(pageParams), {
+              expectedArchived: pageParams.archived,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof CatalogParamsError) {
+            throw error;
+          }
+          throw new Error("Codex app-server history is unavailable");
         }
       },
     },
@@ -1376,12 +1489,27 @@ export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNod
     {
       commands: [
         CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+        CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
         CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
         CODEX_TERMINAL_RESUME_COMMAND,
       ],
       defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) =>
-        context.command === CODEX_TERMINAL_RESUME_COMMAND ? { ok: true } : context.invokeNode(),
+      handle: (context) => {
+        if (context.command === CODEX_TERMINAL_RESUME_COMMAND) {
+          return { ok: true };
+        }
+        if (
+          context.command === CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND &&
+          context.client?.scopes?.includes("operator.admin") !== true
+        ) {
+          return {
+            ok: false,
+            code: "UNAUTHORIZED",
+            message: "Codex history enumeration requires operator.admin",
+          };
+        }
+        return context.invokeNode();
+      },
     },
   ];
 }
@@ -1553,6 +1681,7 @@ function registerCodexSessionCatalog(params: {
 export const codexSessionCatalogRuntime = {
   register: registerCodexSessionCatalog,
   list: listCodexSessionCatalog,
+  enumerateHistory: enumerateCodexSessionHistory,
   readTranscript: readCodexSessionTranscript,
   continueLocal: continueLocalCodexSession,
   continueNode: continueNodeCodexSession,
