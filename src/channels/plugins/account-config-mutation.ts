@@ -3,7 +3,10 @@ import { err as resultError, ok, type Result } from "@openclaw/normalization-cor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
+import {
+  resolveChannelSetupExecutionAdapter,
+  type ChannelSetupFieldMetadata,
+} from "./setup-contract.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -32,19 +35,19 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
     return undefined;
   }
   const useEnvField = plugin.setupContract.metadata.fields.find(
-    (field) => field.key === "useEnv" && field.kind === "boolean",
+    (field): field is Extract<ChannelSetupFieldMetadata, { kind: "boolean" }> =>
+      field.kind === "boolean" && field.key === "useEnv",
   );
-  const envVars = useEnvField?.envVars;
-  if (!envVars?.length) {
+  if (!useEnvField?.envVars?.length) {
     return undefined;
   }
+  const { envVars, envVarMode } = useEnvField;
   const missing = envVars.filter((name) => !process.env[name]?.trim());
-  const ready =
-    useEnvField.envVarMode === "any" ? missing.length < envVars.length : !missing.length;
+  const ready = envVarMode === "any" ? missing.length < envVars.length : !missing.length;
   if (ready) {
     return undefined;
   }
-  return useEnvField.envVarMode === "any"
+  return envVarMode === "any"
     ? `Set one of these environment variables before using --use-env: ${missing.join(", ")}.`
     : `Set these environment variables before using --use-env: ${missing.join(", ")}.`;
 }

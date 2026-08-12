@@ -57,15 +57,17 @@ const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
     if (!validRelayUrl(input.relayUrl)) {
       return "Buzz requires --relay-url with a ws:// or wss:// URL.";
     }
-    if (!input.useEnv && !input.privateKey?.trim()) {
+    if (input.useEnv) {
+      return null;
+    }
+    const privateKey = input.privateKey?.trim();
+    if (!privateKey) {
       return "Buzz requires --private-key or --use-env.";
     }
-    if (!input.useEnv) {
-      try {
-        decodeBuzzPrivateKey(input.privateKey);
-      } catch (error) {
-        return error instanceof Error ? error.message : "Invalid Buzz private key.";
-      }
+    try {
+      decodeBuzzPrivateKey(privateKey);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Invalid Buzz private key.";
     }
     return null;
   },

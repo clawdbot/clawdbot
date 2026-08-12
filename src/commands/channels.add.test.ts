@@ -551,9 +551,8 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    const error = String(runtime.error.mock.calls[0]?.[0] ?? "");
     for (const missing of testCase.missing) {
-      expect(error).toContain(missing);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
     }
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
