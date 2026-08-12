@@ -98,6 +98,113 @@ describe("variant channel spellings validate canonically", () => {
   });
 });
 
+// ClawSweeper cycle 32 (P1): admission folds a manifest spelling and its canonical identity onto
+// one channel, but validated each authored section independently. `resolveChannelConfigKey`
+// serves exactly ONE section per canonical identity (the exact canonical key first, else the
+// first authored record that folds), so a config carrying both spellings validated clean while
+// activation silently ignored the other section's credentials or `enabled: false`.
+describe("duplicate alias-equivalent channel sections are rejected", () => {
+  // `clickclack` is a bundled channel id, so `normalizeChatChannelId` folds case variants onto
+  // it — the same fold the activation resolver applies.
+  const variantClaimant = (spelling: string, id = `${spelling.toLowerCase()}-variant`) =>
+    createPluginManifestRecord({
+      id,
+      origin: "global",
+      enabledByDefault: true,
+      channels: [spelling],
+      channelConfigs: { [spelling]: { schema: { type: "object" } } },
+    });
+
+  it("rejects a variant plus canonical pair and names the section activation reads", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack")],
+    });
+
+    for (const channels of [
+      { ClickClack: { token: "tok" }, clickclack: { enabled: false } },
+      { clickclack: { enabled: false }, ClickClack: { token: "tok" } },
+    ]) {
+      const result = validateConfigObjectWithPlugins({ channels });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const duplicate = result.issues.find((issue) =>
+          issue.message.includes("duplicate channel config"),
+        );
+        expect(duplicate?.message).toContain('"ClickClack"');
+        expect(duplicate?.message).toContain('"clickclack"');
+        // The exact canonical key takes priority in the resolver, whichever key came first.
+        expect(duplicate?.message).toContain("activation reads only channels.clickclack");
+      }
+    }
+  });
+
+  it("names the first authored variant when no exact canonical section exists", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack"), variantClaimant("CLICKCLACK")],
+    });
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { ClickClack: { token: "tok" }, CLICKCLACK: { enabled: false } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const duplicate = result.issues.find((issue) =>
+        issue.message.includes("duplicate channel config"),
+      );
+      expect(duplicate?.path).toBe("channels.CLICKCLACK");
+      expect(duplicate?.message).toContain("activation reads only channels.ClickClack");
+    }
+  });
+
+  it("accepts a single authored variant section", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack")],
+    });
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { ClickClack: { token: "tok" } },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a single canonical section", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack")],
+    });
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { clickclack: { token: "tok" } },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("ignores non-record duplicates the resolver walk skips", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack")],
+    });
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { ClickClack: "oops", clickclack: { token: "tok" } },
+    });
+
+    // The string section fails its own schema; only two record-shaped sections can shadow
+    // each other through the resolver, so no duplicate issue is reported.
+    if (!result.ok) {
+      expect(
+        result.issues.some((issue) => issue.message.includes("duplicate channel config")),
+      ).toBe(false);
+    }
+  });
+});
+
 // #120332 round 48 (P1): ownership is planned from the DEFAULTED config. A `{}` channel whose
 // schema default makes it meaningfully configured activates its replacement claim in the
 // validated config gateway auto-enable consumes — the replacement supersedes the claimant

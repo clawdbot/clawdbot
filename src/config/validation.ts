@@ -20,6 +20,7 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { resolveChannelConfigKey } from "./channel-configured-shared.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -675,6 +676,11 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  // First record-shaped section per canonical channel identity, by authored key. Admission folds
+  // variant spellings onto one channel while `resolveChannelConfigKey` serves exactly one section
+  // per identity, so a second record folding onto a seen identity must reject: validating it
+  // would accept credentials or `enabled: false` that activation silently ignores.
+  const channelSectionKeyByCanonicalId = new Map<string, string>();
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
@@ -702,6 +708,24 @@ function validateConfigObjectWithPluginsBase(
           issues.push(issue);
         }
         continue;
+      }
+      // Only record-shaped sections can shadow each other: the resolver never serves a
+      // non-record entry as a channel's config record.
+      if (isRecord(config.channels[trimmed])) {
+        const canonicalChannelId = normalizeManifestChannelId(trimmed);
+        const firstSectionKey = channelSectionKeyByCanonicalId.get(canonicalChannelId);
+        if (firstSectionKey !== undefined) {
+          // The winning key comes from the activation resolver itself, so the message states
+          // exactly which section the runtime reads (exact canonical key first, else the first
+          // authored record that folds).
+          const servedKey = resolveChannelConfigKey(config, canonicalChannelId);
+          issues.push({
+            path: `channels.${trimmed}`,
+            message: `duplicate channel config: "${firstSectionKey}" and "${trimmed}" both configure channel "${canonicalChannelId}" and activation reads only channels.${servedKey}; merge these sections into one key`,
+          });
+          continue;
+        }
+        channelSectionKeyByCanonicalId.set(canonicalChannelId, trimmed);
       }
       // Schema metadata is keyed by canonical channel identity; the authored key may be a
       // declared variant spelling. Issue paths and the cache key keep the authored spelling.
