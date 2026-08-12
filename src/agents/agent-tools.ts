@@ -69,6 +69,7 @@ import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.j
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
+import { resolvePluginToolDiscoveryAllowlist } from "./plugin-tool-discovery.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
@@ -630,8 +631,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const ownerOnlyCoreToolPolicy =
     ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.pluginToolDiscoveryAllowlist ??
-      capabilityProfile.policy.explicitToolAllowlist,
+    resolvePluginToolDiscoveryAllowlist(capabilityProfile),
     runtimePluginToolGrant,
   );
   const pluginToolDenylist = [

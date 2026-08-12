@@ -1427,18 +1427,17 @@ describe("createOpenClawCodingTools", () => {
     ]);
   });
 
-  it("accepts legacy prepared profiles without a plugin discovery allowlist", () => {
+  it("derives plugin discovery from cloned prepared profiles", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const config: OpenClawConfig = { tools: { alsoAllow: ["lobster"] } };
     const resolvedProfile = resolveConversationCapabilityProfile({ config });
-    const { pluginToolDiscoveryAllowlist: _omitted, ...legacyPolicy } = resolvedProfile.policy;
 
     createOpenClawCodingTools({
       config,
       conversationCapabilityProfile: {
         ...resolvedProfile,
-        policy: legacyPolicy,
+        policy: { ...resolvedProfile.policy },
       },
     });
 

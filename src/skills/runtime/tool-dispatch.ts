@@ -6,6 +6,7 @@ import {
   resolveConversationToolPolicies,
 } from "../../agents/conversation-tool-policy-pipeline.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
+import { resolvePluginToolDiscoveryAllowlist } from "../../agents/plugin-tool-discovery.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
 import { applyToolPolicyPipeline } from "../../agents/tool-policy-pipeline.js";
@@ -152,9 +153,7 @@ export function resolveSkillDispatchTools(params: {
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
-    pluginToolAllowlist:
-      capabilityProfile.policy.pluginToolDiscoveryAllowlist ??
-      capabilityProfile.policy.explicitToolAllowlist,
+    pluginToolAllowlist: resolvePluginToolDiscoveryAllowlist(capabilityProfile),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,

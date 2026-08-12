@@ -12,6 +12,7 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
+import { resolvePluginToolDiscoveryAllowlist } from "./plugin-tool-discovery.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
@@ -266,7 +267,7 @@ describe("resolveConversationCapabilityProfile", () => {
 
     expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
     expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
-    expect(profile.policy.pluginToolDiscoveryAllowlist).toEqual(["pdf"]);
+    expect(resolvePluginToolDiscoveryAllowlist(profile)).toEqual(["pdf"]);
   });
 
   it("preserves full-profile wildcards for plugin discovery", () => {
@@ -284,8 +285,8 @@ describe("resolveConversationCapabilityProfile", () => {
       modelId: "gpt-5.5",
     });
 
-    expect(globalProfile.policy.pluginToolDiscoveryAllowlist).toEqual(["*"]);
-    expect(providerProfile.policy.pluginToolDiscoveryAllowlist).toEqual(["*"]);
+    expect(resolvePluginToolDiscoveryAllowlist(globalProfile)).toEqual(["*"]);
+    expect(resolvePluginToolDiscoveryAllowlist(providerProfile)).toEqual(["*"]);
   });
 
   it("adds runtime tools without replacing the configured tool surface", () => {
@@ -346,7 +347,7 @@ describe("resolveConversationCapabilityProfile", () => {
 
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
-      expect(profile.policy.pluginToolDiscoveryAllowlist).toContain("image_generate");
+      expect(resolvePluginToolDiscoveryAllowlist(profile)).toContain("image_generate");
       expect(profile.policy.delegated).toBe(true);
       expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
