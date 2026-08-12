@@ -191,7 +191,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
 
-  it("lets a same-session message reach steer admission while the first run is active", async () => {
+  it("starts a second same-session event while the first run is active", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
