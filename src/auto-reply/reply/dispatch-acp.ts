@@ -56,6 +56,7 @@ import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
+import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -362,6 +363,13 @@ async function finalizeAcpTurnOutput(params: {
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
       } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
+        const delivered = await params.delivery.deliver(
+          "final",
+          { text: ttsSyntheticReply.text },
+          { skipTts: true },
+        );
+        queuedFinal = queuedFinal || delivered;
+      } else if (needsTtsFallback(true, accumulatedVisibleBlockText, ttsSyntheticReply.text)) {
         const delivered = await params.delivery.deliver(
           "final",
           { text: ttsSyntheticReply.text },
