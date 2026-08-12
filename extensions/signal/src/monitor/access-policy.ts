@@ -6,6 +6,7 @@ import {
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   formatSignalSenderId,
   looksLikeUuid,
@@ -42,17 +43,17 @@ function strippedSignalEntry(
 const SIGNAL_GROUP_ID_BYTE_LENGTHS = new Set([16, 32]);
 
 function canonicalizeSignalGroupId(groupId: string): string {
-  if (!/^[A-Za-z0-9+/_-]+=*$/.test(groupId)) {
+  // Mirrors extensions/voice-call/src/media-base64.ts: convert the base64url
+  // alphabet, then let the shared helper validate alphabet/padding and repad.
+  const canonical = canonicalizeBase64(groupId.replaceAll("-", "+").replaceAll("_", "/"));
+  if (!canonical) {
     return groupId;
   }
-  const standard = groupId.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = (4 - (standard.length % 4)) % 4;
-  const padded = standard + "=".repeat(padding);
-  const decoded = Buffer.from(padded, "base64");
-  if (!SIGNAL_GROUP_ID_BYTE_LENGTHS.has(decoded.length) || decoded.toString("base64") !== padded) {
+  const decoded = Buffer.from(canonical, "base64");
+  if (!SIGNAL_GROUP_ID_BYTE_LENGTHS.has(decoded.length)) {
     return groupId;
   }
-  return padded;
+  return canonical;
 }
 
 function normalizeSignalGroupEntry(entry: string): string | null {

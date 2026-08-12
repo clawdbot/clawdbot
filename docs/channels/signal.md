@@ -481,7 +481,7 @@ Provider options:
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID IDs.
 - `channels.signal.aliases`: OpenClaw-side aliases for DM or group delivery targets.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
+- `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`, in either standard or URL-safe base64), sender E.164 numbers, or `uuid:<id>` values.
 - `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
