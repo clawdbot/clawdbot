@@ -316,8 +316,8 @@ export class ComposedGatewayHarness {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
     return {
-      version: 2,
-      socketPath: this.socketPath,
+      version: 3,
+      connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
         credential,
@@ -354,7 +354,7 @@ export class ComposedGatewayHarness {
     const descriptor = this.createDescriptor(params);
     const epoch = descriptor.admission.ownerEpoch;
     const connection = createWorkerConnection({
-      socketPath: this.socketPath,
+      endpoint: { kind: "unix", socketPath: this.socketPath },
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
