@@ -104,11 +104,14 @@ function appendTail(current: string, chunk: string): string {
 }
 
 function lastStderrLine(stderr: string): string | undefined {
-  return stderr
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1);
+  const lines = stderr.split(/\r?\n/u);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (line) {
+      return line;
+    }
+  }
+  return undefined;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -239,7 +242,10 @@ export function createManagedLinuxDesktop(
   const waitUntilReady = async (active: ManagedResources, activeEpoch: number) => {
     const deadline = nowMs() + readinessTimeoutMs;
     let lastProbe = "unreachable";
-    while (activeEpoch === epoch && !stopping) {
+    for (;;) {
+      if (activeEpoch !== epoch || stopping) {
+        break;
+      }
       const probe = await probeRfb({
         host: "127.0.0.1",
         port: active.port,
@@ -264,7 +270,7 @@ export function createManagedLinuxDesktop(
 
   const stopPair = async (current: ManagedPair | undefined) => {
     supervisor.cancelScope(scopeKey, "manual-cancel");
-    await Promise.allSettled([...activeWaits]);
+    await Promise.allSettled(activeWaits);
     if (pair === current) {
       pair = undefined;
     }

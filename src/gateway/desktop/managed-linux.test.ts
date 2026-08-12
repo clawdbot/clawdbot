@@ -139,7 +139,9 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     if (predicate()) {
       return;
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
   throw new Error("condition did not settle");
 }
@@ -318,6 +320,9 @@ describe("managed Linux desktop", () => {
     });
     expect(observer).toBeDefined();
     observer?.release();
-    await waitFor(() => desktop.status().state === "not-started");
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(desktop.status()).toEqual({ state: "not-started" });
   });
 });
