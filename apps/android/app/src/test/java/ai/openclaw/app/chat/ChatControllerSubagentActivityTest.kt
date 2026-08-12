@@ -208,8 +208,8 @@ class ChatControllerSubagentActivityTest {
       assertEquals(
         "Second run",
         controller.subagentActivities.value
-            .getValue("task-1")
-            .snippet,
+          .getValue("task-1")
+          .snippet,
       )
 
       controller.handleGatewayEvent(
@@ -223,8 +223,8 @@ class ChatControllerSubagentActivityTest {
       assertEquals(
         "Second run complete",
         controller.subagentActivities.value
-            .getValue("task-1")
-            .terminalSummary,
+          .getValue("task-1")
+          .terminalSummary,
       )
     }
 
