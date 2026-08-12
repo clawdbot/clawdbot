@@ -2,7 +2,10 @@
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -31,11 +34,6 @@ import {
   musicCompletionEvents,
   taskCompletionEvents,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  callGateway as runtimeCallGateway,
-  dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
-  sendMessage as runtimeSendMessage,
-} from "./subagent-announce-delivery.runtime.js";
 import {
   testing,
   deliverSubagentAnnouncement,
