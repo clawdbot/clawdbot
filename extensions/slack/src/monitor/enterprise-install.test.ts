@@ -147,10 +147,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     ["channel ID", { channels: { C01234567: {} } }],
     ["allowFrom user ID", { allowFrom: ["U01234567"] }],
     ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
-    [
-      "reaction user ID",
-      { reactionNotifications: "allowlist", reactionAllowlist: ["U01234567"] },
-    ],
+    ["reaction user ID", { reactionNotifications: "allowlist", reactionAllowlist: ["U01234567"] }],
     [
       "per-channel user ID",
       {
@@ -160,9 +157,9 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       },
     ],
   ])("rejects unscoped Enterprise %s", (_label, config) => {
-    expect(() =>
-      assertEnterpriseSlackPolicyConfig({ accountId: "org", config }),
-    ).toThrow(/Slack Enterprise Grid/);
+    expect(() => assertEnterpriseSlackPolicyConfig({ accountId: "org", config })).toThrow(
+      /Slack Enterprise Grid/,
+    );
   });
 
   it.each<[string, SlackAccountConfig]>([
