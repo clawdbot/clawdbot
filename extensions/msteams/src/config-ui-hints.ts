@@ -22,6 +22,10 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Graph Media Fallback",
     help: "Query Microsoft Graph for unresolved channel or group-chat HTML media. Adds one lookup per matching message when enabled (default: false).",
   },
+  threadSessionPolicy: {
+    label: "MS Teams Thread Session Policy",
+    help: 'Choose "thread" (default) to isolate each channel thread or "channel" to share one session across the whole channel.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "MS Teams",
     streaming: {

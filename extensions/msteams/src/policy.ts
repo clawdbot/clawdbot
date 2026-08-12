@@ -32,6 +32,8 @@ type MSTeamsResolvedRouteConfig = {
   channelMatchSource?: "direct" | "wildcard";
 };
 
+export type MSTeamsThreadSessionPolicy = "thread" | "channel";
+
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
 const teamScopeKey = (teamKey: string) => scopeKey(["team", teamKey]);
 const channelScopeKey = (teamKey: string, channelKey: string) =>
@@ -255,4 +257,41 @@ export function resolveMSTeamsReplyPolicy(params: {
     explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
 
   return { requireMention, replyStyle };
+}
+
+export function resolveMSTeamsThreadSessionPolicy(params: {
+  globalConfig?: MSTeamsConfig;
+  teamConfig?: MSTeamsTeamConfig;
+  channelConfig?: MSTeamsChannelConfig;
+}): MSTeamsThreadSessionPolicy {
+  return (
+    params.channelConfig?.threadSessionPolicy ??
+    params.teamConfig?.threadSessionPolicy ??
+    params.globalConfig?.threadSessionPolicy ??
+    "thread"
+  );
+}
+
+export function resolveMSTeamsOutboundRouteConfig(params: {
+  cfg?: MSTeamsConfig;
+  conversationId: string;
+}): MSTeamsResolvedRouteConfig {
+  const direct = resolveMSTeamsRouteConfig({
+    cfg: params.cfg,
+    conversationId: params.conversationId,
+  });
+  if (direct.channelConfig) {
+    return direct;
+  }
+  for (const teamId of Object.keys(params.cfg?.teams ?? {})) {
+    const candidate = resolveMSTeamsRouteConfig({
+      cfg: params.cfg,
+      teamId,
+      conversationId: params.conversationId,
+    });
+    if (candidate.channelConfig) {
+      return candidate;
+    }
+  }
+  return direct;
 }

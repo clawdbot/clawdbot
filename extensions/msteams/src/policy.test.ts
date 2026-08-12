@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import {
   resolveMSTeamsGroupToolPolicy,
+  resolveMSTeamsOutboundRouteConfig,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
+  resolveMSTeamsThreadSessionPolicy,
 } from "./policy.js";
 
 function resolveNamedTeamRouteConfig(allowNameMatching = false) {
@@ -156,6 +158,47 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+    });
+  });
+
+  describe("resolveMSTeamsThreadSessionPolicy", () => {
+    it("defaults to thread isolation", () => {
+      expect(resolveMSTeamsThreadSessionPolicy({ globalConfig: {} })).toBe("thread");
+    });
+
+    it("prefers channel overrides over team and global policy", () => {
+      expect(
+        resolveMSTeamsThreadSessionPolicy({
+          globalConfig: { threadSessionPolicy: "channel" },
+          teamConfig: { threadSessionPolicy: "channel" },
+          channelConfig: { threadSessionPolicy: "thread" },
+        }),
+      ).toBe("thread");
+    });
+
+    it("finds outbound channel policy without a team id", () => {
+      const cfg: MSTeamsConfig = {
+        threadSessionPolicy: "thread",
+        teams: {
+          team123: {
+            channels: {
+              chan456: { threadSessionPolicy: "channel" },
+            },
+          },
+        },
+      };
+      const routeConfig = resolveMSTeamsOutboundRouteConfig({
+        cfg,
+        conversationId: "chan456",
+      });
+
+      expect(
+        resolveMSTeamsThreadSessionPolicy({
+          globalConfig: cfg,
+          teamConfig: routeConfig.teamConfig,
+          channelConfig: routeConfig.channelConfig,
+        }),
+      ).toBe("channel");
     });
   });
 

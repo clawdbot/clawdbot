@@ -194,6 +194,27 @@ describe("msteams config schema", () => {
     }
   });
 
+  it("accepts threadSessionPolicy at global/team/channel levels", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      threadSessionPolicy: "channel",
+      teams: {
+        team123: {
+          threadSessionPolicy: "thread",
+          channels: {
+            chan456: { threadSessionPolicy: "channel" },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.threadSessionPolicy).toBe("channel");
+      expect(res.data.teams?.team123?.threadSessionPolicy).toBe("thread");
+      expect(res.data.teams?.team123?.channels?.chan456?.threadSessionPolicy).toBe("channel");
+    }
+  });
+
   it("accepts Teams SDK cloud and serviceUrl configuration", () => {
     const res = MSTeamsConfigSchema.safeParse({
       cloud: "USGovDoD",
@@ -261,6 +282,14 @@ describe("msteams config schema", () => {
   it("rejects invalid replyStyle", () => {
     const res = MSTeamsConfigSchema.safeParse({
       replyStyle: "nope",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects invalid threadSessionPolicy", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      threadSessionPolicy: "conversation",
     });
 
     expect(res.success).toBe(false);

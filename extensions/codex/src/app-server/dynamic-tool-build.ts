@@ -243,6 +243,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
+  const sharedConversation = params.chatType === "group" || params.chatType === "channel";
   const buildOpenClawCodingTools = () =>
     params.hostCapabilities.bindToolSurface(
       createOpenClawCodingTools({
@@ -274,7 +275,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         senderName: params.senderName,
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
-        senderIsOwner: params.senderIsOwner,
+        // A shared conversation has one durable Codex thread, so its tool surface
+        // must not gain owner-only tools when the sender changes between turns.
+        senderIsOwner: sharedConversation ? false : params.senderIsOwner,
         inputProvenance: params.inputProvenance,
         trustedInternalHandoff: params.trustedInternalHandoff,
         scheduledToolPolicy: params.scheduledToolPolicy,

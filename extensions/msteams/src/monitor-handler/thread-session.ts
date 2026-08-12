@@ -1,5 +1,6 @@
 // Msteams plugin module implements thread session behavior.
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import type { MSTeamsThreadSessionPolicy } from "../policy.js";
 
 // Strip any trailing `:thread:<id>` segments from a session key. Thread ids are
 // timestamps/uuids and never contain `:`, so the segment boundary is unambiguous;
@@ -11,10 +12,12 @@ export function resolveMSTeamsRouteSessionKey(params: {
   isChannel: boolean;
   conversationMessageId?: string;
   replyToId?: string;
+  threadSessionPolicy?: MSTeamsThreadSessionPolicy;
 }): string {
-  const channelThreadId = params.isChannel
-    ? (params.conversationMessageId ?? params.replyToId ?? undefined)
-    : undefined;
+  const channelThreadId =
+    params.isChannel && params.threadSessionPolicy !== "channel"
+      ? (params.conversationMessageId ?? params.replyToId ?? undefined)
+      : undefined;
   // Re-derive from a clean base. If a caller hands us a session key that is
   // already thread-qualified (e.g. a `route.sessionKey` mutated in place by a
   // prior turn whose object is still held in the resolved-route cache, see

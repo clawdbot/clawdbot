@@ -740,11 +740,14 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.mediaMaxMb`: per-channel media size limit override in MB. Falls back to `agents.defaults.mediaMaxMb` when unset.
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply style](#reply-style-threads-vs-posts)).
+- `channels.msteams.threadSessionPolicy`: `thread | channel` (default `thread`; see [Routing and sessions](#routing-and-sessions)).
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
+- `channels.msteams.teams.<teamId>.threadSessionPolicy`: per-team session-boundary override.
 - `channels.msteams.teams.<teamId>.requireMention`: per-team override.
 - `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
 - `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.threadSessionPolicy`: per-channel session-boundary override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
@@ -764,9 +767,30 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
-  - Channel/group messages use conversation id:
-    - `agent:<agentId>:msteams:channel:<conversationId>`
-    - `agent:<agentId>:msteams:group:<conversationId>`
+  - Group chats use one session per conversation: `agent:<agentId>:msteams:group:<conversationId>`.
+  - Channels isolate each Teams thread by default: `agent:<agentId>:msteams:channel:<conversationId>:thread:<messageId>`.
+
+Set `threadSessionPolicy: "channel"` when an agent should share memory across every thread in a Teams channel. This trades thread isolation for one channel-wide context, so unrelated discussions in that channel can influence later replies.
+
+```json5
+{
+  channels: {
+    msteams: {
+      teams: {
+        "19:team-id@thread.tacv2": {
+          channels: {
+            "19:channel-id@thread.tacv2": {
+              threadSessionPolicy: "channel",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Resolution uses the most specific configured value: channel, then team, then global. The implicit default remains `thread`. The policy changes only the memory/session boundary; `replyStyle` still controls whether outbound messages appear as threaded replies or top-level posts.
 
 ## Reply style: threads vs posts
 

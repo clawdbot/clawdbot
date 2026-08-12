@@ -12,6 +12,7 @@ import {
 } from "../graph-thread.js";
 import type { extractMSTeamsQuoteInfo } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
+import type { MSTeamsThreadSessionPolicy } from "../policy.js";
 import { resolveMSTeamsAllowlistMatch } from "../policy.js";
 import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -34,6 +35,7 @@ export function prepareMSTeamsThreadRouting(params: {
   senderId: string;
   conversationId: string;
   conversationMessageId?: string;
+  threadSessionPolicy: MSTeamsThreadSessionPolicy;
   teamId?: string;
   log: MSTeamsMessageHandlerDeps["log"];
 }) {
@@ -52,6 +54,7 @@ export function prepareMSTeamsThreadRouting(params: {
     isChannel: params.isChannel,
     conversationMessageId: params.conversationMessageId,
     replyToId: params.context.activity.replyToId,
+    threadSessionPolicy: params.threadSessionPolicy,
   });
 
   const deadline = createMSTeamsInboundDeadline();

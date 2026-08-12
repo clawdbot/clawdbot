@@ -168,9 +168,20 @@ describe("msteams session route", () => {
     },
   );
 
-  it("builds channel routes for thread conversations and strips suffix metadata", () => {
-    const route = resolveMSTeamsOutboundSessionRoute({
+  it.each([
+    {
+      label: "default thread isolation",
       cfg: {},
+      sessionKey: "agent:main:msteams:channel:19:abc123@thread.tacv2:thread:42",
+    },
+    {
+      label: "channel-wide sessions",
+      cfg: { channels: { msteams: { threadSessionPolicy: "channel" as const } } },
+      sessionKey: "agent:main:msteams:channel:19:abc123@thread.tacv2",
+    },
+  ])("builds channel routes with $label and preserves reply metadata", ({ cfg, sessionKey }) => {
+    const route = resolveMSTeamsOutboundSessionRoute({
+      cfg,
       agentId: "main",
       accountId: "default",
       target: "teams:19:abc123@thread.tacv2;messageid=42",
@@ -179,7 +190,7 @@ describe("msteams session route", () => {
     expect(route?.peer).toEqual({ kind: "channel", id: "19:abc123@thread.tacv2" });
     expect(route?.from).toBe("msteams:channel:19:abc123@thread.tacv2");
     expect(route?.to).toBe("conversation:19:abc123@thread.tacv2");
-    expect(route?.sessionKey).toBe("agent:main:msteams:channel:19:abc123@thread.tacv2:thread:42");
+    expect(route?.sessionKey).toBe(sessionKey);
     expect(route?.threadId).toBe("42");
     expect(route?.recipientSessionExact).toBe(true);
   });

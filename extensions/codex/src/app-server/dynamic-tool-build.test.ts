@@ -1510,6 +1510,28 @@ describe("Codex app-server dynamic tool build", () => {
     expect(factoryOptions[0]).toMatchObject({ senderIsOwner: true });
   });
 
+  it.each(["group", "channel"] as const)(
+    "uses a stable non-owner tool surface for owner turns in shared %s conversations",
+    async (chatType) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.chatType = chatType;
+      params.senderIsOwner = true;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      const factoryOptions: unknown[] = [];
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        factoryOptions.push(options);
+        return [];
+      });
+
+      await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+      expect(factoryOptions[0]).toMatchObject({ senderIsOwner: false });
+    },
+  );
+
   it("passes native and routable channel targets into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

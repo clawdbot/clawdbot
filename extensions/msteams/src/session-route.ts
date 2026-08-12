@@ -8,6 +8,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsRouteSessionKey } from "./monitor-handler/thread-session.js";
+import { resolveMSTeamsOutboundRouteConfig, resolveMSTeamsThreadSessionPolicy } from "./policy.js";
 
 export function inferMSTeamsTargetChatType(
   raw: string,
@@ -77,15 +78,26 @@ export function resolveMSTeamsOutboundSessionRoute(params: ChannelOutboundSessio
         : `msteams:group:${conversationId}`,
     to: isUser ? `user:${conversationId}` : `conversation:${conversationId}`,
   });
-  return isChannel
-    ? {
-        ...route,
-        sessionKey: resolveMSTeamsRouteSessionKey({
-          baseSessionKey: route.baseSessionKey,
-          isChannel: true,
-          conversationMessageId: channelThreadId,
-        }),
-        ...(channelThreadId !== undefined ? { threadId: channelThreadId } : {}),
-      }
-    : route;
+  if (!isChannel) {
+    return route;
+  }
+  const msteamsConfig = params.cfg.channels?.msteams;
+  const routeConfig = resolveMSTeamsOutboundRouteConfig({
+    cfg: msteamsConfig,
+    conversationId,
+  });
+  return {
+    ...route,
+    sessionKey: resolveMSTeamsRouteSessionKey({
+      baseSessionKey: route.baseSessionKey,
+      isChannel: true,
+      conversationMessageId: channelThreadId,
+      threadSessionPolicy: resolveMSTeamsThreadSessionPolicy({
+        globalConfig: msteamsConfig,
+        teamConfig: routeConfig.teamConfig,
+        channelConfig: routeConfig.channelConfig,
+      }),
+    }),
+    ...(channelThreadId !== undefined ? { threadId: channelThreadId } : {}),
+  };
 }

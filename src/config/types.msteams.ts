@@ -47,6 +47,9 @@ export type MSTeamsSsoConfig = {
 /** Reply style for MS Teams messages. */
 export type MSTeamsReplyStyle = "thread" | "top-level";
 
+/** Session boundary for replies inside MS Teams channels. */
+export type MSTeamsThreadSessionPolicy = "thread" | "channel";
+
 /** Channel-level config for MS Teams. */
 export type MSTeamsChannelConfig = {
   /** Require @mention to respond. Default: true. */
@@ -56,6 +59,8 @@ export type MSTeamsChannelConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
+  /** Session boundary for channel replies. Default: "thread". */
+  threadSessionPolicy?: MSTeamsThreadSessionPolicy;
 };
 
 /** Team-level config for MS Teams. */
@@ -67,6 +72,8 @@ export type MSTeamsTeamConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Default reply style for channels in this team. */
   replyStyle?: MSTeamsReplyStyle;
+  /** Default session boundary for channel replies in this team. */
+  threadSessionPolicy?: MSTeamsThreadSessionPolicy;
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
   channels?: Record<string, MSTeamsChannelConfig>;
 };
@@ -107,6 +114,8 @@ export type MSTeamsConfig = Omit<
     webhook?: MSTeamsWebhookConfig;
     /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
     typingIndicator?: boolean;
+    /** Session boundary for replies inside Teams channels. Default: "thread". */
+    threadSessionPolicy?: MSTeamsThreadSessionPolicy;
     /**
      * Allowed host suffixes for inbound attachment downloads.
      * Use ["*"] to allow any host (not recommended).

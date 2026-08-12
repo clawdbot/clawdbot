@@ -15,7 +15,7 @@ import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
-import { resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy, resolveMSTeamsThreadSessionPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -162,6 +162,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
+    const { teamConfig, channelConfig } = channelGate;
     const threadRouting = prepareMSTeamsThreadRouting({
       cfg,
       context,
@@ -170,6 +171,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderId,
       conversationId,
       conversationMessageId: conversationMessageId ?? undefined,
+      threadSessionPolicy: resolveMSTeamsThreadSessionPolicy({
+        globalConfig: msteamsCfg,
+        teamConfig,
+        channelConfig,
+      }),
       teamId,
       log,
     });
@@ -186,7 +192,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
 
     const channelId = conversationId;
-    const { teamConfig, channelConfig } = channelGate;
     const { requireMention, replyStyle } = resolveMSTeamsReplyPolicy({
       isDirectMessage,
       globalConfig: msteamsCfg,
