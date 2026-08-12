@@ -25,12 +25,6 @@ export const SessionsCreateParamsSchema = closedObject({
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
-  recover: Type.Optional(
-    Type.Boolean({
-      description:
-        "Recover a restart-tombstoned parent into a fresh session and continue its transcript; requires parentSessionKey.",
-    }),
-  ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
   succeedsParent: Type.Optional(
     Type.Boolean({

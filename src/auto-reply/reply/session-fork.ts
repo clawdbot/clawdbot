@@ -6,7 +6,7 @@ import {
   type SessionParentForkDecision,
   type ParentForkedSessionTranscript,
 } from "../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isModelSelectionLocked,
@@ -21,12 +21,6 @@ function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
   // context into an ordinary child would let the child continue it elsewhere.
   if (isModelSelectionLocked(parentEntry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  }
-}
-
-function assertParentSessionRecoveryAllowed(parentEntry: SessionEntry): void {
-  if (!parentEntry.mainRestartRecovery?.tombstone) {
-    throw new Error("Session recovery requires a tombstoned parent session.");
   }
 }
 
@@ -115,16 +109,6 @@ export async function resolveParentForkDecision(
   });
 }
 
-export async function resolveParentRecoveryDecision(
-  params: ParentForkDecisionParams,
-): Promise<ParentForkDecision> {
-  assertParentSessionRecoveryAllowed(params.parentEntry);
-  return await resolveSessionParentForkDecision({
-    parentEntry: params.parentEntry,
-    storePath: resolveParentForkStorePath(params),
-  });
-}
-
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
@@ -140,22 +124,6 @@ export async function forkSessionFromParent(
     ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
   return fork.status === "created" ? fork.transcript : null;
-}
-
-export async function recoverSessionFromParent(
-  params: ForkSessionFromParentParams,
-): Promise<{ sessionId: string; sessionFile: string } | null> {
-  assertParentSessionRecoveryAllowed(params.parentEntry);
-  const storePath = resolveParentForkStorePath(params);
-  const recovered = await forkSessionFromParentTranscript({
-    agentId: params.agentId,
-    parentEntry: params.parentEntry,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath,
-    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
-  });
-  return recovered.status === "created" ? recovered.transcript : null;
 }
 
 function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {

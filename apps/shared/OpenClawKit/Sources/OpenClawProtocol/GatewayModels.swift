@@ -8319,7 +8319,6 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let spawndepth: Int?
     public let fork: Bool?
-    public let recover: Bool?
     public let emitcommandhooks: Bool?
     public let succeedsparent: Bool?
     public let task: String?
@@ -8344,7 +8343,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         spawndepth: Int? = nil,
         fork: Bool? = nil,
-        recover: Bool? = nil,
         emitcommandhooks: Bool? = nil,
         succeedsparent: Bool? = nil,
         task: String? = nil,
@@ -8368,7 +8366,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.spawndepth = spawndepth
         self.fork = fork
-        self.recover = recover
         self.emitcommandhooks = emitcommandhooks
         self.succeedsparent = succeedsparent
         self.task = task
@@ -8394,7 +8391,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case spawndepth = "spawnDepth"
         case fork
-        case recover
         case emitcommandhooks = "emitCommandHooks"
         case succeedsparent = "succeedsParent"
         case task
@@ -8452,6 +8448,50 @@ public struct SessionsCreateResult: Codable, Sendable {
         case messageseq = "messageSeq"
         case runerror = "runError"
         case worktree
+    }
+}
+
+public struct SessionsRecoverParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+
+    public init(
+        key: String,
+        agentid: String? = nil)
+    {
+        self.key = key
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsRecoverResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String
+    public let continuation: AnyCodable
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String,
+        continuation: AnyCodable)
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.continuation = continuation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case continuation
     }
 }
 

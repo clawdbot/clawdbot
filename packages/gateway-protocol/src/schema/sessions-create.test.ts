@@ -11,14 +11,4 @@ describe("sessions.create schema", () => {
   it("rejects unknown visibility values", () => {
     expect(validateSessionsCreateParams({ agentId: "main", visibility: "private" })).toBe(false);
   });
-
-  it("accepts restart recovery requests", () => {
-    expect(
-      validateSessionsCreateParams({
-        agentId: "main",
-        parentSessionKey: "agent:main:dashboard:tombstoned",
-        recover: true,
-      }),
-    ).toBe(true);
-  });
 });

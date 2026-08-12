@@ -494,6 +494,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
+    recover: mutations.recover,
     patch: mutations.patch,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,

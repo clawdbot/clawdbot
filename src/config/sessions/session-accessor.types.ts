@@ -818,12 +818,7 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | {
-      ok: true;
-      entry: SessionEntry;
-      /** Related rows committed with the created entry in the same lifecycle transaction. */
-      companionEntries?: Array<{ sessionKey: string; entry: SessionEntry }>;
-    }
+  | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
 
 export type SessionEntryCreateWithTranscriptOptions = {

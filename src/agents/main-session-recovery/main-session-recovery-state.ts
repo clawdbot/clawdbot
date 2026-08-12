@@ -151,7 +151,7 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
-export type MainRestartRecoveryRolloverEligibility =
+type MainRestartRecoveryRolloverEligibility =
   | { eligible: true }
   | {
       eligible: false;

@@ -3,23 +3,6 @@ import {
   type RpcAttachmentInput,
 } from "./attachment-normalize.js";
 
-const RESTART_RECOVERY_CONTINUATION_MESSAGE =
-  "Continue from the recovered transcript and finish the interrupted work.";
-
-const RESTART_RECOVERY_ALLOWED_PARAMS = new Set(["agentId", "parentSessionKey", "recover"]);
-
-export function validateSessionRecoveryCreateParams(
-  params: Record<string, unknown>,
-): string | undefined {
-  if (
-    params.recover === true &&
-    Object.keys(params).some((key) => !RESTART_RECOVERY_ALLOWED_PARAMS.has(key))
-  ) {
-    return "sessions.create recovery only accepts agentId and parentSessionKey";
-  }
-  return undefined;
-}
-
 function resolveOptionalInitialSessionMessage(params: {
   task?: unknown;
   message?: unknown;
@@ -36,13 +19,9 @@ function resolveOptionalInitialSessionMessage(params: {
 export function resolveSessionCreateInitialTurn(params: {
   attachments?: unknown[];
   message?: unknown;
-  recover?: unknown;
   task?: unknown;
 }) {
-  const message =
-    params.recover === true
-      ? RESTART_RECOVERY_CONTINUATION_MESSAGE
-      : resolveOptionalInitialSessionMessage(params);
+  const message = resolveOptionalInitialSessionMessage(params);
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
     params.attachments as RpcAttachmentInput[] | undefined,
   );

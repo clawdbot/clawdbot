@@ -7,8 +7,10 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -816,6 +818,8 @@ export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchR
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
+export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<

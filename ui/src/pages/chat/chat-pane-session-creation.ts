@@ -75,11 +75,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       resolveAgentIdFromSessionKey(state.sessionKey);
     const params = {
       ...(agentId ? { agentId } : {}),
-      parentSessionKey: state.sessionKey,
-      recover: true,
+      key: state.sessionKey,
     };
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
-      method: "sessions.create",
+      method: "sessions.recover",
       params,
     });
     return {
@@ -127,11 +126,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       resolveAgentIdFromSessionKey(sourceSessionKey);
     const params = {
       ...(agentId ? { agentId } : {}),
-      parentSessionKey: sourceSessionKey,
-      recover: true,
+      key: sourceSessionKey,
     };
     const access = readSessionMethodAccess(context.gateway.snapshot, {
-      method: "sessions.create",
+      method: "sessions.recover",
       params,
     });
     if (!access.allowed) {
@@ -144,17 +142,18 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     this.requestUpdate();
     setChatError(state, null);
     try {
-      const nextSessionKey = await sessions.create(params);
+      const recovery = await sessions.recover(params);
       if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
         return false;
       }
-      if (!nextSessionKey) {
+      if (!recovery) {
         if (isCurrent()) {
           setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
           state.requestUpdate?.();
         }
         return false;
       }
+      const nextSessionKey = recovery.key;
       if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
         return false;
       }
