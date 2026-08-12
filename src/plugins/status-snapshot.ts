@@ -2,12 +2,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-<<<<<<< HEAD
-import { buildPluginStaticInventory } from "./loader-records.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { buildPluginStaticInventory } from "./loader-records.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {

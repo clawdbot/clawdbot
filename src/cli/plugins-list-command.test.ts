@@ -217,6 +217,55 @@ describe("runPluginsListCommand", () => {
     ]);
   });
 
+  it("normalizes legacy JSON snapshot records without static inventory", async () => {
+    vi.doMock("../config/config.js", () => ({
+      getRuntimeConfig: () => ({}),
+    }));
+    vi.doMock("../plugins/status-snapshot.js", () => ({
+      buildPluginRegistrySnapshotReport: () => ({
+        workspaceDir: "/workspace",
+        registrySource: "config",
+        registryDiagnostics: [],
+        plugins: [
+          {
+            id: "legacy",
+            enabled: true,
+            commands: [],
+          },
+        ],
+        diagnostics: [],
+      }),
+    }));
+
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({ json: true }, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      {
+        workspaceDir: "/workspace",
+        registry: {
+          source: "config",
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "legacy",
+            enabled: true,
+            commands: [],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    ]);
+  });
+
   it.each([
     { label: "normal", options: { enabled: true } },
     { label: "verbose", options: { enabled: true, verbose: true } },

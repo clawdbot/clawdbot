@@ -1,5 +1,6 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
+import { normalizePluginStaticInventory } from "../plugins/loader-records.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
@@ -17,6 +18,7 @@ function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agent
   const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
   return {
     ...record,
+    staticInventory: normalizePluginStaticInventory(plugin.staticInventory),
   };
 }
 
