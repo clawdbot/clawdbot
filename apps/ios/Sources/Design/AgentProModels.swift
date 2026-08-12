@@ -263,9 +263,16 @@ struct ClawHubSearchResponseLite: Decodable {
 
 struct ClawHubSearchResultLite: Decodable {
     let slug: String
+    let ownerHandle: String?
     let displayName: String
     let summary: String?
     let version: String?
+
+    var reference: String {
+        SkillManagementContract.canonicalClawHubReference(
+            slug: self.slug,
+            ownerHandle: self.ownerHandle) ?? self.slug
+    }
 }
 
 struct ClawHubInstallParams: Encodable {

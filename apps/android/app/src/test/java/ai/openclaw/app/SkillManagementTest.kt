@@ -38,6 +38,26 @@ class SkillManagementTest {
   }
 
   @Test
+  fun searchResultsKeepSameSlugPublishersDistinct() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"weather","ownerHandle":"alice","displayName":"Alice Weather"},{"slug":"weather","ownerHandle":"bob","displayName":"Bob Weather"}]}""",
+        json,
+      )
+
+    assertEquals(listOf("@alice/weather", "@bob/weather"), results.map { it.reference })
+    assertEquals(
+      "@alice/weather",
+      json
+        .parseToJsonElement(clawHubDetailParams(results.first().reference))
+        .jsonObject
+        .getValue("slug")
+        .jsonPrimitive
+        .content,
+    )
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(

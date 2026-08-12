@@ -70,7 +70,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -672,6 +672,7 @@ describe("searchClawHub", () => {
         {
           score: 0.95,
           slug: "github-new",
+          ownerHandle: "openclaw",
           displayName: "GitHub New",
           summary: "Fresh result",
           version: "2.0.0",
@@ -680,7 +681,7 @@ describe("searchClawHub", () => {
     });
 
     await expect(searchClawHub(state.client!, "github", controller.signal)).resolves.toEqual([
-      expect.objectContaining({ slug: "github-new" }),
+      expect.objectContaining({ slug: "github-new", ownerHandle: "openclaw" }),
     ]);
     expect(request).toHaveBeenCalledWith(
       "skills.search",
@@ -691,25 +692,31 @@ describe("searchClawHub", () => {
 });
 
 describe("loadClawHubDetail", () => {
-  it("ignores stale detail responses after slug changes", async () => {
+  it("keeps same-slug publishers distinct and ignores stale detail responses", async () => {
     const { state, request } = createState();
     const queue = createDeferredRequestQueue(request);
 
-    const firstPending = loadClawHubDetail(state, "github");
-    const secondPending = loadClawHubDetail(state, "gitlab");
+    const firstPending = loadClawHubDetail(state, "@alice/weather");
+    const secondPending = loadClawHubDetail(state, "@bob/weather");
 
     queue.resolveNext({
-      skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
+      skill: { slug: "weather", displayName: "Alice Weather", createdAt: 1, updatedAt: 2 },
+      owner: { handle: "alice" },
     });
     await firstPending;
 
     queue.resolveNext({
-      skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
+      skill: { slug: "weather", displayName: "Bob Weather", createdAt: 3, updatedAt: 4 },
+      owner: { handle: "bob" },
     });
     await secondPending;
 
     expect(state.clawhubDetailLoading).toBe(false);
-    expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
+    expect(request.mock.calls).toEqual([
+      ["skills.detail", { slug: "@alice/weather" }],
+      ["skills.detail", { slug: "@bob/weather" }],
+    ]);
+    expect(state.clawhubDetail?.owner?.handle).toBe("bob");
   });
 
   it("ignores a same-client detail response from an older connection epoch", async () => {
@@ -1288,7 +1295,7 @@ describe("skill mutations", () => {
       text:
         "Review the ClawHub warning before installing this skill.\n\n" +
         "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeSlug: "github",
+      acknowledgeRef: "github",
       acknowledgeVersion: "1.2.3",
       acknowledgeLabel: "Acknowledge risk and install",
     });

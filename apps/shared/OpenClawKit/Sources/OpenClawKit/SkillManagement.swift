@@ -220,12 +220,19 @@ public struct ClawHubInstalledSkillLink: Codable, Sendable {
 
 public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let slug: String
+    public let ownerHandle: String?
     public let displayName: String
     public let summary: String?
     public let version: String?
 
     public var id: String {
-        self.slug
+        self.reference
+    }
+
+    public var reference: String {
+        SkillManagementContract.canonicalClawHubReference(
+            slug: self.slug,
+            ownerHandle: self.ownerHandle) ?? self.slug
     }
 }
 
@@ -367,7 +374,7 @@ public enum SkillManagementContract {
         return (String(parts[1]), String(parts[0]).lowercased())
     }
 
-    fileprivate static func canonicalClawHubReference(slug: String, ownerHandle: String?) -> String? {
+    public static func canonicalClawHubReference(slug: String, ownerHandle: String?) -> String? {
         guard let reference = clawHubReference(slug) else { return nil }
         let owner = ownerHandle?
             .trimmingCharacters(in: .whitespacesAndNewlines)

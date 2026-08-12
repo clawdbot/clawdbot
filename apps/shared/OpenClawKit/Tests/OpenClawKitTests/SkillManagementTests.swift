@@ -22,6 +22,15 @@ struct SkillManagementTests {
         #expect(review.author == "Molly")
     }
 
+    @Test func `search results keep same slug publishers distinct`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"weather","ownerHandle":"alice","displayName":"Alice Weather"},{"slug":"weather","ownerHandle":"bob","displayName":"Bob Weather"}]}"#.utf8)
+        let results = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data).results
+
+        #expect(results.map(\.reference) == ["@alice/weather", "@bob/weather"])
+        #expect(results.map(\.id) == ["@alice/weather", "@bob/weather"])
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",

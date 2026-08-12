@@ -25,6 +25,7 @@ vi.mock("../../skills/lifecycle/clawhub.js", () => ({
 }));
 
 vi.mock("../../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
   fetchClawHubSkillDetail: (...args: unknown[]) => fetchClawHubSkillDetailMock(...args),
   searchClawHubSkills: vi.fn(),
 }));
@@ -80,6 +81,7 @@ describe("skills.search handler", () => {
       {
         score: 0.95,
         slug: "github",
+        ownerHandle: "openclaw",
         displayName: "GitHub",
         summary: "GitHub integration",
         version: "1.0.0",
@@ -103,6 +105,7 @@ describe("skills.search handler", () => {
         {
           score: 0.95,
           slug: "github",
+          ownerHandle: "openclaw",
           displayName: "GitHub",
           summary: "GitHub integration",
           version: "1.0.0",
@@ -193,6 +196,24 @@ describe("skills.detail handler", () => {
     expect(response).toEqual(detail);
   });
 
+  it("resolves an owner-qualified reference before fetching detail", async () => {
+    fetchClawHubSkillDetailMock.mockResolvedValue({
+      skill: { slug: "weather", displayName: "Alice Weather", createdAt: 1, updatedAt: 1 },
+      owner: { handle: "alice", displayName: "Alice" },
+    });
+
+    const { ok, error } = await callHandler("skills.detail", {
+      slug: "@Alice/weather",
+    });
+
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "alice",
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+  });
+
   it("returns error when slug is not found", async () => {
     fetchClawHubSkillDetailMock.mockRejectedValue(new Error("not found"));
 
@@ -215,6 +236,17 @@ describe("skills.detail handler", () => {
 
     expect(ok).toBe(false);
     expectErrorField(error, "code", "INVALID_REQUEST");
+    expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat source-qualified install references as ClawHub detail refs", async () => {
+    const { ok, error } = await callHandler("skills.detail", {
+      slug: "skills-sh:alice/tools/weather",
+    });
+
+    expect(ok).toBe(false);
+    expectErrorField(error, "code", "INVALID_REQUEST");
+    expectErrorField(error, "message", "skills.detail only supports ClawHub skill references.");
     expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
   });
 });

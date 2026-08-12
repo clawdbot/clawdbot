@@ -91,13 +91,13 @@ type SkillsState = {
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailSlug: string | null;
+  clawhubDetailRef: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: string;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
@@ -637,13 +637,13 @@ export async function installSkill(
   });
 }
 
-export async function loadClawHubDetail(state: SkillsState, slug: string) {
+export async function loadClawHubDetail(state: SkillsState, ref: string) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
-  state.clawhubDetailSlug = slug;
+  state.clawhubDetailRef = ref;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
@@ -651,9 +651,9 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     () =>
       state.connected &&
       state.client === client &&
-      slug === state.clawhubDetailSlug &&
+      ref === state.clawhubDetailRef &&
       isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
+    () => client.request<ClawHubSkillDetail>("skills.detail", { slug: ref }),
     (res) => {
       state.clawhubDetail = res ?? null;
     },
@@ -667,7 +667,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
 }
 
 export function closeClawHubDetail(state: SkillsState) {
-  state.clawhubDetailSlug = null;
+  state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
   state.clawhubDetailLoading = false;
@@ -725,7 +725,7 @@ export async function installFromClawHub(
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
           : formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
-        ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
+        ...(needsAcknowledgement ? { acknowledgeRef: slug } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }
           : {}),

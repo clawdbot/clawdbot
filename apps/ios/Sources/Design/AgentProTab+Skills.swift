@@ -146,7 +146,7 @@ extension AgentProTab {
                 if !self.clawHubResults.isEmpty {
                     VStack(spacing: 0) {
                         let results = Array(self.clawHubResults.prefix(8))
-                        ForEach(Array(results.enumerated()), id: \.element.slug) { index, result in
+                        ForEach(Array(results.enumerated()), id: \.element.reference) { index, result in
                             self.clawHubResultRow(result)
                             if index < results.count - 1 {
                                 Divider().padding(.leading, 42)
@@ -160,7 +160,7 @@ extension AgentProTab {
     }
 
     func clawHubResultRow(_ result: ClawHubSearchResultLite) -> some View {
-        let installing = clawHubInstallSlug == result.slug
+        let installing = clawHubInstallSlug == result.reference
         return HStack(alignment: .top, spacing: 10) {
             ProIconBadge(systemName: "sparkles", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
@@ -741,11 +741,11 @@ extension AgentProTab {
     @MainActor
     func installClawHubSkill(_ result: ClawHubSearchResultLite) async {
         guard liveGatewayConnected else { return }
-        clawHubInstallSlug = result.slug
+        clawHubInstallSlug = result.reference
         clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
         do {
-            let params = ClawHubInstallParams(slug: result.slug)
+            let params = ClawHubInstallParams(slug: result.reference)
             _ = try await self.requestGateway(method: "skills.install", params: params, timeoutSeconds: 125)
             await appModel.refreshGatewayOverviewIfConnected()
             await refreshOverview(force: true)

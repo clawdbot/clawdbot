@@ -31,7 +31,11 @@ data class GatewayClawHubSkillSummary(
   val displayName: String,
   val summary: String?,
   val version: String?,
-)
+  val ownerHandle: String? = null,
+) {
+  val reference: String
+    get() = canonicalClawHubSkillReference(slug, ownerHandle) ?: slug
+}
 
 data class GatewayClawHubInstallReview(
   val slug: String,
@@ -60,6 +64,7 @@ internal fun parseClawHubSearchResults(
       val displayName = value.string("displayName") ?: return@mapNotNull null
       GatewayClawHubSkillSummary(
         slug = slug,
+        ownerHandle = value.string("ownerHandle"),
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),
