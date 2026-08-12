@@ -9,6 +9,7 @@ type BenchOptions = {
   cwd: string;
   maxWorkers?: number;
   mode: "ref" | "worktree";
+  proofReuse: boolean;
   ref: string;
   rss: boolean;
 };
@@ -65,6 +66,7 @@ export function parseArgs(argv: string[]): BenchOptions {
       ref: "origin/main",
       rss: process.platform === "darwin",
       mode: "ref",
+      proofReuse: false,
     },
     [
       stringFlag("--cwd", "cwd"),
@@ -81,6 +83,10 @@ export function parseArgs(argv: string[]): BenchOptions {
           target.mode = "worktree";
           return "handled";
         }
+        if (arg === "--proof-reuse") {
+          target.proofReuse = true;
+          return "handled";
+        }
         return undefined;
       },
     },
@@ -88,6 +94,7 @@ export function parseArgs(argv: string[]): BenchOptions {
   return {
     cwd: path.resolve(args.cwd),
     mode: args.mode,
+    proofReuse: args.proofReuse,
     ref: args.ref,
     rss: args.rss,
     ...(typeof args.maxWorkers === "number" ? { maxWorkers: args.maxWorkers } : {}),
@@ -236,10 +243,24 @@ function main() {
     console.log(`- ${changedPath}`);
   }
 
-  const routedCommand: [string, ...string[]] =
-    opts.mode === "worktree"
+  const routedCommand: [string, ...string[]] = opts.proofReuse
+    ? [
+        process.execPath,
+        "--import",
+        "tsx",
+        "scripts/check-changed.mts",
+        "--proof-reuse",
+        "--base",
+        "HEAD",
+        "--head",
+        "HEAD",
+        "--",
+        ...changedPaths,
+      ]
+    : opts.mode === "worktree"
       ? [process.execPath, "--import", "tsx", "scripts/test-projects.mts", ...changedPaths]
       : [process.execPath, "--import", "tsx", "scripts/test-projects.mts", "--changed", opts.ref];
+  const warmCommand = routedCommand;
   const rootCommand: [string, ...string[]] = [
     process.execPath,
     "scripts/run-vitest.mjs",
@@ -276,6 +297,21 @@ function main() {
   }
 
   printRunSummary("routed", routed);
+  if (opts.proofReuse) {
+    console.log(`[bench-test-changed] warm:   ${warmCommand.map(quoteArg).join(" ")}`);
+    const warm = runBenchCommand({
+      command: warmCommand,
+      cwd: opts.cwd,
+      label: "warm",
+      rss: opts.rss,
+      ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
+    });
+    if (warm.status !== 0) {
+      process.stderr.write(warm.output);
+      process.exit(warm.status);
+    }
+    printRunSummary("warm", warm);
+  }
   printRunSummary("root", root);
   console.log(
     `[bench-test-changed] delta wall=${formatMs(root.elapsedMs - routed.elapsedMs)} rss=${

@@ -6,6 +6,7 @@ import {
   constants,
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +28,16 @@ import {
   stringFlag,
 } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import {
+  commandFamily,
+  createCheckProofReceipt,
+  createToolProofEnv,
+  defaultCheckProofReceiptDir,
+  evaluateReusableReceipt,
+  readWrapperProofReceipt,
+  type WrapperProof,
+  writeCheckProofReceipt,
+} from "./lib/check-proof-reuse.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -37,6 +48,9 @@ import {
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
+import { createOxlintWrapperProofForArgs } from "./run-oxlint.mts";
+import { createOxlintShardsWrapperProof } from "./run-oxlint-shards.mts";
+import { createTsgoWrapperProofForArgs } from "./run-tsgo.mts";
 
 type ChangedCheckCommand = {
   name: string;
@@ -68,6 +82,8 @@ type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
   dryRun?: boolean;
   timed?: boolean;
   explicitPaths?: boolean;
+  proofReuse?: boolean;
+  proofReceiptDir?: string;
 };
 
 type ChangedCheckTiming = Parameters<typeof printTimingSummary>[1][number];
@@ -986,6 +1002,16 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     ...options,
     env: childEnv,
   });
+  const proofContext = {
+    base: options.base,
+    head: options.head,
+    changedPaths: result.paths,
+    planCommands: plan.commands,
+    planSummary: plan.summary,
+    reuseBlockers: changedCheckEvidenceReuseBlockers(result, options),
+    cwd: process.cwd(),
+  };
+  const proofReceiptDir = options.proofReceiptDir ?? defaultCheckProofReceiptDir();
   const releaseLock = options.dryRun
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
@@ -995,7 +1021,11 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
       });
 
   try {
-    printPlan(result, plan, options);
+    printPlan(result, plan, options, {
+      context: proofContext,
+      proofReceiptDir,
+      proofReuse: options.proofReuse !== false,
+    });
 
     if (options.dryRun) {
       return 0;
@@ -1003,7 +1033,11 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
 
     const timings: ChangedCheckTiming[] = [];
     for (const command of plan.commands) {
-      const status = await runPlanCommand(command, timings);
+      const status = await runPlanCommand(command, timings, {
+        context: proofContext,
+        proofReceiptDir,
+        proofReuse: options.proofReuse !== false,
+      });
       if (status !== 0) {
         printSummary(timings, options);
         return status;
@@ -1025,6 +1059,7 @@ function printPlan(
   result: ChangedLaneResult,
   plan: ReturnType<typeof createChangedCheckPlan>,
   options: ChangedCheckRunOptions,
+  proofOptions?: ProofRunOptions,
 ) {
   const prefix = options.dryRun ? "[check:changed:dry-run]" : "[check:changed]";
   console.error(`${prefix} lanes=${plan.summary || "none"}`);
@@ -1037,19 +1072,215 @@ function printPlan(
   if (options.dryRun) {
     for (const command of plan.commands) {
       console.error(`${prefix} would run: ${formatPlanCommand(command)}`);
+      if (proofOptions) {
+        const decision = describeCommandEvidenceDecision(command, proofOptions);
+        if (decision) {
+          console.error(`${prefix} ${decision}`);
+        }
+      }
     }
   }
 }
 
-async function runPnpm(command: ChangedCheckCommand, timings: ChangedCheckTiming[]) {
-  return await runCommand(createPnpmManagedCommand(command), timings);
+type ProofRunOptions = {
+  context: ProofRunContext;
+  proofReceiptDir: string;
+  proofReuse: boolean;
+};
+
+type ProofRunContext = Parameters<typeof createCheckProofReceipt>[0]["context"];
+
+function changedCheckEvidenceReuseBlockers(
+  result: ChangedLaneResult,
+  options: ChangedCheckRunOptions,
+) {
+  const blockers = [];
+  if (options.proofReuse === false) {
+    blockers.push("force-fresh requested");
+  }
+  if (result.lanes.all) {
+    blockers.push("lanes.all fail-safe plan");
+  }
+  if (
+    !options.staged &&
+    !changedCheckDiffRefsReady({
+      base: options.base ?? "origin/main",
+      head: options.head ?? "HEAD",
+    })
+  ) {
+    blockers.push("diff refs unresolved");
+  }
+  return blockers;
 }
 
-async function runPlanCommand(command: ChangedCheckCommand, timings: ChangedCheckTiming[]) {
-  if (command.bin) {
-    return await runCommand({ ...command, bin: command.bin }, timings);
+function describeCommandEvidenceDecision(command: ChangedCheckCommand, options: ProofRunOptions) {
+  const managedCommand = command.bin
+    ? { ...command, bin: command.bin }
+    : createPnpmManagedCommand(command);
+  const expectedWrapperProof = createExpectedWrapperProofForCommand(managedCommand);
+  if (!expectedWrapperProof) {
+    return null;
   }
-  return await runPnpm(command, timings);
+  const expected = createCheckProofReceipt({
+    command: managedCommand,
+    context: options.context,
+    exitCode: 0,
+    expectedWrapperProof,
+    wrapperProof: expectedWrapperProof,
+  });
+  const blockers = options.proofReuse
+    ? (options.context.reuseBlockers ?? [])
+    : ["force-fresh requested"];
+  if (blockers.length > 0) {
+    return `no reuse: ${managedCommand.name}: ${blockers.join("; ")}`;
+  }
+  const decision = evaluateReusableReceipt(options.proofReceiptDir, expected);
+  return decision.reusable
+    ? `reusing changed-check evidence receipt for ${managedCommand.name}: ${decision.path}`
+    : `no reuse: ${managedCommand.name}: ${decision.reason}`;
+}
+
+function createExpectedWrapperProofForCommand(
+  command: ChangedCheckCommand & { bin: string },
+): WrapperProof | null {
+  const wrapperInvocation = resolveWrapperInvocation(command);
+  if (!wrapperInvocation) {
+    return null;
+  }
+  if (wrapperInvocation.wrapper === "scripts/run-tsgo.mjs") {
+    const plan = createTsgoWrapperProofForArgs(wrapperInvocation.args, command.env ?? process.env);
+    return plan.sparseGuardError ? null : plan.proof;
+  }
+  if (wrapperInvocation.wrapper === "scripts/run-oxlint.mjs") {
+    return createOxlintWrapperProofForArgs(wrapperInvocation.args, command.env ?? process.env)
+      .proof;
+  }
+  if (wrapperInvocation.wrapper === "scripts/run-oxlint-shards.mts") {
+    return createOxlintShardsWrapperProof({
+      argv: wrapperInvocation.args,
+      env: command.env ?? process.env,
+    }).proof;
+  }
+  return null;
+}
+
+function resolveWrapperInvocation(command: ChangedCheckCommand & { bin: string }) {
+  const direct = resolveDirectWrapperInvocation(command.args);
+  if (direct) {
+    return direct;
+  }
+  const scriptName = resolvePnpmScriptName(command);
+  if (!scriptName) {
+    return null;
+  }
+  const script = readPackageScript(scriptName);
+  if (!script || script.includes("&&") || script.includes("||") || script.includes(";")) {
+    return null;
+  }
+  return resolveDirectWrapperInvocation(splitShellWords(script));
+}
+
+function resolveDirectWrapperInvocation(args: string[]) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (
+      arg === "scripts/run-tsgo.mjs" ||
+      arg === "scripts/run-oxlint.mjs" ||
+      arg === "scripts/run-oxlint-shards.mts"
+    ) {
+      return {
+        wrapper: arg,
+        args: args.slice(index + 1),
+      };
+    }
+  }
+  return null;
+}
+
+function resolvePnpmScriptName(command: ChangedCheckCommand & { bin: string }) {
+  if (command.bin === "pnpm") {
+    return command.args[0];
+  }
+  if (command.bin === "corepack" && command.args[0] === "pnpm") {
+    return command.args[1];
+  }
+  return null;
+}
+
+function readPackageScript(name: string | undefined) {
+  if (!name) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, unknown>;
+    };
+    const script = parsed.scripts?.[name];
+    return typeof script === "string" ? script : null;
+  } catch {
+    return null;
+  }
+}
+
+function splitShellWords(command: string) {
+  const words = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (const char of command) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      if (current.length > 0) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current.length > 0) {
+    words.push(current);
+  }
+  return words;
+}
+
+async function runPnpm(
+  command: ChangedCheckCommand,
+  timings: ChangedCheckTiming[],
+  options?: ProofRunOptions,
+) {
+  return await runCommand(createPnpmManagedCommand(command), timings, options);
+}
+
+async function runPlanCommand(
+  command: ChangedCheckCommand,
+  timings: ChangedCheckTiming[],
+  options?: ProofRunOptions,
+) {
+  if (command.bin) {
+    return await runCommand({ ...command, bin: command.bin }, timings, options);
+  }
+  return await runPnpm(command, timings, options);
 }
 
 function formatPlanCommand(command: ChangedCheckCommand) {
@@ -1120,18 +1351,76 @@ export function cleanupCorepackPnpmShimDir() {
 async function runCommand(
   command: ChangedCheckCommand & { bin: string },
   timings: ChangedCheckTiming[],
+  options?: ProofRunOptions,
 ) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
+  const expectedWrapperProof = createExpectedWrapperProofForCommand(command);
+  const family = expectedWrapperProof?.tool ?? commandFamily(command);
+  let wrapperReceiptPath: string | null = null;
+  let commandToRun = command;
+  if (options && expectedWrapperProof && family !== "other") {
+    const expected = createCheckProofReceipt({
+      command,
+      context: options.context,
+      exitCode: 0,
+      expectedWrapperProof,
+      wrapperProof: expectedWrapperProof,
+    });
+    const blockers = options.proofReuse
+      ? (options.context.reuseBlockers ?? [])
+      : ["force-fresh requested"];
+    const decision =
+      blockers.length === 0 ? evaluateReusableReceipt(options.proofReceiptDir, expected) : null;
+    if (decision?.reusable) {
+      console.error(`[check:changed] reusing changed-check evidence receipt: ${decision.path}`);
+      timings.push({
+        name: command.name,
+        durationMs: performance.now() - startedAt,
+        status: 0,
+      });
+      return 0;
+    }
+    console.error(
+      `[check:changed] no reuse: ${
+        blockers.length > 0 ? blockers.join("; ") : (decision?.reason ?? "missing receipt")
+      }`,
+    );
+    wrapperReceiptPath = path.join(
+      options.proofReceiptDir,
+      "wrapper",
+      `${process.pid}-${Date.now()}-${timings.length}.json`,
+    );
+    commandToRun = {
+      ...command,
+      env: createToolProofEnv(command, wrapperReceiptPath),
+    };
+  }
   let status = 1;
   try {
     status = await runManagedCommand({
-      bin: command.bin,
-      args: command.args,
-      env: command.env ?? resolveLocalHeavyCheckEnv(),
+      bin: commandToRun.bin,
+      args: commandToRun.args,
+      env: commandToRun.env ?? resolveLocalHeavyCheckEnv(),
     });
   } catch (error) {
     console.error(error);
+  }
+  if (options && expectedWrapperProof && family !== "other" && wrapperReceiptPath) {
+    const wrapperProof = readWrapperProofReceipt(wrapperReceiptPath);
+    const receipt = createCheckProofReceipt({
+      command,
+      context: options.context,
+      exitCode: status,
+      expectedWrapperProof,
+      wrapperProof,
+    });
+    writeCheckProofReceipt(options.proofReceiptDir, receipt);
+    if (receipt.status === "skipped") {
+      console.error(
+        "[check:changed] recorded non-reusable changed-check evidence receipt: wrapper did not prove ranTool=true",
+      );
+    }
   }
 
   timings.push({
@@ -1157,6 +1446,8 @@ function parseArgs(argv: string[]) {
     staged: false,
     dryRun: false,
     timed: false,
+    proofReuse: true,
+    proofReceiptDir: "",
     noChanges: false,
     help: false,
     paths: new Array<string>(),
@@ -1170,6 +1461,10 @@ function parseArgs(argv: string[]) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--proof-reuse", "proofReuse"),
+      booleanFlag("--no-reuse", "proofReuse", false),
+      booleanFlag("--force-fresh", "proofReuse", false),
+      stringFlag("--proof-receipt-dir", "proofReceiptDir"),
       booleanFlag("--no-changes", "noChanges"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
@@ -1199,6 +1494,11 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --proof-reuse    Reuse exact changed-check evidence receipts (default)",
+      "  --no-reuse       Run fresh checks while still writing new evidence receipts",
+      "  --force-fresh    Alias for --no-reuse",
+      "  --proof-receipt-dir <dir>",
+      "                   Directory for evidence receipts (default: .artifacts/check-changed-receipts)",
       "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",
@@ -1278,12 +1578,14 @@ async function main() {
         process.exitCode = delegated.backendUnavailable
           ? await runChangedCheck(result, {
               ...args,
+              proofReceiptDir: args.proofReceiptDir || undefined,
               explicitPaths: args.paths.length > 0,
             })
           : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
+          proofReceiptDir: args.proofReceiptDir || undefined,
           explicitPaths: args.paths.length > 0,
         });
       }

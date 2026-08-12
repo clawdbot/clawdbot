@@ -11,6 +11,11 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mts";
+import {
+  createWrapperProof,
+  type WrapperProof,
+  writeWrapperProofReceipt,
+} from "./lib/check-proof-reuse.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -48,6 +53,16 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.scripts.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
+
+type OxlintWrapperProofPlan = {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  focusedConfig: boolean;
+  proof: WrapperProof | null;
+  skipReason: string | null;
+  skippedConfigs: string[];
+  skippedTargets: string[];
+};
 
 /**
  * Returns whether oxlint args need package-boundary declaration artifacts first.
@@ -251,6 +266,50 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
   }
 }
 
+export function createOxlintWrapperProofForArgs(
+  argv: string[],
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
+  options: {
+    cwd?: string;
+    hostResources?: { logicalCpuCount: number; totalMemoryBytes: number };
+  } = {},
+): OxlintWrapperProofPlan {
+  const cwd = options.cwd ?? process.cwd();
+  const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
+  const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
+  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+  const { args: policyArgs, env } = focusedConfig
+    ? { args: oxlintArgs, env: localEnv }
+    : applyLocalOxlintPolicy(oxlintArgs, localEnv, {
+        logicalCpuCount: options.hostResources?.logicalCpuCount ?? os.availableParallelism(),
+        totalMemoryBytes: options.hostResources?.totalMemoryBytes ?? os.totalmem(),
+      });
+  const sparseTargets = filterSparseMissingOxlintTargets(policyArgs, { cwd });
+  const skipReason =
+    sparseTargets.skippedConfigs.length > 0
+      ? `sparse checkout is missing tracked config(s): ${sparseTargets.skippedConfigs.join(", ")}`
+      : sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0
+        ? "no present sparse-checkout targets remain"
+        : null;
+  return {
+    args: sparseTargets.args,
+    env,
+    focusedConfig,
+    proof:
+      skipReason === null
+        ? createWrapperProof({
+            tool: "tsgolint",
+            wrapper: "scripts/run-oxlint.mts",
+            argv: sparseTargets.args,
+            cwd,
+          })
+        : null,
+    skipReason,
+    skippedConfigs: sparseTargets.skippedConfigs,
+    skippedTargets: sparseTargets.skippedTargets,
+  };
+}
+
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
@@ -258,36 +317,32 @@ async function main(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ) {
-  const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
-  const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
-  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
-  // Focused configs are syntax-only guards; keep wrapper process handling
-  // without the broad type-aware policy or package artifact preparation.
-  const { args: policyArgs, env } = focusedConfig
-    ? { args: oxlintArgs, env: localEnv }
-    : applyLocalOxlintPolicy(oxlintArgs, localEnv, {
-        logicalCpuCount: os.availableParallelism(),
-        totalMemoryBytes: os.totalmem(),
-      });
-  const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const finalArgs = sparseTargets.args;
+  const proofReceiptPath = runtimeEnv.OPENCLAW_TOOL_PROOF_RECEIPT;
+  const {
+    args: finalArgs,
+    env,
+    focusedConfig,
+    proof,
+    skippedConfigs,
+    skippedTargets,
+  } = createOxlintWrapperProofForArgs(argv, runtimeEnv);
   const oxlintPath = resolveRepoToolBinPath("oxlint");
   const needsArtifactPreparation =
     !focusedConfig &&
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
     shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs);
-  if (sparseTargets.skippedTargets.length > 0) {
+  if (skippedTargets.length > 0) {
     console.error(
-      `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
+      `[oxlint] sparse checkout is missing tracked target(s); skipping ${skippedTargets.join(", ")}`,
     );
   }
-  if (sparseTargets.skippedConfigs.length > 0) {
+  if (skippedConfigs.length > 0) {
     console.error(
-      `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${sparseTargets.skippedConfigs.join(", ")}`,
+      `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${skippedConfigs.join(", ")}`,
     );
     return;
   }
-  if (sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0) {
+  if (!proof) {
     console.error("[oxlint] no present sparse-checkout targets remain; skipping oxlint.");
     return;
   }
@@ -317,6 +372,9 @@ async function main(
       env: resolveOxlintToolchainEnv(oxlintPath, env),
     });
     process.exitCode = status;
+    if (status === 0) {
+      writeWrapperProofReceipt(proofReceiptPath, proof);
+    }
   } finally {
     releaseLock();
   }

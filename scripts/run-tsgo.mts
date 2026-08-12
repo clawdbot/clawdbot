@@ -14,28 +14,73 @@ import {
 } from "./lib/local-heavy-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import {
+  createWrapperProof,
+  type WrapperProof,
+  writeWrapperProofReceipt,
+} from "./lib/check-proof-reuse.mts";
+import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
 
+type TsgoWrapperProofPlan = {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  proof: WrapperProof;
+  sparseGuardError: string | null;
+};
+
+export function createTsgoWrapperProofForArgs(
+  argv: string[],
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
+  options: {
+    cwd?: string;
+    hostResources?: { logicalCpuCount: number; totalMemoryBytes: number };
+  } = {},
+): TsgoWrapperProofPlan {
+  const cwd = options.cwd ?? process.cwd();
+  const hostResources = options.hostResources ?? {
+    logicalCpuCount:
+      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    totalMemoryBytes: os.totalmem(),
+  };
+  const { args, env } = applyLocalTsgoPolicy(
+    argv,
+    resolveLocalHeavyCheckEnv(runtimeEnv),
+    hostResources,
+  );
+  return {
+    args,
+    env,
+    proof: createWrapperProof({
+      tool: "tsgo",
+      wrapper: "scripts/run-tsgo.mts",
+      argv: args,
+      cwd,
+    }),
+    sparseGuardError: getSparseTsgoGuardError(args, { cwd }),
+  };
+}
+
 function main(): void {
+  const proofReceiptPath = process.env.OPENCLAW_TOOL_PROOF_RECEIPT;
   const hostResources = {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
     totalMemoryBytes: os.totalmem(),
   };
-  const { args: finalArgs, env } = applyLocalTsgoPolicy(
-    process.argv.slice(2),
-    resolveLocalHeavyCheckEnv(process.env),
-    hostResources,
-  );
+  const {
+    args: finalArgs,
+    env,
+    proof,
+    sparseGuardError,
+  } = createTsgoWrapperProofForArgs(process.argv.slice(2), process.env, { hostResources });
 
   const tsgoPath = resolveRepoToolBinPath("tsgo");
   const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
   if (tsBuildInfoFile) {
     fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
   }
-  const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
   const releaseLock =
     sparseGuardError ||
     env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
@@ -75,6 +120,9 @@ function main(): void {
       }
 
       process.exitCode = result.status ?? 1;
+      if (process.exitCode === 0) {
+        writeWrapperProofReceipt(proofReceiptPath, proof);
+      }
     }
   } finally {
     releaseLock();

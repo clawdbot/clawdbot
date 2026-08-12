@@ -17,6 +17,13 @@ import {
   listStagedChangedPaths,
 } from "../../scripts/changed-lanes.mts";
 import {
+  createCheckProofReceipt,
+  createWrapperProof,
+  isReusableCheckProofReceipt,
+  writeWrapperProofReceipt,
+  readWrapperProofReceipt,
+} from "../../scripts/lib/check-proof-reuse.mts";
+import {
   buildChangedCheckCrabboxArgs,
   changedCheckLocalDependenciesReady,
   changedCheckRequiresRemote,
@@ -1054,6 +1061,113 @@ describe("scripts/changed-lanes", () => {
 
     expect(command.bin).toBe("corepack");
     expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("reuses only exact passed proof receipts for the same command family", () => {
+    const command = {
+      name: "lint core changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.core.json",
+        "src/agents/auth-profiles/usage.ts",
+      ],
+      env: { PATH: "/usr/bin", OPENCLAW_LOCAL_CHECK: "1" },
+    };
+    const context = {
+      base: "origin/main",
+      head: "HEAD",
+      changedPaths: ["src/agents/auth-profiles/usage.ts"],
+      planSummary: "core, coreTests",
+      cwd: repoRoot,
+    };
+    const wrapperProof = createWrapperProof({
+      tool: "tsgolint",
+      wrapper: "scripts/run-oxlint.mts",
+      argv: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/agents/auth-profiles/usage.ts"],
+      cwd: repoRoot,
+    });
+    const expected = createCheckProofReceipt({
+      command,
+      context,
+      exitCode: 0,
+      expectedWrapperProof: wrapperProof,
+      wrapperProof: wrapperProof,
+    });
+    const stored = createCheckProofReceipt({
+      command,
+      context,
+      exitCode: 0,
+      expectedWrapperProof: wrapperProof,
+      wrapperProof,
+    });
+
+    expect(isReusableCheckProofReceipt(stored, expected)).toBe(true);
+    expect(
+      isReusableCheckProofReceipt(
+        {
+          ...stored,
+          commandFamily: "tsgo",
+        },
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      isReusableCheckProofReceipt(
+        {
+          ...stored,
+          status: "skipped",
+          ranTool: false,
+        },
+        expected,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects skipped wrapper proof markers as non-proof", () => {
+    const dir = makeTempRepoRoot(tempDirs, "wrapper-proof-");
+    const receiptPath = path.join(dir, "proof.json");
+    writeFileSync(
+      receiptPath,
+      `${JSON.stringify(
+        {
+          status: "skipped",
+          exitCode: 0,
+          ranTool: false,
+          tool: "tsgo",
+          wrapper: "scripts/run-tsgo.mts",
+          argv: ["-p", "tsconfig.core.json"],
+          wrapperDigest: "digest",
+          toolDigest: null,
+          configDigests: {},
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    expect(readWrapperProofReceipt(receiptPath)).toBeNull();
+    writeWrapperProofReceipt(
+      receiptPath,
+      createWrapperProof({
+        tool: "tsgo",
+        wrapper: "scripts/run-tsgo.mts",
+        argv: ["-p", "tsconfig.core.json"],
+        cwd: repoRoot,
+      }),
+    );
+
+    expect(readWrapperProofReceipt(receiptPath)).toEqual(
+      expect.objectContaining({
+        tool: "tsgo",
+        status: "passed",
+        exitCode: 0,
+        ranTool: true,
+        wrapper: "scripts/run-tsgo.mts",
+      }),
+    );
   });
 
   it("cleans CI Corepack pnpm shim temp dirs", () => {

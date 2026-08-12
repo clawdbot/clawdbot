@@ -10,7 +10,16 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mts";
-import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
+import {
+  createOxlintWrapperProofForArgs,
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+} from "./run-oxlint.mts";
+import {
+  createWrapperProof,
+  readWrapperProofReceipt,
+  writeWrapperProofReceipt,
+  type WrapperProof,
+} from "./lib/check-proof-reuse.mts";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
@@ -29,7 +38,9 @@ const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
-const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
+type ParentTerminationSignal = "SIGINT" | "SIGTERM";
+
+const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies ParentTerminationSignal[];
 
 type OxlintShard = { name: string; args: string[] };
 type HostResources = { logicalCpuCount: number; totalMemoryBytes: number };
@@ -43,17 +54,18 @@ type ResourceOptions = PlatformOptions & { hostResources?: HostResources };
 type RunnerOptions = {
   env: NodeJS.ProcessEnv;
   extraArgs: string[];
+  proofReceiptDir?: string;
   runner: string;
 };
 type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard };
 type ShardBatchOptions = RunnerOptions & { concurrency: number; entries: OxlintShard[] };
 type ChildProcessGroupOptions = { child: ChildProcess; useProcessGroup: boolean };
 type ActiveShardChild = ChildProcessGroupOptions & { killGraceMs: number };
-type SignalOptions = ChildProcessGroupOptions & { signal: NodeJS.Signals };
+type SignalOptions = ChildProcessGroupOptions & { signal: ParentTerminationSignal };
 type WaitOptions = ChildProcessGroupOptions & { timeoutMs: number };
 
 const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
-let parentTerminationSignal: NodeJS.Signals | null = null;
+let parentTerminationSignal: ParentTerminationSignal | null = null;
 let parentTerminationForceKill: ReturnType<typeof setTimeout> | null = null;
 let parentSignalForwardingInstalled = false;
 
@@ -251,6 +263,7 @@ export async function main(
   extraArgs: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ) {
+  const proofReceiptPath = runtimeEnv.OPENCLAW_TOOL_PROOF_RECEIPT;
   const runner = path.resolve("scripts", "run-oxlint.mjs");
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalHeavyCheckEnv(runtimeEnv);
@@ -282,6 +295,14 @@ export async function main(
       splitCore: shardArgs.splitCore,
     });
     const selectedShards = filterOxlintShards(shards, shardArgs.only);
+    const proofPlan = createOxlintShardsWrapperProof({
+      argv: extraArgs,
+      env,
+      selectedShards,
+    });
+    const proofReceiptDir = proofReceiptPath
+      ? path.join(path.dirname(proofReceiptPath), `${path.basename(proofReceiptPath)}.shards`)
+      : undefined;
 
     ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
     const prepareResult = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
@@ -324,9 +345,21 @@ export async function main(
         entries: selectedShards,
         env,
         extraArgs: shardArgs.oxlintArgs,
+        proofReceiptDir,
         runner,
       });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
+      if (
+        process.exitCode === 0 &&
+        proofReceiptPath &&
+        proofReceiptDir &&
+        proofPlan.proof &&
+        selectedShards.every((shard) =>
+          readWrapperProofReceipt(shardProofReceiptPath(proofReceiptDir, shard.name)),
+        )
+      ) {
+        writeWrapperProofReceipt(proofReceiptPath, proofPlan.proof);
+      }
     }
   } finally {
     releaseLock();
@@ -413,6 +446,64 @@ export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(
   );
 }
 
+export function createOxlintShardsWrapperProof({
+  argv,
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  selectedShards,
+}: {
+  argv: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  selectedShards?: readonly OxlintShard[];
+}): { proof: WrapperProof | null; reason: string | null } {
+  const shardArgs = parseShardRunnerArgs(argv);
+  const shards =
+    selectedShards ??
+    filterOxlintShards(
+      createOxlintShards({
+        cwd,
+        env,
+        platform,
+        splitCore: shardArgs.splitCore,
+      }),
+      shardArgs.only,
+    );
+  const aggregateArgv = [...argv, "--openclaw-selected-shards"];
+  if (shards.length === 0) {
+    return { proof: null, reason: "no oxlint shards selected" };
+  }
+  for (const shard of shards) {
+    const childPlan = createOxlintWrapperProofForArgs(
+      [...shard.args, ...shardArgs.oxlintArgs],
+      {
+        ...env,
+        OPENCLAW_OXLINT_SKIP_LOCK: "1",
+        OPENCLAW_OXLINT_SKIP_PREPARE: "1",
+      },
+      { cwd },
+    );
+    if (!childPlan.proof) {
+      return {
+        proof: null,
+        reason: childPlan.skipReason ?? `shard ${shard.name} did not produce native proof`,
+      };
+    }
+    aggregateArgv.push(`[${shard.name}]`, ...childPlan.args);
+  }
+  return {
+    proof: createWrapperProof({
+      tool: "tsgolint",
+      wrapper: "scripts/run-oxlint-shards.mts",
+      argv: aggregateArgv,
+      cwd,
+    }),
+    reason: null,
+  };
+}
+
 function requireShardSelector(value: string | undefined) {
   if (!value || value.startsWith("-")) {
     throw new Error("--only requires a shard name");
@@ -422,6 +513,10 @@ function requireShardSelector(value: string | undefined) {
 
 function matchesShardSelector(shard: { name: string }, selector: string) {
   return selector === shard.name || selector === shard.name.split(":")[0];
+}
+
+function shardProofReceiptPath(proofReceiptDir: string, shardName: string) {
+  return path.join(proofReceiptDir, `${shardName.replaceAll(/[^A-Za-z0-9_.-]/gu, "_")}.json`);
 }
 
 /**
@@ -453,7 +548,14 @@ export function resolveOxlintShardConcurrency({
   );
 }
 
-async function runShards({ concurrency, entries, env, extraArgs, runner }: ShardBatchOptions) {
+async function runShards({
+  concurrency,
+  entries,
+  env,
+  extraArgs,
+  proofReceiptDir,
+  runner,
+}: ShardBatchOptions) {
   // Dependency-less worktrees establish their primary-checkout toolchain link
   // before this lazy import, avoiding a top-level package-resolution failure.
   const { default: pMap } = await import("p-map");
@@ -463,7 +565,7 @@ async function runShards({ concurrency, entries, env, extraArgs, runner }: Shard
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      return await runShard({ env, extraArgs, runner, shard });
+      return await runShard({ env, extraArgs, proofReceiptDir, runner, shard });
     },
     { concurrency, stopOnError: true },
   );
@@ -473,21 +575,34 @@ async function runShards({ concurrency, entries, env, extraArgs, runner }: Shard
 /**
  * Runs one oxlint shard with bounded output, heartbeat, and forced cleanup.
  */
-export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOptions) {
+export async function runShard({
+  env,
+  extraArgs,
+  proofReceiptDir,
+  runner,
+  shard,
+}: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
   const timeoutMs = resolveShardTimeoutMs(env);
   const killGraceMs = resolveShardKillGraceMs(env);
   const useProcessGroup = process.platform !== "win32";
+  const childEnv = {
+    ...env,
+    OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    OPENCLAW_OXLINT_SKIP_PREPARE: "1",
+    ...(proofReceiptDir
+      ? { OPENCLAW_TOOL_PROOF_RECEIPT: shardProofReceiptPath(proofReceiptDir, shard.name) }
+      : {}),
+  };
+  if (!proofReceiptDir) {
+    delete childEnv.OPENCLAW_TOOL_PROOF_RECEIPT;
+  }
   const child = spawn(process.execPath, [runner, ...shard.args, ...extraArgs], {
     stdio: "inherit",
     detached: useProcessGroup,
-    env: {
-      ...env,
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_OXLINT_SKIP_PREPARE: "1",
-    },
+    env: childEnv,
   });
   const unregisterShardChild = registerShardChild({ child, killGraceMs, useProcessGroup });
 
@@ -751,7 +866,7 @@ function isParentTerminationRequested() {
   return parentTerminationSignal !== null;
 }
 
-function signalActiveShardChildren(signal: NodeJS.Signals) {
+function signalActiveShardChildren(signal: ParentTerminationSignal) {
   for (const entry of ACTIVE_SHARD_CHILDREN) {
     signalChildProcess({ ...entry, signal });
   }
@@ -776,7 +891,7 @@ function scheduleParentTerminationForceKill() {
   parentTerminationForceKill.unref();
 }
 
-function getSignalExitCode(signal: NodeJS.Signals) {
+function getSignalExitCode(signal: ParentTerminationSignal) {
   return signal === "SIGINT" ? 130 : 143;
 }
 

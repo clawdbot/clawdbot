@@ -90,6 +90,18 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                                      |
 | `pnpm check:changed`                              | Classifies the changed lanes before choosing execution. Docs-only, no-change, and small metadata plans stay local when dependencies are ready; plans with typecheck/lint fan-out, other heavy lanes, or missing local dependencies delegate to Crabbox/Testbox outside CI. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof. |
 
+### `check:changed` proof reuse
+
+`pnpm check:changed --proof-reuse` enables exact-fingerprint reuse for native `tsgo` and `tsgolint` wrapper proofs. Receipts are written under `.artifacts/check-changed-receipts` by default; use `--proof-receipt-dir <dir>` for isolated benchmark or CI experiments.
+
+Reuse is deliberately narrow. A receipt is reusable only when it is schema-valid, `status=passed`, `exitCode=0`, `ranTool=true`, uses the same command family, and matches the current base/head, Git head/tree, changed paths, lane plan, command argv, selected resource env, package digest, wrapper identity, effective wrapper argv, and config digests. Sparse-checkout skips and no-target lint exits are recorded as `status=skipped` with `ranTool=false`; they are telemetry, not proof.
+
+Benchmark the cold/warm path with:
+
+```sh
+node --import tsx scripts/bench-test-changed.mts --worktree --proof-reuse --no-rss
+```
+
 ## Shared test state and process helpers
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
