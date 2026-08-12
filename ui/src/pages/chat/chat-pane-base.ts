@@ -57,7 +57,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 

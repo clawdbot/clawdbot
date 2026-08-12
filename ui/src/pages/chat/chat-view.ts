@@ -57,13 +57,14 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
-import type { ChatReplyMessageAccess, ChatTranscriptController } from "./components/chat-thread.ts";
+import type { ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
 import {
   renderChatPinnedMessages,
-  renderChatSearchBar,
-  renderChatThread,
-  toggleChatThreadSearch,
-} from "./components/chat-thread.ts";
+  renderTranscriptSearch,
+  toggleTranscriptSearch,
+} from "./components/chat-thread-interactions.ts";
+import { renderChatThread } from "./components/chat-thread.ts";
+import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -261,7 +262,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     replyTarget?: ChatReplyTarget | null;
     onClearReply?: () => void;
     onSetReply?: (target: ChatReplyTarget) => void;
-    replyMessageAccess?: ChatReplyMessageAccess;
+    replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
     onForkMessage?: (entryId: string) => Promise<void> | void;
     sessionWorkspace?: SessionWorkspaceProps;
@@ -582,11 +583,11 @@ export function renderChat(props: ChatProps) {
           resolveAsciiShortcutKey(event) === "f"
         ) {
           event.preventDefault();
-          toggleChatThreadSearch(props.paneId, requestUpdate, event);
+          toggleTranscriptSearch(props.paneId, requestUpdate, event);
         }
       }}
     >
-      ${renderChatViewNotices(props)} ${renderChatSearchBar(props.paneId, requestUpdate)}
+      ${renderChatViewNotices(props)} ${renderTranscriptSearch(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
           paneId: props.paneId,
