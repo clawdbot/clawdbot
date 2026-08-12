@@ -260,7 +260,16 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       sessionNewOrdering.transformOutbound(message, controller);
     },
   });
-  void orderedOutbound.readable.pipeTo(stream.writable);
+  // pipeTo rejects when the NDJSON writer or stdout fails. Discarding that promise
+  // would strand the bridge: the ACP client is already unreachable, but the Gateway
+  // connection and shared state database would stay open. Route it through the same
+  // idempotent shutdown owner as EOF and SIGTERM.
+  void orderedOutbound.readable.pipeTo(stream.writable).catch(async (err: unknown) => {
+    if (opts.verbose) {
+      process.stderr.write(`openclaw acp: outbound stream failed: ${String(err)}\n`);
+    }
+    await shutdown();
+  });
   const eventLedger = createSqliteAcpEventLedger();
 
   const connection = new AgentSideConnection(
