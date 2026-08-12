@@ -1126,6 +1126,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               // stop-driven flow (health monitor sweeps, thaw recovery, reload).
               // Bound it like the task teardown below; the timed-out path flows
               // into the existing recoveryStopTimedOut two-call restart contract.
+              let stopAttemptAbandoned = false;
               const stopAccountAttempt = plugin.gateway
                 .stopAccount({
                   cfg,
@@ -1135,9 +1136,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   abortSignal: abort?.signal ?? new AbortController().signal,
                   log,
                   getStatus: () => getRuntime(channelId, id),
-                  setStatus: (next) => setRuntime(channelId, id, next),
+                  setStatus: (next) => {
+                    // A stop we abandoned may settle after a replacement started;
+                    // its late writes must not repaint or tear down that account.
+                    setRuntime(
+                      channelId,
+                      id,
+                      stopAttemptAbandoned
+                        ? sanitizeAbortedTaskStatusPatch(next, getRuntime(channelId, id))
+                        : next,
+                    );
+                  },
                 })
                 .catch((error: unknown) => {
+                  if (stopAttemptAbandoned) {
+                    log.warn?.(
+                      `[${id}] abandoned stopAccount failed late: ${formatErrorMessage(error)}`,
+                    );
+                    return;
+                  }
                   outcome = { status: "rejected", error };
                   log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
                 });
@@ -1146,6 +1163,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 CHANNEL_STOP_ABORT_TIMEOUT_MS,
               );
               if (!stopAccountSettled) {
+                stopAttemptAbandoned = true;
                 log.warn?.(
                   `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; continuing stop`,
                 );
