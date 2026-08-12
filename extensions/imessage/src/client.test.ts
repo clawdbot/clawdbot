@@ -141,7 +141,7 @@ describe("IMessageRpcClient child stream error handling", () => {
       ),
     );
 
-    const error = await pending.catch((error: unknown) => error);
+    const error = await pending.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
     expect(error).toMatchObject({
       name: "IMessageRpcRequestError",
