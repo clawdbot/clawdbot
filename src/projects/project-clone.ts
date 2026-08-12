@@ -3,7 +3,7 @@ import path from "node:path";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
@@ -51,7 +51,7 @@ export async function materializeProjectClone(
   }
 
   const env = options.env ?? process.env;
-  const fingerprint = sha256HexPrefix(parsed.url, 16);
+  const fingerprint = sha256HexPrefixCore(parsed.url, 16);
   return await withOpenClawStateLease(
     {
       scope: "projects.clone",

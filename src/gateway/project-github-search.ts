@@ -11,7 +11,7 @@ import {
   GITHUB_API_ORIGIN,
   githubApiToken,
   isRecord,
-  optionalString,
+  readOptionalGitHubString,
   readGitHubJsonResponse,
   requiredString,
 } from "./control-ui-github-api.js";
@@ -51,22 +51,22 @@ function parseRepository(value: unknown, affiliated: boolean): SearchCandidate |
   } catch {
     return null;
   }
-  const clone = parseProjectGitUrl(optionalString(value, "clone_url") ?? "");
-  const webUrl = boundedString(optionalString(value, "html_url"), 2048);
+  const clone = parseProjectGitUrl(readOptionalGitHubString(value, "clone_url") ?? "");
+  const webUrl = boundedString(readOptionalGitHubString(value, "html_url"), 2048);
   if (!clone || !webUrl) {
     return null;
   }
   return {
     affiliated,
-    updatedAt: optionalString(value, "updated_at") ?? "",
+    updatedAt: readOptionalGitHubString(value, "updated_at") ?? "",
     project: {
       name: name.slice(0, 100),
       fullName: fullName.slice(0, 200),
       cloneUrl: clone.url,
       webUrl,
       private: value.private === true,
-      ...(boundedString(optionalString(value, "description"), 500)
-        ? { description: boundedString(optionalString(value, "description"), 500) }
+      ...(boundedString(readOptionalGitHubString(value, "description"), 500)
+        ? { description: boundedString(readOptionalGitHubString(value, "description"), 500) }
         : {}),
     },
   };

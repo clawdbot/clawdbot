@@ -88,6 +88,8 @@ const CURRENT_TRAIN_METHODS = [
   "projects.list",
   "projects.register",
   "projects.remove",
+  "projects.add",
+  "projects.searchRemote",
   "worker.desktop.launch",
   "secrets.store.list",
   "secrets.store.set",

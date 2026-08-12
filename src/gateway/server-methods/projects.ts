@@ -12,7 +12,6 @@ import {
   validateProjectsSearchRemoteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
-import { loadCombinedSessionStoreForGateway } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -29,10 +28,10 @@ import {
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { githubApiToken } from "../control-ui-github-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -279,7 +278,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
       );
       const sessionReference = Object.entries(
-        loadCombinedSessionStoreForGateway(context.getRuntimeConfig(), { projection: "list" })
+        loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), { projection: "list" })
           .store,
       ).find(([, entry]) => {
         if (entry.archivedAt) {

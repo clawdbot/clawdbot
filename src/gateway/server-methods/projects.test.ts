@@ -5,9 +5,9 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import {
   registerClonedProjectRegistry,
   registerProjectRegistry,
@@ -274,7 +274,7 @@ test("projects.remove refuses to delete a cloned checkout referenced by a live w
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const originUrl = "https://github.com/acme/managed.git";
-    const fingerprint = sha256HexPrefix(originUrl, 16);
+    const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
       path.join(state.stateDir, "projects", fingerprint),
       "managed",
@@ -319,7 +319,7 @@ test("projects.remove deletes an unreferenced Gateway-managed clone", async () =
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const originUrl = "https://github.com/acme/removable.git";
-    const fingerprint = sha256HexPrefix(originUrl, 16);
+    const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
       path.join(state.stateDir, "projects", fingerprint),
       "removable",
@@ -344,7 +344,7 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const originUrl = "https://github.com/acme/session-project.git";
-    const fingerprint = sha256HexPrefix(originUrl, 16);
+    const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
       path.join(state.stateDir, "projects", fingerprint),
       "session-project",
@@ -355,7 +355,7 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
       name: "Session project",
       originUrl,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", env: state.env, sessionKey: "agent:main:project-session" },
       { sessionId: "project-session", spawnedCwd: repo, updatedAt: 1 },
     );
