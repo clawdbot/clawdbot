@@ -837,15 +837,18 @@ function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarCon
   const sessionKey = state.sessionKey;
   return {
     kind: "session-diff",
-    load: async () => {
+    load: async (scope) => {
       if (!state.client) {
         throw new Error(t("chat.sessionDiff.disconnected"));
       }
       return await state.client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...scopedAgentParamsForSession(state, sessionKey),
+        ...scope,
       });
     },
+    openFile: (path) => openFile(state, getWorkspaceState(state), path),
+    revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
 }
 

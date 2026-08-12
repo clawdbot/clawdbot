@@ -2,6 +2,8 @@
 // working-tree state captured when the logical session started.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  ErrorCodes,
+  errorShape,
   validateSessionsDiffParams,
   type SessionsDiffParams,
   type SessionsDiffResult,
@@ -51,9 +53,24 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   if (!cwd) {
     return empty("unknown_session");
   }
+  if (params.scope === "commit") {
+    if (!params.commit) {
+      throw new TypeError("commit scope requires a commit");
+    }
+    return await loadCheckoutDiff({
+      commit: params.commit,
+      cwd,
+      scope: "commit",
+      sessionKey: params.sessionKey,
+    });
+  }
   return await applySessionDiffBaseline({
     baseline: entry.sessionDiffBaseline,
-    diff: await loadCheckoutDiff({ cwd, sessionKey: params.sessionKey }),
+    diff: await loadCheckoutDiff({
+      cwd,
+      scope: params.scope ?? "all",
+      sessionKey: params.sessionKey,
+    }),
     sessionId: entry.sessionId,
   });
 }
@@ -61,6 +78,18 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
   "sessions.diff": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
+      return;
+    }
+    const scope = params.scope ?? "all";
+    if ((scope === "commit") !== (params.commit !== undefined)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid sessions.diff params: commit must be set if and only if scope is commit",
+        ),
+      );
       return;
     }
     respond(true, await loadSessionDiff(params));

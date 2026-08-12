@@ -33,6 +33,8 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsFilesSetResult: sessions.SessionsFilesSetResultSchema,
   SessionDiffFileStatus: sessions.SessionDiffFileStatusSchema,
   SessionDiffFile: sessions.SessionDiffFileSchema,
+  SessionDiffCommit: sessions.SessionDiffCommitSchema,
+  SessionDiffScope: sessions.SessionDiffScopeSchema,
   SessionsDiffParams: sessions.SessionsDiffParamsSchema,
   SessionsDiffResult: sessions.SessionsDiffResultSchema,
   SessionWorktreeInfo: sessions.SessionWorktreeInfoSchema,

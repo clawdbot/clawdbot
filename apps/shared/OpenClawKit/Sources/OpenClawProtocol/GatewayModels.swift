@@ -182,6 +182,12 @@ public enum SessionDiffFileStatus: String, Codable, Sendable {
     case renamed = "renamed"
 }
 
+public enum SessionDiffScope: String, Codable, Sendable {
+    case all = "all"
+    case uncommitted = "uncommitted"
+    case commit = "commit"
+}
+
 public enum TaskSuggestionResolution: String, Codable, Sendable {
     case dismissed = "dismissed"
     case accepted = "accepted"
@@ -8005,21 +8011,47 @@ public struct SessionDiffFile: Codable, Sendable {
     }
 }
 
+public struct SessionDiffCommit: Codable, Sendable {
+    public let sha: String
+    public let subject: String
+
+    public init(
+        sha: String,
+        subject: String)
+    {
+        self.sha = sha
+        self.subject = subject
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sha
+        case subject
+    }
+}
+
 public struct SessionsDiffParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let scope: SessionDiffScope?
+    public let commit: String?
 
     public init(
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        scope: SessionDiffScope? = nil,
+        commit: String? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.scope = scope
+        self.commit = commit
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case scope
+        case commit
     }
 }
 
@@ -8028,6 +8060,9 @@ public struct SessionsDiffResult: Codable, Sendable {
     public let root: String?
     public let branch: String?
     public let baseref: String?
+    public let aheadcount: Int?
+    public let commits: [SessionDiffCommit]?
+    public let mergebase: SessionDiffCommit?
     public let files: [SessionDiffFile]
     public let additions: Int
     public let deletions: Int
@@ -8039,6 +8074,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         root: String? = nil,
         branch: String? = nil,
         baseref: String? = nil,
+        aheadcount: Int? = nil,
+        commits: [SessionDiffCommit]? = nil,
+        mergebase: SessionDiffCommit? = nil,
         files: [SessionDiffFile],
         additions: Int,
         deletions: Int,
@@ -8049,6 +8087,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         self.root = root
         self.branch = branch
         self.baseref = baseref
+        self.aheadcount = aheadcount
+        self.commits = commits
+        self.mergebase = mergebase
         self.files = files
         self.additions = additions
         self.deletions = deletions
@@ -8061,6 +8102,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         case root
         case branch
         case baseref = "baseRef"
+        case aheadcount = "aheadCount"
+        case commits
+        case mergebase = "mergeBase"
         case files
         case additions
         case deletions
