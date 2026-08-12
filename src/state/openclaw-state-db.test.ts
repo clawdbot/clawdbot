@@ -318,6 +318,38 @@ function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
   markStateDatabaseAsV6(database);
 }
 
+function seedPartiallyAdditiveV6CommitmentSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE commitments (
+      id TEXT NOT NULL PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      account_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'followup',
+      status TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL DEFAULT '',
+      due_earliest_ms INTEGER NOT NULL,
+      due_latest_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      last_attempt_at_ms INTEGER,
+      record_json TEXT NOT NULL
+    );
+    CREATE INDEX idx_commitments_scope_due
+      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_status_due
+      ON commitments(status, due_earliest_ms, due_latest_ms);
+    INSERT INTO commitments (
+      id, agent_id, session_key, channel, account_id, kind, status, dedupe_key,
+      due_earliest_ms, due_latest_ms, updated_at_ms, last_attempt_at_ms, record_json
+    ) VALUES (
+      'partial-commitment', 'main', 'agent:main:main', 'telegram', 'default',
+      'followup', 'pending', 'partial-dedupe', 10, 20, 1, 1, '{}'
+    );
+  `);
+  markStateDatabaseAsV6(database);
+}
+
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
   bomTarget: string;
@@ -1540,6 +1572,33 @@ describe("openclaw state database", () => {
         const result = repairOpenClawStateDatabaseSchema(options);
         expect(result.warnings).toEqual([]);
         expect(result.changes).toContain("Retired shared state commitments table and indexes");
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "retires a partially additive v6 commitments layout through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const partial = new DatabaseSync(databasePath);
+      seedPartiallyAdditiveV6CommitmentSchema(partial);
+      partial.close();
+
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired shared state commitments table and indexes"],
+          warnings: [],
+        });
       }
       const migrated = openOpenClawStateDatabase(options);
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(

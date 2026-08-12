@@ -81,16 +81,37 @@ CREATE INDEX idx_commitments_agent_sent
   ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
-const EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL = `
+const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL = `
 CREATE TABLE commitments (
   id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
+  account_id TEXT,
+  recipient_id TEXT,
+  thread_id TEXT,
+  sender_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'followup',
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  source TEXT NOT NULL DEFAULT 'unknown',
   status TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  suggested_text TEXT NOT NULL DEFAULT '',
+  dedupe_key TEXT NOT NULL DEFAULT '',
+  confidence REAL NOT NULL DEFAULT 0,
   due_earliest_ms INTEGER NOT NULL,
   due_latest_ms INTEGER NOT NULL,
+  due_timezone TEXT NOT NULL DEFAULT 'UTC',
+  source_message_id TEXT,
+  source_run_id TEXT,
+  created_at_ms INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at_ms INTEGER,
+  sent_at_ms INTEGER,
+  dismissed_at_ms INTEGER,
+  snoozed_until_ms INTEGER,
+  expired_at_ms INTEGER,
   record_json TEXT NOT NULL
 );
 CREATE INDEX idx_commitments_scope_due
@@ -99,6 +120,10 @@ CREATE INDEX idx_commitments_status_due
   ON commitments(status, due_earliest_ms, due_latest_ms);
 CREATE INDEX idx_commitments_agent_due
   ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+CREATE INDEX idx_commitments_scope_dedupe
+  ON commitments(agent_id, session_key, channel, dedupe_key, status);
+CREATE INDEX idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
 const RETIRED_COMMITMENTS_INDEX_NAMES = [
@@ -107,6 +132,30 @@ const RETIRED_COMMITMENTS_INDEX_NAMES = [
   "idx_commitments_scope_dedupe",
   "idx_commitments_scope_due",
   "idx_commitments_status_due",
+] as const;
+
+const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
+  "commitments.account_id",
+  "commitments.recipient_id",
+  "commitments.thread_id",
+  "commitments.sender_id",
+  "commitments.kind",
+  "commitments.sensitivity",
+  "commitments.source",
+  "commitments.reason",
+  "commitments.suggested_text",
+  "commitments.dedupe_key",
+  "commitments.confidence",
+  "commitments.due_timezone",
+  "commitments.source_message_id",
+  "commitments.source_run_id",
+  "commitments.created_at_ms",
+  "commitments.attempts",
+  "commitments.last_attempt_at_ms",
+  "commitments.sent_at_ms",
+  "commitments.dismissed_at_ms",
+  "commitments.snoozed_until_ms",
+  "commitments.expired_at_ms",
 ] as const;
 
 const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
@@ -125,17 +174,13 @@ const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
     "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
     "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
   },
+  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
   allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
 };
 
-const EARLY_RETIRED_COMMITMENTS_INDEX_NAMES = [
-  "idx_commitments_agent_due",
-  "idx_commitments_scope_due",
-  "idx_commitments_status_due",
-] as const;
-
-const EARLY_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
-  allowedMissingIndexes: EARLY_RETIRED_COMMITMENTS_INDEX_NAMES,
+const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
+  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
 };
 
 function hasSupportedRetiredCommitmentsSchema(
@@ -188,9 +233,9 @@ function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
     ) ||
     hasSupportedRetiredCommitmentsSchema(
       db,
-      EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      EARLY_RETIRED_COMMITMENTS_INDEX_NAMES,
-      EARLY_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL,
+      RETIRED_COMMITMENTS_INDEX_NAMES,
+      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     )
   );
 }
