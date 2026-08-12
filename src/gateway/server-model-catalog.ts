@@ -121,7 +121,7 @@ export async function loadGatewayModelCatalogSnapshot(
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
-  return (await loadGatewayModelCatalogSnapshot(params)).entries;
+  return (await loadGatewayModelCatalogOwnerSnapshot(params)).owner.modelCatalog.entries;
 }
 
 /** Reads the already-published startup catalog without starting provider discovery. */
