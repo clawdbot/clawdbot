@@ -270,6 +270,54 @@ function seedV6CommitmentSchema(database: DatabaseSync): void {
   markStateDatabaseAsV6(database);
 }
 
+function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE commitments (
+      id TEXT NOT NULL PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      account_id TEXT,
+      recipient_id TEXT,
+      thread_id TEXT,
+      sender_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'followup',
+      sensitivity TEXT NOT NULL DEFAULT 'normal',
+      source TEXT NOT NULL DEFAULT 'unknown',
+      status TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      suggested_text TEXT NOT NULL DEFAULT '',
+      dedupe_key TEXT NOT NULL DEFAULT '',
+      confidence REAL NOT NULL DEFAULT 0,
+      due_earliest_ms INTEGER NOT NULL,
+      due_latest_ms INTEGER NOT NULL,
+      due_timezone TEXT NOT NULL DEFAULT 'UTC',
+      source_message_id TEXT,
+      source_run_id TEXT,
+      created_at_ms INTEGER NOT NULL DEFAULT 0,
+      updated_at_ms INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at_ms INTEGER,
+      sent_at_ms INTEGER,
+      dismissed_at_ms INTEGER,
+      snoozed_until_ms INTEGER,
+      expired_at_ms INTEGER,
+      record_json TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_commitments_scope_due
+      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_status_due
+      ON commitments(status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_scope_dedupe
+      ON commitments(agent_id, session_key, channel, dedupe_key, status);
+    CREATE INDEX idx_commitments_agent_due
+      ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+    CREATE INDEX idx_commitments_agent_sent
+      ON commitments(agent_id, status, sent_at_ms, session_key);
+  `);
+  markStateDatabaseAsV6(database);
+}
+
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
   bomTarget: string;
@@ -1434,6 +1482,32 @@ describe("openclaw state database", () => {
   );
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "retires the supported additive v6 commitments layout through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const additive = new DatabaseSync(databasePath);
+      seedAdditiveV6CommitmentSchema(additive);
+      additive.close();
+
+      if (migrationPath === "doctor repair") {
+        const result = repairOpenClawStateDatabaseSchema(options);
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toContain("Retired shared state commitments table and indexes");
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "preserves a foreign commitments table and colliding index through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
@@ -1496,17 +1570,31 @@ describe("openclaw state database", () => {
     },
   );
 
-  it("preserves an extra index on the final v6 commitments layout", () => {
+  it.each([
+    {
+      label: "extra index",
+      name: "foreign_commitments_status",
+      sql: "CREATE INDEX foreign_commitments_status ON commitments(status);",
+      type: "index",
+    },
+    {
+      label: "attached trigger",
+      name: "foreign_commitments_delete",
+      sql: `CREATE TRIGGER foreign_commitments_delete
+              AFTER DELETE ON commitments BEGIN SELECT 1; END;`,
+      type: "trigger",
+    },
+  ])("preserves an $label on the final v6 commitments layout", ({ name, sql, type }) => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const customized = new DatabaseSync(databasePath);
     seedV6CommitmentSchema(customized);
-    customized.exec("CREATE INDEX foreign_commitments_status ON commitments(status);");
+    customized.exec(sql);
     customized.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/unsupported additional indexes/u);
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/commitments/u);
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -1515,10 +1603,8 @@ describe("openclaw state database", () => {
         preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
       ).toEqual({ name: "commitments" });
       expect(
-        preserved
-          .prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'foreign_commitments_status'")
-          .get(),
-      ).toEqual({ tbl_name: "commitments" });
+        preserved.prepare("SELECT type, tbl_name FROM sqlite_schema WHERE name = ?").get(name),
+      ).toEqual({ type, tbl_name: "commitments" });
     } finally {
       preserved.close();
     }

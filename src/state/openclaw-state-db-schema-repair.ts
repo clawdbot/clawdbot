@@ -4,6 +4,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteSchemaContains,
   collectSqliteSchemaIssues,
+  type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
@@ -101,27 +102,48 @@ const RETIRED_COMMITMENTS_INDEX_NAMES = [
   "idx_commitments_status_due",
 ] as const;
 
+const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  // These defaults shipped as independent same-version additive repairs, so
+  // supported databases may mix canonical and defaulted definitions. The
+  // surrounding exact-object check still rejects every other schema change.
+  allowedColumnDefinitions: {
+    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
+    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
+    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
+    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
+    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
+    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
+    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
+    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
+    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+  },
+};
+
 function hasExactRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
   expectedIndexNames: readonly string[],
+  compatibility: SqliteSchemaCompatibility = {},
 ): boolean {
-  if (collectSqliteSchemaIssues(db, schemaSql).length > 0) {
+  if (collectSqliteSchemaIssues(db, schemaSql, compatibility).length > 0) {
     return false;
   }
-  const actualIndexNames = (
-    db
-      .prepare(
-        `SELECT name
+  const attachedObjects = db
+    .prepare(
+      `SELECT type, name
            FROM sqlite_schema
-          WHERE type = 'index' AND tbl_name = 'commitments' AND sql IS NOT NULL
-          ORDER BY name`,
-      )
-      .all() as Array<{ name: string }>
-  ).map((row) => row.name);
+          WHERE type IN ('index', 'trigger')
+            AND tbl_name = 'commitments'
+            AND sql IS NOT NULL
+          ORDER BY type, name`,
+    )
+    .all() as Array<{ name: string; type: string }>;
   return (
-    actualIndexNames.length === expectedIndexNames.length &&
-    actualIndexNames.every((name, index) => name === expectedIndexNames[index])
+    attachedObjects.length === expectedIndexNames.length &&
+    attachedObjects.every(
+      (object, index) => object.type === "index" && object.name === expectedIndexNames[index],
+    )
   );
 }
 
@@ -131,6 +153,7 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
       db,
       RETIRED_COMMITMENTS_SCHEMA_SQL,
       RETIRED_COMMITMENTS_INDEX_NAMES,
+      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     ) ||
     hasExactRetiredCommitmentsSchema(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL, [])
   ) {
