@@ -539,21 +539,10 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
   if (profileApiKey) {
     return { status: "available", value: profileApiKey };
   }
-  const hasConfiguredApiKeyProfile = isProviderAuthProfileConfigured({
-    provider: "openai",
-    cfg: params.cfg,
-    profileTypes: ["api_key"],
-    includeExternalCliAuth: false,
-  });
-
   const envApiKey = resolveOpenAIRealtimeEnvApiKey();
   if (envApiKey.status === "available") {
     return envApiKey;
   }
-  if (hasConfiguredApiKeyProfile || hasOpenAIRealtimeApiKeyInput(undefined)) {
-    return { status: "missing" };
-  }
-
   return { status: "missing" };
 }
 

@@ -25,8 +25,6 @@ import {
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
-  OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
-  OPENAI_GPT_LIVE_AUTH_REQUIRED,
   OPENAI_REALTIME_CAPABILITIES,
   OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
   OPENAI_REALTIME_DEFAULT_MODEL,
@@ -260,32 +258,12 @@ async function createOpenAIRealtimeBrowserSession(
       instructions: buildOpenAIQuicksilverInstructions(req.instructions),
       ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
     };
-    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-      cfg: req.cfg,
-      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
-    });
-    if (subscriptionAuth) {
-      return await quicksilverBroker.createBrowserSession(quicksilverRequest, subscriptionAuth);
-    }
-    const auth = await resolveOpenAIRealtimePlatformAuth({
+    const auth = await resolveOpenAIQuicksilverBridgeAuth({
       configuredApiKey: config.apiKey,
       cfg: req.cfg,
+      agentId: req.agentId,
     });
-    if (auth.status === "available") {
-      return await quicksilverBroker.createBrowserSession(quicksilverRequest, {
-        type: "api-key",
-        token: auth.value,
-      });
-    }
-    if (
-      hasOpenAIRealtimePlatformAuthInput({
-        configuredApiKey: config.apiKey,
-        cfg: req.cfg,
-      })
-    ) {
-      throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
-    }
-    throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+    return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
   const auth = await resolveOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
@@ -339,14 +317,6 @@ async function createOpenAIRealtimeBrowserSession(
     voice,
     ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
   };
-}
-
-async function cancelOpenAIRealtimeBrowserSession(
-  quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
-  _req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
-  session: RealtimeVoiceBrowserSession,
-): Promise<void> {
-  await quicksilverBroker?.cancelBrowserSession(session);
 }
 
 export function buildOpenAIRealtimeVoiceProvider(options?: {
@@ -522,12 +492,8 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return undefined;
     },
-    cancelBrowserSession: (request, session) =>
-      cancelOpenAIRealtimeBrowserSession(
-        options?.quicksilverBrowserSessionBroker,
-        request,
-        session,
-      ),
+    cancelBrowserSession: (_request, session) =>
+      options?.quicksilverBrowserSessionBroker?.cancelBrowserSession(session),
   };
   Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
     configurable: true,

@@ -212,7 +212,6 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
     connection: RealtimeVoiceSessionConnection,
   ): boolean {
     if (
-      event.type !== "response.done" ||
       event.response?.status !== "completed" ||
       !Array.isArray(event.response.output) ||
       !this.config.onToolCall
