@@ -1,4 +1,7 @@
-import { createProgressDraftDiffStatTracker } from "./progress-draft-diffstat.js";
+import {
+  createProgressDraftDiffStatTracker,
+  type ChannelProgressDraftDiffStat,
+} from "./progress-draft-diffstat.js";
 import {
   createChannelProgressDraftEventHandlers,
   type ChannelProgressDraftEventLineBuilder,
@@ -42,11 +45,6 @@ export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 // commentary updates. It owns draft lifecycle state before the final reply wins.
 type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
-type ChannelProgressDraftDiffStat = Readonly<{
-  files: number;
-  added: number;
-  removed: number;
-}>;
 export type ChannelProgressDraftCompositorSnapshot = Readonly<{
   lines: readonly ChannelProgressDraftCompositorLine[];
   statusHeadline?: string;
