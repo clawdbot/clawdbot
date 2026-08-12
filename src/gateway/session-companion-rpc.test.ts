@@ -12,6 +12,7 @@ async function invoke(
     reset?: ReturnType<typeof vi.fn>;
   },
   client: { connId?: string } = { connId: "conn-1" },
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn();
   await sessionCompanionHandlers[method]?.({
@@ -19,6 +20,7 @@ async function invoke(
     client,
     context: { sessionCompanion: companion },
     respond,
+    signal,
   } as never);
   return respond;
 }
@@ -41,6 +43,26 @@ describe("session companion RPC", () => {
       answer: "It is checking the fix.",
       ts: 123,
     });
+  });
+
+  it("forwards the authenticated request lifetime and emits one final response", async () => {
+    const controller = new AbortController();
+    const ask = vi.fn(async () => ({ answer: "Bound to this connection.", ts: 124 }));
+    const respond = await invoke(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "Who owns this ask?" },
+      { ask },
+      { connId: "conn-1" },
+      controller.signal,
+    );
+
+    expect(ask).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      question: "Who owns this ask?",
+      connId: "conn-1",
+      signal: controller.signal,
+    });
+    expect(respond.mock.calls).toEqual([[true, { answer: "Bound to this connection.", ts: 124 }]]);
   });
 
   it.each([
@@ -91,6 +113,29 @@ describe("session companion RPC", () => {
         code: "UNAVAILABLE",
         retryable: true,
         details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY },
+      }),
+    );
+  });
+
+  it("returns a retryable typed context-read failure", async () => {
+    const ask = vi.fn(async () => {
+      throw new SessionCompanionAskError(
+        "context-unavailable",
+        "The selected session history could not be loaded.",
+      );
+    });
+    const respond = await invoke(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "Why?" },
+      { ask },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "context-unavailable" },
       }),
     );
   });

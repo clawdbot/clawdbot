@@ -243,6 +243,27 @@ describe("calculateContextTokens", () => {
     });
     expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
   });
+
+  it("scans past a sparse assistant row to retain older valid usage", () => {
+    const validUsage = createUsage(20);
+    const sparseAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "seeded without provider usage" }],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      stopReason: "stop",
+      timestamp: 2,
+    } as AgentMessage;
+    const messages = [createAssistant("complete", validUsage, 1), sparseAssistant];
+
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBe(validUsage);
+    expect(estimateContextTokens(messages)).toMatchObject({
+      usageTokens: 20,
+      lastUsageIndex: 0,
+    });
+    expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
+  });
 });
 
 describe("session-entry compaction budgeting", () => {

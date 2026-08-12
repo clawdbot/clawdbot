@@ -89,7 +89,6 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   countActiveDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRuns(rootSessionKey: string): number;
-  countPendingDescendantRunsExcludingRun(rootSessionKey: string, excludeRunId: string): number;
   hasDescendantRunAwaitingSettle(rootSessionKey: string, excludeRunId?: string): boolean;
   listDescendantRunsForRequester(rootSessionKey: string): T[];
   runsByControllerSessionKey: ReadonlyMap<string, readonly T[]>;
@@ -291,14 +290,6 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     return count;
   };
 
-  const countPendingDescendantRunsExcludingRun = (
-    rootSessionKey: string,
-    excludeRunId: string,
-  ): number =>
-    countPendingDescendantRunsInternal(rootSessionKey, {
-      excludeRunId,
-    });
-
   const hasDescendantRunAwaitingSettle = (rootSessionKey: string, excludeRunId?: string): boolean =>
     countPendingDescendantRunsInternal(rootSessionKey, {
       excludeRunId,
@@ -319,7 +310,6 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     latestRunsByChildSessionKey,
     countActiveDescendantRuns,
     countPendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun,
     hasDescendantRunAwaitingSettle,
     listDescendantRunsForRequester,
     runsByControllerSessionKey,
@@ -483,18 +473,6 @@ export function countPendingDescendantRunsFromRuns(
   rootSessionKey: string,
 ): number {
   return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(rootSessionKey);
-}
-
-/** Counts pending descendants while excluding one run id from the total. */
-export function countPendingDescendantRunsExcludingRunFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-  excludeRunId: string,
-): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRunsExcludingRun(
-    rootSessionKey,
-    excludeRunId,
-  );
 }
 
 /**

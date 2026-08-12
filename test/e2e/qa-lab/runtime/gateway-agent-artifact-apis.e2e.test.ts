@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
-import { resolveStorePath } from "../../../../src/config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import { createManagedOutgoingMediaBlocks } from "../../../../src/gateway/managed-image-attachments.js";
@@ -358,9 +358,9 @@ describe("Gateway agent and artifact APIs", () => {
     const sessionKey = "agent:main:artifact-api";
     const sessionId = "gateway-agent-artifact-session";
     const messageId = "gateway-agent-artifact-message";
-    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: sessionKey,

@@ -1,6 +1,9 @@
 import os from "node:os";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionFilePathOptions,
+} from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
@@ -36,7 +39,7 @@ async function resolveSessionCostLine(params: {
     sessionFile = resolveExistingUsageSessionFile({
       sessionId,
       sessionEntry: params.sessionEntry,
-      sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry, pathOpts),
+      sessionFile: resolveSessionFilePathCore(sessionId, params.sessionEntry, pathOpts),
       agentId: params.agentId,
     });
   } catch {

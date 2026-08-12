@@ -1514,7 +1514,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
 });
 
 vi.mock("./doctor-config-analysis.js", () => {
-  function formatConfigPath(parts: Array<string | number>): string {
+  function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
       return "<root>";
     }
@@ -1549,10 +1549,11 @@ vi.mock("./doctor-config-analysis.js", () => {
 
   return {
     collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
-    formatConfigPath,
+    formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteMcpOriginWarning: vi.fn(),
     noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {

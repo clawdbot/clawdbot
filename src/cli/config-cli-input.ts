@@ -20,12 +20,12 @@ import {
   validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
   parseConfigSetValue,
   type PathSegment,
-  toDotPath,
   validatePathSegments,
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode, ConfigSetDryRunResult } from "./config-set-dryrun.js";

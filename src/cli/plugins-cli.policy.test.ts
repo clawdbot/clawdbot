@@ -2,16 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginRegistrySnapshotReport,
+  buildPluginRegistrySnapshotReportMock,
   enablePluginInConfigMock,
-  loadConfig,
-  replaceConfigFile,
-  refreshPluginRegistry,
+  pluginCliConfigMock,
+  replaceConfigFileMock,
+  refreshPluginRegistryMock,
   resetPluginsCliTestState,
   runtimeErrors,
   pluginsCliRuntimeLogs,
   runPluginsCommand,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -35,7 +35,7 @@ describe("plugins cli policy mutations", () => {
   });
 
   function mockPluginRegistry(ids: string[]) {
-    buildPluginRegistrySnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       plugins: ids.map((id) => ({ id })),
       diagnostics: [],
       registrySource: "derived",
@@ -44,13 +44,13 @@ describe("plugins cli policy mutations", () => {
   }
 
   function requireFirstWrittenConfig(): OpenClawConfig {
-    const call = writeConfigFile.mock.calls[0];
+    const call = configWriteMock.mock.calls[0];
     if (!call) {
-      throw new Error("expected writeConfigFile to be called");
+      throw new Error("expected configWriteMock to be called");
     }
     const [config] = call;
     if (!config) {
-      throw new Error("expected writeConfigFile to receive a config");
+      throw new Error("expected configWriteMock to receive a config");
     }
     return config;
   }
@@ -73,7 +73,7 @@ describe("plugins cli policy mutations", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     enablePluginInConfigMock.mockReturnValue({
       config: enabledConfig,
       enabled: true,
@@ -86,15 +86,15 @@ describe("plugins cli policy mutations", () => {
     expect(enablePluginInConfigMock).toHaveBeenCalledWith(sourceConfig, "alpha", {
       updateChannelConfig: false,
     });
-    expect(replaceConfigFile).toHaveBeenCalledWith({
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig: enabledConfig,
       baseHash: "mock",
       writeOptions: {
         explicitSetPaths: [["plugins", "entries", "alpha"]],
       },
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+    expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: enabledConfig,
       installRecords: {},
       policyPluginIds: ["alpha"],
@@ -120,7 +120,7 @@ describe("plugins cli policy mutations", () => {
     },
   ])("fails without mutations when $policy blocks enablement", async ({ plugins, reason }) => {
     const sourceConfig = { plugins } as OpenClawConfig;
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     enablePluginInConfigMock.mockReturnValue({
       config: sourceConfig,
       enabled: false,
@@ -131,9 +131,9 @@ describe("plugins cli policy mutations", () => {
 
     await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
 
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
     expect(pluginsCliRuntimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
@@ -154,11 +154,11 @@ describe("plugins cli policy mutations", () => {
     }
 
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("refreshes the persisted plugin registry after disabling a plugin", async () => {
-    loadConfig.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue({
       plugins: {
         entries: {
           alpha: { enabled: true },
@@ -172,14 +172,14 @@ describe("plugins cli policy mutations", () => {
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
-    expect(replaceConfigFile).toHaveBeenCalledWith({
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig,
       baseHash: "mock",
       writeOptions: {
         explicitSetPaths: [["plugins", "entries", "alpha"]],
       },
     });
-    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
       policyPluginIds: ["alpha"],
@@ -198,7 +198,7 @@ describe("plugins cli policy mutations", () => {
           },
         },
       } as OpenClawConfig;
-      loadConfig.mockReturnValue(sourceConfig);
+      pluginCliConfigMock.mockReturnValue(sourceConfig);
       enablePluginInConfigMock.mockReturnValue({
         config: enabledConfig,
         enabled: true,
@@ -211,21 +211,21 @@ describe("plugins cli policy mutations", () => {
       expect(enablePluginInConfigMock).toHaveBeenCalledWith(sourceConfig, pluginId, {
         updateChannelConfig: false,
       });
-      expect(replaceConfigFile).toHaveBeenCalledWith({
+      expect(replaceConfigFileMock).toHaveBeenCalledWith({
         nextConfig: enabledConfig,
         baseHash: "mock",
         writeOptions: {
           explicitSetPaths: [["plugins", "entries", pluginId]],
         },
       });
-      expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+      expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
   );
 
   it.each(compatibilityPluginIds)(
     "disables compatibility id $alias through canonical plugin $pluginId",
     async ({ alias, pluginId }) => {
-      loadConfig.mockReturnValue({
+      pluginCliConfigMock.mockReturnValue({
         plugins: {
           entries: {
             [pluginId]: { enabled: true },
@@ -240,7 +240,7 @@ describe("plugins cli policy mutations", () => {
       const entries = requirePluginEntries(nextConfig);
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
-      expect(replaceConfigFile).toHaveBeenCalledWith({
+      expect(replaceConfigFileMock).toHaveBeenCalledWith({
         nextConfig,
         baseHash: "mock",
         writeOptions: {
@@ -263,13 +263,13 @@ describe("plugins cli policy mutations", () => {
         "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search missing-plugin` to look for installable plugins.",
       );
       expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-      expect(writeConfigFile).not.toHaveBeenCalled();
-      expect(refreshPluginRegistry).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     },
   );
 
   it("does not create a channel config when disabling a channel plugin by policy", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     mockPluginRegistry(["twitch"]);
 
     await runPluginsCommand(["plugins", "disable", "twitch"]);

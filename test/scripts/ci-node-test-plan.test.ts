@@ -240,6 +240,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // pairing them starves model visibility and repeatedly hits its timeout.
     expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
     expect(jobOf("core-runtime-media-ui")).not.toBe(jobOf("core-unit-src-security"));
+    expect(
+      compact[jobOf("core-unit-src-security")]?.groups.map((group) => group.shard_name),
+    ).toEqual(["core-unit-src-security"]);
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);

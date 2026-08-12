@@ -17,7 +17,7 @@ import {
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
-  log,
+  taskRegistryLog,
   persistTaskRegistry,
   pickPreferredRunIdTask,
   rebuildRunIdIndex,
@@ -223,7 +223,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
         .toSorted(compareTasksNewestFirst)
         .map(({ insertionIndex: _, ...task }) => task);
     } catch (error) {
-      log.warn("Failed to read fresh owner task registry records", {
+      taskRegistryLog.warn("Failed to read fresh owner task registry records", {
         ownerKey: key,
         error,
       });

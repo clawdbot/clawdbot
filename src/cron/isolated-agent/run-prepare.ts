@@ -285,7 +285,7 @@ export async function prepareCronRunContext(params: {
       resetBoundaryReason?: "cron-stale";
       update: (entry: SessionEntry | undefined) => SessionEntry;
     }) => {
-      const { applySessionEntryLifecycleMutation, patchSessionEntry } =
+      const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
         await loadSessionAccessorRuntime();
       if (resetBoundaryReason) {
         await applySessionEntryLifecycleMutation({
@@ -304,7 +304,7 @@ export async function prepareCronRunContext(params: {
         return;
       }
       // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
-      await patchSessionEntry(
+      await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
         { fallbackEntry, replaceEntry: true },

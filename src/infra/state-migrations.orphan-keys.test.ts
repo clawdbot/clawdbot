@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   migrateOrphanedSessionKeys,
   resolveSessionStoreOwnership,
@@ -43,7 +43,7 @@ function requireStoreEntry(
 async function withStateFixture(
   run: (params: { tmpDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
+  await withTestDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
     const stateDir = path.join(tmpDir, ".openclaw");
     fs.mkdirSync(stateDir, { recursive: true });
     await run({ tmpDir, stateDir });

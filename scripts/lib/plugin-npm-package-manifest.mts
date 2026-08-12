@@ -17,11 +17,7 @@ import {
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mts";
 import type { PluginNpmRuntimeBuildPlan, PluginPackageJson } from "./plugin-npm-runtime-build.mts";
-
-// The live-updater fixture copies this closure without workspace packages.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./record-shared.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";

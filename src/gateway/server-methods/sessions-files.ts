@@ -25,13 +25,13 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  readSessionTranscriptVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -257,7 +257,7 @@ async function foldSqliteTouchedFiles(
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
   while (true) {
-    const delta = readSessionTranscriptVisibleMessageDelta(scope, {
+    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
       ...(cursor ? { cursor } : {}),
       maxBytes,
       maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
@@ -526,7 +526,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }

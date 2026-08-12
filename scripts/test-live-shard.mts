@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord as isUnknownRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -796,8 +797,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         process.exit(1);
       },
     );
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -9,7 +9,7 @@ import {
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
@@ -165,7 +165,7 @@ function collectReplaySafeThinkingToolIds(
 }
 
 function shortHash(text: string, length = 8): string {
-  return sha256HexPrefix(text, length);
+  return sha256HexPrefixCore(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {

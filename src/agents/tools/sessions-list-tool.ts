@@ -43,7 +43,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
-  classifySessionKind,
+  classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
@@ -69,6 +69,7 @@ const SessionsListToolSchema = Type.Object({
 const SessionListRowOutputSchema = Type.Object(
   {
     key: Type.String(),
+    sessionId: Type.Optional(Type.String()),
     agentId: Type.String(),
     kind: Type.Union([
       Type.Literal("main"),
@@ -284,7 +285,7 @@ export function createSessionsListTool(opts?: {
         }
 
         const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
-        const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
+        const kind = classifySessionListKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
         }
@@ -361,6 +362,7 @@ export function createSessionsListTool(opts?: {
           : undefined;
         const row: SessionListRow = {
           key: displayKey,
+          ...(sessionId ? { sessionId } : {}),
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,

@@ -15,13 +15,13 @@ const sharedMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   waitForControlUiDocument: vi.fn(),
   issueControlUiBrowserHandoff: vi.fn(),
-  resolveAdvertisedLanHost: vi.fn(),
+  resolveAdvertisedLanHostCore: vi.fn(),
   resolveAdvertisedControlUiLinks: vi.fn(),
 }));
 
 vi.mock("../infra/advertised-lan-host.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/advertised-lan-host.js")>()),
-  resolveAdvertisedLanHost: sharedMocks.resolveAdvertisedLanHost,
+  resolveAdvertisedLanHostCore: sharedMocks.resolveAdvertisedLanHostCore,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -57,8 +57,8 @@ beforeEach(() => {
     browserUrl: `${url}#bootstrapToken=one-time-bootstrap`,
     expiresAtMs: 123_456,
   }));
-  sharedMocks.resolveAdvertisedLanHost.mockReset();
-  sharedMocks.resolveAdvertisedLanHost.mockResolvedValue(null);
+  sharedMocks.resolveAdvertisedLanHostCore.mockReset();
+  sharedMocks.resolveAdvertisedLanHostCore.mockResolvedValue(null);
   sharedMocks.resolveAdvertisedControlUiLinks.mockReset();
 });
 
@@ -418,7 +418,9 @@ describe("runBrowserHatchHandoff", () => {
       tlsConfig: { enabled: true },
       sshHint: undefined,
     };
-    sharedMocks.resolveAdvertisedLanHost.mockRejectedValue(new Error("default route unavailable"));
+    sharedMocks.resolveAdvertisedLanHostCore.mockRejectedValue(
+      new Error("default route unavailable"),
+    );
     sharedMocks.resolveAdvertisedControlUiLinks.mockImplementation(async (params) => {
       const { resolveAdvertisedControlUiLinks } = await import("../gateway/control-ui-links.js");
       return await resolveAdvertisedControlUiLinks(params);
@@ -440,7 +442,7 @@ describe("runBrowserHatchHandoff", () => {
       );
 
       expect(result).toEqual({ handedOff: true });
-      expect(sharedMocks.resolveAdvertisedLanHost).toHaveBeenCalledOnce();
+      expect(sharedMocks.resolveAdvertisedLanHostCore).toHaveBeenCalledOnce();
       expect(networkInterfaces).toHaveBeenCalled();
       const displayed = vi
         .mocked(prompter.note)

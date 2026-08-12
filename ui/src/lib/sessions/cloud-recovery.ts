@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   cloudSessionRecoveryExactStorageKey,
@@ -43,10 +44,10 @@ export function parseCloudSessionCreateParams(
   sessionKey: string,
   agentId: string,
 ): CloudSessionCreateParams | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const allowed = new Set<string>([
     "key",
     "agentId",
@@ -74,9 +75,7 @@ export function parseCloudSessionCreateParams(
 function parseStoredCloudSessionRecovery(raw: string): Partial<CloudSessionRecovery> | null {
   try {
     const value: unknown = JSON.parse(raw);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Partial<CloudSessionRecovery>)
-      : null;
+    return isRecord(value) ? (value as Partial<CloudSessionRecovery>) : null;
   } catch {
     return null;
   }

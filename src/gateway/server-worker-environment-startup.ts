@@ -3,7 +3,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActiveSecretsRuntimeConfigSnapshot,
-  getActiveSecretsRuntimeEnv,
+  getActiveSecretsRuntimeEnvState,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
@@ -180,7 +180,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           kind: "material",
           contents: await workerRuntime.resolveSecretRefString(genericKeyRef, {
             config: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
-            env: getActiveSecretsRuntimeEnv(),
+            env: getActiveSecretsRuntimeEnvState(),
           }),
         }),
       });

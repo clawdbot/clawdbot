@@ -55,6 +55,7 @@ describe("chat session sharing menu", () => {
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
     expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
+    expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -68,6 +69,49 @@ describe("chat session sharing menu", () => {
     );
     expect(onVisibilityChange).toHaveBeenCalledWith("shared");
     expect(onMemberChange).toHaveBeenCalledWith("alice", true);
+  });
+
+  it("distinguishes people from channel-backed members", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [
+              { type: "human", id: "profile-vyctor", label: "Vyctor Brzezowski" },
+              { type: "human", id: "channel:chn_design", label: "Design" },
+              { type: "human", id: "discord:channel:operations", label: "Operations" },
+            ],
+            role: "owner",
+            allowedVisibilities: ["shared"],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const human = root.querySelector('wa-dropdown-item[value="member:profile-vyctor"]');
+    const channels = [
+      root.querySelector('wa-dropdown-item[value="member:channel:chn_design"]'),
+      root.querySelector('wa-dropdown-item[value="member:discord:channel:operations"]'),
+    ];
+
+    expect(human?.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    for (const channel of channels) {
+      expect(channel?.querySelector("openclaw-session-owner-chip")).toBeNull();
+      expect(channel?.querySelector(".chat-pane__sharing-channel-icon svg")).not.toBeNull();
+    }
   });
 
   it("shows only the draft marker to a non-manager", () => {

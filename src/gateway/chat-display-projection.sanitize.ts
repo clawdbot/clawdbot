@@ -278,10 +278,6 @@ function projectAssistantMixedToolContent(
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
-function toFiniteNumber(x: unknown): number | undefined {
-  return asFiniteNumber(x);
-}
-
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -289,7 +285,7 @@ function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   const c = raw as Record<string, unknown>;
   const out: Record<string, number> = {};
   for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
-    const value = toFiniteNumber(c[key]);
+    const value = asFiniteNumber(c[key]);
     if (value !== undefined) {
       out[key] = value;
     }
@@ -324,7 +320,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   ];
 
   for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
+    const n = asFiniteNumber(u[k]);
     if (n !== undefined) {
       out[k] = n;
     }

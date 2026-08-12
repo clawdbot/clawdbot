@@ -32,7 +32,7 @@ import {
 } from "./interactive-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -48,10 +48,8 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "./memory-embedding-provider-runtime.js";
+import { registerMemoryEmbeddingProvider } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -551,7 +549,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("can scope bundled provider loads without hanging", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const scopedDir = path.join(bundledDir, "scoped-provider");
     mkdirSafe(scopedDir);
     fs.writeFileSync(
@@ -625,7 +623,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("allows bundled plugins to supply system.notify without opening the command to external plugins", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const bundledPluginDir = path.join(bundledDir, "notify-host");
     mkdirSafe(bundledPluginDir);
     fs.writeFileSync(
@@ -784,7 +782,9 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listRegisteredMemoryEmbeddingProviderAdapters().map((adapter) => adapter.id)).toEqual([
+      "active",
+    ]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -984,7 +984,7 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
+    expect(listRegisteredMemoryEmbeddingProviderAdapters()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {
@@ -1287,7 +1287,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("restores cached memory capability public artifacts on cache hits", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const plugin = writePlugin({
@@ -1354,7 +1354,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const memoryPlugin = writePlugin({
@@ -1755,8 +1755,8 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached bundled plugin registries across env changes",
       pluginId: "cache-root",
       setup: () => {
-        const bundledA = makeTempDir();
-        const bundledB = makeTempDir();
+        const bundledA = makePluginLoaderTempDir();
+        const bundledB = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "cache-root",
           dir: path.join(bundledA, "cache-root"),
@@ -1807,10 +1807,10 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached load-path plugin registries across env home changes",
       pluginId: "demo",
       setup: () => {
-        const homeA = makeTempDir();
-        const homeB = makeTempDir();
-        const stateDir = makeTempDir();
-        const bundledDir = makeTempDir();
+        const homeA = makePluginLoaderTempDir();
+        const homeB = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
+        const bundledDir = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "demo",
           dir: path.join(homeA, "plugins", "demo"),

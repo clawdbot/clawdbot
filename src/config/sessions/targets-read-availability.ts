@@ -4,7 +4,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
@@ -86,12 +86,12 @@ function resolveFixedSessionStoreTargetsReadOnly(
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const fixedTarget = {
     agentId: requested,
-    storePath: resolveStorePath(storeConfig, { agentId: requested, env }),
+    storePath: resolveSessionStorePathCore(storeConfig, { agentId: requested, env }),
   };
   try {
     const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map((configuredAgentId) => ({
       agentId: configuredAgentId,
-      storePath: resolveStorePath(storeConfig, { agentId: configuredAgentId, env }),
+      storePath: resolveSessionStorePathCore(storeConfig, { agentId: configuredAgentId, env }),
     }));
     if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
       configuredTargets.push(fixedTarget);
@@ -142,7 +142,7 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
   }
   const configuredTarget = {
     agentId: requested,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: requested, env }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: requested, env }),
   };
   const targets = dedupeTargetsByStorePath([
     configuredTarget,

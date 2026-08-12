@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawWrapperPath: vi.fn(),
   assertNoSystemLaunchDaemonOwnership: vi.fn(),
   execLaunchctl: vi.fn(),
-  loadPluginManifestRegistry: vi.fn<
+  loadPluginManifestRegistryCore: vi.fn<
     (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
   >(() => ({
     diagnostics: [],
@@ -73,7 +73,7 @@ vi.mock("../daemon/launchd-system.js", async (importActual) => ({
 vi.mock("../plugins/manifest-registry.js", async (importActual) => {
   const actual = await importActual<typeof import("../plugins/manifest-registry.js")>();
   const hasPluginIntegrationProvider = (
-    params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+    params?: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
   ) =>
     Object.values(params?.config?.secrets?.providers ?? {}).some(
       (provider) =>
@@ -83,12 +83,12 @@ vi.mock("../plugins/manifest-registry.js", async (importActual) => {
     );
   return {
     ...actual,
-    loadPluginManifestRegistry: (
-      params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+    loadPluginManifestRegistryCore: (
+      params?: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
     ) =>
       hasPluginIntegrationProvider(params)
-        ? mocks.loadPluginManifestRegistry(params)
-        : actual.loadPluginManifestRegistry(params),
+        ? mocks.loadPluginManifestRegistryCore(params)
+        : actual.loadPluginManifestRegistryCore(params),
   };
 });
 
@@ -166,7 +166,7 @@ function mockNodeGatewayPlanFixture(
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
-  mocks.loadPluginManifestRegistry.mockReturnValue({ diagnostics: [], plugins: [] });
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({ diagnostics: [], plugins: [] });
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [],
@@ -228,7 +228,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   const pluginRoot = path.join(home, "acme-secrets");
   createSecurePluginRoot(pluginRoot);
   writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-  mocks.loadPluginManifestRegistry.mockReturnValue({
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
       {
@@ -714,7 +714,7 @@ describe("buildGatewayInstallPlan", () => {
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -826,7 +826,7 @@ describe("buildGatewayInstallPlan", () => {
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
         {

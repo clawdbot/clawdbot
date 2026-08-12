@@ -1429,6 +1429,8 @@ private fun ChatMessageList(
           is ChatTimelineItem.QuestionPrompt ->
             ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
           is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
+          is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
+          is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,

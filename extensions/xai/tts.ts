@@ -1,4 +1,5 @@
 // Xai plugin module implements tts behavior.
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -257,7 +258,7 @@ export async function xaiTTSStream(params: {
         },
       });
     } catch (error) {
-      failConnect(error instanceof Error ? error : new Error(String(error)));
+      failConnect(toStringifiedError(error));
       return;
     }
 
@@ -276,7 +277,7 @@ export async function xaiTTSStream(params: {
     });
 
     ws.once("error", (error) => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       if (connectSettled) {
         failStream(normalized);
         return;
@@ -373,7 +374,7 @@ export async function xaiTTSStream(params: {
           const payload = rawDataToString(data);
           handleServerEvent(JSON.parse(payload) as XaiTtsStreamServerEvent);
         } catch (error) {
-          failStream(error instanceof Error ? error : new Error(String(error)));
+          failStream(toStringifiedError(error));
         }
       });
 
@@ -407,7 +408,7 @@ export async function xaiTTSStream(params: {
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
-        failStream(error instanceof Error ? error : new Error(String(error)));
+        failStream(toStringifiedError(error));
       }
 
       resolve({ audioStream: wiredStream, release });

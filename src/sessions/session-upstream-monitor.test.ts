@@ -3,7 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
@@ -785,7 +785,7 @@ describe("session upstream monitor", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:provenance";
     const sessionId = "session-provenance";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, env: database.env },
       { sessionId, updatedAt: 1 },
     );
@@ -830,7 +830,7 @@ describe("session upstream monitor", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:catalog-import";
     const sessionId = "session-catalog-import";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, env: database.env },
       { sessionId, updatedAt: 1 },
     );

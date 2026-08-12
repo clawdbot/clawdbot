@@ -3,7 +3,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -436,7 +436,7 @@ function extractHeadlineText(messageValue: unknown): string | undefined {
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : extractEditorText(message.content ?? message.text);
   const normalized = text?.replace(/\s+/g, " ").trim();
   return normalized || undefined;

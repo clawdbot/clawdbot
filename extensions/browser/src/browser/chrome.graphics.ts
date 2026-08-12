@@ -1,4 +1,10 @@
-import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  asFiniteNumber,
+  filterStringEntries,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Managed Chrome graphics diagnostics.
  *
@@ -24,11 +30,11 @@ type ChromeGraphicsProbeOptions = {
 };
 
 function readChromeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function readChromeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return asFiniteNumber(value) ?? 0;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -40,12 +46,6 @@ function readStringRecord(value: unknown): Record<string, string> {
     .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     .toSorted(([left], [right]) => left.localeCompare(right));
   return Object.fromEntries(entries);
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function readSize(value: unknown): { width: number; height: number } {
@@ -162,7 +162,7 @@ function normalizeChromeGraphicsInfo(
     devices,
     featureStatus,
     disabledFeatures,
-    driverBugWorkarounds: readStringArray(gpu.driverBugWorkarounds),
+    driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
     videoDecoding: readVideoDecoding(gpu.videoDecoding),
     videoEncoding: readVideoEncoding(gpu.videoEncoding),
   };

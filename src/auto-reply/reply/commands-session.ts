@@ -20,7 +20,7 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -314,7 +314,9 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
                   sessionKey: params.sessionKey,
                   storePath:
                     params.storePath ??
-                    resolveStorePath(params.cfg.session?.store, { agentId: usageAgentId }),
+                    resolveSessionStorePathCore(params.cfg.session?.store, {
+                      agentId: usageAgentId,
+                    }),
                 }),
               },
             }

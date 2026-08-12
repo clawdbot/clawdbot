@@ -12,6 +12,7 @@ import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -28,7 +29,6 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,

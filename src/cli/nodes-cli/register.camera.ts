@@ -22,13 +22,13 @@ import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeNonNegativeInteger,
   parseOptionalNodePositiveInteger,
-  resolveNode,
-  resolveNodeId,
+  resolveCliNode,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -57,8 +57,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const raw = await callGatewayCli(
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
+          const raw = await callNodesGatewayCli(
             "node.invoke",
             opts,
             buildNodeInvokeParams({
@@ -128,7 +128,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
           const facingOpt = normalizeLowercaseStringOrEmpty(
             normalizeOptionalString(opts.facing) ?? "",
@@ -186,7 +186,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               timeoutMs,
             });
 
-            const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+            const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
             const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
             const filePath = cameraTempPath({
               kind: "snap",
@@ -233,7 +233,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 90000)", "90000")
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
-          const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
           const facing = parseFacing(opts.facing ?? "front");
           const target = resolveCameraClipTarget({ facing, platform: node.platform });
@@ -258,7 +258,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             timeoutMs,
           });
 
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
           const filePath = await writeCameraClipPayloadToFile({
             payload,

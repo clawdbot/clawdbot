@@ -31,7 +31,7 @@ import {
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
-  resolveAllowedModelRef as resolveAllowedModelRefInternal,
+  resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
   resolveConfiguredModelFallbacks,
 } from "./model-selection-resolve.js";
 import {

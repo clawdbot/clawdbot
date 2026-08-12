@@ -21,8 +21,8 @@ import {
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -381,11 +381,11 @@ export function createGatewayAuxHandlers(params: {
               const restartedChannels = new Set<ChannelKind>();
               try {
                 for (;;) {
-                  const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+                  const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
                   if (!previousSnapshot) {
                     throw new Error("Secrets runtime snapshot is not active.");
                   }
-                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                   const previousGenerationOwnership =
                     captureSharedGatewaySessionGenerationOwnership(
                       params.sharedGatewaySessionGenerationState,
@@ -404,7 +404,7 @@ export function createGatewayAuxHandlers(params: {
                       publishFailureAsDegraded: true,
                       forceColdRefKeys: reloadOptions?.forceColdRefKeys,
                       canPublishFailureAsDegraded: () =>
-                        getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
+                        getActiveSecretsRuntimeSnapshotRevisionState() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
@@ -425,7 +425,7 @@ export function createGatewayAuxHandlers(params: {
                         activate: true,
                       },
                       async () => {
-                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                         generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
                           params.sharedGatewaySessionGenerationState,
                           previousGenerationOwnership,

@@ -1112,6 +1112,34 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("invalidates the projection cursor when a later chunk fails terminally", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-terminal-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    const invalidate = vi.spyOn(cursor, "invalidate");
+    botApi.sendMessage
+      .mockResolvedValueOnce({
+        message_id: 1601,
+        date: 1_779_394_745,
+        chat: { id: "123", type: "private" },
+        from: { id: 42, is_bot: true, first_name: "Kelaw" },
+        text: "page one",
+      })
+      .mockRejectedValueOnce(new Error("400: Bad Request: chat not found"));
+
+    await expect(
+      sendMessageTelegram("123", "A".repeat(4200), {
+        cfg,
+        token: "tok",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      }),
+    ).rejects.toThrow();
+
+    expect(invalidate).toHaveBeenCalled();
+  });
+
   it("records transcript projection metadata for native locations", async () => {
     const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };

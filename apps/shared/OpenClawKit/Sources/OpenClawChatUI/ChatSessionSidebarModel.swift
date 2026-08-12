@@ -488,7 +488,8 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String) -> Bool
     {
         let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
+        return self.normalized(session.sessionId) != nil &&
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
             session.hasActiveRun != true &&
             session.hasActiveSubagentRun != true &&
             status != "running"

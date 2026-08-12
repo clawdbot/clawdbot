@@ -2,7 +2,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
@@ -27,7 +27,7 @@ function formatTimestampWithAge(valueMs?: number) {
 
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
   return {

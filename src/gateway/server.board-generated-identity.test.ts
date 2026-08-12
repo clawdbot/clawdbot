@@ -11,7 +11,11 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -47,7 +51,7 @@ it(
 
     const events: string[] = [];
     const start = async () => {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       const server = await startTestGatewayServer(port, {
         auth: { mode: "none" },
         bind: "loopback",

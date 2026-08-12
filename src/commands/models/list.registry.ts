@@ -1,6 +1,6 @@
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
-  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 /** Model registry access helpers for `openclaw models list`. */
@@ -72,7 +72,7 @@ function loadAvailableModels(
             baseUrl: model.baseUrl,
             config: cfg,
           })
-        : !shouldSuppressBuiltInModel({
+        : !shouldSuppressBuiltInModelCore({
             provider: model.provider,
             id: model.id,
             baseUrl: model.baseUrl,
@@ -108,7 +108,7 @@ export async function loadModelRegistry(
   });
   const models = registry.getAll().filter((model) =>
     runtimeSuppression
-      ? !shouldSuppressBuiltInModel({
+      ? !shouldSuppressBuiltInModelCore({
           provider: model.provider,
           id: model.id,
           baseUrl: model.baseUrl,

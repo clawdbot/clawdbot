@@ -145,7 +145,7 @@ export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise
   }
 }
 
-export async function pathExists(target: string): Promise<boolean> {
+export async function worktreePathExists(target: string): Promise<boolean> {
   try {
     await fs.lstat(target);
     return true;

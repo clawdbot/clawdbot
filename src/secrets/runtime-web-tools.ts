@@ -36,7 +36,7 @@ import {
 } from "./runtime-owner-assignments.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
-import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import {
   hasConfiguredSecretRef,
@@ -153,7 +153,7 @@ function collectUnavailableWebProviders(params: {
       forceColdRefKeys: params.forceColdRefKeys,
     });
     if (degradationState === "stale") {
-      const active = getActiveSecretsRuntimeSnapshot();
+      const active = getActiveSecretsRuntimeSnapshotState();
       const activeOwner = active?.secretOwners?.find(
         (entry) =>
           entry.ownerKind === "capability" &&
@@ -240,7 +240,7 @@ function associateWebProviderResolutionError(params: {
     };
   });
   const ownerIds = new Set(owners.map((owner) => owner.ownerId));
-  const activeCoOwners = (getActiveSecretsRuntimeSnapshot()?.secretOwners ?? []).flatMap(
+  const activeCoOwners = (getActiveSecretsRuntimeSnapshotState()?.secretOwners ?? []).flatMap(
     (owner) => {
       if (
         owner.ownerKind !== "capability" ||

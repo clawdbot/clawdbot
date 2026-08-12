@@ -30,12 +30,12 @@ vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-const { runSecurityAudit } = await import("./audit.js");
+const { runSecurityAuditCore } = await import("./audit.js");
 
 function createAuditOptions(params: {
   sourceConfig: OpenClawConfig;
-  plugins: Parameters<typeof runSecurityAudit>[0]["plugins"];
-}): Parameters<typeof runSecurityAudit>[0] {
+  plugins: Parameters<typeof runSecurityAuditCore>[0]["plugins"];
+}): Parameters<typeof runSecurityAuditCore>[0] {
   return {
     config: params.sourceConfig,
     sourceConfig: params.sourceConfig,
@@ -97,7 +97,7 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await runSecurityAudit(
+    await runSecurityAuditCore(
       createAuditOptions({
         sourceConfig,
         plugins: [],
@@ -145,7 +145,7 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await runSecurityAudit(
+    await runSecurityAuditCore(
       createAuditOptions({
         sourceConfig,
         plugins: [{ id: "external-channel-plugin" }] as never,
@@ -169,7 +169,7 @@ describe("security audit read-only plugin scope", () => {
       },
     };
 
-    const report = await runSecurityAudit({
+    const report = await runSecurityAuditCore({
       ...createAuditOptions({
         sourceConfig,
         plugins: [],
@@ -191,7 +191,7 @@ describe("security audit read-only plugin scope", () => {
       },
     };
 
-    await runSecurityAudit({
+    await runSecurityAuditCore({
       config: sourceConfig,
       sourceConfig,
       env: {},

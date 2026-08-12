@@ -17,7 +17,7 @@ import {
 import { resolveSessionSubscriptionKeys } from "../session-subscription-keys.js";
 import {
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -84,7 +84,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Session entry carries per-session model overrides; utility routing must
     // derive its small-model default from the provider this session actually
     // uses, not the agent's configured default.
-    const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
+    const { cfg: sessionCfg, entry } = loadGatewaySessionEntryReadOnly(
       params.sessionKey,
       selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
     );

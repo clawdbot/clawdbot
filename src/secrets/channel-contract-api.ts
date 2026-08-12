@@ -19,6 +19,7 @@ import {
 } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -203,18 +204,29 @@ export function loadChannelSecretContractApi(params: {
   // External contracts are considered only after bundled artifacts so core channels keep their
   // shipped metadata stable even when similarly named plugins are installed.
   const env = params.env ?? process.env;
-  for (const record of listChannelSecretContractRecords({
-    channelId: params.channelId,
-    config: params.config,
-    env,
-    loadablePluginOrigins: params.loadablePluginOrigins,
-  })) {
+  const officialFallback = loadOfficialExternalChannelSecretContractApi(params.channelId);
+  let records: PluginManifestRecord[];
+  try {
+    records = listChannelSecretContractRecords({
+      channelId: params.channelId,
+      config: params.config,
+      env,
+      loadablePluginOrigins: params.loadablePluginOrigins,
+    });
+  } catch (error) {
+    // Catalog contracts are process-stable fallbacks when plugin metadata is unavailable.
+    if (officialFallback) {
+      return officialFallback;
+    }
+    throw error;
+  }
+  for (const record of records) {
     const contract = loadExternalChannelSecretContractFromRecord(record, env);
     if (contract) {
       return contract;
     }
   }
-  return undefined;
+  return officialFallback;
 }
 
 /** Loads a channel secret contract directly from a manifest record. */

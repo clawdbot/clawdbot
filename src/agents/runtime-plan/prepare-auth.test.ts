@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { getApiKeyForModelCore } from "../model-auth.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -1219,7 +1219,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       maxTokens: 128_000,
     } as Model;
     const profileAttempt = prepared.attempts[0];
-    const profileResolved = await getApiKeyForModel({
+    const profileResolved = await getApiKeyForModelCore({
       model,
       cfg: config,
       profileId: profileAttempt?.profileId,
@@ -1417,7 +1417,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         },
       });
 
-      const resolved = await getApiKeyForModel({
+      const resolved = await getApiKeyForModelCore({
         model: {
           id: "gpt-5.5",
           name: "GPT-5.5",

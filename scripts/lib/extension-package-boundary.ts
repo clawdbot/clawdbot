@@ -158,6 +158,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
   ],
   "@openclaw/media-core": ["../dist/plugin-sdk/packages/media-core/src/index.d.ts"],
+  "@openclaw/media-core/attachment-classify": [
+    "../dist/plugin-sdk/packages/media-core/src/attachment-classify.d.ts",
+  ],
   "@openclaw/media-core/base64": ["../dist/plugin-sdk/packages/media-core/src/base64.d.ts"],
   "@openclaw/media-core/constants": ["../dist/plugin-sdk/packages/media-core/src/constants.d.ts"],
   "@openclaw/media-core/content-length": [

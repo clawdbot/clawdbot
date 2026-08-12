@@ -316,7 +316,7 @@ Docker notes:
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Harness baseline model: `openai/gpt-5.6-luna`
-- Fresh OpenAI API-key selection default: `openai/gpt-5.6`
+- Fresh OpenAI API-key selection default: `openai/gpt-5.6-sol`
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
 - Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
@@ -509,7 +509,7 @@ OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6`, and then
+the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6-sol`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:

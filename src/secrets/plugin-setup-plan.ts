@@ -1,8 +1,9 @@
 /** Shared plan construction for plugin-owned SecretRef setup commands. */
 import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
 import type { PluginIntegrationSecretProviderConfig, SecretRef } from "../config/types.secrets.js";
+import { toDotPath } from "../shared/dot-path.js";
 import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
-import { resolveSecretPlanTargetByPath } from "./target-registry-query.js";
+import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
 type PluginSecretRefProviderMapping = {
   providerId: string;
@@ -24,10 +25,6 @@ function parseDotPath(pathname: string): string[] {
     .split(".")
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
-}
-
-function toDotPath(segments: string[]): string {
-  return segments.join(".");
 }
 
 export function assertValidPluginSecretProviderAlias(value: string): void {
@@ -101,7 +98,7 @@ function createPluginConfigSecretTarget(params: {
   ) {
     throw new Error(`Invalid --target config path: ${params.path}`);
   }
-  const resolved = resolveSecretPlanTargetByPath({
+  const resolved = resolveSecretPlanTargetByPathCore({
     configFile: params.agentId ? "auth-profiles.json" : "openclaw.json",
     pathSegments,
   });

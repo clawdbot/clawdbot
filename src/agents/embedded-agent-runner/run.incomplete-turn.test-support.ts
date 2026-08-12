@@ -10,10 +10,8 @@ import type { FailoverReason } from "../failover/signal.js";
 import type { AgentHarness } from "../harness/types.js";
 import { buildEmbeddedRunBlockedResult } from "./run/blocked-run-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
-import {
-  resolveReplayInvalidFlag,
-  shouldRetrySilentErrorAssistantTurn,
-} from "./run/incomplete-turn.js";
+import { shouldRetrySilentErrorAssistantTurn } from "./run/incomplete-turn-recovery.js";
+import { resolveReplayInvalidFlag } from "./run/incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";

@@ -4,8 +4,8 @@
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
-import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./run/attempt-result.js";
+import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
 
 const DEFAULT_OVERFLOW_ERROR_MESSAGE =
   "request_too_large: Request size exceeds model context window";
@@ -38,7 +38,7 @@ export function makeCompactionSuccess(params: {
   };
 }
 
-type AttemptResultOverrides = Partial<EmbeddedRunAttemptResult> &
+type AttemptResultOverrides = Partial<EmbeddedRunAttemptWithReceiptEvidence> &
   Parameters<typeof normalizeAgentRunAttemptTerminal>[0];
 
 function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
@@ -47,7 +47,7 @@ function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
 
 export function makeAttemptResult(
   overrides: AttemptResultOverrides = {},
-): EmbeddedRunAttemptResult {
+): EmbeddedRunAttemptWithReceiptEvidence {
   const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
     Object.assign({}, entry, {
       replaySafe: entry.replaySafe ?? isAgentToolReplaySafe({ name: entry.toolName }),

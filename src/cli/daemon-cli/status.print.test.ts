@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -138,7 +138,7 @@ describe("printDaemonStatus", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases in human status",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const logFile = path.join(home, "logs", "gateway.log");
         await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
         await fs.promises.writeFile(logFile, "ready", "utf8");

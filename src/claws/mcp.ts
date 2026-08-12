@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
-import { listConfiguredMcpServers, setConfiguredMcpServer } from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,

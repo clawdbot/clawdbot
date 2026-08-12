@@ -87,6 +87,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const selectedSessionId = selectedSession?.sessionId?.trim() || undefined;
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -370,12 +371,14 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
               kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
-              disabledReason: mutationAccess.unarchive.allowed
-                ? undefined
-                : mutationAccess.unarchive.reason,
+              disabledReason: !selectedSessionId
+                ? "Session lifecycle action requires a durable session identity."
+                : mutationAccess.unarchive.allowed
+                  ? undefined
+                  : mutationAccess.unarchive.reason,
               onAction: () => {
-                if (mutationAccess.unarchive.allowed) {
-                  void this.restoreArchivedSession(state.sessionKey);
+                if (selectedSessionId && mutationAccess.unarchive.allowed) {
+                  void this.restoreArchivedSession(state.sessionKey, selectedSessionId);
                 }
               },
             }
@@ -567,6 +570,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
+      replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
       onNewSession: () => void this.createSession(),
@@ -598,7 +602,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
-      gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const primary = this.renderBoardPrimary(board, chat);

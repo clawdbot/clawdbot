@@ -458,31 +458,149 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("applies reset kept-tail projection to file-backed history", async () => {
-    const sessionId = "test-session-reset-boundary";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      createTranscriptMessage("old", null, "user", "old"),
-      createTranscriptMessage("kept-user", "old", "user", "kept question"),
-      createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
-      createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        timestamp: "2026-07-22T00:00:00.000Z",
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
-      createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
-    ]);
+  test.each([
+    {
+      name: "keeps the reset marker first when no earlier entries survive",
+      sessionId: "test-session-reset-no-kept",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "old",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["reset", "new turn"],
+    },
+    {
+      name: "places the reset marker between retained and new turns",
+      sessionId: "test-session-reset-kept-tail",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        createTranscriptMessage("kept-user", "old", "user", "kept question"),
+        createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
+        createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "kept-assistant",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "new",
+          firstKeptEntryId: "kept-user",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["kept question", "kept answer", "reset", "new turn"],
+    },
+    {
+      name: "drops an earlier compaction marker at a later reset boundary",
+      sessionId: "test-session-compaction-then-reset",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "compaction",
+          id: "compaction-before-reset",
+          timestamp: "2026-07-22T00:00:00.000Z",
+        },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "compaction-before-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "assistant", "new answer"),
+      ],
+      expected: ["reset", "new answer"],
+    },
+    {
+      name: "preserves reset then compaction marker order",
+      sessionId: "test-session-reset-then-compaction",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: null,
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+        {
+          type: "compaction",
+          id: "compaction-after-reset",
+          parentId: "post-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+        },
+        createTranscriptMessage(
+          "post-compaction",
+          "compaction-after-reset",
+          "assistant",
+          "new answer",
+        ),
+      ],
+      expected: ["reset", "new turn", "compaction", "new answer"],
+    },
+  ])("$name", async ({ sessionId, entries, expected }) => {
+    writeTranscript(tmpDir, sessionId, entries(sessionId));
 
-    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+    const project = (messages: unknown[]) =>
+      messages.map((message) => {
+        const record = message as { content?: unknown; __openclaw?: { kind?: string } };
+        return record["__openclaw"]?.kind ?? record.content;
+      });
+    const full = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
       reason: "test reset boundary",
     });
+    const recent = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      maxBytes: 16_384,
+    });
 
-    expectMessageContents(messages, ["kept question", "kept answer", "new turn"]);
+    expect(project(full)).toEqual(expected);
+    expect(project(recent.messages)).toEqual(expected);
+  });
+
+  test("keeps reset markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-reset";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("old-user", null, "user", "old prompt"),
+      {
+        type: "reset",
+        id: "reset-1",
+        parentId: "old-user",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "reset",
+      },
+      createTranscriptMessage("active-user", "reset-1", "user", "active prompt"),
+      createTranscriptMessage("active-assistant", "active-user", "assistant", "active answer"),
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Reset" }],
+      openclaw: { kind: "reset", id: "reset-1", seq: 1 },
+    });
   });
 
   test("keeps parentless linear history after a leaf control", async () => {

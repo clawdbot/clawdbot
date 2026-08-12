@@ -34,7 +34,7 @@ vi.mock("./config.js", () => {
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryCore: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
