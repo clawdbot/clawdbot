@@ -567,7 +567,10 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
-    recordReplyOperationAgentTurn(replyOperationRunState, "failed");
+    recordReplyOperationAgentTurn(
+      replyOperationRunState,
+      replyOperation.result?.kind === "aborted" ? "cancelled" : "failed",
+    );
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,

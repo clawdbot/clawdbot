@@ -10,6 +10,7 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -548,14 +549,16 @@ describe("runReplyAgent runtime config", () => {
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("does not start the main turn after cancellation during memory flush", async () => {
+  it("records cancellation during memory flush without starting the main turn", async () => {
+    const runState: ReplyOperationRunState = {};
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
+    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: { replyOperation: { abortByUser: () => boolean } }) => {
+      async (params: { replyOperation: ReplyOperation }) => {
         expect(params.replyOperation.abortByUser()).toBe(true);
         return { sessionEntry: undefined, outcome: "failed" };
       },
@@ -564,6 +567,29 @@ describe("runReplyAgent runtime config", () => {
     const result = await runReplyAgent(replyParams);
 
     expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    expect(executeAgentTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("records cancellation during preflight compaction without starting the main turn", async () => {
+    const runState: ReplyOperationRunState = {};
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { replyOperation: ReplyOperation }) => {
+        expect(params.replyOperation.abortByUser()).toBe(true);
+        throw params.replyOperation.abortSignal.reason;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
