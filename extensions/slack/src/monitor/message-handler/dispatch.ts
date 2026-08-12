@@ -442,6 +442,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return false;
         },
         onQueuedFollowupAdmitted: progress.onQueuedFollowupAdmitted,
+        onQueuedFollowupSettled: progress.onQueuedFollowupSettled,
         onReasoningStream:
           statusReactionsEnabled || progress.previewToolProgressEnabled
             ? async (payload) => {
@@ -592,6 +593,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (dispatchError || agentRunFailed) {
     await progress.finalizeDraftProgressCard("error");
   }
+  await progress.dropDetachedProgressCards();
 
   if (statusReactionsEnabled) {
     if (dispatchError || agentRunFailed) {

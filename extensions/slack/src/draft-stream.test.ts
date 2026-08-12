@@ -197,6 +197,45 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("333.444");
   });
 
+  it("drops a posted preview detached by forceNewMessage", async () => {
+    const { stream, remove } = createDraftStreamHarness();
+
+    stream.update("working");
+    await stream.flush();
+    stream.forceNewMessage();
+    await stream.dropDetachedMessages();
+    await stream.dropDetachedMessages();
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("C123", "111.222", {
+      token: "xoxb-test",
+      accountId: undefined,
+    });
+  });
+
+  it("does not drop a finalized preview after forceNewMessage", async () => {
+    const { stream, remove } = createDraftStreamHarness();
+
+    stream.update("finished");
+    await stream.flush();
+    await stream.seal();
+    await expect(stream.finalizeMessage("111.222", async () => {})).resolves.toBe(true);
+    stream.forceNewMessage();
+    await stream.dropDetachedMessages();
+
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("does not issue wire calls when no detached preview exists", async () => {
+    const { stream, send, edit, remove } = createDraftStreamHarness();
+
+    await stream.dropDetachedMessages();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("rearms updates after sealing and finalizing the previous message", async () => {
     const send = vi
       .fn<DraftSendFn>()
