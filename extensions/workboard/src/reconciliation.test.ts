@@ -58,52 +58,102 @@ describe("WorkboardReconciler", () => {
     expect(repeated.card.title).toBe("External run");
   });
 
-  it("returns the persisted association for a duplicate idempotency key", async () => {
+  it("replays an older persisted association after a newer link without creating another card", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
-    const created = await reconciler.apply({
-      sourceUrl: "https://example.test/runs/17",
+    const first = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/17/a",
       tenant: "acme",
-      idempotencyKey: "run-17-v1",
+      idempotencyKey: "run-17-a",
       sourceUpdatedAt: 100,
-      link: { title: "Persisted title" },
+      link: { title: "First association" },
       card: { title: "External run", boardId: "reconcile" },
     });
 
-    const repeated = await reconciler.apply({
-      sourceUrl: "https://attacker.test/runs/17",
+    const second = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/17/b",
       tenant: "acme",
-      idempotencyKey: "run-17-v1",
+      idempotencyKey: "run-17-b",
+      sourceUpdatedAt: 200,
+      cardId: first.card.id,
+      card: { title: "Newer title" },
+    });
+    const replayed = await reconciler.apply({
+      sourceUrl: "https://attacker.test/runs/17/a",
+      tenant: "acme",
+      idempotencyKey: "run-17-a",
       sourceUpdatedAt: 999,
       link: { title: "Incoming title" },
       card: { title: "Changed title" },
     });
 
-    expect(repeated.link).toEqual(created.link);
+    expect(second.card.id).toBe(first.card.id);
+    expect(replayed.card.id).toBe(first.card.id);
+    expect(replayed.link).toEqual({
+      sourceUrl: "https://example.test/runs/17/a",
+      tenant: "acme",
+      idempotencyKey: "run-17-a",
+      sourceUpdatedAt: 100,
+      title: "First association",
+    });
+    expect(
+      replayed.card.metadata?.links?.filter((link) => link.id.startsWith("external:")),
+    ).toHaveLength(2);
   });
 
-  it("does not apply an older observation", async () => {
+  it("associates an older new link without regressing lifecycle-controlled card fields", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const created = await reconciler.apply({
       sourceUrl: "https://example.test/runs/18",
       tenant: "acme",
       idempotencyKey: "run-18-v2",
       sourceUpdatedAt: 200,
-      card: { title: "Fresh title", boardId: "reconcile" },
+      card: { title: "Fresh title", status: "running", boardId: "reconcile" },
     });
 
     const stale = await reconciler.apply({
-      sourceUrl: "https://example.test/runs/18",
+      sourceUrl: "https://example.test/runs/18/older",
       tenant: "acme",
       idempotencyKey: "run-18-v1",
       sourceUpdatedAt: 100,
       cardId: created.card.id,
-      card: { title: "Stale title" },
+      card: { title: "Stale title", status: "todo" },
     });
 
     expect(stale).toMatchObject({
-      applied: false,
-      card: { id: created.card.id, title: "Fresh title" },
+      applied: true,
+      card: { id: created.card.id, title: "Fresh title", status: "running" },
     });
+    expect(stale.card.metadata?.lifecycleStatusSourceUpdatedAt).toBe(200);
+    expect(stale.card.metadata?.links?.map((link) => link.id)).toContain("external:run-18-v1");
+  });
+
+  it("fails closed when an explicit card belongs to another tenant", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const owner = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/tenant-owner",
+      tenant: "acme",
+      idempotencyKey: "tenant-owner-v1",
+      sourceUpdatedAt: 100,
+      card: { title: "Tenant-owned", boardId: "reconcile" },
+    });
+
+    const rejected = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/tenant-attacker",
+      tenant: "other",
+      idempotencyKey: "tenant-attacker-v1",
+      sourceUpdatedAt: 200,
+      cardId: owner.card.id,
+      card: { title: "Foreign overwrite", status: "running" },
+    });
+
+    expect(rejected).toMatchObject({
+      applied: false,
+      card: { id: owner.card.id, title: "Tenant-owned" },
+    });
+    expect(rejected.card.metadata?.automation?.tenant).toBe("acme");
+    expect(rejected.card.metadata?.links?.map((link) => link.id)).not.toContain(
+      "external:tenant-attacker-v1",
+    );
   });
 
   it.each(["blocked", "review", "done"] as const)(

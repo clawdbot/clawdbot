@@ -662,6 +662,10 @@ function normalizeLink(value: unknown): WorkboardLink | null {
   const targetCardId = normalizeBoundedString(record.targetCardId, undefined, 120, "link target");
   const title = normalizeBoundedString(record.title, undefined, 180, "link title");
   const url = normalizeBoundedString(record.url, undefined, 2000, "link URL");
+  const sourceUpdatedAt =
+    typeof record.sourceUpdatedAt === "number" && Number.isFinite(record.sourceUpdatedAt)
+      ? normalizeTimestamp(record.sourceUpdatedAt, 0)
+      : undefined;
   if (!targetCardId && !url) {
     return null;
   }
@@ -669,6 +673,7 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     id,
     type: normalizeLinkType(record.type, "relates_to"),
     createdAt,
+    ...(sourceUpdatedAt !== undefined ? { sourceUpdatedAt } : {}),
     ...(targetCardId ? { targetCardId } : {}),
     ...(title ? { title } : {}),
     ...(url ? { url } : {}),

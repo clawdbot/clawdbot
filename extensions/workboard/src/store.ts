@@ -56,17 +56,38 @@ function reconciliationLinkFor(
   card: WorkboardCard,
   fallback: WorkboardExternalExecutionLink,
 ): WorkboardExternalExecutionLink {
-  const idempotencyKey = card.metadata?.automation?.idempotencyKey;
-  const link = idempotencyKey
-    ? card.metadata?.links?.find((entry) => entry.id === `external:${idempotencyKey}`)
-    : undefined;
+  const link = card.metadata?.links?.find(
+    (entry) => entry.id === `external:${fallback.idempotencyKey}`,
+  );
   return {
     sourceUrl: link?.url ?? card.sourceUrl ?? fallback.sourceUrl,
     tenant: card.metadata?.automation?.tenant ?? fallback.tenant,
-    idempotencyKey: idempotencyKey ?? fallback.idempotencyKey,
-    sourceUpdatedAt: card.metadata?.lifecycleStatusSourceUpdatedAt ?? fallback.sourceUpdatedAt,
+    idempotencyKey: fallback.idempotencyKey,
+    sourceUpdatedAt: link?.sourceUpdatedAt ?? fallback.sourceUpdatedAt,
     ...(link?.title ? { title: link.title } : {}),
   };
+}
+
+function externalLinkId(link: WorkboardExternalExecutionLink): string {
+  return `external:${link.idempotencyKey}`;
+}
+
+function hasExternalLink(card: WorkboardCard, link: WorkboardExternalExecutionLink): boolean {
+  return card.metadata?.links?.some((entry) => entry.id === externalLinkId(link)) ?? false;
+}
+
+function appendExternalLink(card: WorkboardCard, link: WorkboardExternalExecutionLink) {
+  return [
+    ...(card.metadata?.links ?? []),
+    {
+      id: externalLinkId(link),
+      type: "relates_to" as const,
+      createdAt: Date.now(),
+      sourceUpdatedAt: link.sourceUpdatedAt,
+      url: link.sourceUrl,
+      ...(link.title ? { title: link.title } : {}),
+    },
+  ];
 }
 
 function reconciliationResult(
@@ -92,7 +113,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const duplicate = cards.find(
         (card) =>
           card.metadata?.automation?.tenant === link.tenant &&
-          card.metadata?.automation?.idempotencyKey === link.idempotencyKey,
+          (card.metadata?.automation?.idempotencyKey === link.idempotencyKey ||
+            hasExternalLink(card, link)),
       );
       if (duplicate) {
         return reconciliationResult(duplicate, true, reconciliationLinkFor(duplicate, link));
@@ -107,19 +129,31 @@ export class WorkboardStore extends WorkboardNotificationStore {
           );
       if (existing) {
         if (
+          existing.metadata?.automation?.tenant !== undefined &&
+          existing.metadata.automation.tenant !== link.tenant
+        ) {
+          return reconciliationResult(existing, false, link);
+        }
+        if (
           observation.expectedRevision !== undefined &&
           observation.expectedRevision !== existing.updatedAt
         ) {
           return reconciliationResult(existing, false, link);
         }
-        if (
-          existing.metadata?.lifecycleStatusSourceUpdatedAt !== undefined &&
-          link.sourceUpdatedAt <= existing.metadata.lifecycleStatusSourceUpdatedAt
-        ) {
-          return reconciliationResult(existing, false, link);
-        }
         if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
           return reconciliationResult(existing, false, link);
+        }
+        if (
+          existing.metadata?.lifecycleStatusSourceUpdatedAt !== undefined &&
+          link.sourceUpdatedAt < existing.metadata.lifecycleStatusSourceUpdatedAt
+        ) {
+          const associated = await this.updateCard(existing.id, {
+            metadata: {
+              ...existing.metadata,
+              links: appendExternalLink(existing, link),
+            },
+          });
+          return reconciliationResult(associated, true, reconciliationLinkFor(associated, link));
         }
         const patch = observation.card ?? {};
         const updated = await this.updateCard(existing.id, {
@@ -133,16 +167,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           metadata: {
             ...existing.metadata,
             lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
-            links: [
-              ...(existing.metadata?.links ?? []),
-              {
-                id: `external:${link.idempotencyKey}`,
-                type: "relates_to",
-                createdAt: Date.now(),
-                url: link.sourceUrl,
-                ...(link.title ? { title: link.title } : {}),
-              },
-            ],
+            links: appendExternalLink(existing, link),
           },
         });
         return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
@@ -167,6 +192,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               id: `external:${link.idempotencyKey}`,
               type: "relates_to",
               createdAt: Date.now(),
+              sourceUpdatedAt: link.sourceUpdatedAt,
               url: link.sourceUrl,
               ...(link.title ? { title: link.title } : {}),
             },

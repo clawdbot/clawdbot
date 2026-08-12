@@ -142,6 +142,8 @@ export type WorkboardLink = {
   id: string;
   type: WorkboardLinkType;
   createdAt: number;
+  /** Source timestamp for durable external-execution associations only. */
+  sourceUpdatedAt?: number;
   targetCardId?: string;
   title?: string;
   url?: string;
