@@ -2276,7 +2276,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("approved local file path");
   });
 
-  it("omits the self-serve path without the caller's host-placement fact", async () => {
+  it("defers the self-serve path until the final runtime capability", async () => {
     const filePath = await createTempMediaFile({
       fileName: "sandboxed.doc",
       content: Buffer.from("Root Entry WordDocument legacy preview", "utf8"),
@@ -2286,17 +2286,21 @@ describe("applyMediaUnderstanding", () => {
       body: "<media:file>",
       mediaPath: filePath,
       mediaType: "application/msword",
-      // Sandboxed/unknown placement: the caller does not vouch for host paths.
+      // Preprocessing does not yet own the final reply tool surface.
       selfServeLocalPaths: false,
     });
 
-    // A path the executing runtime cannot open must never be directed at
-    // (#122411 tracks sandbox-staged references).
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain(
       "[Unsupported document format: application/msword. PDF and plain-text attachments can be read.]",
     );
-    expect(ctx.Body).not.toContain("The file is saved at");
+    expect(ctx.Body).not.toContain("approved local file path");
+
+    result.enableLocalPathSelfServe?.(ctx);
+
+    expect(ctx.Body).toContain("approved local file path");
+    expect(ctx.Body).toContain(filePath);
+    expect(ctx.Body).not.toContain("PDF and plain-text attachments can be read");
   });
 
   it("never renders hostile declared MIME metadata into model context", async () => {

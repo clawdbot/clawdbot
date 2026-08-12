@@ -61,6 +61,7 @@ export type ApplyMediaUnderstandingResult = {
   appliedAudio: boolean;
   appliedVideo: boolean;
   appliedFile: boolean;
+  enableLocalPathSelfServe?: (...contexts: MsgContext[]) => void;
 };
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
@@ -113,6 +114,7 @@ type ClassifiedFileAttachment = {
 };
 
 type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
+type LocalPathSelfServeUpgrade = { fallback: string; selfServe: string };
 
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
@@ -131,7 +133,6 @@ async function classifyFileAttachment(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
-  selfServePathsEnabled: boolean;
 }): Promise<ClassifiedFileAttachment> {
   const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
   const attachmentFilename =
@@ -178,12 +179,9 @@ async function classifyFileAttachment(params: {
   // reaches model context; undefined drops the mime from block and marker.
   const classifiedMime = sanitizeMimeType(classification.mime);
   const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? classifiedMime;
-  // Self-serve only for the cache's root-approved local read; a raw
-  // attachment.path may be blocked by policy with bytes served via URL
-  // fallback, and the marker must never point the agent at a blocked path.
-  // The caller vouches for host placement — sandboxed runtimes reject host
-  // mount paths, so absent that fact the directive stays off (#122411).
-  const selfServeLocalPath = params.selfServePathsEnabled ? bufferResult.localPath : undefined;
+  // Preserve only the cache's root-approved local read. Rendering still waits
+  // for the reply runtime's final filesystem capability (#122411).
+  const selfServeLocalPath = bufferResult.localPath;
   if (
     classification.class !== "text" &&
     !(classification.class === "document" && classification.mime === "application/pdf")
@@ -289,10 +287,11 @@ async function extractFileContext(params: {
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
-    return { blocks: [], images: [] };
+    return { blocks: [], images: [], localPathSelfServeUpgrades: [] };
   }
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
+  const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
@@ -303,7 +302,6 @@ async function extractFileContext(params: {
       cfg,
       limits,
       skipAttachmentIndexes,
-      selfServePathsEnabled: params.selfServePathsEnabled,
     });
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
@@ -313,21 +311,54 @@ async function extractFileContext(params: {
         })),
       );
     }
-    const blockText = renderFileAttachmentOutcome(outcome);
+    const blockText = renderFileAttachmentOutcome(outcome, {
+      selfServeLocalPaths: params.selfServePathsEnabled,
+    });
     if (blockText === null) {
       continue;
     }
-    blocks.push({
-      text: renderFileContextBlock({
+    const renderBlock = (content: string) =>
+      renderFileContextBlock({
         filename,
         fallbackName: `file-${attachment.index + 1}`,
         mimeType,
-        content: blockText,
-      }),
+        content,
+      });
+    const text = renderBlock(blockText);
+    blocks.push({
+      text,
       consumesMarkerBudget: isSkippedFileOutcome(outcome),
     });
+    if (outcome.kind === "unsupported-format" && outcome.localPath) {
+      const fallback = renderFileAttachmentOutcome(outcome, { selfServeLocalPaths: false });
+      const selfServe = renderFileAttachmentOutcome(outcome, { selfServeLocalPaths: true });
+      if (fallback && selfServe) {
+        localPathSelfServeUpgrades.push({
+          fallback: renderBlock(fallback),
+          selfServe: renderBlock(selfServe),
+        });
+      }
+    }
   }
-  return { blocks, images };
+  return { blocks, images, localPathSelfServeUpgrades };
+}
+
+const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
+
+function enableLocalPathSelfServe(
+  upgrades: LocalPathSelfServeUpgrade[],
+  contexts: MsgContext[],
+): void {
+  for (const context of contexts) {
+    for (const upgrade of upgrades) {
+      for (const field of SELF_SERVE_CONTEXT_FIELDS) {
+        const value = context[field];
+        if (typeof value === "string") {
+          context[field] = value.replace(upgrade.fallback, upgrade.selfServe);
+        }
+      }
+    }
+  }
 }
 
 function renderMediaAttachmentMarkers(params: {
@@ -395,7 +426,7 @@ export async function applyMediaUnderstanding(params: {
   activeModel?: ActiveMediaModel;
   /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
   processingMode?: "audio-only";
-  /** Caller-owned placement fact: true when the executing agent can open host-local media paths. */
+  /** Render local paths immediately only when the caller owns the final tool surface. */
   selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
   deliveredImageIndexes?: ReadonlySet<number>;
@@ -545,7 +576,7 @@ export async function applyMediaUnderstanding(params: {
     );
     const fileContext =
       params.processingMode === "audio-only"
-        ? { blocks: [], images: [] }
+        ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
         : await extractFileContext({
             attachments,
             cache,
@@ -585,6 +616,12 @@ export async function applyMediaUnderstanding(params: {
       appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
       appliedVideo: outputs.some((output) => output.kind === "video.description"),
       appliedFile: fileContext.blocks.length > 0,
+      ...(fileContext.localPathSelfServeUpgrades.length > 0
+        ? {
+            enableLocalPathSelfServe: (...contexts: MsgContext[]) =>
+              enableLocalPathSelfServe(fileContext.localPathSelfServeUpgrades, contexts),
+          }
+        : {}),
     };
   } finally {
     await cache.cleanup();

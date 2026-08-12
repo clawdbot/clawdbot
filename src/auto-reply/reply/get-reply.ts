@@ -201,11 +201,11 @@ function canSelfServeLocalPaths(params: {
   provider: string;
   model: string;
   opts?: GetReplyOptions;
-  hasProviderToolPolicy: boolean;
+  senderIsOwner: boolean;
+  spawnedBy?: string;
 }): boolean {
   if (
     params.opts?.disableTools === true ||
-    params.hasProviderToolPolicy ||
     !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })
   ) {
     return false;
@@ -237,10 +237,12 @@ function canSelfServeLocalPaths(params: {
       normalizeOptionalString(params.ctx.GroupSubject),
     groupSpace: normalizeOptionalString(params.ctx.GroupSpace),
     memberRoleIds: params.ctx.MemberRoleIds,
+    spawnedBy: params.spawnedBy,
     senderId: normalizeOptionalString(params.ctx.SenderId),
     senderName: normalizeOptionalString(params.ctx.SenderName),
     senderUsername: normalizeOptionalString(params.ctx.SenderUsername),
     senderE164: normalizeOptionalString(params.ctx.SenderE164),
+    senderIsOwner: params.senderIsOwner,
     modelProvider: params.provider,
     modelId: params.model,
     workspaceDir: params.workspaceDir,
@@ -392,6 +394,7 @@ export async function getReplyFromConfig(
     | RuntimeInternalGetReplyOptions
     | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
+  let enableLocalPathSelfServe: ApplyMediaUnderstandingResult["enableLocalPathSelfServe"];
   const agentCfg = cfg.agents?.defaults;
   const agentEntry = resolveAgentConfig(cfg, agentId);
   const configuredThinkingDefault =
@@ -541,28 +544,16 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
-          selfServeLocalPaths: canSelfServeLocalPaths({
-            ctx: finalized,
-            cfg,
-            agentId,
-            agentDir,
-            sessionKey: agentSessionKey,
-            workspaceDir,
-            provider,
-            model,
-            opts: optsWithSkillFilter,
-            // Channel, session, and inline model selection happen after media
-            // preprocessing. A provider-specific policy is therefore not final yet.
-            hasProviderToolPolicy:
-              Object.keys(cfg.tools?.byProvider ?? {}).length > 0 ||
-              Object.keys(agentEntry?.tools?.byProvider ?? {}).length > 0,
-          }),
+          // Cache and classify now; the final provider and owner policy are
+          // resolved later, immediately before the embedded turn starts.
+          selfServeLocalPaths: false,
           ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
       );
       if (mediaResult?.extractedFileImages.length) {
         extractedFileImages = mediaResult.extractedFileImages;
       }
+      enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
     }
   }
   if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
@@ -866,6 +857,24 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       commandAuthorized,
     });
+    if (
+      enableLocalPathSelfServe &&
+      canSelfServeLocalPaths({
+        ctx: sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        sessionKey,
+        workspaceDir,
+        provider: autoFallbackPrimaryProbe?.provider ?? provider,
+        model: autoFallbackPrimaryProbe?.model ?? model,
+        opts: resolvedOpts,
+        senderIsOwner: fastCommand.senderIsOwner,
+        spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
+      })
+    ) {
+      enableLocalPathSelfServe(finalized, sessionCtx);
+    }
     logResolverTiming("milestone", "before_fast_directive_prepared_reply");
     const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
       runPreparedReply({
@@ -1160,6 +1169,25 @@ export async function getReplyFromConfig(
           ? "off"
           : await runModelState.resolveDefaultReasoningLevel();
     }
+  }
+
+  if (
+    enableLocalPathSelfServe &&
+    canSelfServeLocalPaths({
+      ctx: sessionCtx,
+      cfg,
+      agentId,
+      agentDir,
+      sessionKey,
+      workspaceDir,
+      provider: runProvider,
+      model: runModel,
+      opts: resolvedOpts,
+      senderIsOwner: command.senderIsOwner,
+      spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
+    })
+  ) {
+    enableLocalPathSelfServe(finalized, sessionCtx);
   }
 
   // Already-staged facts or SDK projections must remain a single-stage contract.

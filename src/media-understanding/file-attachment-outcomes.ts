@@ -39,9 +39,8 @@ export type FileAttachmentOutcome =
   | { kind: "extracted"; text: string; images: DocumentExtractedImage[] }
   | { kind: "rendered-to-images"; images: DocumentExtractedImage[] }
   | { kind: "no-extractable-text" }
-  // localPath is set only for files on local disk the agent can open itself;
-  // its presence switches the marker from a capability apology to a self-serve
-  // directive so the agent extracts the content instead of punting to the user.
+  // localPath is set only after a root-approved cache read. The reply runtime
+  // separately decides whether its final tool surface can reveal that path.
   | { kind: "unsupported-format"; mime?: string; localPath?: string }
   // Operator-pinned allowlist rejection: policy, not capability — the marker
   // must not claim PDF/text support the active configuration disables.
@@ -85,7 +84,10 @@ export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
   return SKIPPED_FILE_OUTCOME_KINDS.has(outcome.kind);
 }
 
-export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): string | null {
+export function renderFileAttachmentOutcome(
+  outcome: FileAttachmentOutcome,
+  options?: { selfServeLocalPaths?: boolean },
+): string | null {
   switch (outcome.kind) {
     case "extracted":
       return wrapUntrustedAttachmentContent(outcome.text);
@@ -98,7 +100,8 @@ export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): str
       const formatClause = mime
         ? `Unsupported document format: ${mime}.`
         : "Unsupported document format.";
-      const localPath = markerSafeLocalPath(outcome.localPath);
+      const localPath =
+        options?.selfServeLocalPaths === false ? undefined : markerSafeLocalPath(outcome.localPath);
       // Modern OOXML files unzip to XML; legacy OLE formats (msword, x-cfb) do
       // not, and a wrong hint sends the agent down a dead extraction path.
       const formatHint = outcome.mime?.startsWith("application/vnd.openxmlformats-officedocument")

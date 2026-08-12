@@ -1,5 +1,6 @@
 // Tests get-reply message hooks before and after agent execution.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
@@ -187,6 +188,52 @@ async function resetMessageHookTestState() {
   );
 }
 
+async function runLocalPathSelfServeCase(params: {
+  ctx: Partial<MsgContext>;
+  cfg: OpenClawConfig;
+  opts?: Parameters<typeof getReplyFromConfig>[1];
+  provider?: string;
+  model?: string;
+  senderIsOwner?: boolean;
+}) {
+  const ctx = buildCtx(params.ctx);
+  const enableLocalPathSelfServe = vi.fn();
+  mocks.applyMediaUnderstanding.mockResolvedValueOnce({
+    outputs: [],
+    decisions: [],
+    extractedFileImages: [],
+    appliedImage: false,
+    appliedAudio: false,
+    appliedVideo: false,
+    appliedFile: true,
+    enableLocalPathSelfServe,
+  });
+  mocks.initSessionState.mockResolvedValueOnce(
+    createGetReplySessionState({
+      sessionCtx: ctx,
+      sessionKey: ctx.SessionKey,
+      isGroup: false,
+    }),
+  );
+  mocks.resolveReplyDirectives.mockResolvedValueOnce(
+    createGetReplyContinueDirectivesResult({
+      body: ctx.BodyForAgent ?? "read the document",
+      abortKey: ctx.SessionKey ?? "agent:main:main",
+      from: ctx.From ?? "webchat:operator",
+      to: ctx.To ?? "webchat:local",
+      senderId: ctx.SenderId ?? "operator",
+      commandSource: "message",
+      senderIsOwner: params.senderIsOwner ?? false,
+      resetHookTriggered: false,
+      provider: params.provider,
+      model: params.model,
+    }),
+  );
+
+  await getReplyFromConfig(ctx, params.opts, withFastReplyConfig(params.cfg));
+  return enableLocalPathSelfServe;
+}
+
 describe("getReplyFromConfig message hooks", () => {
   let enrichedHookCase: {
     transcribed: ReturnType<typeof hookEventCall>;
@@ -367,102 +414,87 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it.each([
-    {
-      name: "sandboxes an external direct conversation that shares the main transcript",
+  const hostDocumentCtx = {
+    SessionKey: "agent:main:main",
+    OriginatingChannel: undefined,
+    Provider: "webchat",
+    Surface: "webchat",
+    ChatType: "direct",
+    SenderId: "operator",
+  } as const;
+
+  it("promotes local document self-service for a host main session", async () => {
+    const enable = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg: {} });
+    expect(enable).toHaveBeenCalledOnce();
+  });
+
+  it("withholds local document self-service from a sandboxed external conversation", async () => {
+    const enable = await runLocalPathSelfServeCase({
       ctx: {
-        SessionKey: "agent:main:main",
-        OriginatingChannel: "telegram" as MsgContext["OriginatingChannel"],
+        ...hostDocumentCtx,
+        OriginatingChannel: "telegram",
         AccountId: "default",
-        ChatType: "direct",
         SenderId: "42",
       },
-      expected: false,
-    },
-    {
-      name: "keeps a local main-session conversation on the host",
-      ctx: {
-        SessionKey: "agent:main:main",
-        OriginatingChannel: undefined,
-        Provider: "webchat",
-        ChatType: "direct",
-        SenderId: "operator",
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
       },
-      expected: true,
-    },
-  ])(
-    "sets local document self-service from runtime placement: $name",
-    async ({ ctx, expected }) => {
-      await getReplyFromConfig(
-        buildCtx(ctx),
-        undefined,
-        withFastReplyConfig({
-          agents: {
-            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-            list: [{ id: "main", default: true }],
-          },
-        }),
-      );
-
-      expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({ selfServeLocalPaths: expected }),
-      );
-    },
-  );
+    });
+    expect(enable).not.toHaveBeenCalled();
+  });
 
   it("withholds local document self-service when the turn cannot read files", async () => {
-    await getReplyFromConfig(
-      buildCtx({
-        SessionKey: "agent:main:main",
-        Provider: "webchat",
-        ChatType: "direct",
-        SenderId: "operator",
-      }),
-      { toolsAllow: ["message"] },
-      withFastReplyConfig({}),
-    );
-
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ selfServeLocalPaths: false }),
-    );
+    const enable = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg: {},
+      opts: { toolsAllow: ["message"] },
+    });
+    expect(enable).not.toHaveBeenCalled();
   });
 
   it("withholds local document self-service from workspace-only file tools", async () => {
-    await getReplyFromConfig(
-      buildCtx({
-        SessionKey: "agent:main:main",
-        Provider: "webchat",
-        ChatType: "direct",
-        SenderId: "operator",
-      }),
-      undefined,
-      withFastReplyConfig({ tools: { fs: { workspaceOnly: true } } }),
-    );
-
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ selfServeLocalPaths: false }),
-    );
+    const enable = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+    });
+    expect(enable).not.toHaveBeenCalled();
   });
 
-  it("withholds local document self-service before a provider tool-policy override", async () => {
-    await getReplyFromConfig(
-      buildCtx({
-        SessionKey: "agent:main:main",
-        OriginatingChannel: undefined,
-        Provider: "webchat",
-        ChatType: "direct",
-        SenderId: "operator",
-      }),
-      undefined,
-      withFastReplyConfig({
-        channels: { modelByChannel: { webchat: { "*": "anthropic/claude-sonnet" } } },
-        tools: { byProvider: { anthropic: { deny: ["read"] } } },
-      }),
-    );
+  it("projects local document self-service against the final provider", async () => {
+    const cfg = { tools: { byProvider: { anthropic: { deny: ["read"] } } } };
+    const denied = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet",
+    });
+    expect(denied).not.toHaveBeenCalled();
 
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ selfServeLocalPaths: false }),
-    );
+    await resetMessageHookTestState();
+    const unrelated = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      provider: "openai",
+      model: "gpt-5",
+    });
+    expect(unrelated).toHaveBeenCalledOnce();
+  });
+
+  it("applies wildcard sender policy only to non-owner turns", async () => {
+    const cfg = { tools: { toolsBySender: { "*": { deny: ["read"] } } } };
+    const nonOwner = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg });
+    expect(nonOwner).not.toHaveBeenCalled();
+
+    await resetMessageHookTestState();
+    const owner = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      senderIsOwner: true,
+    });
+    expect(owner).toHaveBeenCalledOnce();
   });
 
   it("keeps unconfigured audio with a model-locked harness", async () => {
