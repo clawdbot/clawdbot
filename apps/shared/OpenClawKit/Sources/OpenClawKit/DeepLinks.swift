@@ -130,13 +130,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     }
 
     public var websocketURL: URL? {
-        guard (1...65535).contains(self.port) else { return nil }
-        var components = URLComponents()
-        components.scheme = self.tls ? "wss" : "ws"
-        components.host = self.host
-        components.port = self.port
-        components.percentEncodedPath = self.contextPath ?? ""
-        return components.url
+        self.connectionEndpoints.first?.websocketURL
     }
 
     public var isValidEndpoint: Bool {
@@ -388,6 +382,16 @@ public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
         self.tls = try container.decode(Bool.self, forKey: .tls)
         self.contextPath = try normalizeGatewayContextPath(
             container.decodeIfPresent(String.self, forKey: .contextPath))
+    }
+
+    public var websocketURL: URL? {
+        guard (1...65535).contains(self.port) else { return nil }
+        var components = URLComponents()
+        components.scheme = self.tls ? "wss" : "ws"
+        components.host = self.host
+        components.port = self.port
+        components.percentEncodedPath = self.contextPath ?? ""
+        return components.url
     }
 }
 
