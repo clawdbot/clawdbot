@@ -468,5 +468,16 @@ export function resolveGatewayPort(
       return configPort;
     }
   }
-  return DEFAULT_GATEWAY_PORT;
+  const stateDirName = profileStateDirName(env);
+  if (!stateDirName || stateDirName === NEW_STATE_DIRNAME) {
+    return DEFAULT_GATEWAY_PORT;
+  }
+  const profile = env.OPENCLAW_PROFILE!.trim();
+  // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
+  // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
+  let hash = 2_166_136_261;
+  for (const byte of Buffer.from(profile, "utf8")) {
+    hash = Math.imul(hash ^ byte, 16_777_619) >>> 0;
+  }
+  return 20_000 + (hash % 40_000);
 }
