@@ -133,13 +133,25 @@ replication.
 Git-backed backups dump each selected database into deterministic `schema.sql`,
 `manifest.json`, and per-table JSONL files, then create one commit for the
 whole run. Unchanged database content produces no commit, so Git stores and
-pushes only content changes by construction.
+pushes only content changes by construction. OpenClaw stages only the
+backup-owned `global` and `agents` paths, not unrelated files elsewhere in the
+repository.
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
 openclaw backup git create --repository ~/Backups/openclaw-git --all --push
 openclaw backup git log --repository ~/Backups/openclaw-git
 ```
+
+Use a repository dedicated to OpenClaw backups. Existing `global/` and
+`agents/<agentId>/` scopes must be empty or contain a valid schema-version-1
+OpenClaw backup manifest. OpenClaw refuses to replace any other scope, and an
+`--all` run validates every existing agent scope before deleting stale
+backup-owned entries.
+
+The repository root must be owned by the current user and must not be group- or
+world-writable. This is checked during init and every create. On POSIX systems,
+confirm ownership and run `chmod 700 <repository>` to repair unsafe permissions.
 
 The repository is ordinary Git and can use any remote, including GitHub. Keep
 the remote private: the default dump includes auth profiles, tokens, and other

@@ -108,12 +108,57 @@ openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-g
 openclaw backup git create --repository ~/Backups/openclaw-git --all --push
 ```
 
-You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command stages every selected database, runs `git add -A`, and creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+The repository root must be owned by the current user and must not be group- or
+world-writable. OpenClaw checks this when initializing or adopting a repository
+and before every create. On POSIX systems, repair unsafe permissions with
+`chmod 700 <repository>` after confirming its ownership.
+
+The repository must be dedicated to OpenClaw backups. An existing `global/` or
+`agents/<agentId>/` scope is backup-owned only when it is empty or contains a
+valid schema-version-1 `manifest.json`. OpenClaw refuses to replace any other
+scope. With `--all`, it validates every existing entry under `agents/` before
+removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
+before anything is deleted.
+
+You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+
+Git staging is restricted to the backup-owned `global` and `agents` paths;
+unrelated files elsewhere in an adopted repository are never staged.
 
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 
 <Warning>
-  Git history is durable. Without `--exclude-secrets`, snapshots include credential material and any pushed remote must be private. `--exclude-secrets` omits these shared-state tables: `device_auth_tokens`, `device_bootstrap_tokens`, `mcp_oauth_stores`, `auth_profile_stores`, `auth_profile_state`, and `worker_environment_credentials`. It omits these per-agent tables: `auth_profile_store` and `auth_profile_state`. Restore reports the omitted tables so a redacted snapshot cannot be mistaken for a complete credential backup.
+  Git history is durable. Without `--exclude-secrets`, snapshots include
+  credential material and any pushed remote must be private.
+
+`--exclude-secrets` omits these shared-state tables:
+
+- `apns_registrations`
+- `auth_profile_state`
+- `auth_profile_stores`
+- `channel_ingress_events`
+- `clawhub_promotion_claims`
+- `device_auth_tokens`
+- `device_bootstrap_tokens`
+- `device_identities`
+- `device_pairing_paired`
+- `gateway_origin_device_tokens`
+- `mcp_oauth_stores`
+- `native_hook_relay_bridges`
+- `node_host_config`
+- `secret_store_entries`
+- `web_push_subscriptions`
+- `web_push_vapid_keys`
+- `worker_environment_credentials`
+
+It omits these per-agent tables:
+
+- `auth_profile_state`
+- `auth_profile_store`
+- `session_suggestions`
+
+Restore reports the omitted tables so a redacted snapshot cannot be mistaken
+for a complete credential backup.
 </Warning>
 
 Inspect or verify history without changing the live databases:
