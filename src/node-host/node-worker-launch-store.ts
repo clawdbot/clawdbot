@@ -16,7 +16,7 @@ import {
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
 
-export type NodeWorkerLaunchState =
+type NodeWorkerLaunchState =
   | "pending"
   | "running"
   | "completed"
@@ -59,7 +59,7 @@ type NodeWorkerLaunchClaim = Pick<
   | "sessionId"
 >;
 
-export type NodeWorkerLaunchClaimResult = {
+type NodeWorkerLaunchClaimResult = {
   action: "start" | "replay" | "recover";
   receipt: NodeWorkerLaunchReceipt;
 };

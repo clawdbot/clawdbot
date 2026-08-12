@@ -6,7 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 
-export const TEST_BUNDLE_HASH = "a".repeat(64);
+const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
 
 export const TEST_WORKER_SOURCE = String.raw`
@@ -88,6 +88,17 @@ if (mode === "wait") {
     "failure " + "x".repeat(5000) + " " + credential + " " + encodeURIComponent(credential) + " " + escaped,
   );
   exitWorker(7);
+} else if (mode.startsWith("secret-cutoff-")) {
+  const credential = descriptor.admission.credential;
+  const representations = {
+    "secret-cutoff-raw": credential,
+    "secret-cutoff-url": encodeURIComponent(credential),
+    "secret-cutoff-json": JSON.stringify(credential).slice(1, -1),
+  };
+  const representation = representations[mode];
+  const suffixBytes = 4096 - Math.floor(Buffer.byteLength(representation, "utf8") / 2);
+  process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
+  exitWorker(7);
 } else if (mode === "secret-success") {
   await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
@@ -105,6 +116,8 @@ if (mode === "wait") {
   await new Promise((resolve) => setTimeout(resolve, 100));
   fs.writeFileSync(marker, "normal");
   writeResultAndExit(JSON.stringify({ status: "completed" }) + "\n");
+} else if (mode === "env") {
+  writeResultAndExit(JSON.stringify(process.env) + "\n");
 } else {
   await new Promise((resolve) => setTimeout(resolve, 25));
   writeResultAndExit(JSON.stringify({ argv: process.argv.slice(2), status: "completed" }) + "\n");

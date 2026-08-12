@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -46,12 +47,12 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
 
 async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: string) {
   await vi.waitFor(
-    () => {
-      expect(supervisor.status(launchId)?.state).not.toMatch(/^(?:pending|running)$/u);
+    async () => {
+      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
     },
     { timeout: 5_000 },
   );
-  const receipt = supervisor.status(launchId);
+  const receipt = await supervisor.status(launchId);
   if (!receipt) {
     throw new Error(`missing launch receipt ${launchId}`);
   }
@@ -91,7 +92,7 @@ describe("node worker supervisor", () => {
     expect(findTable()).toBeUndefined();
 
     const active = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(active.status("missing-launch")).toBeUndefined();
+    expect(await active.status("missing-launch")).toBeUndefined();
     expect(
       database.db
         .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
@@ -102,7 +103,7 @@ describe("node worker supervisor", () => {
 
   it("keeps pending and running launches owned by a live supervisor unchanged", async () => {
     const { bundleRoot, env, supervisor } = fixture();
-    supervisor.status("schema-probe");
+    await supervisor.status("schema-probe");
     const database = openOpenClawStateDatabase({ env }).db;
     const supervisorIdentity = requireNodeWorkerProcessIdentity(process.pid);
     const insert = database.prepare(`
@@ -133,8 +134,11 @@ describe("node worker supervisor", () => {
     );
 
     const sameHandle = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(sameHandle.status("pending-launch")).toMatchObject({ state: "pending", worker: null });
-    expect(sameHandle.status("running-launch")).toMatchObject({
+    expect(await sameHandle.status("pending-launch")).toMatchObject({
+      state: "pending",
+      worker: null,
+    });
+    expect(await sameHandle.status("running-launch")).toMatchObject({
       state: "running",
       worker: supervisorIdentity,
     });
@@ -144,8 +148,11 @@ describe("node worker supervisor", () => {
 
     openOpenClawStateDatabase({ env });
     const recovered = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(recovered.status("pending-launch")).toMatchObject({ state: "pending", worker: null });
-    expect(recovered.status("running-launch")).toMatchObject({
+    expect(await recovered.status("pending-launch")).toMatchObject({
+      state: "pending",
+      worker: null,
+    });
+    expect(await recovered.status("running-launch")).toMatchObject({
       state: "running",
       worker: supervisorIdentity,
     });
@@ -186,6 +193,120 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
+  it.each(["status", "launch", "cancel", "close"] as const)(
+    "retains an observed terminal outcome when %s reconciliation keeps failing",
+    async (operation) => {
+      const { env, supervisor, workspaceDir } = fixture();
+      const input = launchInput(workspaceDir, `finish-failure-${operation}`);
+      const store = (supervisor as unknown as { store: NodeWorkerLaunchStore }).store;
+      const originalFinish = store.finish.bind(store);
+      let persistenceUnavailable = true;
+      const finish = vi.spyOn(store, "finish").mockImplementation((params) => {
+        if (persistenceUnavailable) {
+          throw new Error("injected finish failure");
+        }
+        return originalFinish(params);
+      });
+      const invoke = async () => {
+        switch (operation) {
+          case "status":
+            return await supervisor.status(input.launchId);
+          case "launch":
+            return await supervisor.launch(input);
+          case "cancel":
+            return await supervisor.cancel(input.launchId);
+          case "close":
+            await supervisor.close();
+            return new NodeWorkerLaunchStore({ env }).get(input.launchId);
+          default:
+            throw new Error("unsupported reconciliation operation");
+        }
+      };
+
+      expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
+      await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+
+      await expect(invoke()).rejects.toThrow("injected finish failure");
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+
+      persistenceUnavailable = false;
+      const completed = await invoke();
+      expect(completed).toMatchObject({
+        state: "completed",
+        resultJson: expect.stringContaining('"status":"completed"'),
+      });
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
+      await supervisor.close();
+    },
+  );
+
+  it("spawns workers with only supplied runtime essentials", async () => {
+    const root = tempDirs.make("node-worker-env-");
+    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
+    const suppliedPathKey = process.platform === "win32" ? "Path" : "PATH";
+    const suppliedEnv: NodeJS.ProcessEnv = {
+      ...env,
+      [suppliedPathKey]: process.env.PATH,
+      HOME: path.join(root, "worker-home"),
+      LANG: "en_US.UTF-8",
+      LC_TIME: "de_DE.UTF-8",
+      OPENCLAW_SUPPLIED_SECRET: "supplied-openclaw-secret",
+      NODE_OPTIONS: "--title=forbidden-worker-title",
+      BASH_ENV: path.join(root, "forbidden-shell-init"),
+      DYLD_INSERT_LIBRARIES: path.join(root, "forbidden-runtime-injection"),
+      HTTPS_PROXY: "http://supplied-proxy.invalid",
+      SUPPLIED_SECRET: "supplied-secret",
+    };
+
+    await withEnvAsync(
+      {
+        AMBIENT_SECRET: "ambient-secret",
+        OPENCLAW_AMBIENT_SECRET: "ambient-openclaw-secret",
+        HTTP_PROXY: "http://ambient-proxy.invalid",
+        NODE_OPTIONS: undefined,
+      },
+      async () => {
+        const expectedWorkerEnv: NodeJS.ProcessEnv = {
+          HOME: suppliedEnv.HOME,
+          LANG: suppliedEnv.LANG,
+          LC_TIME: suppliedEnv.LC_TIME,
+          [suppliedPathKey]: suppliedEnv[suppliedPathKey],
+        };
+        const supervisor = createNodeWorkerSupervisor({ bundleRoot, env: suppliedEnv });
+        suppliedEnv.HOME = path.join(root, "mutated-home");
+        suppliedEnv.LANG = "mutated-locale";
+        const input = launchInput(workspaceDir, "env-launch", "env");
+        await supervisor.launch(input);
+        const completed = await waitForTerminal(supervisor, input.launchId);
+        const workerEnv = JSON.parse(completed.resultJson ?? "null") as Record<string, string>;
+
+        expect(workerEnv).toMatchObject(expectedWorkerEnv);
+        expect(workerEnv).not.toHaveProperty("AMBIENT_SECRET");
+        expect(workerEnv).not.toHaveProperty("OPENCLAW_AMBIENT_SECRET");
+        expect(workerEnv).not.toHaveProperty("OPENCLAW_STATE_DIR");
+        expect(workerEnv).not.toHaveProperty("OPENCLAW_SUPPLIED_SECRET");
+        expect(workerEnv).not.toHaveProperty("NODE_OPTIONS");
+        expect(workerEnv).not.toHaveProperty("BASH_ENV");
+        expect(workerEnv).not.toHaveProperty("DYLD_INSERT_LIBRARIES");
+        expect(workerEnv).not.toHaveProperty("HTTP_PROXY");
+        expect(workerEnv).not.toHaveProperty("HTTPS_PROXY");
+        expect(workerEnv).not.toHaveProperty("SUPPLIED_SECRET");
+        expect(JSON.stringify(workerEnv)).not.toContain(TEST_WORKER_CREDENTIAL);
+        const platformInjectedKeys =
+          process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [];
+        expect(Object.keys(workerEnv).toSorted()).toEqual(
+          [...Object.keys(expectedWorkerEnv), ...platformInjectedKeys]
+            .filter(
+              (key) => expectedWorkerEnv[key] !== undefined || platformInjectedKeys.includes(key),
+            )
+            .toSorted(),
+        );
+        await supervisor.close();
+      },
+    );
+  });
+
   it("bounds output and scrubs launch credentials after registry eviction", async () => {
     const { supervisor, workspaceDir } = fixture();
     const successInput = launchInput(workspaceDir, "secret-success-launch", "secret-success");
@@ -224,6 +345,27 @@ describe("node worker supervisor", () => {
     });
     await supervisor.close();
   });
+
+  it.each([
+    ["raw", "secret-cutoff-raw", TEST_WORKER_CREDENTIAL],
+    ["URL", "secret-cutoff-url", encodeURIComponent(TEST_WORKER_CREDENTIAL)],
+    ["JSON-escaped", "secret-cutoff-json", JSON.stringify(TEST_WORKER_CREDENTIAL).slice(1, -1)],
+  ])(
+    "redacts a %s credential representation across the stderr cutoff",
+    async (_, prompt, representation) => {
+      const { supervisor, workspaceDir } = fixture();
+      const input = launchInput(workspaceDir, `cutoff-${prompt}`, prompt);
+
+      await supervisor.launch(input);
+      const failure = await waitForTerminal(supervisor, input.launchId);
+
+      expect(failure.state).toBe("failed");
+      expect(Buffer.byteLength(failure.errorText ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
+      expect(failure.errorText).not.toContain(representation);
+      expect(failure.errorText).not.toContain(representation.slice(-8));
+      await supervisor.close();
+    },
+  );
 
   it("does not open or signal a child after markRunning observes its terminal receipt", async () => {
     const { supervisor, workspaceDir } = fixture();
@@ -277,7 +419,7 @@ describe("node worker supervisor", () => {
       await supervisor.close();
     }
 
-    expect(supervisor.status(input.launchId)).toMatchObject({
+    expect(await supervisor.status(input.launchId)).toMatchObject({
       state,
       worker: { pid: expect.any(Number), startTime: expect.any(Number) },
     });
@@ -309,7 +451,7 @@ describe("node worker supervisor", () => {
       await supervisor.launch(input);
       await stopping;
 
-      expect(supervisor.status(input.launchId)?.state).toBe(state);
+      expect((await supervisor.status(input.launchId))?.state).toBe(state);
       expect(fs.existsSync(path.join(workspaceDir, "grandchild.pid"))).toBe(false);
       await supervisor.close();
     },
@@ -335,7 +477,7 @@ describe("node worker supervisor", () => {
       await supervisor.close();
     }
 
-    const terminal = supervisor.status(input.launchId);
+    const terminal = await supervisor.status(input.launchId);
     expect(terminal).toMatchObject({ state, worker: running.worker });
     await vi.waitFor(() => {
       expect(inspectNodeWorkerProcessIdentity(running.worker!)).not.toBe("live");

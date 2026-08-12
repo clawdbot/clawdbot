@@ -86,6 +86,8 @@ export async function createChildAdapter(params: {
   argv: string[];
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
+  /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
+  exactEnv?: true;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
@@ -99,9 +101,9 @@ export async function createChildAdapter(params: {
     env: baseEnv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
-    env: baseEnv,
-  });
+  const preparedSpawn = params.exactEnv
+    ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
+    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 

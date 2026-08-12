@@ -827,6 +827,28 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
+  it("keeps an exact Linux child environment out of the OOM shell wrapper", async () => {
+    setPlatform("linux");
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
+    const { child } = createStubChild(3335);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    try {
+      const adapter = await createChildAdapter({
+        argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+        env: { HOME: "/worker-home", PATH: "/usr/bin" },
+        exactEnv: true,
+        stdinMode: "pipe-open",
+      });
+      expect(adapter.oomScoreWrapperSelected).toBe(false);
+    } finally {
+      restoreLinuxShell();
+    }
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual(["/usr/bin/node", "-e", "process.exit(0)"]);
+    expect(spawnArgs.options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
+  });
+
   it("passes explicit env overrides as strings", async () => {
     await createAdapterHarness({
       pid: 4444,

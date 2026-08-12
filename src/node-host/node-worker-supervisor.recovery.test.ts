@@ -195,7 +195,7 @@ describe("node worker supervisor recovery", () => {
   it("atomically adopts pending work only after the previous supervisor is stale", async () => {
     const { bundleRoot, env, workspaceDir } = fixture("node-worker-stale-pending-");
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-    supervisor.status("schema-probe");
+    await supervisor.status("schema-probe");
     const input = testWorkerLaunchInput(workspaceDir, "stale-pending-launch");
     insertLaunch({
       env,
@@ -237,7 +237,7 @@ describe("node worker supervisor recovery", () => {
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-      supervisor.status("schema-probe");
+      await supervisor.status("schema-probe");
       insertLaunch({
         env,
         input,
@@ -251,7 +251,7 @@ describe("node worker supervisor recovery", () => {
       expect(recovered).toMatchObject({ state: "interrupted", worker });
       await waitForIdentityDeath(worker);
       await waitForIdentityDeath(grandchild);
-      expect(supervisor.status(input.launchId)?.worker).toEqual(worker);
+      expect((await supervisor.status(input.launchId))?.worker).toEqual(worker);
       await supervisor.close();
     },
   );

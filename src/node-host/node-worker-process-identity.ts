@@ -6,9 +6,9 @@ export type NodeWorkerProcessIdentity = {
   startTime: number;
 };
 
-export type NodeWorkerProcessIdentityState = "live" | "dead" | "reused" | "unknown";
+type NodeWorkerProcessIdentityState = "live" | "dead" | "reused" | "unknown";
 
-export function readNodeWorkerProcessStartTime(pid: number): number | null {
+function readNodeWorkerProcessStartTime(pid: number): number | null {
   return process.platform === "win32"
     ? readWindowsProcessStartTimeSync(pid)
     : getFileLockProcessStartTime(pid);
