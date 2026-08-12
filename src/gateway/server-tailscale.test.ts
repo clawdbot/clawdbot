@@ -112,7 +112,7 @@ describe("startGatewayTailscaleExposure", () => {
     ["serve", mocks.enableTailscaleServe],
     ["funnel", mocks.enableTailscaleFunnel],
   ] as const)(
-    "restores a persistent %s route before releasing the private port",
+    "restores a persistent %s route to the stable configured port during cleanup",
     async (mode, enable) => {
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: mode,

@@ -116,8 +116,8 @@ export async function startGatewayTailscaleExposure(params: {
       if (params.resetOnExit) {
         await clearRoute();
       } else {
-        // Background routes persist by product contract. Before the private ephemeral
-        // listener closes, restore the route to the stable configured Gateway port.
+        // Background routes persist by product contract. Shutdown calls this after the
+        // private listener closes, then restores the stable configured Gateway port.
         await applyRoute(params.port);
       }
     } catch (err) {

@@ -49,6 +49,8 @@ type PairingSetupPayload = {
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
+const PAIRING_SETUP_MAX_URLS = 8;
+
 type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;

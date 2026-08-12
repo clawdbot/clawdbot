@@ -112,27 +112,27 @@ function attributed<
 }
 
 function hasTailscaleProxyHeaders(req: IncomingMessage): boolean {
+  const headers = req.headers ?? {};
   return Boolean(
-    req.headers["x-forwarded-for"] &&
-    req.headers["x-forwarded-proto"] &&
-    req.headers["x-forwarded-host"],
+    headers["x-forwarded-for"] && headers["x-forwarded-proto"] && headers["x-forwarded-host"],
   );
 }
 
 function hasTailscaleOwnedHeaders(req: IncomingMessage): boolean {
+  const headers = req.headers ?? {};
   return [
     "tailscale-funnel-request",
     "tailscale-headers-info",
     "tailscale-user-login",
     "tailscale-user-name",
     "tailscale-user-profile-pic",
-  ].some((name) => req.headers[name] !== undefined);
+  ].some((name) => headers[name] !== undefined);
 }
 
 function resolveTailscaleClientIp(req: IncomingMessage): string | undefined {
   return resolveClientIp({
-    remoteAddr: req.socket.remoteAddress,
-    forwardedFor: headerValue(req.headers["x-forwarded-for"]),
+    remoteAddr: req.socket?.remoteAddress,
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: ["127.0.0.1", "::1"],
   });
 }
@@ -151,7 +151,7 @@ function resolveManagedTailscaleIngress(params: {
   if (!clientIp || isLoopbackAddress(clientIp)) {
     return unattributableProxy(remoteAddress);
   }
-  const funnelMarker = headerValue(req.headers["tailscale-funnel-request"]);
+  const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
     return funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
@@ -161,9 +161,9 @@ function resolveManagedTailscaleIngress(params: {
     return unattributableProxy(remoteAddress);
   }
 
-  const headerLogin = normalizeOptionalString(req.headers["tailscale-user-login"]);
-  const headerName = normalizeOptionalString(req.headers["tailscale-user-name"]);
-  const profilePic = normalizeOptionalString(req.headers["tailscale-user-profile-pic"]);
+  const headerLogin = normalizeOptionalString(req.headers?.["tailscale-user-login"]);
+  const headerName = normalizeOptionalString(req.headers?.["tailscale-user-name"]);
+  const profilePic = normalizeOptionalString(req.headers?.["tailscale-user-profile-pic"]);
   let identityPromise: Promise<VerifiedTailscaleIngressIdentity | undefined> | undefined;
   const verifyIdentity = () => {
     if (!headerLogin) {
