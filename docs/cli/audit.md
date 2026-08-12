@@ -129,7 +129,9 @@ For Gateway runs, a resolved authenticated profile can make the invoker
 do not establish a person: without a durable profile the invoker stays absent,
 or `unknown` when authenticated user evidence promised a profile that could not
 be resolved. Session creation and run inspection consume the same prepared
-connection fact.
+connection fact, but ordinary session provenance retains only the durable
+profile id. An optional bounded, secret-redacted display label can be retained
+only in execution identity after that audit storage is explicitly enabled.
 
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and

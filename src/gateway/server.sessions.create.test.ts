@@ -3092,7 +3092,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
 });
 
 test("sessions.create stamps trusted operator provenance and records created", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const profileId = "profile-session-creator";
   const client = {
     connect: { scopes: ["operator.write"] },
@@ -3126,7 +3126,9 @@ test("sessions.create stamps trusted operator provenance and records created", a
     createdActor: { type: "human", id: profileId },
     createdAt: expect.any(Number),
   });
+  expect(created.payload?.entry).not.toHaveProperty("createdActor.label");
   const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("createdActor.label");
   expect(listSessionStateEventsSince(key, "main", 0, 20).events).toContainEqual(
     expect.objectContaining({
       kind: "created",

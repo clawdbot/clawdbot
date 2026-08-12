@@ -92,13 +92,17 @@ this boundary. A run becomes
 Neither state means that identity affected an allow or deny decision.
 
 Authenticated Gateway runs record connection facts once and reuse them for the
-session creator and run admission. A resolved durable profile, including one
-established by verified trusted-proxy or Tailscale identity, supplies a
-pseudonymized person invoker. A paired device adds device assurance but never
-becomes a person. Shared tokens, passwords, auth-none connections, and other
-profileless clients remain unattributed. If authenticated user evidence promises
-a durable profile but profile resolution fails, the invoker is `unknown` rather
-than guessed from headers, device ids, connection ids, or credentials.
+session creator and run admission. Ordinary session provenance retains only the
+durable profile id; it does not retain a profile display label. When execution
+identity recording is explicitly enabled, its audit context may also retain the
+prepared display label after secret redaction and the 128-character bound. A
+resolved durable profile, including one established by verified trusted-proxy
+or Tailscale identity, supplies a pseudonymized person invoker. A paired device
+adds device assurance but never becomes a person. Shared tokens, passwords,
+auth-none connections, and other profileless clients remain unattributed. If
+authenticated user evidence promises a durable profile but profile resolution
+fails, the invoker is `unknown` rather than guessed from headers, device ids,
+connection ids, or credentials.
 
 Each present context currently projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason

@@ -12,7 +12,7 @@ function resolveWithIngress(localUserIngress: ReturnType<typeof prepareGatewayLo
 }
 
 describe("agent run session creation provenance", () => {
-  it("uses a proven Gateway profile id", () => {
+  it("uses a proven Gateway profile id without retaining its display label", () => {
     const localUserIngress = prepareGatewayLocalUserIngress({
       authenticatedUserExpected: true,
       profile: { profileId: "profile-ada", displayName: "Ada" },
@@ -21,7 +21,7 @@ describe("agent run session creation provenance", () => {
 
     expect(resolveWithIngress(localUserIngress)).toEqual({
       via: "run",
-      actor: { type: "human", id: "profile-ada", label: "Ada" },
+      actor: { type: "human", id: "profile-ada" },
     });
     expect(localUserIngress.facts.invoker).toEqual({
       state: "present",
@@ -115,18 +115,28 @@ describe("agent run session creation provenance", () => {
     ]);
   });
 
-  it("redacts an optional profile label before session or run persistence", () => {
+  it("keeps a bounded, redacted profile label transient for opt-in run auditing", () => {
     const secret = "sk-1234567890abcdef";
     const localUserIngress = prepareGatewayLocalUserIngress({
       authenticatedUserExpected: true,
-      profile: { profileId: "profile-redacted", displayName: `Operator OPENAI_API_KEY=${secret}` },
+      profile: {
+        profileId: "profile-redacted",
+        displayName: `Operator OPENAI_API_KEY=${secret} ${"x".repeat(256)}`,
+      },
       isLocalClient: false,
     });
 
-    expect(localUserIngress.facts.invoker).toMatchObject({
-      state: "present",
-      displayLabel: "Operator OPENAI_API_KEY=***",
+    const invoker = localUserIngress.facts.invoker;
+    expect(invoker).toMatchObject({ state: "present" });
+    if (invoker?.state !== "present") {
+      throw new Error("expected present invoker");
+    }
+    expect(invoker.displayLabel).toContain("OPENAI_API_KEY=***");
+    expect(invoker.displayLabel).not.toContain(secret);
+    expect(invoker.displayLabel?.length).toBeLessThanOrEqual(128);
+    expect(resolveWithIngress(localUserIngress)).toEqual({
+      via: "run",
+      actor: { type: "human", id: "profile-redacted" },
     });
-    expect(JSON.stringify(resolveWithIngress(localUserIngress))).not.toContain(secret);
   });
 });

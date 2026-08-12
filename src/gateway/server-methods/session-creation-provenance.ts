@@ -53,8 +53,8 @@ export function resolveOperatorSessionCreation(
     };
   }
   const invoker = getGatewayLocalUserIngress(client)?.facts.invoker;
-  // The session stamp and run admission consume the same prepared connection
-  // fact. Device, credential, and profile-less clients never become people.
+  // Session provenance keeps only the durable profile id. The optional display
+  // label stays transient unless execution-identity auditing is explicitly enabled.
   return {
     via: "operator",
     ...(invoker?.state === "present" && invoker.kind === "person"
@@ -62,7 +62,6 @@ export function resolveOperatorSessionCreation(
           actor: {
             type: "human" as const,
             id: invoker.rawPrincipalRef,
-            ...(invoker.displayLabel ? { label: invoker.displayLabel } : {}),
           },
         }
       : {}),

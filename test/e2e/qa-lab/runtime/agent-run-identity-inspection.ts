@@ -716,10 +716,12 @@ async function runProof(options: ProducerOptions): Promise<string> {
     }
     if (
       profiledSession?.createdActor?.type !== "human" ||
-      profiledSession.createdActor.label !== "Operator" ||
-      !profiledSession.createdActor.id
+      !profiledSession.createdActor.id ||
+      profiledSession.createdActor.label !== undefined
     ) {
-      throw new Error("profiled Gateway session omitted its authenticated human creator");
+      throw new Error(
+        "profiled Gateway session did not retain only its authenticated human creator id",
+      );
     }
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;

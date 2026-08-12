@@ -39,8 +39,9 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
 });
 
 describe("Gateway agent command execution identity", () => {
-  it("carries the authenticated connection facts into run admission", async () => {
+  it("carries only the prepared bounded, redacted label into opt-in run admission", async () => {
     let work: ExecutionIdentityAdmissionWork | undefined;
+    const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
     cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
       work = candidate;
       return true;
@@ -61,7 +62,7 @@ describe("Gateway agent command execution identity", () => {
         state: "present",
         kind: "person",
         rawPrincipalRef: "profile-ada",
-        displayLabel: "Ada",
+        displayLabel,
       },
       assurance: [
         {
@@ -97,7 +98,7 @@ describe("Gateway agent command execution identity", () => {
           state: "present",
           kind: "person",
           rawPrincipalRef: "profile-ada",
-          displayLabel: "Ada",
+          displayLabel: "Operator OPENAI_API_KEY=***",
         },
         assurance: [
           {
@@ -108,5 +109,51 @@ describe("Gateway agent command execution identity", () => {
         ],
       },
     });
+    if (work?.kind !== "capture" || work.envelope.invoker?.state !== "present") {
+      throw new Error("expected captured present invoker");
+    }
+    expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
+    expect(work.envelope.invoker.displayLabel?.length).toBeLessThanOrEqual(128);
+  });
+
+  it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
+      return true;
+    });
+
+    const opts: AgentCommandIngressOpts = {
+      message: "do not retain this label",
+      allowModelOverride: false,
+    };
+    attachAgentCommandAdmissionFacts(opts, {
+      ingress: {
+        kind: "gateway-client",
+        boundary: "gateway.ws.authenticated-connect",
+        state: "present",
+      },
+      invoker: {
+        state: "present",
+        kind: "person",
+        rawPrincipalRef: "profile-ada",
+        displayLabel: "Ada",
+      },
+    });
+    const prepared = prepareAgentCommandExecutionIdentity({
+      opts,
+      prepared: {
+        cfg: { logging: { audit: { enabled: true, executionIdentity: false } } },
+        runId: "run-profiled-disabled",
+        sessionAgentId: "main",
+        sessionId: "session-profiled-disabled",
+      },
+      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+      lifecycleGeneration: "generation-1",
+    });
+
+    await prepared.admit("embedded");
+
+    expect(work).toBeUndefined();
   });
 });
