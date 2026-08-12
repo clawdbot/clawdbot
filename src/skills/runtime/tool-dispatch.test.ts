@@ -119,6 +119,31 @@ describe("resolveSkillDispatchTools", () => {
     });
   });
 
+  it("preserves optional plugin tools for full-profile skill dispatch", () => {
+    const pluginTool = hoisted.makeTool("optional_plugin_tool");
+    setPluginToolMeta(pluginTool, { pluginId: "optional-plugin", optional: true });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([pluginTool]);
+
+    const tools = resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: { tools: { profile: "full" } } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+      senderIsOwner: true,
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.pluginToolAllowlist).toEqual(["*"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["optional_plugin_tool"]);
+    expect(getPluginToolMeta(tools[0]!)).toEqual({
+      pluginId: "optional-plugin",
+      optional: true,
+    });
+  });
+
   it("keeps required plugin tools out of minimal skill dispatch", () => {
     const pluginTool = hoisted.makeTool("required_plugin_tool");
     setPluginToolMeta(pluginTool, { pluginId: "required-plugin", optional: false });
