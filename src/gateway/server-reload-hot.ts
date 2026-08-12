@@ -13,6 +13,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import {
   shouldRefreshContextWindowCache,
@@ -25,6 +26,7 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./se
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   restartGatewayChannels,
+  restartStoppedPluginAccounts,
   shouldIncludeKnownAccountsForPluginReload,
 } from "./server-reload-channel-restart.js";
 import {
@@ -366,9 +368,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             );
           },
         });
-      const rollbackStoppedPluginTargets = async (reason: string): Promise<string[]> => [
-        ...(await restartStoppedPluginAccounts(reason)),
-        ...(await restartStoppedPluginChannels(reason)),
+      const rollbackStoppedPluginTargets = async (
+        reason: string,
+        options: { includeKnownAccounts?: boolean } = {},
+      ): Promise<string[]> => [
+        ...(await restartStoppedPluginAccounts({
+          params,
+          reason,
+          accountsStoppedBeforePluginReload,
+          channelsStoppedBeforePluginReload,
+        })),
+        ...(await restartStoppedPluginChannels(reason, options)),
       ];
       const failPluginChannelRollback = (reason: string, failures: string[]): never => {
         const error = new Error(
