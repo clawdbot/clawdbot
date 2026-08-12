@@ -1,11 +1,15 @@
 // Slack tests cover actions.blocks plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
 const SLACK_EDIT_TEXT_MAX_BYTES = 4000;
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
   text?: string;

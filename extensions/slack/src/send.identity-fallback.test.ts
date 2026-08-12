@@ -1,7 +1,12 @@
 // Slack tests cover send.identity fallback plugin behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),

@@ -1,7 +1,12 @@
 // Slack tests cover actionsownload file plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 const resolveSlackMedia = vi.fn();
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());

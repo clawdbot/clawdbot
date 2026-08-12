@@ -6,8 +6,9 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./blocks.test-helpers.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -111,6 +112,9 @@ vi.mock("./runtime-api.js", async () => {
 
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };

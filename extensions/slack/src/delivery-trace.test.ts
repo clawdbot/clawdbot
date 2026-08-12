@@ -22,7 +22,10 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
+
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
 
 type RecordedWireCall = {
   method: string;
@@ -141,6 +144,7 @@ vi.mock("./client.js", async (importOriginal) => {
 import { dispatchPreparedSlackMessage } from "./monitor/message-handler/dispatch.js";
 
 afterAll(() => {
+  workspaceInstallation.release();
   vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
   vi.doUnmock("./client.js");
   vi.resetModules();
