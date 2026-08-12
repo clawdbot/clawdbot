@@ -129,7 +129,13 @@ export function buildStatusCommandOverviewRows(
   const hostDesktopValue =
     hostDesktop.state === "disabled"
       ? params.muted("disabled")
-      : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
+      : hostDesktop.state === "managed"
+        ? hostDesktop.managedState === "running"
+          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
+          : hostDesktop.managedState === "failed"
+            ? `managed · failed: ${hostDesktop.error}`
+            : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
+        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
     decorateOk: params.ok,

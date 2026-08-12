@@ -188,9 +188,11 @@ export const healthHandlers: GatewayRequestHandlers = {
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const hostDesktopStatus = await context.hostDesktopService?.status();
     const status = await getStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
+      ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
     if (context.getEventLoopHealth) {
       status.eventLoop = context.getEventLoopHealth();

@@ -263,6 +263,7 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -590,12 +591,16 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-  const hostDesktop = await (
-    await import("../gateway/desktop/host-source.js")
-  ).inspectHostDesktop({ config: cfg.desktop?.host });
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
-    hostDesktop: hostDesktop.status,
+    hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
