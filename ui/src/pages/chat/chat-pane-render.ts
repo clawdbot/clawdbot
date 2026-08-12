@@ -607,10 +607,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     );
     const chat = renderChat({ ...props, header: board.face === "dashboard" ? nothing : header });
     const boardPrimary = this.renderBoardPrimary(board, chat);
-    const primary =
-      board.face === "dashboard"
-        ? html`<div class="chat-pane-primary-column">${header}${boardPrimary}</div>`
-        : boardPrimary;
+    // Keep this root stable across board face changes so the guarded board runtime
+    // remains connected while Chat is active.
+    const primary = html`<div class="chat-pane-primary-column">
+      ${board.face === "dashboard" ? header : nothing}${boardPrimary}
+    </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,
