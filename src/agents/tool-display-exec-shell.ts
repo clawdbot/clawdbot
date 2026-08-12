@@ -481,16 +481,60 @@ function splitTopLevel(
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/**
+ * Shell keywords that open a compound block. A `;` inside such a block separates
+ * commands *within* the block, so it must not end the surrounding stage.
+ */
+const COMPOUND_BLOCK_OPENERS = new Set(["for", "while", "until", "if", "case", "select"]);
+/** Keywords that close a compound block opened by {@link COMPOUND_BLOCK_OPENERS}. */
+const COMPOUND_BLOCK_CLOSERS = new Set(["done", "fi", "esac"]);
+/**
+ * Keywords after which the next word is again a command (`do echo hi`), so a
+ * following keyword still counts as being in command position.
+ */
+const COMPOUND_BLOCK_BODY_KEYWORDS = new Set(["do", "then", "else", "elif"]);
+const SHELL_WORD_BOUNDARY = /[\s;&|()<>]/;
+
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
+  // A compound block (`for …; do …; done`) is a single stage: splitting on its
+  // inner `;` yields fragments like `do echo x` and `done`, which the summarizer
+  // then renders as if `do` and `done` were binaries.
+  let blockDepth = 0;
+  let word = "";
+  // Keywords are only keywords in command position — `echo if` is an argument.
+  let atCommandPosition = true;
+
+  const closeWord = (): void => {
+    if (word.length === 0) {
+      return;
+    }
+    const keyword = word;
+    word = "";
+    if (atCommandPosition && COMPOUND_BLOCK_OPENERS.has(keyword)) {
+      blockDepth += 1;
+    } else if (atCommandPosition && COMPOUND_BLOCK_CLOSERS.has(keyword) && blockDepth > 0) {
+      blockDepth -= 1;
+    }
+    atCommandPosition = COMPOUND_BLOCK_BODY_KEYWORDS.has(keyword);
+  };
+
   return splitTopLevel(command, (char, index) => {
-    if (char === ";") {
-      return 1;
+    if (!SHELL_WORD_BOUNDARY.test(char)) {
+      word += char;
+      return 0;
     }
-    if ((char === "&" || char === "|") && command[index + 1] === char) {
-      return 2;
+    closeWord();
+    const isStageSeparator =
+      char === ";" || ((char === "&" || char === "|") && command[index + 1] === char);
+    if (!isStageSeparator) {
+      return 0;
     }
-    return 0;
+    atCommandPosition = true;
+    if (blockDepth > 0) {
+      return 0;
+    }
+    return char === ";" ? 1 : 2;
   });
 }
 

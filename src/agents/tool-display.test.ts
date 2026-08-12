@@ -668,6 +668,43 @@ describe("tool display details", () => {
     ]);
   });
 
+  it("keeps a compound block as a single stage", () => {
+    const command = 'for d in $(ls ~/x); do echo "$d"; ls "$d"; done';
+
+    expect(splitTopLevelStages(command)).toEqual([command]);
+  });
+
+  it("keeps if/while/case blocks as single stages", () => {
+    expect(splitTopLevelStages("if [ -f a ]; then cat a; else echo no; fi")).toEqual([
+      "if [ -f a ]; then cat a; else echo no; fi",
+    ]);
+    expect(splitTopLevelStages('while read l; do echo "$l"; done')).toEqual([
+      'while read l; do echo "$l"; done',
+    ]);
+    expect(splitTopLevelStages("case $x in a) echo A;; b) echo B;; esac")).toEqual([
+      "case $x in a) echo A;; b) echo B;; esac",
+    ]);
+  });
+
+  it("splits around a compound block without splitting inside it", () => {
+    expect(splitTopLevelStages("echo a; for x in 1; do echo b; done; echo c")).toEqual([
+      "echo a",
+      "for x in 1; do echo b; done",
+      "echo c",
+    ]);
+  });
+
+  it("tracks nested compound blocks", () => {
+    const command = "for a in 1; do for b in 2; do echo x; done; done";
+
+    expect(splitTopLevelStages(command)).toEqual([command]);
+  });
+
+  it("treats block keywords outside command position as plain arguments", () => {
+    expect(splitTopLevelStages("echo if; echo x")).toEqual(["echo if", "echo x"]);
+    expect(splitTopLevelStages("echo done1; echo two")).toEqual(["echo done1", "echo two"]);
+  });
+
   it("does not treat the overlapping end of a here-string as a heredoc", () => {
     const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
 
