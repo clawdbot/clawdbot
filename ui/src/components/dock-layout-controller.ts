@@ -24,6 +24,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   height: number;
   width: number;
 
+  private previousDock: TDock | undefined;
   private suppressed = false;
   private resizeCleanup: (() => void) | null = null;
   private readonly onViewportResize = () => {
@@ -57,6 +58,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     const layout = this.options.layout.load();
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
+    this.previousDock = layout.previousDock;
     this.height = layout.height;
     this.width = layout.width;
     window.addEventListener("resize", this.onViewportResize);
@@ -128,10 +130,26 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.host.requestUpdate();
   }
 
+  setRestorableDock(dock: TDock): void {
+    if (dock !== this.dock) {
+      this.previousDock = this.dock;
+    }
+    this.setDock(dock);
+  }
+
+  toggleDock(dock: TDock): void {
+    if (this.dock === dock) {
+      this.setDock(this.previousDock ?? this.options.layout.defaults.dock);
+    } else {
+      this.setRestorableDock(dock);
+    }
+  }
+
   persist(): void {
     this.options.layout.save({
       open: this.open,
       dock: this.dock,
+      ...(this.previousDock ? { previousDock: this.previousDock } : {}),
       height: this.height,
       width: this.width,
     });
