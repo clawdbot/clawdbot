@@ -31,13 +31,12 @@ import {
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import type { ApplicationOverlays, ApplicationOverlaySnapshot } from "./overlays-types.ts";
-export type { ApplicationOverlays } from "./overlays-types.ts";
 import {
   createOverlayApprovalRefresher,
   createOverlayPairingPendingCount,
   readOverlayOperatorAccessTransition,
 } from "./overlays-access.ts";
+import type { ApplicationOverlays, ApplicationOverlaySnapshot } from "./overlays-types.ts";
 import {
   classifyUpdateRunResponse,
   createPendingUpdateReconciliation,

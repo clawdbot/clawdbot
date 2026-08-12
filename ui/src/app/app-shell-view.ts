@@ -88,7 +88,7 @@ function renderScopeUpgradeBanner(
     .props=${{
       statusBanner: {
         tone: "warn",
-        text: t("connection.scopeUpgrade.limited"),
+        text: t("connection.scopeUpgrade.guidance"),
       },
     }}
   ></openclaw-update-banner>`;
