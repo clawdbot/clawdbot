@@ -1889,6 +1889,200 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a summary whose finalized bytes fail the quality audit", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/compaction-final-audit.log";
+    const auditValidBeforeFinalization = [
+      "## Decisions",
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      identifier,
+    ].join("\n");
+    expect(
+      auditSummaryQuality({
+        summary: auditValidBeforeFinalization,
+        identifiers: [identifier],
+        latestAsk,
+      }).ok,
+    ).toBe(true);
+    mockSummarizeInStages.mockResolvedValue(summaryResult(auditValidBeforeFinalization));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = {
+      ...createCompactionEvent({ messageText: `${latestAsk} ${identifier}`, tokensBefore: 1_500 }),
+      preparation: {
+        ...createCompactionEvent({
+          messageText: `${latestAsk} ${identifier}`,
+          tokensBefore: 1_500,
+        }).preparation,
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: false,
+      },
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).toEqual({ cancel: true });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const reason = consumeCompactionSafeguardCancelReason(sessionManager);
+    expect(reason).toContain("finalized summary failed quality checks");
+    expect(reason).not.toContain(identifier);
+    expect(reason).not.toContain(latestAsk);
+  });
+
+  it("returns the first finalized retry that passes the source audit", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report the deployment status";
+    const identifier = "/tmp/compaction-retry.log";
+    const validRetry = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      identifier,
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("invalid first attempt"))
+      .mockResolvedValueOnce(summaryResult(validRetry));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(expectCompactionResult(result).summary).toBe(validRetry);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const retry = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(retry.customInstructions).toContain("Quality check feedback");
+    expect(retry.customInstructions).toContain("complete summary body within 16000 UTF-16");
+  });
+
+  it("propagates caller abort during corrective generation", async () => {
+    mockSummarizeInStages.mockReset();
+    const controller = new AbortController();
+    const abortError = Object.assign(new Error("corrective compaction aborted"), {
+      name: "AbortError",
+    });
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("invalid first attempt"))
+      .mockImplementationOnce(async () => {
+        controller.abort(abortError);
+        throw new Error("transport closed after abort");
+      });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: "report deployment status",
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+    event.signal = controller.signal;
+    const handler = createCompactionHandler();
+    const context = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+
+    await expect(handler(event, context)).rejects.toBe(abortError);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("audits all-preserved fallback output against pre-partition source facts", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report deployment status";
+    const identifier = "/tmp/all-preserved.log";
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(latestAsk);
+    expect(summary).toContain(identifier);
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+  });
+
+  it("rejects all-preserved fallback output that truncates source facts", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report deployment status";
+    const identifier = "/tmp/all-preserved-truncated.log";
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const sourceText = `${"x".repeat(610)} ${latestAsk} ${identifier}`;
+    const event = createCompactionEvent({ messageText: sourceText, tokensBefore: 1_500 });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).toEqual({ cancel: true });
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+      "Compaction safeguard finalized summary failed quality checks.",
+    );
+  });
+
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages
@@ -1990,7 +2184,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
   });
 
-  it("does not treat preserved latest asks as satisfying overlap checks", async () => {
+  it("audits preserved latest asks in the exact finalized artifact", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages
       .mockResolvedValueOnce(
@@ -2075,14 +2269,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
-      customInstructions?: string;
-    };
-    expect(secondCall.customInstructions).toContain("latest_user_ask_not_reflected");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(result.compaction?.summary).toContain("latest ask status");
   });
 
-  it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
+  it("cancels when corrective generation fails after finalized quality rejection", async () => {
     mockSummarizeInStages.mockReset();
     const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
     const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
@@ -2141,18 +2332,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       compaction?: { summary?: string };
     };
 
-    expect(result.cancel).not.toBe(true);
-    const summary = result.compaction?.summary ?? "";
-    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER);
-    expect(summary).toContain("**Turn Context (split turn):**");
-    expect(summary).toContain(splitTurnPrefixSummary);
-    expect(summary).toContain("## Recent turns preserved verbatim");
-    expect(summary).toContain("latest ask status");
-    expect(summary).toContain("latest assistant reply");
+    expect(result).toEqual({ cancel: true });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
     expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
       "Additional requirements:",
+    );
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+      "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
     );
   });
 
