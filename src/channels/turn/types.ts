@@ -1,11 +1,11 @@
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
-import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
-import type {
-  GetReplyFromConfig,
-  InternalGetReplyOptions,
-} from "../../auto-reply/reply/get-reply.types.js";
+import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -26,6 +26,7 @@ import type {
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
 import type { MediaFact } from "../../media/media-facts.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
@@ -299,8 +300,8 @@ export type ChannelTurnDroppedHistoryOptions = {
 /** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
 type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
 
-/** Internal reply options carried by core channel turns. */
-type ChannelTurnReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
+/** Reply options plus the opaque native command ownership decision carried by channel turns. */
+type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply"> & PluginCommandReplyOptions;
 
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
 type ChannelTurnReplyPipelineOptions = Omit<
