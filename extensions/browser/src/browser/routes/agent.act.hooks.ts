@@ -85,7 +85,7 @@ export function registerBrowserAgentActHookRoutes(
           return;
         }
 
-        const browserFilesystemLocal = !capabilities.isRemote;
+        const browserFilesystemLocal = capabilities.browserFilesystemLocal;
         if (inputRef || element) {
           if (ref) {
             return jsonError(res, 400, "ref cannot be combined with inputRef/element");

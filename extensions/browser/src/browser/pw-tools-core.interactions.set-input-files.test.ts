@@ -340,6 +340,7 @@ describe("setInputFilesViaPlaywright", () => {
 
     await setInputFilesViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
+      browserFilesystemLocal: false,
       targetId: "T1",
       inputRef: "e7",
       paths: ["/tmp/openclaw/uploads/ok.txt"],

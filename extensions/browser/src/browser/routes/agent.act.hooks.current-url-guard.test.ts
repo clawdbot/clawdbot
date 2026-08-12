@@ -36,9 +36,14 @@ vi.mock("../pw-ai-module.js", () => ({
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 
-function createProfileContext(options?: { driver?: "openclaw" | "extension"; tabUrl?: string }) {
+function createProfileContext(options?: {
+  attachOnly?: boolean;
+  driver?: "openclaw" | "extension";
+  tabUrl?: string;
+}) {
   return {
     profile: {
+      attachOnly: options?.attachOnly ?? false,
       cdpIsLoopback: true,
       cdpUrl: "http://127.0.0.1:9222",
       driver: options?.driver ?? ("openclaw" as const),
@@ -174,6 +179,30 @@ describe("agent act hook current URL guard", () => {
     expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
         browserFilesystemLocal: true,
+        ref: "upload-button",
+        paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
+
+  it("sends loopback attach-only uploads as payloads for a separate browser filesystem", async () => {
+    const profileCtx = createProfileContext({
+      attachOnly: true,
+      tabUrl: "http://127.0.0.1:8080/upload",
+    });
+
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+      profileCtx,
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserFilesystemLocal: false,
         ref: "upload-button",
         paths: ["/tmp/upload.txt"],
       }),
