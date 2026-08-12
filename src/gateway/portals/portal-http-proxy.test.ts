@@ -37,7 +37,9 @@ afterEach(async () => {
 
 afterAll(async () => {
   targetWss.close();
-  await new Promise<void>((resolve) => targetServer.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    targetServer.close(() => resolve());
+  });
 });
 
 function portalService() {
@@ -197,9 +199,13 @@ describe("portal HTTP proxy", () => {
 
   it("shows a retry page while the target is down", async () => {
     const unavailableTarget = createServer();
-    await new Promise<void>((resolve) => unavailableTarget.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      unavailableTarget.listen(0, "127.0.0.1", resolve);
+    });
     const port = (unavailableTarget.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => unavailableTarget.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      unavailableTarget.close(() => resolve());
+    });
     const portal = await portalService().open({ targetPort: port });
     const token = portal.tokenQuery.slice("openclaw_portal=".length);
 
@@ -222,14 +228,19 @@ describe("portal HTTP proxy", () => {
       ws.once("open", () => resolve());
       ws.once("error", reject);
     });
-    const echoed = new Promise<string>((resolve) =>
-      ws.once("message", (data) => resolve(data.toString())),
-    );
+    const echoed = new Promise<string>((resolve) => {
+      ws.once("message", (data) => {
+        const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        resolve(bytes.toString("utf8"));
+      });
+    });
     ws.send("hot reload");
     expect(await echoed).toBe("hot reload");
     expect(targetWebSocketPath).toBe("/hmr?channel=dev");
 
-    const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+    });
     await service.close(portal.id);
     await closed;
     await expect(httpCall({ port: portal.listenPort })).rejects.toThrow();
