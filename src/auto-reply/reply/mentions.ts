@@ -37,7 +37,15 @@ const JOINER_CHARS = String.raw`\u200C\u200D`;
 // where they can appear.
 const JOINER_SPACING = String.raw`[${JOINER_CHARS}]*`;
 const DECORATION_SPACING = String.raw`[${JOINER_CHARS}\s]*`;
-const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
+// A digit that heads a keycap sequence is an identity character spelling a
+// pictograph: the token split must not consume it into a word run, and the
+// boundary assertions must not read it as the first letter of a foreign word,
+// or "Bot1️⃣" would both demand its keycap and refuse the typed keycap as
+// glued text -- while "Bot#️⃣", whose base is not an identity character,
+// never had either problem. A bare digit stays a word character: "Bot1" keeps
+// requiring its 1, and a name matched inside "bot1x" stays rejected.
+const KEYCAP_HEAD_GUARD = String.raw`(?![0-9]\u{FE0F}?\u{20E3})`;
+const UNICODE_WORD_CHAR = String.raw`(?:${KEYCAP_HEAD_GUARD}[${NAME_TOKEN_CHARS}${JOINER_CHARS}])`;
 const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // A token starts at an identity character: marks attach to the character
 // before them, they never stand for one. So a mark run that trails decoration
@@ -45,7 +53,10 @@ const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // enclosing keycap U+20E3 -- while a mark on a letter stays part of its token.
 // Deriving a bare mark run as the token would both require decoration nobody
 // types and match every unrelated emoji carrying the same mark.
-const NAME_TOKEN_SPLIT = new RegExp(`([${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`, "gu");
+const NAME_TOKEN_SPLIT = new RegExp(
+  `(${KEYCAP_HEAD_GUARD}[${NAME_IDENTITY_CHARS}](?:${KEYCAP_HEAD_GUARD}[${NAME_TOKEN_CHARS}])*)`,
+  "gu",
+);
 // Decoration is what a member may leave out when typing the name: symbol and
 // mark code points (emoji, flags, dingbats), the skin-tone modifiers, the tag
 // characters a subdivision flag spells its region with, and the invisible

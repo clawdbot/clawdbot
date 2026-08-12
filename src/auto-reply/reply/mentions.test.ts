@@ -349,6 +349,7 @@ describe("derived mention matching with decorated identity names", () => {
     ["variation selector on emoji punctuation", "‼️"],
     ["enclosed letter", "🅰️"],
     ["keycap", "#️⃣"],
+    ["numeric keycap", "1️⃣"],
     ["joined sequence", "👩‍👧"],
     ["skin tone modifier", "👍🏽"],
     ["regional indicator pair", "🇹🇼"],
@@ -381,6 +382,36 @@ describe("derived mention matching with decorated identity names", () => {
     expect(stripMentions(`小蝶${scotland} /status`, {} as MsgContext, cfg, "decorated-agent")).toBe(
       "/status",
     );
+  });
+
+  it("treats a numeric keycap as decoration without freeing its bare digit", () => {
+    // The keycap's digit is an identity character, so the token split would
+    // absorb it and the marks that follow; the digit heading a keycap stays
+    // out of the token instead, and the boundary must not read it as a
+    // foreign word character when the member types the keycap.
+    const cfg = configForName("Bot1️⃣");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("bot 早安", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot1️⃣ 早安", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot1 早安", regexes)).toBe(false);
+    expect(matchesMentionPatterns("botx 早安", regexes)).toBe(false);
+    expect(stripMentions("bot /status", {} as MsgContext, cfg, "decorated-agent")).toBe("/status");
+    expect(stripMentions("bot1️⃣ /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("bot1 /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "bot1 /status",
+    );
+  });
+
+  it("keeps a plain digit in the name required", () => {
+    // Only a digit spelling a keycap is decoration; "Bot1" names itself with
+    // the 1, so the bare spelling must not gain a trigger.
+    const regexes = buildMentionRegexes(configForName("Bot1"), "decorated-agent");
+
+    expect(matchesMentionPatterns("bot1 早安", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot 早安", regexes)).toBe(false);
   });
 
   it("keeps one subdivision flag from matching another", () => {
