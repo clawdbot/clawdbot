@@ -5,6 +5,7 @@ import {
   formatErrorMessage,
   stringifyNonErrorCause,
   toErrorObject,
+  toStringifiedError,
 } from "./error-coercion.js";
 
 const keepText = (text: string): string => text;
@@ -60,6 +61,20 @@ describe("toErrorObject", () => {
 
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
+  });
+});
+
+describe("toStringifiedError", () => {
+  it("preserves Error identity and stringifies every other value", () => {
+    const error = new Error("boom");
+    const objectError = toStringifiedError({ ok: true });
+
+    expect(toStringifiedError(error)).toBe(error);
+    expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
+    expect(objectError).toMatchObject({ message: "[object Object]" });
+    expect(objectError).not.toHaveProperty("cause");
+    expect(objectError).not.toHaveProperty("ok");
+    expect(toStringifiedError(null)).toMatchObject({ message: "null" });
   });
 });
 

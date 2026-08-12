@@ -17,6 +17,7 @@ import {
   type AgentHarnessResetParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
@@ -454,10 +455,10 @@ function computeSessionKey(
     (typeof p.model === "string" ? p.model : "");
   const requestTransport =
     p.model && typeof p.model === "object" ? getModelProviderRequestTransport(p.model) : undefined;
-  const requestAuthMode = readSessionString(
+  const requestAuthMode = normalizeOptionalString(
     requestTransport?.auth?.mode ?? modelObj.request?.auth?.mode,
   );
-  const azureApiVersion = readSessionString(
+  const azureApiVersion = normalizeOptionalString(
     modelObj.azureApiVersion ?? modelObj.params?.azureApiVersion,
   );
   // resolveCopilotAuth can throw when an explicit `auth.gitHubToken`
@@ -557,10 +558,6 @@ function computeSessionKey(
     ...(options.includeAuth ? authParts : []),
   ];
   return parts.join("|");
-}
-
-function readSessionString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function fingerprintSessionValue(value: unknown): string {

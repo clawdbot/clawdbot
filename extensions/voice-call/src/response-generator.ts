@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   isRecord,
+  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -66,7 +67,7 @@ function readExplicitToolsAllow(value: unknown): string[] | undefined {
     return undefined;
   }
 
-  return allow.filter((entry): entry is string => typeof entry === "string");
+  return filterStringEntries(allow);
 }
 
 function resolveVoiceAgentToolsAllow(config: CoreConfig, agentId: string): string[] | undefined {

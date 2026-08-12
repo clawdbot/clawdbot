@@ -1,4 +1,5 @@
 // Control UI chat module implements tool cards behavior.
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -472,10 +473,10 @@ function renderArgsKeyValueList(args: Record<string, unknown>) {
 }
 
 function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown> {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return false;
   }
-  const keys = Object.keys(args as Record<string, unknown>);
+  const keys = Object.keys(args);
   return keys.length > 0 && keys.length <= KV_MAX_KEYS;
 }
 
@@ -491,22 +492,20 @@ function extraArgsBeyondRowTarget(
   args: unknown,
   kind: ToolCallView["kind"],
 ): Record<string, unknown> | null {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return null;
   }
   const summarized = ROW_SUMMARIZED_ARG_KEYS[kind];
   if (!summarized) {
-    return args as Record<string, unknown>;
+    return args;
   }
-  const extras = Object.fromEntries(
-    Object.entries(args as Record<string, unknown>).filter(([key]) => !summarized.has(key)),
-  );
+  const extras = Object.fromEntries(Object.entries(args).filter(([key]) => !summarized.has(key)));
   return Object.keys(extras).length > 0 ? extras : null;
 }
 
 function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
-  if (card.args && typeof card.args === "object" && !Array.isArray(card.args)) {
-    const args = card.args as Record<string, unknown>;
+  const args = asNullableRecord(card.args);
+  if (args) {
     for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
       const value = args[key];
       if (typeof value === "string" && value.trim()) {
@@ -747,10 +746,7 @@ export function renderExpandedToolCardContent(
   // args (workdir, timeout, env…) stay visible as key-value rows so identical
   // commands in different contexts remain distinguishable in the audit trail.
   if (view.kind === "command" && view.command && !card.preview) {
-    const argsRecord =
-      card.args && typeof card.args === "object" && !Array.isArray(card.args)
-        ? (card.args as Record<string, unknown>)
-        : null;
+    const argsRecord = asNullableRecord(card.args);
     const extraArgs = Object.fromEntries(
       Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
     );

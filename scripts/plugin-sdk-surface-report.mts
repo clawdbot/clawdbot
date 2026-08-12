@@ -273,7 +273,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: channel-neutral location and provider-update hook contracts.
       // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
       // +2: narrow channel agent-run terminal reader and outcome contract.
-      4873,
+      // +5: narrow string, record, and error coercion helpers.
+      4878,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -338,7 +339,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
       // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
       // +1: narrow channel agent-run terminal reader.
-      2926,
+      // +5: narrow string, record, and error coercion helpers.
+      2931,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -363,7 +365,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -2: text-runtime names record and string coercion compatibility exports explicitly.
-      77,
+      76,
       env,
     ),
   };

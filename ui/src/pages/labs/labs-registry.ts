@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
@@ -75,8 +76,8 @@ export const LAB_FEATURES = [
       if (typeof raw === "boolean") {
         return raw;
       }
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        return (raw as Record<string, unknown>).enabled !== false;
+      if (isRecord(raw)) {
+        return raw.enabled !== false;
       }
       return true;
     },
@@ -115,10 +116,10 @@ export const LAB_FEATURES = [
       if (typeof raw === "boolean") {
         return raw;
       }
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      if (!isRecord(raw)) {
         return false;
       }
-      const node = raw as Record<string, unknown>;
+      const node = raw;
       return typeof node.enabled === "boolean"
         ? node.enabled
         : Object.keys(node).some((key) => key !== "enabled");
@@ -213,10 +214,10 @@ export const LAB_FEATURES = [
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
   let current: unknown = config;
   for (const segment of path) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current)) {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[segment];
+    current = current[segment];
   }
   return current;
 }
@@ -226,10 +227,10 @@ function defaultModelRef(config: Record<string, unknown>): string | undefined {
   if (typeof model === "string") {
     return model;
   }
-  if (!model || typeof model !== "object" || Array.isArray(model)) {
+  if (!isRecord(model)) {
     return undefined;
   }
-  const primary = (model as Record<string, unknown>).primary;
+  const primary = model.primary;
   return typeof primary === "string" ? primary : undefined;
 }
 
@@ -258,10 +259,10 @@ function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   if (key === "enabled" && typeof parent === "boolean") {
     return parent;
   }
-  if (!parent || typeof parent !== "object" || Array.isArray(parent) || !key) {
+  if (!isRecord(parent) || !key) {
     return false;
   }
-  return feature.activeValues.includes((parent as Record<string, unknown>)[key] as LabFeatureValue);
+  return feature.activeValues.includes(parent[key] as LabFeatureValue);
 }
 
 function labFeatureOverridePath(
@@ -286,12 +287,7 @@ function labFeatureOverridePath(
   ) {
     return parentPath;
   }
-  if (
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent) &&
-    Object.hasOwn(parent, key)
-  ) {
+  if (isRecord(parent) && Object.hasOwn(parent, key)) {
     return feature.configPath;
   }
   return null;
@@ -314,13 +310,7 @@ export function resolveLabFeatureState(
   let defaultParent = parent;
   if (overridePath?.length === parentPath.length) {
     defaultParent = undefined;
-  } else if (
-    overridePath &&
-    key &&
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent)
-  ) {
+  } else if (overridePath && key && isRecord(parent)) {
     defaultParent = { ...(parent as Record<string, unknown>) };
     delete (defaultParent as Record<string, unknown>)[key];
   }

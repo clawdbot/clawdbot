@@ -1,5 +1,8 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
-import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber as resolvePositiveContextTokens,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
@@ -13,7 +16,6 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -139,7 +141,7 @@ export async function finalizeCronRun(params: {
       model: modelUsed,
       config: prepared.cfgWithAgentDefaults,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({ usage, cost: costConfig }),
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
@@ -196,7 +198,7 @@ export async function finalizeCronRun(params: {
         diagnosticUsage?.output !== undefined ||
         diagnosticUsage?.cacheRead !== undefined ||
         diagnosticUsage?.cacheWrite !== undefined;
-      const diagnosticEstimatedCostUsd = resolveNonNegativeNumber(
+      const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
         estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
       );
       const contextUsedTokens = deriveContextPromptTokens({

@@ -1,4 +1,5 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -24,10 +25,10 @@ function storageKey(gatewayUrl: string): string {
 }
 
 function normalizePreference(value: unknown): NewSessionPreference | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const workspace = normalizeOptionalString(record.workspace);
   const folder = normalizeOptionalString(record.folder);
   const model = normalizeOptionalString(record.model);
@@ -48,7 +49,7 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
 function readStore(storage: Storage, gatewayUrl: string): PersistedPreferences {
   try {
     const parsed = JSON.parse(storage.getItem(storageKey(gatewayUrl)) ?? "null") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       return {};
     }
     return parsed as PersistedPreferences;
