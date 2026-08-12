@@ -1,5 +1,5 @@
 // Workboard plugin module implements store behavior.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
   WorkboardCard,
@@ -69,11 +69,30 @@ function reconciliationLinkFor(
 }
 
 function externalLinkId(link: WorkboardExternalExecutionLink): string {
-  return `external:${link.idempotencyKey}`;
+  return `external:${createHash("sha256").update(`${link.tenant}\u0000${link.idempotencyKey}`).digest("base64url")}`;
+}
+
+function isExternalLinkFor(card: WorkboardCard, link: WorkboardExternalExecutionLink): boolean {
+  return (
+    card.metadata?.links?.some(
+      (entry) =>
+        entry.id === externalLinkId(link) ||
+        (entry.id === `external:${link.idempotencyKey}` &&
+          card.metadata?.automation?.tenant === link.tenant),
+    ) ?? false
+  );
+}
+
+function latestExternalSourceUpdatedAt(card: WorkboardCard): number | undefined {
+  const values = card.metadata?.links
+    ?.filter((entry) => entry.id.startsWith("external:"))
+    .map((entry) => entry.sourceUpdatedAt)
+    .filter((value): value is number => value !== undefined);
+  return values?.length ? Math.max(...values) : undefined;
 }
 
 function hasExternalLink(card: WorkboardCard, link: WorkboardExternalExecutionLink): boolean {
-  return card.metadata?.links?.some((entry) => entry.id === externalLinkId(link)) ?? false;
+  return isExternalLinkFor(card, link);
 }
 
 function appendExternalLink(card: WorkboardCard, link: WorkboardExternalExecutionLink) {
@@ -143,9 +162,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
           return reconciliationResult(existing, false, link);
         }
+        const latestAssociationSourceUpdatedAt = latestExternalSourceUpdatedAt(existing);
         if (
-          existing.metadata?.lifecycleStatusSourceUpdatedAt !== undefined &&
-          link.sourceUpdatedAt < existing.metadata.lifecycleStatusSourceUpdatedAt
+          (existing.metadata?.lifecycleStatusSourceUpdatedAt !== undefined &&
+            link.sourceUpdatedAt < existing.metadata.lifecycleStatusSourceUpdatedAt) ||
+          (latestAssociationSourceUpdatedAt !== undefined &&
+            link.sourceUpdatedAt < latestAssociationSourceUpdatedAt)
         ) {
           const associated = await this.updateCard(existing.id, {
             metadata: {
@@ -171,6 +193,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
           },
         });
         return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
+      }
+
+      if (observation.cardId) {
+        throw new Error(`card not found: ${observation.cardId}`);
       }
 
       const card = observation.card ?? {};

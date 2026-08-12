@@ -124,7 +124,9 @@ describe("WorkboardReconciler", () => {
       card: { id: created.card.id, title: "Fresh title", status: "running" },
     });
     expect(stale.card.metadata?.lifecycleStatusSourceUpdatedAt).toBe(200);
-    expect(stale.card.metadata?.links?.map((link) => link.id)).toContain("external:run-18-v1");
+    expect(
+      stale.card.metadata?.links?.some((link) => link.url === "https://example.test/runs/18/older"),
+    ).toBe(true);
   });
 
   it("fails closed when an explicit card belongs to another tenant", async () => {
@@ -151,9 +153,47 @@ describe("WorkboardReconciler", () => {
       card: { id: owner.card.id, title: "Tenant-owned" },
     });
     expect(rejected.card.metadata?.automation?.tenant).toBe("acme");
-    expect(rejected.card.metadata?.links?.map((link) => link.id)).not.toContain(
-      "external:tenant-attacker-v1",
-    );
+    expect(
+      rejected.card.metadata?.links?.some(
+        (link) => link.url === "https://example.test/runs/tenant-attacker",
+      ),
+    ).toBe(false);
+  });
+
+  it("fails closed for an explicit card id that does not exist", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/runs/missing",
+        tenant: "acme",
+        idempotencyKey: "missing-v1",
+        sourceUpdatedAt: 100,
+        cardId: "missing-card",
+        card: { title: "Must not create" },
+      }),
+    ).rejects.toThrow("card not found: missing-card");
+  });
+
+  it("does not apply older link card fields after a manual lifecycle marker clear", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const reconciler = new WorkboardReconciler(store);
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/newer",
+      tenant: "acme",
+      idempotencyKey: "newer-v1",
+      sourceUpdatedAt: 200,
+      card: { title: "Newer", status: "running" },
+    });
+    await store.update(created.card.id, { status: "todo" });
+    const older = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/older",
+      tenant: "acme",
+      idempotencyKey: "older-v1",
+      sourceUpdatedAt: 100,
+      cardId: created.card.id,
+      card: { title: "Older overwrite", status: "running" },
+    });
+    expect(older).toMatchObject({ applied: true, card: { title: "Newer", status: "todo" } });
   });
 
   it.each(["blocked", "review", "done"] as const)(

@@ -85,6 +85,75 @@ function linkFor(observation: WorkboardReconciliationObservation): WorkboardExte
   };
 }
 
+const OBSERVATION_FIELDS = new Set([
+  "sourceUrl",
+  "tenant",
+  "idempotencyKey",
+  "sourceUpdatedAt",
+  "cardId",
+  "expectedRevision",
+  "card",
+  "link",
+]);
+const CARD_FIELDS = new Set([
+  "title",
+  "notes",
+  "status",
+  "priority",
+  "labels",
+  "agentId",
+  "sessionKey",
+  "runId",
+  "taskId",
+  "sourceUrl",
+  "execution",
+  "position",
+  "boardId",
+]);
+const LINK_FIELDS = new Set(["title"]);
+
+function objectWithOnly(
+  value: unknown,
+  name: string,
+  fields: Set<string>,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} must be an object.`);
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!fields.has(key)) {
+      throw new Error(`${name}.${key} is not allowed.`);
+    }
+  }
+  return record;
+}
+
+export function projectReconciliationObservation(
+  value: unknown,
+): WorkboardReconciliationObservation {
+  const input = objectWithOnly(value, "observation", OBSERVATION_FIELDS);
+  const card =
+    input.card === undefined ? undefined : objectWithOnly(input.card, "card", CARD_FIELDS);
+  const link =
+    input.link === undefined ? undefined : objectWithOnly(input.link, "link", LINK_FIELDS);
+  if (input.expectedRevision !== undefined) {
+    readTimestamp(input.expectedRevision, "expectedRevision");
+  }
+  return {
+    sourceUrl: input.sourceUrl as string,
+    tenant: input.tenant as string,
+    idempotencyKey: input.idempotencyKey as string,
+    sourceUpdatedAt: input.sourceUpdatedAt as number,
+    ...(input.cardId === undefined ? {} : { cardId: readRequiredString(input.cardId, "cardId") }),
+    ...(input.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
+    ...(card === undefined ? {} : { card: card as WorkboardReconciliationObservation["card"] }),
+    ...(link === undefined ? {} : { link: link as WorkboardReconciliationObservation["link"] }),
+  };
+}
+
 export class WorkboardReconciler {
   constructor(private readonly store: WorkboardStore) {}
 
@@ -117,7 +186,8 @@ export class WorkboardReconciler {
   async apply(
     observation: WorkboardReconciliationObservation,
   ): Promise<WorkboardReconciliationApplyResult> {
-    const link = linkFor(observation);
-    return await this.store.applyReconciliation(observation, link);
+    const projected = projectReconciliationObservation(observation);
+    const link = linkFor(projected);
+    return await this.store.applyReconciliation(projected, link);
   }
 }

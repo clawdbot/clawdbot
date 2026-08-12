@@ -1,4 +1,3 @@
-import type { WorkboardReconciliationObservation } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
@@ -15,7 +14,7 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
-import { WorkboardReconciler } from "./reconciliation.js";
+import { WorkboardReconciler, projectReconciliationObservation } from "./reconciliation.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -73,7 +72,8 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.reconciliation.apply",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, await reconciler.apply(requestParams as WorkboardReconciliationObservation));
+        const result = await reconciler.apply(projectReconciliationObservation(requestParams));
+        respond(true, { ...result, card: redactClaimToken(result.card) });
       } catch (error) {
         respondError(respond, error);
       }

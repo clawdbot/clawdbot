@@ -40,7 +40,13 @@ function fixtureCard(index: number): WorkboardCard {
       attempts: [{ id: `${id}-attempt`, status: "succeeded", startedAt: 1000 + index }],
       comments: [{ id: `${id}-comment`, body: `note ${index}`, createdAt: 1000 + index }],
       links: [
-        { id: `${id}-link`, type: "relates_to", url: "https://example.test", createdAt: 1000 },
+        {
+          id: `${id}-link`,
+          type: "relates_to",
+          url: "https://example.test",
+          sourceUpdatedAt: 777,
+          createdAt: 1000,
+        },
       ],
       proof: [{ id: `${id}-proof`, status: "passed", label: "unit", createdAt: 1000 }],
       artifacts: [{ id: `${id}-artifact`, label: "log", createdAt: 1000 }],

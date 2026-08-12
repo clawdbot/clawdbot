@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -246,6 +246,7 @@ const WORKBOARD_SCHEMA_SQL = `
       target_card_id TEXT,
       title TEXT,
       url TEXT,
+      source_updated_at INTEGER,
       created_at INTEGER NOT NULL
     ) STRICT;
 
@@ -359,6 +360,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
+  ensureColumn(db, "workboard_card_links", "source_updated_at", "source_updated_at INTEGER");
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -651,6 +653,7 @@ function readMetadata(
     const targetCardId = stringValue(child, "target_card_id");
     const title = stringValue(child, "title");
     const url = stringValue(child, "url");
+    const sourceUpdatedAt = numberValue(child, "source_updated_at");
     if (targetCardId) {
       entry.targetCardId = targetCardId;
     }
@@ -659,6 +662,9 @@ function readMetadata(
     }
     if (url) {
       entry.url = url;
+    }
+    if (sourceUpdatedAt !== undefined) {
+      entry.sourceUpdatedAt = sourceUpdatedAt;
     }
     return entry;
   });
@@ -1035,8 +1041,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
@@ -1046,6 +1052,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       bindNull(entry.targetCardId),
       bindNull(entry.title),
       bindNull(entry.url),
+      bindNull(entry.sourceUpdatedAt),
       entry.createdAt,
     );
   });
