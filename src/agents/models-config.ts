@@ -30,6 +30,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import { resolveModelsJsonSourceContents } from "./models-config-source.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
@@ -562,7 +563,8 @@ export async function planOpenClawModelsJsonSource(
   });
   return {
     agentDir,
-    modelsJsonContents: plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+    modelsJsonContents:
+      plan.action === "write" ? plan.contents : resolveModelsJsonSourceContents(cfg, agentDir),
     // Planned writes share the writer's complete-replacement contract, including intentional
     // stale-catalog deletion. Only a non-authoritative plan omits this field.
     pluginCatalogs:

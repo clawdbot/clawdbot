@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
@@ -37,6 +35,7 @@ import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import { resolveModelsJsonSourceContents } from "./models-config-source.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import {
@@ -486,17 +485,6 @@ export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): bool
   return fullModelCatalogSnapshots.has(snapshot);
 }
 
-function captureModelsJsonContents(agentDir: string): string | null {
-  try {
-    return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
 export function fingerprintPreparedRuntimeFacts(value: unknown): string {
   return sha256Base64Url(stableStringify(value));
 }
@@ -530,7 +518,10 @@ function groupConfiguredRegistrySources(
 ): PreparedConfiguredRegistryGroup[] {
   const groups = new Map<string, PreparedConfiguredRegistryGroup[]>();
   for (const facts of agentFacts) {
-    const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    const modelsJsonContents = resolveModelsJsonSourceContents(
+      facts.input.config,
+      facts.input.agentDir,
+    );
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Generated catalogs are agent-owned. Capture only plugins needed by unresolved configured
     // refs, then group exact bytes and OAuth behavior so publication never mixes generations.
@@ -700,7 +691,7 @@ export async function prepareAgentCatalogSource(
   // Capture immediately after the serialized write. Another owner may share this directory and
   // publish a different workspace generation before full-catalog parsing begins.
   return {
-    modelsJsonContents: captureModelsJsonContents(input.agentDir),
+    modelsJsonContents: resolveModelsJsonSourceContents(input.config, input.agentDir),
     pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
     providerOutcomes: resultOutcomes(),
   };

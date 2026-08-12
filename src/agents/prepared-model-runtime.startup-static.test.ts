@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
@@ -94,6 +97,11 @@ const mocks = vi.hoisted(() => {
     })),
     resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
     resolveSyntheticAuth,
+    agentIds: ["default"],
+    agentDir: "/tmp/prepared-static-agent",
+    defaultAgentDir: "/tmp/prepared-static-agent",
+    defaultAgentId: "default",
+    workspaceDir: "/tmp/prepared-static-workspace",
     mutationListener: undefined as
       | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
       | undefined,
@@ -122,11 +130,11 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
-  listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
-  resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
-  resolveDefaultAgentDir: () => "/tmp/prepared-static-agent",
-  resolveDefaultAgentId: () => "default",
+  listAgentIds: () => mocks.agentIds,
+  resolveAgentDir: () => mocks.agentDir,
+  resolveAgentWorkspaceDir: () => mocks.workspaceDir,
+  resolveDefaultAgentDir: () => mocks.defaultAgentDir,
+  resolveDefaultAgentId: () => mocks.defaultAgentId,
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
@@ -184,9 +192,45 @@ beforeEach(() => {
     .mockReturnValue(createEmptyPluginRegistry());
   vi.clearAllMocks();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
+  mocks.agentIds = ["default"];
+  mocks.agentDir = "/tmp/prepared-static-agent";
+  mocks.defaultAgentDir = "/tmp/prepared-static-agent";
+  mocks.defaultAgentId = "default";
+  mocks.workspaceDir = "/tmp/prepared-static-workspace";
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
+  it("uses the default root catalog for a secondary static registry without copying it", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-static-catalog-"));
+    const defaultAgentDir = path.join(home, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(home, "agents", "ops", "agent");
+    const contents = '{"providers":{"fixture":{"models":[{"id":"fixture-model"}]}}}\n';
+    await fs.mkdir(defaultAgentDir, { recursive: true });
+    await fs.writeFile(path.join(defaultAgentDir, "models.json"), contents);
+    mocks.agentIds = ["ops"];
+    mocks.agentDir = secondaryAgentDir;
+    mocks.defaultAgentDir = defaultAgentDir;
+    mocks.defaultAgentId = "main";
+    mocks.workspaceDir = path.join(home, "workspace-ops");
+
+    try {
+      await refreshPreparedModelRuntimeSnapshots(
+        { agents: { list: [{ id: "main", default: true }, { id: "ops" }] } },
+        { gatewayLifecycle: true, catalogMode: "static" },
+      );
+
+      expect(mocks.discoverModels).toHaveBeenCalledWith(
+        mocks.authStorage,
+        expect.objectContaining({ modelsJsonContents: contents }),
+      );
+      await expect(fs.access(path.join(secondaryAgentDir, "models.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
