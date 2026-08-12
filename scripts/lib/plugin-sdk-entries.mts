@@ -113,7 +113,6 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
 /** Supported SDK facades backed by bundled plugins until generic contracts replace them. */
 export const supportedBundledFacadeSdkEntrypoints = [
   "discord",
-  "matrix",
   "telegram-account",
 ] as const;
 
