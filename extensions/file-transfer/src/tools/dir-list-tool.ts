@@ -50,8 +50,8 @@ export function createDirListTool(): AnyAgentTool {
       const nextPageToken =
         typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
 
-      const fileCount = entries.filter((e) => !e.isDir).length;
-      const dirCount = entries.filter((e) => e.isDir).length;
+      const dirCount = entries.reduce((count, entry) => count + (entry.isDir ? 1 : 0), 0);
+      const fileCount = entries.length - dirCount;
       const truncatedNote = truncated ? " (more entries available — pass nextPageToken)" : "";
       const summary = `Listed ${canonicalPath}: ${fileCount} file${fileCount !== 1 ? "s" : ""}, ${dirCount} subdir${dirCount !== 1 ? "s" : ""}${truncatedNote}`;
 
