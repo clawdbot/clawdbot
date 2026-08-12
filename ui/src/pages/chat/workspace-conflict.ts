@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { hasTerminalControl } from "../../lib/terminal-command.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;

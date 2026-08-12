@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAuthTokenRecord } from "../../packages/gateway-client/src/client.js";
 import {
@@ -6,8 +7,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers.js";
+import { encodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { resolveResumeSession } from "../tui/tui-session-picker.js";
+import { registerResumeCli } from "./resume-cli.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,13 +50,21 @@ const ttyDescriptors = [process.stdin, process.stdout].map(
   (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
 );
 
-function createGatewayClient(rows: SessionRow[]) {
+function createGatewayClient(
+  rows: SessionRow[],
+  connection: {
+    url: string;
+    token?: string;
+    password?: string;
+    tlsFingerprint?: string;
+  } = {
+    url: "wss://resolved.example/control",
+    token: "resolved-token",
+    tlsFingerprint: "sha256:resolved-pin",
+  },
+) {
   const client = {
-    connection: {
-      url: "wss://resolved.example/control",
-      token: "resolved-token",
-      tlsFingerprint: "sha256:resolved-pin",
-    },
+    connection,
     listSessions: vi.fn().mockResolvedValue({ sessions: rows }),
     onConnected: undefined as (() => void) | undefined,
     onConnectError: undefined as ((error: Error) => void) | undefined,
@@ -142,6 +153,71 @@ describe("resolveResumeSession", () => {
 });
 
 describe("runResumeCommand", () => {
+  it.each([
+    ["malformed", "not+base64url"],
+    ["oversized", "A".repeat(4097)],
+  ])("rejects a %s handoff before Gateway discovery or the TUI", async (_name, handoff) => {
+    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
+      "Invalid --handoff payload. Copy a fresh command from the Control UI.",
+    );
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a positional query", "agent:main:other", undefined],
+    ["an explicit URL", undefined, "wss://other.example/ws"],
+  ])("rejects a handoff combined with %s", async (_name, query, url) => {
+    const handoff = encodeResumeHandoff({
+      sessionKey: "agent:main:alpha",
+      gatewayUrl: "wss://gateway.example/openclaw",
+    });
+
+    await expect(runResumeCommand(query, { handoff, ...(url ? { url } : {}) })).rejects.toThrow(
+      "--handoff cannot be combined with a positional query or --url.",
+    );
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
+  it("passes an exact handoff target and explicit auth directly into the bound TUI", async () => {
+    const sessionKey = "agent:main: hostile-'\"$&;|<>^()%![]{}\\`-%PATH% ";
+    const url = "wss://gateway.example/openclaw/$&;=()+,![]{}'`/%25PATH%25";
+    const handoff = encodeResumeHandoff({ sessionKey, gatewayUrl: url });
+    const client = createGatewayClient([], {
+      url: "wss://normalized.example/different-path",
+      token: "explicit-token",
+      password: "explicit-password",
+      tlsFingerprint: "sha256:explicit-pin",
+    });
+
+    await runResumeCommand(undefined, {
+      handoff,
+      token: "explicit-token",
+      password: "explicit-password",
+      tlsFingerprint: "sha256:explicit-pin",
+    });
+
+    expect(mocks.connect).toHaveBeenCalledWith({
+      url,
+      token: "explicit-token",
+      password: "explicit-password",
+      tlsFingerprint: "sha256:explicit-pin",
+      allowConfiguredAuthForExactTarget: true,
+    });
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(mocks.runTui).toHaveBeenCalledWith({
+      boundGateway: {
+        url,
+        token: "explicit-token",
+        password: "explicit-password",
+        tlsFingerprint: "sha256:explicit-pin",
+      },
+      session: sessionKey,
+      forceProcessExitOnReturn: true,
+    });
+  });
+
   it("excludes the bare global session from query resolution", async () => {
     const client = createGatewayClient([]);
 
@@ -192,7 +268,6 @@ describe("runResumeCommand", () => {
 
     expect(mocks.connect).toHaveBeenCalledWith({
       url: "wss://gateway.example/control",
-      allowConfiguredAuthForExactTarget: true,
     });
     expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,6 +290,15 @@ describe("runResumeCommand", () => {
     );
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+});
+
+describe("resume command registration", () => {
+  it("documents the additive opaque handoff option", () => {
+    const program = new Command().name("openclaw");
+    registerResumeCli(program);
+
+    expect(program.commands[0]?.helpInformation()).toContain("--handoff <payload>");
   });
 });
 

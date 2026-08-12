@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 describe("buildContinueInTerminalCommand", () => {
@@ -11,19 +12,17 @@ describe("buildContinueInTerminalCommand", () => {
         rowAgentId: "ignored",
         selectedAgentId: "fallback",
       },
-      command:
-        "openclaw resume 'Agent:Work:Case'\\''Sensitive' --url wss://gateway.example/openclaw",
+      qualifiedKey: "Agent:Work:Case'Sensitive",
     },
     {
       name: "qualifies a bare key with the row agent",
       input: {
-        gatewayUrl: "ws://127.0.0.1:18789/control",
-        sessionKey: "deploy's shell $(touch nope)",
+        gatewayUrl: "ws://127.0.0.1:18789/control/$&;=()+,![]{}'`/%25PATH%25",
+        sessionKey: "deploy-'\"$&;|<>^()%![]{}\\`-%PATH%",
         rowAgentId: "build's agent",
         selectedAgentId: "fallback",
       },
-      command:
-        "openclaw resume 'agent:build'\\''s agent:deploy'\\''s shell $(touch nope)' --url ws://127.0.0.1:18789/control",
+      qualifiedKey: "agent:build's agent:deploy-'\"$&;|<>^()%![]{}\\`-%PATH%",
     },
     {
       name: "uses the selected agent only when the row agent is absent",
@@ -32,10 +31,17 @@ describe("buildContinueInTerminalCommand", () => {
         sessionKey: "main",
         selectedAgentId: "selected",
       },
-      command: "openclaw resume agent:selected:main --url wss://gateway.example/ws",
+      qualifiedKey: "agent:selected:main",
     },
-  ])("$name", ({ input, command }) => {
-    expect(buildContinueInTerminalCommand(input)).toBe(command);
+  ])("$name", ({ input, qualifiedKey }) => {
+    const command = buildContinueInTerminalCommand(input);
+    expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+    const encoded = command?.slice("openclaw resume --handoff ".length) ?? "";
+    expect(decodeResumeHandoff(encoded)).toEqual({
+      version: 1,
+      sessionKey: qualifiedKey,
+      gatewayUrl: input.gatewayUrl,
+    });
   });
 
   it.each([

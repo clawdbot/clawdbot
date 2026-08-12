@@ -8,6 +8,7 @@ import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -125,10 +126,15 @@ describe("chat pane header state", () => {
 
       await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
       paint(row);
-      expect(
+      const command =
         container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
-          ?.textContent,
-      ).toBe("openclaw resume agent:row-agent:bare-session --url wss://gateway.example/control");
+          ?.textContent ?? "";
+      expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+      expect(decodeResumeHandoff(command.slice("openclaw resume --handoff ".length))).toEqual({
+        version: 1,
+        sessionKey: "agent:row-agent:bare-session",
+        gatewayUrl: "wss://gateway.example/control",
+      });
 
       if (change === "target") {
         pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";

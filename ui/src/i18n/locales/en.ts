@@ -4619,7 +4619,8 @@ export const en: TranslationMap = {
       continueInTerminal: {
         action: "Continue in terminal…",
         title: "Continue in terminal",
-        description: "Copy this command to continue the current session in your terminal.",
+        description:
+          "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
         authNote:
           "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
         disconnected: "Connect to the Gateway to continue this session in a terminal.",

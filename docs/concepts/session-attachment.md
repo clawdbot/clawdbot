@@ -101,9 +101,12 @@ separately when first pairing with a Gateway origin.
 
 From the Control UI, open the session header menu and choose **Continue in
 terminal…**. The dialog copies a credential-free `openclaw resume` command with
-the exact qualified session key and selected Gateway WebSocket URL. Run it in
-an OpenClaw CLI profile that is already configured for that Gateway; the
-terminal authenticates independently and the session ACL still applies.
+one opaque, versioned handoff argument. The argument encodes only the exact
+qualified session key and selected Gateway WebSocket URL. Its URL-safe alphabet
+needs no shell quoting, so the command is safe to paste in common POSIX shells,
+PowerShell, and `cmd.exe`. Run it in an OpenClaw CLI profile that is already
+configured for that Gateway; the terminal authenticates independently and the
+session ACL still applies.
 
 You can also choose or query a recent session directly:
 
@@ -153,9 +156,16 @@ origin. OpenClaw never reuses configured credentials or a stored device token
 from another origin for that target. The credential-free command copied by
 **Continue in terminal…** has a narrower rule: `openclaw resume` may reuse the
 current CLI profile only when its explicit WebSocket URL byte-for-byte matches
-that profile's configured local, remote, or public-origin target. It never
+that profile's mode: local and public-origin targets are eligible only in local
+mode, while only `gateway.remote.url` is eligible in remote mode. It never
 searches other profiles, and any host, port, or path mismatch returns to the
-normal explicit-credential requirement.
+normal explicit-credential requirement. Exact direct-local targets may reuse
+the local listener's certificate fingerprint, and exact configured remote
+targets may reuse the configured remote pin. A public-origin target does not
+inherit the local listener's pin; pass `--tls-fingerprint` explicitly if that
+proxy origin needs one. The payload contains no credentials; explicit `--token`,
+`--password`, or `--tls-fingerprint` values supplied beside the handoff still
+take priority.
 
 On first contact:
 
@@ -171,7 +181,8 @@ On first contact:
 
 The Control UI continuation command does not perform these first-contact steps
 or carry their credentials. Configure or pair the terminal independently before
-using it.
+using it. If the CLI rejects an invalid or truncated handoff, copy a fresh
+command from the Control UI instead of editing the opaque argument.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
 client should no longer connect. Tokens do not cross origins. Read-only probes

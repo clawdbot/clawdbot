@@ -1,7 +1,8 @@
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -12,9 +13,9 @@ const suite = createControlUiE2eSuite({
 });
 
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/continue-in-terminal");
-const basePath = "/nested/openclaw";
-const sessionKey = "main";
+const basePath = "/nested/$&;=()+,![]{}'`/%25PATH%25";
 const agentId = "runner";
+const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 
 function sessionsListResponse() {
   return {
@@ -59,18 +60,21 @@ suite.define(() => {
         });
         const pageUrl = new URL(suite.server.baseUrl);
         const gatewayUrl = `ws://${pageUrl.host}${basePath}`;
-        const expectedCommand = `openclaw resume agent:${agentId}:${sessionKey} --url ${gatewayUrl}`;
         await context.grantPermissions(["clipboard-read", "clipboard-write"], {
           origin: pageUrl.origin,
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
         const menuTrigger = page.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
         await menuTrigger.click();
-        const action = page.getByText("Continue in terminal…", { exact: true });
+        const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        const action = dropdown.getByText("Continue in terminal…", { exact: true });
+        expect(await dropdown.evaluate((element) => (element as { open?: boolean }).open)).toBe(
+          true,
+        );
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
         await action.click();
@@ -78,20 +82,22 @@ suite.define(() => {
         const dialog = page.locator("openclaw-modal-dialog.continue-in-terminal-dialog");
         await dialog.waitFor({ state: "visible" });
         await action.waitFor({ state: "hidden" });
-        expect(await dialog.locator("code").textContent()).toBe(expectedCommand);
+        const command = (await dialog.locator("code").textContent()) ?? "";
+        expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+        const encoded = command.slice("openclaw resume --handoff ".length);
+        expect(decodeResumeHandoff(encoded)).toEqual({
+          version: 1,
+          sessionKey,
+          gatewayUrl,
+        });
         expect(await dialog.textContent()).not.toMatch(/--token|--password|bootstrap/i);
         await page.screenshot({ path: path.join(artifactDir, "02-modal.png"), fullPage: true });
         await dialog.getByRole("button", { name: "Copy command", exact: true }).click();
-        await expect
-          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-          .toBe(expectedCommand);
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.click();
-        const continuationAction = page
-          .locator("openclaw-chat-header-session-menu wa-dropdown-item")
-          .filter({ hasText: "Continue in terminal…" });
-        await continuationAction.click();
+        await action.click();
         await dialog.waitFor({ state: "visible" });
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1001, "continue-in-terminal reconnect proof");

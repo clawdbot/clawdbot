@@ -4,6 +4,7 @@ import { selectStyled } from "../../packages/terminal-core/src/prompt-select-sty
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { decodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import {
   buildSessionChoices,
@@ -23,14 +24,35 @@ function requireInteractiveResumeTerminal() {
   }
 }
 
-async function fetchResumeSessions(
+async function formatResumeConnectionError(error: unknown): Promise<Error> {
+  const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
+    import("../tui/tui-formatters.js"),
+    import("../tui/tui.js"),
+  ]);
+  const details =
+    error && typeof error === "object" && "details" in error ? error.details : undefined;
+  const state = resolveGatewayDisconnectState({
+    reason: formatTuiErrorMessage(error),
+    details,
+  });
+  return new Error(
+    [
+      state.connectionStatus,
+      state.remediation ??
+        "Ensure the Gateway is running and your --url/--token/--password are correct.",
+    ].join("\n"),
+    { cause: error },
+  );
+}
+
+async function connectResumeGateway(
   opts: ResumeCliOptions,
-  options: { agentId?: string; includeGlobal?: boolean } = {},
+  allowConfiguredAuthForExactTarget: boolean,
 ) {
   const { GatewayChatClient } = await import("../tui/gateway-chat.js");
   const client = await GatewayChatClient.connect({
     ...opts,
-    allowConfiguredAuthForExactTarget: true,
+    ...(allowConfiguredAuthForExactTarget ? { allowConfiguredAuthForExactTarget: true } : {}),
   });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -48,29 +70,34 @@ async function fetchResumeSessions(
         finish(() => reject(new Error(reason || "Gateway connection closed")));
       client.start();
     });
+    return client;
+  } catch (error) {
+    await client.stop();
+    throw await formatResumeConnectionError(error);
+  }
+}
+
+async function resolveHandoffConnection(opts: ResumeCliOptions) {
+  const client = await connectResumeGateway(opts, true);
+  try {
+    return client.connection;
+  } finally {
+    await client.stop();
+  }
+}
+
+async function fetchResumeSessions(
+  opts: ResumeCliOptions,
+  options: { agentId?: string; includeGlobal?: boolean } = {},
+) {
+  const client = await connectResumeGateway(opts, false);
+  try {
     return {
       connection: client.connection,
       sessions: await loadRecentSessions(client, options),
     };
   } catch (error) {
-    const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
-      import("../tui/tui-formatters.js"),
-      import("../tui/tui.js"),
-    ]);
-    const details =
-      error && typeof error === "object" && "details" in error ? error.details : undefined;
-    const state = resolveGatewayDisconnectState({
-      reason: formatTuiErrorMessage(error),
-      details,
-    });
-    throw new Error(
-      [
-        state.connectionStatus,
-        state.remediation ??
-          "Ensure the Gateway is running and your --url/--token/--password are correct.",
-      ].join("\n"),
-      { cause: error },
-    );
+    throw await formatResumeConnectionError(error);
   } finally {
     await client.stop();
   }
@@ -135,28 +162,43 @@ function resolveExplicitGlobalSessionKey(
 
 /** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
+  const { handoff: encodedHandoff, ...connectionOptions } = opts;
+  if (encodedHandoff !== undefined && (query !== undefined || opts.url !== undefined)) {
+    throw new Error("--handoff cannot be combined with a positional query or --url.");
+  }
+  const handoff = encodedHandoff === undefined ? undefined : decodeResumeHandoff(encodedHandoff);
   requireInteractiveResumeTerminal();
-  const trimmedQuery = query?.trim();
-  const explicitGlobalSession = resolveExplicitGlobalSessionKey(trimmedQuery);
-  const discovery = await fetchResumeSessions(
-    opts,
-    explicitGlobalSession
-      ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
-      : undefined,
-  );
+  const resolvedQuery = query?.trim();
+  const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
+  let connection: Awaited<ReturnType<typeof resolveHandoffConnection>>;
   let sessionKey: string | null;
-  if (explicitGlobalSession) {
-    sessionKey = explicitGlobalSession.key;
-  } else if (trimmedQuery) {
-    const resolution = resolveResumeSession(discovery.sessions, trimmedQuery);
-    if (resolution.kind !== "match") {
-      reportResumeFailure(trimmedQuery, resolution);
-      defaultRuntime.exit(1);
-      return;
-    }
-    sessionKey = resolution.session.value;
+  if (handoff) {
+    connection = await resolveHandoffConnection({
+      ...connectionOptions,
+      url: handoff.gatewayUrl,
+    });
+    sessionKey = handoff.sessionKey;
   } else {
-    sessionKey = await promptResumeSession(discovery.sessions);
+    const discovery = await fetchResumeSessions(
+      connectionOptions,
+      explicitGlobalSession
+        ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
+        : undefined,
+    );
+    connection = discovery.connection;
+    if (explicitGlobalSession) {
+      sessionKey = explicitGlobalSession.key;
+    } else if (resolvedQuery) {
+      const resolution = resolveResumeSession(discovery.sessions, resolvedQuery);
+      if (resolution.kind !== "match") {
+        reportResumeFailure(resolvedQuery, resolution);
+        defaultRuntime.exit(1);
+        return;
+      }
+      sessionKey = resolution.session.value;
+    } else {
+      sessionKey = await promptResumeSession(discovery.sessions);
+    }
   }
   if (!sessionKey) {
     return;
@@ -164,12 +206,10 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   const { runTui } = await import("../tui/tui.js");
   await runTui({
     boundGateway: {
-      url: discovery.connection.url,
-      ...(discovery.connection.token ? { token: discovery.connection.token } : {}),
-      ...(discovery.connection.password ? { password: discovery.connection.password } : {}),
-      ...(discovery.connection.tlsFingerprint
-        ? { tlsFingerprint: discovery.connection.tlsFingerprint }
-        : {}),
+      url: handoff?.gatewayUrl ?? connection.url,
+      ...(connection.token ? { token: connection.token } : {}),
+      ...(connection.password ? { password: connection.password } : {}),
+      ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
     forceProcessExitOnReturn: true,

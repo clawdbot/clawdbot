@@ -388,13 +388,17 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    labels; `node-pairing.ts` facade merge. Before any new placement copy.
 2. **Continuation ergonomics** (in progress): `openclaw resume` plus the web
    **Continue in terminal…** session action. The browser copies one
-   credential-free command with the exact qualified session key and selected
-   Gateway WebSocket URL; it never executes the CLI or delegates first-use
-   authentication. Resume may reuse only the current profile's auth,
-   SecretRefs, exact-origin device auth, and TLS pin when the explicit URL
-   byte-for-byte matches its local + Control UI base path, remote, or public
-   origin + base path target. Mismatches fail closed, terminal auth remains
-   independent, and session ACLs stay authoritative.
+   credential-free command with one bounded, versioned, URL-safe handoff
+   argument that encodes the exact qualified session key and selected Gateway
+   WebSocket URL without shell-specific quoting; it never executes the CLI or
+   delegates first-use authentication. Resume may reuse only the current
+   profile's auth, SecretRefs, and exact-origin device auth when the handoff URL
+   byte-for-byte matches a target owned by the configured mode: local + Control
+   UI base path or public origin + base path in local mode, and only the remote
+   URL in remote mode. TLS pin reuse is limited to direct-local and
+   configured remote identities; public origins inherit no local-listener pin.
+   Mismatches fail closed, terminal auth remains independent, and session ACLs
+   stay authoritative.
 3. **`openclaw connect`**: verb + `oc-pair://` decoder + TLS pin in payload +
    `/j/<shortcode>` join route (reserved prefix, single-use, rate-limited) +
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine
