@@ -72,12 +72,15 @@ describe("Codex app-server client runtime", () => {
     harness.send({
       id: "refresh-1",
       method: "account/chatgptAuthTokens/refresh",
-      params: { reason: "expired" },
+      params: { reason: "expired", previousAccountId: "previous-account" },
     });
 
     await vi.waitFor(() => expect(mocks.mergeRateLimitUpdate).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(mocks.refreshAuth).toHaveBeenCalledTimes(1));
-    expect(mocks.refreshAuth).toHaveBeenCalledWith(updatedContext);
+    expect(mocks.refreshAuth).toHaveBeenCalledWith({
+      ...updatedContext,
+      previousAccountId: "previous-account",
+    });
     expect(mocks.mergeRateLimitUpdate).toHaveBeenCalledWith(harness.client, {
       rateLimits: { primary: { usedPercent: 12 } },
     });

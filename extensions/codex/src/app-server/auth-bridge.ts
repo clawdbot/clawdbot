@@ -21,7 +21,7 @@ import {
   type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import {
   resolveCodexAppServerHomeDir,
@@ -700,6 +700,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
+  previousAccountId?: string;
 }): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     ...params,
@@ -721,6 +722,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   authProfileStore?: AuthProfileStore;
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
+  previousAccountId?: string;
 }): Promise<CodexLoginAccountParams | undefined> {
   const store = resolveCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
@@ -751,6 +753,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     preferStoreCredential: Boolean(params.authProfileStore?.profiles[profileId]),
     forceOAuthRefresh: params.forceOAuthRefresh === true,
     config: params.config,
+    previousAccountId: params.previousAccountId,
   });
   if (!loginParams) {
     throw new CodexAppServerAuthProfileUnavailableError(
@@ -841,6 +844,7 @@ async function resolveLoginParamsForCredential(
     preferStoreCredential: boolean;
     forceOAuthRefresh: boolean;
     config?: AuthProfileOrderConfig;
+    previousAccountId?: string;
   },
 ): Promise<CodexLoginAccountParams | undefined> {
   // Runtime honors the persisted auth profile type. Shape-based remediation
@@ -879,6 +883,7 @@ async function resolveLoginParamsForCredential(
     preferStoreCredential: params.preferStoreCredential,
     forceRefresh: params.forceOAuthRefresh,
     config: params.config,
+    previousAccountId: params.previousAccountId,
   });
   const accessToken = resolvedCredential.access?.trim();
   return accessToken
@@ -895,6 +900,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     preferStoreCredential: boolean;
     forceRefresh: boolean;
     config?: AuthProfileOrderConfig;
+    previousAccountId?: string;
   },
 ): Promise<OAuthCredential> {
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
@@ -913,6 +919,7 @@ async function resolveOAuthCredentialForCodexAppServer(
       persistedCredential,
       suppliedCredential: credential,
       config: params.config,
+      previousAccountId: params.previousAccountId,
     });
   const store = useScopedCredential
     ? params.store
@@ -932,6 +939,11 @@ async function resolveOAuthCredentialForCodexAppServer(
     ownerCredential?.type === "oauth" && isCodexAppServerAuthProvider(ownerCredential.provider)
       ? ownerCredential
       : undefined;
+  const reusePersistedCredential =
+    params.forceRefresh &&
+    persistedOAuthCredential !== undefined &&
+    providerAuth.hasOAuthTokenMaterialChanged(persistedOAuthCredential, credential) &&
+    providerAuth.hasUsableOAuthCredential(persistedOAuthCredential);
   if (useScopedCredential && overlaidOAuthCredential) {
     return await resolveScopedOAuthCredential({
       store,
@@ -954,7 +966,8 @@ async function resolveOAuthCredentialForCodexAppServer(
     store,
     profileId,
     agentDir: ownerAgentDir,
-    forceRefresh: params.forceRefresh && Boolean(persistedOAuthCredential),
+    forceRefresh:
+      params.forceRefresh && Boolean(persistedOAuthCredential) && !reusePersistedCredential,
   });
   const refreshed = useScopedCredential
     ? undefined
@@ -983,6 +996,7 @@ function shouldUseScopedOAuthCredential(params: {
   persistedCredential: AuthProfileCredential | undefined;
   suppliedCredential: OAuthCredential;
   config?: AuthProfileOrderConfig;
+  previousAccountId?: string;
 }): boolean {
   if (!params.store.runtimePersistedProfileIds?.includes(params.profileId)) {
     return true;
@@ -999,13 +1013,17 @@ function shouldUseScopedOAuthCredential(params: {
   }
   return (
     !isDeepStrictEqual(persisted, params.suppliedCredential) &&
-    !hasMatchingOAuthIdentity(persisted, params.suppliedCredential)
+    !hasMatchingOAuthIdentity(persisted, params.suppliedCredential, params.previousAccountId)
   );
 }
 
-function hasMatchingOAuthIdentity(persisted: OAuthCredential, supplied: OAuthCredential): boolean {
+function hasMatchingOAuthIdentity(
+  persisted: OAuthCredential,
+  supplied: OAuthCredential,
+  previousAccountId?: string,
+): boolean {
   const persistedAccountId = persisted.accountId?.trim();
-  const suppliedAccountId = supplied.accountId?.trim();
+  const suppliedAccountId = previousAccountId?.trim() || supplied.accountId?.trim();
   if (persistedAccountId && suppliedAccountId) {
     return persistedAccountId === suppliedAccountId;
   }
@@ -1024,7 +1042,7 @@ async function resolveScopedOAuthCredential(params: {
   if (existingRefresh) {
     return await existingRefresh;
   }
-  if (!params.forceRefresh && hasUsableOAuthCredential(params.credential)) {
+  if (!params.forceRefresh && providerAuth.hasUsableOAuthCredential(params.credential)) {
     return params.credential;
   }
 
@@ -1033,7 +1051,7 @@ async function resolveScopedOAuthCredential(params: {
   const refresh = (async () => {
     const current = params.store.profiles[params.profileId];
     const credential = current?.type === "oauth" ? current : params.credential;
-    if (!params.forceRefresh && hasUsableOAuthCredential(credential)) {
+    if (!params.forceRefresh && providerAuth.hasUsableOAuthCredential(credential)) {
       return credential;
     }
     const refreshed = await refreshOAuthCredentialForRuntime({ credential });

@@ -39,7 +39,7 @@ const computerUseServiceMocks = vi.hoisted(() => ({
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPlugin: vi.fn(),
-  refreshProviderOAuthCredentialWithPlugin: vi.fn(
+  refreshOAuthCredential: vi.fn(
     async (params: { provider?: string; context: { refresh: string } }) => {
       const refreshed = await oauthMocks.refreshOpenAICodexToken(params.context.refresh);
       return refreshed
@@ -84,7 +84,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
       }
       let oauthCredential = credential;
       if (params.forceRefresh || (oauthCredential.expires ?? 0) <= Date.now()) {
-        const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
+        const refreshed = await providerRuntimeMocks.refreshOAuthCredential({
           provider: oauthCredential.provider,
           context: oauthCredential,
         });
@@ -109,7 +109,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
     refreshOAuthCredentialForRuntime: async (
       params: Parameters<typeof actual.refreshOAuthCredentialForRuntime>[0],
     ) => {
-      const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
+      const refreshed = await providerRuntimeMocks.refreshOAuthCredential({
         provider: params.credential.provider,
         context: params.credential,
       });
@@ -133,7 +133,7 @@ afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   oauthMocks.refreshOpenAICodexToken.mockReset();
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
-  providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
+  providerRuntimeMocks.refreshOAuthCredential.mockClear();
   computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
 });
 
@@ -1198,7 +1198,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("keeps a prepared persisted store aligned across rotating refresh tokens", async () => {
+  it("force-refreshes unchanged prepared credentials and keeps rotations aligned", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     oauthMocks.refreshOpenAICodexToken
       .mockResolvedValueOnce({
@@ -1221,6 +1221,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           access: "initial-access",
           refresh: "initial-refresh",
           expires: Date.now() + 60_000,
+          accountId: "prepared-account",
         },
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
@@ -1229,11 +1230,13 @@ describe("bridgeCodexAppServerStartOptions", () => {
         agentDir,
         authProfileId: "openai:work",
         authProfileStore,
+        previousAccountId: "prepared-account",
       });
       await refreshCodexAppServerAuthTokens({
         agentDir,
         authProfileId: "openai:work",
         authProfileStore,
+        previousAccountId: "prepared-account",
       });
 
       expect(oauthMocks.refreshOpenAICodexToken.mock.calls).toEqual([
@@ -1244,6 +1247,163 @@ describe("bridgeCodexAppServerStartOptions", () => {
         access: "second-rotated-access",
         refresh: "second-rotated-refresh",
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("force-refreshes after metadata-only persisted changes", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const expires = Date.now() + 10 * 60_000;
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "refreshed-access",
+      refresh: "refreshed-refresh",
+      expires: Date.now() + 20 * 60_000,
+      accountId: "prepared-account",
+    });
+    try {
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai",
+        access: "initial-access",
+        refresh: "initial-refresh",
+        expires,
+        accountId: "prepared-account",
+      };
+      upsertAuthProfile({ agentDir, profileId: "openai:work", credential });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: { ...credential, rateLimitTier: "updated-tier" },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai:work",
+          authProfileStore,
+          previousAccountId: "prepared-account",
+        }),
+      ).resolves.toMatchObject({
+        accessToken: "refreshed-access",
+        chatgptAccountId: "prepared-account",
+      });
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("initial-refresh");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "access-only",
+      rotation: { access: "late-access" },
+      expectedAccess: "late-access",
+    },
+    {
+      name: "refresh-only",
+      rotation: { refresh: "late-refresh" },
+      expectedAccess: "initial-access",
+    },
+    {
+      name: "expiry-only",
+      rotation: { expires: Date.now() + 20 * 60_000 },
+      expectedAccess: "initial-access",
+    },
+  ])("reuses a late persisted same-account $name rotation", async (scenario) => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai",
+        access: "initial-access",
+        refresh: "initial-refresh",
+        expires: Date.now() + 10 * 60_000,
+        accountId: "prepared-account",
+      };
+      upsertAuthProfile({ agentDir, profileId: "openai:work", credential });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: { ...credential, ...scenario.rotation },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai:work",
+          authProfileStore,
+          previousAccountId: "prepared-account",
+        }),
+      ).resolves.toMatchObject({
+        accessToken: scenario.expectedAccess,
+        chatgptAccountId: "prepared-account",
+      });
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(authProfileStore.profiles["openai:work"]).toMatchObject(scenario.rotation);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "different-account",
+      accountId: "different-account",
+      expires: () => Date.now() + 10 * 60_000,
+      expectedRefresh: "initial-refresh",
+    },
+    {
+      name: "expired",
+      accountId: "prepared-account",
+      expires: () => Date.now() - 60_000,
+      expectedRefresh: "persisted-refresh",
+    },
+  ])("does not reuse a $name persisted credential", async (scenario) => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "refreshed-access",
+      refresh: "refreshed-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "prepared-account",
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "initial-access",
+          refresh: "initial-refresh",
+          expires: Date.now() + 60_000,
+          accountId: "prepared-account",
+        },
+      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: scenario.expires(),
+          accountId: scenario.accountId,
+        },
+      });
+
+      await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+        previousAccountId: "prepared-account",
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith(scenario.expectedRefresh);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -2928,9 +3088,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           'Codex app-server auth profile "openai:work" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
         );
         expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
-        expect(
-          providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin,
-        ).not.toHaveBeenCalled();
+        expect(providerRuntimeMocks.refreshOAuthCredential).not.toHaveBeenCalled();
       } finally {
         await fs.rm(agentDir, { recursive: true, force: true });
       }

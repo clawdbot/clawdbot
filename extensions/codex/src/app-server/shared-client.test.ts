@@ -1017,6 +1017,7 @@ describe("shared Codex app-server client", () => {
       authProfileId: "openai:scoped",
       authProfileStore: preparedAuthProfileStore,
       config: undefined,
+      previousAccountId: "scoped-account",
     });
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
       id: "refresh-1",
@@ -1087,6 +1088,7 @@ describe("shared Codex app-server client", () => {
       authProfileId: "openai:scoped",
       authProfileStore,
       config: undefined,
+      previousAccountId: "scoped-account",
     });
   });
 
@@ -1288,6 +1290,7 @@ describe("shared Codex app-server client", () => {
       agentDir: "/tmp/openclaw-persisted-agent",
       authProfileId: "openai:persisted",
       config: undefined,
+      previousAccountId: "persisted-account",
     });
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
       id: "refresh-persisted",

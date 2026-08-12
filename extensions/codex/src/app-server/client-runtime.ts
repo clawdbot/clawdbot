@@ -111,6 +111,7 @@ export function ensureCodexAppServerClientRuntime(
         ? { authProfileStore: runtime.context.authProfileStore }
         : {}),
       config: runtime.context.config,
+      previousAccountId: (request.params as { previousAccountId?: string })?.previousAccountId,
     })) as unknown as JsonValue;
   });
   client.addNotificationHandler((notification) => {
