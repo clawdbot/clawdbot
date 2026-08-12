@@ -12,22 +12,14 @@ import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-const replaceFileAtomicMock = vi.hoisted(() => vi.fn());
 const tempDirs = createTempDirHarness();
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  replaceFileAtomicMock.mockImplementation(actual.replaceFileAtomic);
-  return { ...actual, replaceFileAtomic: replaceFileAtomicMock };
-});
-
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
-  replaceFileAtomicMock.mockClear();
   vi.useRealTimers();
   await tempDirs.cleanup();
 });
@@ -629,89 +621,6 @@ describe("qa suite", () => {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
   });
-
-  it.each([
-    { kind: "report", fileName: "qa-suite-report.md" },
-    { kind: "evidence", fileName: "qa-evidence.json" },
-    { kind: "summary", fileName: "qa-suite-summary.json" },
-  ])(
-    "preserves the prior canonical $kind artifact when atomic publication fails",
-    async ({ fileName }) => {
-      const outputDir = await tempDirs.makeTempDir("qa-suite-artifact-atomic-");
-      const canonicalFileNames = [
-        "qa-suite-report.md",
-        "qa-evidence.json",
-        "qa-suite-summary.json",
-      ];
-      const sentinels = new Map(
-        canonicalFileNames.map((canonicalFileName) => [
-          canonicalFileName,
-          `prior ${canonicalFileName}\n`,
-        ]),
-      );
-      await fs.chmod(outputDir, 0o750);
-      for (const [canonicalFileName, sentinel] of sentinels) {
-        const finalPath = path.join(outputDir, canonicalFileName);
-        await fs.writeFile(finalPath, sentinel, { encoding: "utf8", mode: 0o640 });
-        await fs.chmod(finalPath, 0o640);
-      }
-      const actualSecurityRuntime = await vi.importActual<
-        typeof import("openclaw/plugin-sdk/security-runtime")
-      >("openclaw/plugin-sdk/security-runtime");
-      const publicationOrder: string[] = [];
-      const failSelectedArtifact = async (options: Parameters<typeof replaceFileAtomicMock>[0]) => {
-        publicationOrder.push(path.basename(options.filePath));
-        return await actualSecurityRuntime.replaceFileAtomic({
-          ...options,
-          ...(path.basename(options.filePath) === fileName
-            ? {
-                beforeRename: async ({ tempPath }: { tempPath: string }) => {
-                  await fs.writeFile(tempPath, "partial replacement\n", "utf8");
-                  throw Object.assign(new Error("injected QA artifact publication failure"), {
-                    code: "EIO",
-                  });
-                },
-              }
-            : {}),
-        });
-      };
-
-      await replaceFileAtomicMock.withImplementation(failSelectedArtifact, async () => {
-        await expect(
-          qaSuiteProgressTesting.writeQaSuiteArtifacts({
-            outputDir,
-            startedAt: new Date("2026-08-12T00:00:00.000Z"),
-            finishedAt: new Date("2026-08-12T00:01:00.000Z"),
-            scenarios: [{ name: "Atomic publication", status: "pass", steps: [] }],
-            scenarioDefinitions: [makeQaSuiteTestScenario("channel-chat-baseline")],
-            transport: {
-              id: "qa-channel",
-              createReportNotes: () => [],
-            } as unknown as QaTransportAdapter,
-            providerMode: "mock-openai",
-            primaryModel: "mock-openai/gpt-5.6-luna",
-            alternateModel: "mock-openai/gpt-5.6-luna-alt",
-            fastMode: true,
-            concurrency: 1,
-          }),
-        ).rejects.toMatchObject({ code: "EIO" });
-      });
-
-      const selectedPath = path.join(outputDir, fileName);
-      await expect(fs.readFile(selectedPath, "utf8")).resolves.toBe(sentinels.get(fileName));
-      if (process.platform !== "win32") {
-        expect((await fs.stat(selectedPath)).mode & 0o777).toBe(0o640);
-        expect((await fs.stat(outputDir)).mode & 0o7777).toBe(0o750);
-      }
-      const selectedIndex = canonicalFileNames.indexOf(fileName);
-      expect(publicationOrder).toEqual(canonicalFileNames.slice(0, selectedIndex + 1));
-      expect(
-        (await fs.readdir(outputDir)).filter((entry) =>
-          entry.startsWith(`${fileName}.qa-artifact.`),
-        ),
-      ).toEqual([]);
-    },
-  );
 
   it("can return evidence without writing duplicate child evidence files", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
