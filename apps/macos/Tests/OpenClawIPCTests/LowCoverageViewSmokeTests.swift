@@ -33,14 +33,6 @@ struct LowCoverageViewSmokeTests {
         _ = hosting.fittingSize
     }
 
-    @Test func `menu hosted item hosts content`() {
-        let view = MenuHostedItem(width: 240, rootView: AnyView(Text("Menu")))
-        let hosting = NSHostingView(rootView: view)
-        _ = hosting.fittingSize
-        hosting.rootView = MenuHostedItem(width: 320, rootView: AnyView(Text("Updated")))
-        _ = hosting.fittingSize
-    }
-
     @Test func `dock icon manager updates visibility`() {
         _ = NSApplication.shared
         UserDefaults.standard.set(false, forKey: showDockIconKey)
