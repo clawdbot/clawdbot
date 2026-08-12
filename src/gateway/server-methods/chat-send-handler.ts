@@ -7,7 +7,6 @@ import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
@@ -42,7 +41,6 @@ export async function handleChatSend(
     normalizedRequest.value;
   const {
     clientRunId,
-    sessionLoadOptions,
     sessionLoadMs,
     cfg,
     storePath,
@@ -50,7 +48,6 @@ export async function handleChatSend(
     sessionKey,
     sessionRoutingChanged,
     selectedAgent,
-    agentId,
   } = preparedSession.value;
   const {
     activeRunAbort,
@@ -250,17 +247,6 @@ export async function handleChatSend(
     );
     respond(true, ackPayload, undefined, { runId: clientRunId });
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
-    scheduleChatDashboardSessionTitle({
-      admittedSessionId,
-      agentId,
-      cfg,
-      context,
-      entry,
-      request: normalizedRequest.value,
-      sessionKey,
-      sessionLoadOptions,
-      storePath,
-    });
     startChatDispatch({
       admissionStartedAt,
       admission: admitted.value,
