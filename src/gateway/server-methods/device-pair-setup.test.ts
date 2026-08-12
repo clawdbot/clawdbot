@@ -4,13 +4,13 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePairingSetupFromConfig: vi.fn(),
   encodePairingSetupCode: vi.fn(),
-  registerDevicePairingJoinCode: vi.fn(),
   renderQrPngDataUrl: vi.fn(),
   runCommandWithTimeout: vi.fn(),
 }));
@@ -18,9 +18,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../pairing/setup-code.js", () => ({
   resolvePairingSetupFromConfig: mocks.resolvePairingSetupFromConfig,
   encodePairingSetupCode: mocks.encodePairingSetupCode,
-}));
-vi.mock("../../infra/device-pairing-join-code.js", () => ({
-  registerDevicePairingJoinCode: mocks.registerDevicePairingJoinCode,
 }));
 vi.mock("../../media/qr-image.js", () => ({
   renderQrPngDataUrl: mocks.renderQrPngDataUrl,
@@ -73,7 +70,10 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReset();
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
-    mocks.registerDevicePairingJoinCode.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns the setup code, QR data URL, and only an auth label", async () => {
@@ -255,7 +255,11 @@ describe("device.pair.setupCode", () => {
     };
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(resolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.registerDevicePairingJoinCode.mockReturnValue("a".repeat(22));
+    // Keep storage substitution test-local: this shard shares a non-isolated worker
+    // with the real mint/redeem test, where a leaked module mock creates unbacked codes.
+    const registerDevicePairingJoinCode = vi
+      .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
+      .mockReturnValue("a".repeat(22));
 
     const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
     await expectDefined(
@@ -267,7 +271,7 @@ describe("device.pair.setupCode", () => {
       expect.any(Object),
       expect.objectContaining({ bootstrapProfile: { roles: ["node"], scopes: [] } }),
     );
-    expect(mocks.registerDevicePairingJoinCode).toHaveBeenCalledWith({
+    expect(registerDevicePairingJoinCode).toHaveBeenCalledWith({
       payload: resolution.payload,
       expiresAtMs: resolution.expiresAtMs,
     });

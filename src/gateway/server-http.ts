@@ -18,6 +18,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
@@ -556,17 +557,18 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
-      addAdmittedStage(
-        "device-pairing-join",
-        scopedRequestPath === "/j" || scopedRequestPath.startsWith("/j/"),
-        async () =>
+      const devicePairingJoinShortcode = parseDevicePairingJoinRequestPath(scopedRequestPath);
+      if (devicePairingJoinShortcode !== null) {
+        addAdmittedStage("device-pairing-join", true, async () =>
           (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
             req,
             res,
+            shortcode: devicePairingJoinShortcode,
             clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
             rateLimiter: joinRateLimiter,
           }),
-      );
+        );
+      }
 
       // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
       // this exact GET and 405 every provider redirect. The claim is exact-path

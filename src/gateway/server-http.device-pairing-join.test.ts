@@ -49,12 +49,12 @@ afterAll(async () => {
   await harness?.close();
 });
 
-async function mintJoinUrl(): Promise<JoinSetupResult> {
+async function mintJoinUrl(contextPath = ""): Promise<JoinSetupResult> {
   const response = await rpcReq<JoinSetupResult>(adminSocket, "device.pair.setupCode", {
     bootstrapProfile: "node",
     includeQr: false,
     joinUrl: true,
-    publicUrl: `ws://127.0.0.1:${harness.port}`,
+    publicUrl: `ws://127.0.0.1:${harness.port}${contextPath}`,
   });
   if (!response.ok || !response.payload?.setupCode || !response.payload.joinUrl) {
     throw new Error(`join-code mint failed: ${JSON.stringify(response.error)}`);
@@ -89,7 +89,7 @@ describe("Gateway device join route", () => {
     const opaqueNotFound = await readJson(expiredResponse);
     expect(opaqueNotFound).toEqual({ error: "not_found" });
 
-    const live = await mintJoinUrl();
+    const live = await mintJoinUrl("/public-gateway");
     const shortcode = shortcodeFromUrl(live.joinUrl);
     expect(Buffer.from(shortcode, "base64url").byteLength).toBeGreaterThanOrEqual(16);
 

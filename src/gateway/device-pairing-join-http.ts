@@ -16,14 +16,11 @@ function sendJoinNotFound(res: ServerResponse): void {
 export async function handleDevicePairingJoinHttpRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
+  shortcode: string;
   clientIp: string | undefined;
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
   const parsed = URL.parse(params.req.url ?? "/", "http://localhost");
-  const pathname = parsed?.pathname;
-  if (pathname !== "/j" && !pathname?.startsWith("/j/")) {
-    return false;
-  }
   params.res.setHeader("Cache-Control", "no-store");
 
   await withSerializedRateLimitAttempt({
@@ -42,10 +39,11 @@ export async function handleDevicePairingJoinHttpRequest(params: {
         return;
       }
 
-      const shortcode = pathname?.slice(3) ?? "";
       const validRequest =
-        params.req.method === "GET" && !parsed?.search && isDevicePairingJoinCode(shortcode);
-      const payload = validRequest ? redeemDevicePairingJoinCode({ shortcode }) : null;
+        params.req.method === "GET" && !parsed?.search && isDevicePairingJoinCode(params.shortcode);
+      const payload = validRequest
+        ? redeemDevicePairingJoinCode({ shortcode: params.shortcode })
+        : null;
       if (!payload) {
         params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN);
         sendJoinNotFound(params.res);
