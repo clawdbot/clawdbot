@@ -366,6 +366,107 @@ describe("transcript metadata projection", () => {
   });
 });
 
+describe("sessions_yield display projection", () => {
+  it("prefers the current hidden context record and retains its legacy tool result", () => {
+    const rawResult = {
+      role: "toolResult",
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      details: { status: "yielded", message: "Waiting for the subagent." },
+      timestamp: 10,
+      __openclaw: { seq: 2 },
+    };
+    const hiddenContext = {
+      role: "custom",
+      customType: "openclaw.sessions_yield",
+      content: "internal continuation context",
+      display: false,
+      details: { source: "sessions_yield", message: "Waiting for the subagent." },
+      timestamp: 11,
+      createdAt: "yield-created",
+      agentId: "main",
+      __openclaw: { seq: 3, id: "yield-context" },
+    };
+
+    const projected = projectChatDisplayMessages([rawResult, hiddenContext]);
+
+    expect(projected).toHaveLength(2);
+    expect(projected[0]).toMatchObject({
+      role: "toolResult",
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      timestamp: 10,
+      __openclaw: { seq: 2 },
+    });
+    expect(projected.some((message) => message.role === "custom")).toBe(false);
+    expect(projected[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Waiting for the subagent." }],
+      openclawSessionsYieldMirror: { toolCallId: "call-yield" },
+      timestamp: 11,
+      createdAt: "yield-created",
+      agentId: "main",
+      __openclaw: { seq: 3, id: "yield-context" },
+    });
+  });
+
+  it("projects shipped text-JSON results without hiding the raw result", () => {
+    const result = {
+      role: "toolResult",
+      toolName: "sessions_yield",
+      toolCallId: "call-legacy-yield",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ status: "yielded", message: "Legacy wait status." }),
+        },
+      ],
+      __openclaw: { seq: 4 },
+    };
+
+    const projected = projectChatDisplayMessages([result]);
+
+    expect(projected[0]).toMatchObject(result);
+    expect(projected[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Legacy wait status." }],
+      openclawSessionsYieldMirror: { toolCallId: "call-legacy-yield" },
+      __openclaw: { seq: 4 },
+    });
+    expect(projectChatDisplayMessages([{ ...result, isError: true }])).toEqual([
+      expect.objectContaining({ role: "toolResult", isError: true }),
+    ]);
+  });
+
+  it("dedupes only an adjacent marked mirror, not ordinary assistant text", () => {
+    const text = "Same visible wait status.";
+    const result = {
+      role: "toolResult",
+      toolName: "sessions_yield",
+      toolCallId: "call-adjacent-yield",
+      details: { status: "yielded", message: text },
+    };
+    const ordinaryAssistant = { role: "assistant", content: [{ type: "text", text }] };
+    const existingMirror = {
+      ...ordinaryAssistant,
+      openclawSessionsYieldMirror: { toolCallId: "call-adjacent-yield" },
+    };
+
+    expect(
+      projectChatDisplayMessages([ordinaryAssistant, result]).filter(
+        (message) => message.role === "assistant",
+      ),
+    ).toHaveLength(2);
+    expect(projectChatDisplayMessages([result, existingMirror])).toEqual([
+      expect.objectContaining({ role: "toolResult" }),
+      expect.objectContaining({
+        role: "assistant",
+        openclawSessionsYieldMirror: { toolCallId: "call-adjacent-yield" },
+      }),
+    ]);
+  });
+});
+
 describe("current user profile display projection", () => {
   it("dedupes sender lookups per batch and enriches only resolved sender ids", () => {
     const messages = [

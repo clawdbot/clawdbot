@@ -74,6 +74,14 @@ function hasGatewayHistoryMessageToolMirror(message: unknown) {
   );
 }
 
+function hasGatewaySessionsYieldMirror(message: unknown) {
+  return Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror,
+  );
+}
+
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
@@ -1124,6 +1132,53 @@ describe("gateway server chat", () => {
 
     expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
+  });
+
+  test("chat.history replays one sessions_yield status while retaining the raw result", async () => {
+    const waitText = "Waiting for the subagent to finish.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      createGatewayHistoryText("user", "start worker", 1),
+      {
+        role: "toolResult",
+        toolName: "sessions_yield",
+        toolCallId: "call-yield-status",
+        details: { status: "yielded", message: waitText },
+        timestamp: 2,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.sessions_yield",
+        content: "internal continuation context",
+        display: false,
+        details: { source: "sessions_yield", message: waitText },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(historyMessages.filter(hasGatewaySessionsYieldMirror)).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: waitText }],
+        openclawSessionsYieldMirror: { toolCallId: "call-yield-status" },
+        timestamp: 3,
+      }),
+    ]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "toolResult",
+      ),
+    ).toBe(true);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "custom",
+      ),
+    ).toBe(false);
   });
 
   test.each([

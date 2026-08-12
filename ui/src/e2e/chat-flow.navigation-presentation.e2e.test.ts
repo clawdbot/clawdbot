@@ -15,6 +15,47 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("replays a sessions_yield mirror while raw tool results stay hidden", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    await context.addInitScript((settingsKey) => {
+      localStorage.setItem(settingsKey, JSON.stringify({ chatShowToolCalls: false }));
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+    const page = await context.newPage();
+    const waitText = "Waiting for the subagent to finish.";
+    const rawResult = JSON.stringify({ status: "yielded", message: waitText });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield-status",
+          content: [{ type: "text", text: rawResult }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: waitText }],
+          openclawSessionsYieldMirror: { toolCallId: "call-yield-status" },
+          timestamp: 2,
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(waitText, { exact: true }).waitFor();
+      expect(await page.getByText(waitText, { exact: true }).count()).toBe(1);
+      expect(await page.getByText(rawResult, { exact: true }).count()).toBe(0);
+      expect(await page.locator(".chat-group--activity").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

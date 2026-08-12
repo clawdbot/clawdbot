@@ -347,6 +347,47 @@ describe("SessionHistorySseState", () => {
     ).toBe("Cursor-visible reply.");
   });
 
+  test("keeps one sessions_yield mirror across current inline context persistence", () => {
+    const state = newStateWithUserText("start worker");
+    const waitText = "Waiting for child completion.";
+
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield-inline",
+          details: { status: "yielded", message: waitText },
+        },
+        messageSeq: 2,
+      }),
+    ).toEqual({ shouldRefresh: true });
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "custom",
+          customType: "openclaw.sessions_yield",
+          content: "internal continuation context",
+          display: false,
+          details: { source: "sessions_yield", message: waitText },
+        },
+        messageSeq: 3,
+      }),
+    ).toEqual({ shouldRefresh: true });
+
+    const messages = state.snapshot().messages;
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+    expect(messages.some((message) => message.role === "custom")).toBe(false);
+    expect(messages.filter((message) => message.openclawSessionsYieldMirror !== undefined)).toEqual(
+      [
+        expect.objectContaining({
+          content: [{ type: "text", text: waitText }],
+          openclawSessionsYieldMirror: { toolCallId: "call-yield-inline" },
+        }),
+      ],
+    );
+  });
+
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
