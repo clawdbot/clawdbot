@@ -7,7 +7,7 @@ import {
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveRequestPluginRegistry } from "../plugins/runtime.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
@@ -109,7 +109,7 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
   if (!pluginId) {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
-  const registry = getActivePluginRegistry();
+  const registry = resolveRequestPluginRegistry();
   for (const toolName of requested) {
     if (isKnownCoreToolId(toolName)) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);

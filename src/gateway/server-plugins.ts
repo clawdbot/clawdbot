@@ -16,7 +16,7 @@ import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveRequestPluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
@@ -186,7 +186,7 @@ function canTrustedOfficialPluginRequestScopes(params: {
   if (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) {
     return true;
   }
-  const registry = getActivePluginRegistry();
+  const registry = resolveRequestPluginRegistry();
   const record = registry?.plugins.find((entry) => entry.id === params.pluginId);
   return record?.origin === "bundled" || record?.trustedOfficialInstall === true;
 }

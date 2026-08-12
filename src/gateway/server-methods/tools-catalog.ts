@@ -14,7 +14,7 @@ import {
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { resolveRequestPluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
@@ -91,7 +91,7 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
     runtimeRegistry: toolRegistry,
   });
-  const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
+  const catalogRegistry = toolRegistry ?? resolveRequestPluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X

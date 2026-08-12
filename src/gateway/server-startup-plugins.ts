@@ -13,7 +13,7 @@ import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, stageActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, stageProvisionalPluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
@@ -173,15 +173,15 @@ export async function prepareGatewayPluginBootstrap(params: {
   const pluginRegistry = params.minimalTestGateway
     ? (getActivePluginRegistry() ?? emptyPluginRegistry)
     : emptyPluginRegistry;
-  // Stage, never set: this pre-bind publish is provisional until the attempt completes the
-  // replacement. A plain set would retire a still-running embedded Gateway's registry here —
-  // firing its "disable" lifecycle/scheduler cleanup — while the attempt can still fail. The
-  // loader's post-bind activation installs the loaded registry but keeps the displaced
-  // survivor abortable; it retires only when startup returns successfully (server-start's
-  // finalize). Reusing the already-active registry leaves its slot key/mode/workspace
-  // untouched.
+  // Stage, never set — and over a live process root, never install: a still-running embedded
+  // Gateway keeps the slot (and every request/hook/channel reader) through the whole pre-bind
+  // interval, so the attempt's provisional empty registry can never strip its capabilities.
+  // The loader's post-bind activation consumes this pending attempt when it installs the
+  // loaded registry, still keeping the displaced survivor abortable; the survivor retires only
+  // when startup returns successfully (server-start's finalize). Reusing the already-active
+  // registry leaves its slot key/mode/workspace untouched.
   if (pluginRegistry !== getActivePluginRegistry()) {
-    stageActivePluginRegistry(pluginRegistry, null, "default");
+    stageProvisionalPluginRegistry(pluginRegistry);
   }
 
   return {

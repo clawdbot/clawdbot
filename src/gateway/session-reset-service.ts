@@ -65,7 +65,7 @@ import {
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveRequestPluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isIncognitoSessionKey,
@@ -808,7 +808,7 @@ export async function cleanupSessionBeforeMutation(params: {
   }
   const pluginCleanup = await runPluginHostCleanup({
     cfg: params.cfg,
-    registry: getActivePluginRegistry(),
+    registry: resolveRequestPluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
     sessionKey: params.target.canonicalKey ?? params.key,
     shouldCleanup: () => {
@@ -1284,7 +1284,7 @@ export async function performGatewaySessionReset(params: {
       const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = resolveLifecycleAgentId(cfg, target.agentId);
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const resetPluginRegistry = getActivePluginRegistry();
+      const resetPluginRegistry = resolveRequestPluginRegistry();
       const isResetLifecycleCurrent = () => {
         try {
           params.assertCurrent?.();

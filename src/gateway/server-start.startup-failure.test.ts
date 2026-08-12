@@ -52,7 +52,9 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
+import type { GatewayClient } from "./client.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 // Full production (non-minimal) startups: local runs finish well under this, the budget only
 // buys headroom for loaded CI runners plus the bind-failure EADDRINUSE retry window (~10s).
@@ -99,6 +101,54 @@ function resetReloaderFixture(): void {
   reloaderFixture.survivor = null;
   reloaderFixture.survivorRetiredAtReloaderStart = null;
   reloaderFixture.activeRegistryAtReloaderStart = null;
+}
+
+// ClawSweeper cycle 45 (P1): a still-serving survivor's request paths must keep seeing the
+// survivor's own registry DURING a second start attempt. These hooks open deterministic probe
+// windows inside the two staged intervals: transport creation runs after the kernel staged the
+// pre-bind attempt and before the listener binds (the pre-bind interval); post-attach return in
+// "start" mode runs after the loader's activation and before startup-success finalize (the
+// loaded-but-uncommitted interval).
+const stagedIntervalFixture = vi.hoisted(() => ({
+  onTransportCreate: null as (() => Promise<void>) | null,
+  afterPostAttach: null as (() => Promise<void>) | null,
+  failAfterPostAttach: false,
+}));
+
+vi.mock("./server-runtime-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-runtime-state.js")>();
+  return {
+    ...actual,
+    createGatewayHttpTransport: async (
+      ...args: Parameters<typeof actual.createGatewayHttpTransport>
+    ) => {
+      await stagedIntervalFixture.onTransportCreate?.();
+      return await actual.createGatewayHttpTransport(...args);
+    },
+  };
+});
+
+vi.mock("./server-startup-post-attach.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-startup-post-attach.js")>();
+  return {
+    ...actual,
+    startGatewayPostAttachRuntime: async (
+      ...args: Parameters<typeof actual.startGatewayPostAttachRuntime>
+    ) => {
+      const handles = await actual.startGatewayPostAttachRuntime(...args);
+      await stagedIntervalFixture.afterPostAttach?.();
+      if (stagedIntervalFixture.failAfterPostAttach) {
+        throw new Error("fixture post-attach failure");
+      }
+      return handles;
+    },
+  };
+});
+
+function resetStagedIntervalFixture(): void {
+  stagedIntervalFixture.onTransportCreate = null;
+  stagedIntervalFixture.afterPostAttach = null;
+  stagedIntervalFixture.failAfterPostAttach = false;
 }
 
 async function createServerStartTestState(label: string): Promise<OpenClawTestState> {
@@ -198,6 +248,241 @@ async function occupyLoopbackPort(port: number): Promise<() => Promise<void>> {
       });
     });
 }
+
+// ClawSweeper cycle 45 (P1): the staged intervals must not strip a concurrently SERVING
+// gateway's plugin capabilities. Both tests run a REAL surviving gateway with an observable
+// plugin capability (a registered plugin command listed by the commands.list RPC over its own
+// authenticated WebSocket client) and probe that request path DURING a second start attempt.
+describe("startGatewayServerCore staged-interval survivor request paths", () => {
+  const PROBE_COMMAND = "cycle45-survivor-probe";
+
+  function registerSurvivorProbeCommand(registry: PluginRegistry): void {
+    registry.commands.push({
+      pluginId: "cycle45-survivor-plugin",
+      command: {
+        name: PROBE_COMMAND,
+        description: "cycle 45 staged-interval survivor capability probe",
+        handler: () => ({ text: "ok" }),
+      },
+      source: "cycle45-test",
+    });
+  }
+
+  async function probeSurvivorCommandNames(client: GatewayClient): Promise<string[]> {
+    const payload = await client.request<{ commands: Array<{ name: string }> }>(
+      "commands.list",
+      {},
+    );
+    return payload.commands.map((entry) => entry.name);
+  }
+
+  function hasProbeCommand(names: readonly string[]): boolean {
+    return names.some((name) => name.includes(PROBE_COMMAND));
+  }
+
+  it(
+    "keeps the survivor's commands.list capability through a pre-bind staged interval",
+    { timeout: START_BUDGET_MS },
+    async () => {
+      const port = await getFreePort();
+      const state = await createServerStartTestState("gateway-start-prebind-probe");
+      const token = "gateway-start-prebind-probe-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+      });
+      state.applyEnv();
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+      let client: GatewayClient | undefined;
+      try {
+        // The REAL surviving gateway: a full (non-minimal) start whose loader-activated
+        // registry owns the process slot, carrying an observable plugin command.
+        server = await startGatewayServerCore(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "start",
+        });
+        const survivorRegistry = getActivePluginRegistry();
+        expect(survivorRegistry).not.toBeNull();
+        registerSurvivorProbeCommand(survivorRegistry!);
+        client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          scopes: ["operator.admin"],
+        });
+        const baseline = await probeSurvivorCommandNames(client);
+        console.log(
+          `[cycle45-proof] baseline probe (before second start): probeCommandListed=${hasProbeCommand(baseline)}`,
+        );
+        expect(hasProbeCommand(baseline)).toBe(true);
+
+        // Probe DURING the pre-bind staged interval of the second start attempt: transport
+        // creation runs after the kernel staged the pre-bind attempt, before the bind fails
+        // on the survivor's own port.
+        let probedDuringInterval: {
+          activeIsSurvivor: boolean;
+          commandNames: string[];
+        } | null = null;
+        stagedIntervalFixture.onTransportCreate = async () => {
+          stagedIntervalFixture.onTransportCreate = null;
+          probedDuringInterval = {
+            activeIsSurvivor: getActivePluginRegistry() === survivorRegistry,
+            commandNames: await probeSurvivorCommandNames(client!),
+          };
+        };
+        await expect(
+          startGatewayServerCore(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        ).rejects.toThrow(/already listening|failed to bind/);
+
+        expect(probedDuringInterval).not.toBeNull();
+        const probe = probedDuringInterval! as {
+          activeIsSurvivor: boolean;
+          commandNames: string[];
+        };
+        console.log(
+          `[cycle45-proof] pre-bind interval probe: activeIsSurvivor=${probe.activeIsSurvivor} probeCommandListed=${hasProbeCommand(probe.commandNames)}`,
+        );
+        // The still-serving survivor must remain the process root and keep answering its own
+        // request paths with its own capabilities while the attempt is staged.
+        expect(probe.activeIsSurvivor).toBe(true);
+        expect(hasProbeCommand(probe.commandNames)).toBe(true);
+
+        // After the aborted attempt the survivor still serves the capability.
+        expect(getActivePluginRegistry()).toBe(survivorRegistry);
+        expect(isPluginRegistryRetired(survivorRegistry!)).toBe(false);
+        const afterAbort = await probeSurvivorCommandNames(client);
+        console.log(
+          `[cycle45-proof] post-abort probe: probeCommandListed=${hasProbeCommand(afterAbort)}`,
+        );
+        expect(hasProbeCommand(afterAbort)).toBe(true);
+      } finally {
+        resetStagedIntervalFixture();
+        if (client) {
+          await disconnectGatewayClient(client).catch(() => {});
+        }
+        try {
+          await server?.close({ reason: "cycle45 pre-bind probe done" });
+        } finally {
+          resetPluginRuntimeStateForTest();
+          clearRuntimeConfigSnapshot();
+          await state.cleanup();
+        }
+      }
+    },
+  );
+
+  it(
+    "keeps the survivor's commands.list capability through the loaded-uncommitted interval",
+    { timeout: START_BUDGET_MS },
+    async () => {
+      const survivorPort = await getFreePort();
+      const state = await createServerStartTestState("gateway-start-loaded-probe");
+      const token = "gateway-start-loaded-probe-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port: survivorPort,
+        },
+      });
+      state.applyEnv();
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+      let client: GatewayClient | undefined;
+      try {
+        server = await startGatewayServerCore(survivorPort, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "start",
+        });
+        const survivorRegistry = getActivePluginRegistry();
+        expect(survivorRegistry).not.toBeNull();
+        registerSurvivorProbeCommand(survivorRegistry!);
+        client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${survivorPort}`,
+          token,
+          scopes: ["operator.admin"],
+        });
+        expect(hasProbeCommand(await probeSurvivorCommandNames(client))).toBe(true);
+
+        // The second attempt binds a FREE port and fails AFTER post-attach returned in
+        // "start" mode: the loader's activation already ran, finalize never does. The probe
+        // runs exactly inside that loaded-but-uncommitted interval.
+        let probedDuringInterval: {
+          activeIsSurvivor: boolean;
+          survivorRetired: boolean;
+          commandNames: string[];
+        } | null = null;
+        stagedIntervalFixture.failAfterPostAttach = true;
+        stagedIntervalFixture.afterPostAttach = async () => {
+          stagedIntervalFixture.afterPostAttach = null;
+          probedDuringInterval = {
+            activeIsSurvivor: getActivePluginRegistry() === survivorRegistry,
+            survivorRetired: isPluginRegistryRetired(survivorRegistry!),
+            commandNames: await probeSurvivorCommandNames(client!),
+          };
+        };
+        const attemptPort = await getFreePort();
+        await expect(
+          startGatewayServerCore(attemptPort, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "start",
+          }),
+        ).rejects.toThrow("fixture post-attach failure");
+
+        expect(probedDuringInterval).not.toBeNull();
+        const probe = probedDuringInterval! as {
+          activeIsSurvivor: boolean;
+          survivorRetired: boolean;
+          commandNames: string[];
+        };
+        console.log(
+          `[cycle45-proof] loaded-uncommitted interval probe: activeIsSurvivor=${probe.activeIsSurvivor} survivorRetired=${probe.survivorRetired} probeCommandListed=${hasProbeCommand(probe.commandNames)}`,
+        );
+        // The attempt's loaded registry owns the slot in this interval, but the survivor's
+        // own request path must stay bound to the survivor's registry and capabilities.
+        expect(probe.survivorRetired).toBe(false);
+        expect(hasProbeCommand(probe.commandNames)).toBe(true);
+
+        // The aborted attempt restored the survivor as process root; capability intact.
+        expect(getActivePluginRegistry()).toBe(survivorRegistry);
+        expect(isPluginRegistryRetired(survivorRegistry!)).toBe(false);
+        const afterAbort = await probeSurvivorCommandNames(client);
+        console.log(
+          `[cycle45-proof] post-abort probe: probeCommandListed=${hasProbeCommand(afterAbort)}`,
+        );
+        expect(hasProbeCommand(afterAbort)).toBe(true);
+      } finally {
+        resetStagedIntervalFixture();
+        if (client) {
+          await disconnectGatewayClient(client).catch(() => {});
+        }
+        try {
+          await server?.close({ reason: "cycle45 loaded-uncommitted probe done" });
+        } finally {
+          resetPluginRuntimeStateForTest();
+          clearRuntimeConfigSnapshot();
+          await state.cleanup();
+        }
+      }
+    },
+  );
+});
 
 describe("startGatewayServerCore late startup failure", () => {
   // The reviewer's scenario: the second embedded start survives the whole kernel, then fails

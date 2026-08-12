@@ -15,9 +15,11 @@ import {
   listImportedRuntimePluginIds,
   recordImportedPluginId,
   resetPluginRuntimeStateForTest,
+  hasStagedProvisionalPluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
   stageActivePluginRegistry,
+  stageProvisionalPluginRegistry,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -370,6 +372,106 @@ describe("staged plugin registry attempt", () => {
     expect(isPluginRegistryRetired(survivor)).toBe(false);
     expect(getActivePluginRegistryKey()).toBe("survivor-key");
     expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+  });
+
+  // ClawSweeper cycle 45 (P1): gateway startup's PRE-BIND attempt now stages OFF-SLOT over a
+  // live process root — the survivor keeps the slot (and every unscoped reader) through the
+  // whole pre-bind interval instead of being displaced by the attempt's empty registry.
+  it("keeps the survivor as process root through the pre-bind staged interval", async () => {
+    const survivor = seedSurvivor();
+    const preBind = createEmptyPluginRegistry();
+
+    stageProvisionalPluginRegistry(preBind);
+
+    // The attempt never entered the slot: readers keep resolving the survivor's registry,
+    // key, and subagent mode for the whole pre-bind interval.
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+    expect(hasStagedProvisionalPluginRegistry()).toBe(true);
+
+    // A pre-bind failure (bind error) clears: the abort discards only the off-slot attempt.
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(isPluginRegistryRetired(preBind)).toBe(true);
+    expect(hasStagedProvisionalPluginRegistry()).toBe(false);
+  });
+
+  it("installs the pre-bind registry on a fresh start with no live root", () => {
+    const preBind = createEmptyPluginRegistry();
+    stageProvisionalPluginRegistry(preBind);
+    expect(getActivePluginRegistry()).toBe(preBind);
+    expect(hasStagedProvisionalPluginRegistry()).toBe(false);
+  });
+
+  it("defers the survivor's retirement when the loader consumes the pre-bind attempt", async () => {
+    const { survivor, cleanupSignal, cleanupCount } = seedObservableSurvivor();
+    const preBind = createEmptyPluginRegistry();
+    stageProvisionalPluginRegistry(preBind);
+    // The loader's post-bind activation: capture, stage the loaded registry, commit.
+    const loaderCapture = captureActivePluginRegistrySnapshot();
+    expect(loaderCapture.activeRegistry).toBe(survivor);
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
+    expect(isPluginRegistryRetired(preBind)).toBe(true);
+
+    commitStagedPluginRegistry(loaderCapture.activeRegistry, loaded);
+
+    // The loaded registry owns the slot; the displaced survivor stays live until finalize.
+    expect(getActivePluginRegistry()).toBe(loaded);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(cleanupCount()).toBe(0);
+
+    finalizeStagedPluginRegistryReplacement();
+
+    expect(isPluginRegistryRetired(survivor)).toBe(true);
+    await waitForCleanupSignal(cleanupSignal, "survivor retirement cleanup");
+    expect(cleanupCount()).toBe(1);
+  });
+
+  it("aborts to the survivor after the loader consumed the pre-bind attempt", async () => {
+    const { survivor, cleanupCount } = seedObservableSurvivor();
+    stageProvisionalPluginRegistry(createEmptyPluginRegistry());
+    const loaderCapture = captureActivePluginRegistrySnapshot();
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
+    commitStagedPluginRegistry(loaderCapture.activeRegistry, loaded);
+
+    // Late startup failure between the loader's commit and finalize.
+    await clearActivePluginRegistry();
+
+    expect(isPluginRegistryRetired(loaded)).toBe(true);
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(cleanupCount()).toBe(0);
+  });
+
+  it("re-arms the off-slot attempt across the loader's activation-failure rollback", async () => {
+    // loader-shared's activatePluginRegistry catch: capture before stage, stage the loaded
+    // registry, restore the capture on failure. The pending off-slot attempt must survive the
+    // round-trip so the failure close aborts the attempt instead of clearing the survivor.
+    const survivor = seedSurvivor();
+    const preBind = createEmptyPluginRegistry();
+    stageProvisionalPluginRegistry(preBind);
+    const loaderCapture = captureActivePluginRegistrySnapshot();
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
+
+    restoreActivePluginRegistrySnapshot(loaderCapture);
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(loaded)).toBe(true);
+    expect(hasStagedProvisionalPluginRegistry()).toBe(true);
+
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(hasStagedProvisionalPluginRegistry()).toBe(false);
   });
 
   it("re-arms the staged abort across a capture/restore round-trip", async () => {

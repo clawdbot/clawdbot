@@ -82,11 +82,12 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
-    // The displaced survivor stays recoverable for any failure in here: before the loader's
-    // post-bind activation the pre-bind registry is still STAGED (transport create, ws
-    // attach, listener bind), and after it the activation retained the abort marker while
-    // deferring the survivor's retirement (finalize below never ran). Either way the close's
-    // registry clear tears down this attempt's registry and restores the displaced survivor.
+    // The displaced survivor stays SERVING for any failure in here: before the loader's
+    // post-bind activation the pre-bind attempt is staged off-slot (transport create, ws
+    // attach, listener bind) so the survivor never left the slot, and after it the
+    // activation retained the abort marker while deferring the survivor's retirement
+    // (finalize below never ran). Either way the close's registry clear tears down this
+    // attempt's registry and leaves the survivor as the process root.
     // The close also scrubs the snapshot families unconditionally, so restore the survivor's
     // captured prior state once teardown settles — mirroring the kernel's own failure path,
     // even when the close itself throws.

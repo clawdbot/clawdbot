@@ -20,7 +20,7 @@ import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../../plugins/runtime-degraded-state.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, resolveRequestPluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -139,7 +139,7 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
 }
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
-  const registry = getActivePluginRegistry();
+  const registry = resolveRequestPluginRegistry();
   const degradedPlugins = listActiveDegradedPlugins();
   const unavailable = degradedPlugins
     .map(({ pluginId, state, diagnostic }) => ({

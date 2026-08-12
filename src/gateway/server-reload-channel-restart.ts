@@ -1,7 +1,7 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -14,7 +14,11 @@ export function startGatewayChannelFromActiveRegistry(
   channel: ChannelKind,
   accountId?: string,
 ): Promise<void> {
-  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+  // Bind the restart to the PROCESS-ROOT registry the reload just committed. A reload can run
+  // inside a gateway request whose scope still pins the pre-reload registry; the restarted
+  // channel must serve from the replacement, never the requester's stale handle.
+  const rootRegistry = getActivePluginRegistry() ?? requireActivePluginRegistry();
+  return withPluginRuntimeRegistryScope(rootRegistry, () =>
     runOutsideGatewayRootWorkAdmission(() =>
       accountId === undefined
         ? params.startChannel(channel)

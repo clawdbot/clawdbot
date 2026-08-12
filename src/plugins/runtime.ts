@@ -57,20 +57,32 @@ export type ActivePluginRegistrySnapshot = {
   // survivor stays recoverable across a capture/restore round-trip — the loader's activation
   // failure rollback would otherwise strand the survivor behind a plain-clear marker wipe.
   stagedRevert: ActivePluginRegistrySnapshot | null;
+  // The off-slot pre-bind attempt pending at capture time. Restore re-arms it so the loader's
+  // activation-failure rollback keeps the attempt's abort-by-clear discarding the attempt
+  // instead of clearing the still-serving process root.
+  provisionalAttempt: PluginRegistry | null;
 };
 
 // Arms exactly one revert for the currently staged registry: staging displaces a still-live
 // registry WITHOUT retiring it, so if the staged attempt is cleared before commit the displaced
 // snapshot (registry, key, subagent mode, workspace dir) must come back — otherwise the clear
 // empties the slot and its tail wipes global host state the displaced survivor still owns.
-// Staging a successor over a still-staged attempt TRANSFERS the marker (the abort target stays
-// the original survivor); committing a transferred marker RETAINS it (the survivor's retirement
-// defers to finalizeStagedPluginRegistryReplacement on complete startup success); any other
+// A stage that consumed a pending pre-bind attempt marks the marker deferToFinalize: the commit
+// RETAINS it (the survivor's retirement defers to finalizeStagedPluginRegistryReplacement on
+// complete startup success); direct stages (reload replacements) complete at commit. Any other
 // install or clear invalidates it so a stale snapshot can never resurrect.
 let stagedRegistryRevert: {
   registry: PluginRegistry;
   snapshot: ActivePluginRegistrySnapshot;
+  deferToFinalize: boolean;
 } | null = null;
+
+// Gateway startup's pre-bind attempt when a live registry already owns the slot: the attempt
+// stays OFF-SLOT so the still-serving process root keeps answering every reader during the
+// pre-bind interval. The loader's post-bind activation consumes it (staging the loaded
+// registry with a defer-to-finalize marker); a clear before that consumes it as an abort of
+// the attempt — never of the serving root.
+let stagedProvisionalAttempt: PluginRegistry | null = null;
 
 function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
   if (!registry) {
@@ -180,12 +192,49 @@ export function setActivePluginRegistry(
   });
 }
 
+/**
+ * Stages gateway startup's provisional pre-bind registry. With no live process root it
+ * installs like a plain pre-bind publish; over a live root it stays OFF-SLOT — the serving
+ * registry keeps answering every reader until the loader's post-bind activation stages the
+ * fully loaded replacement (which consumes this pending attempt into a defer-to-finalize
+ * marker). Installing the empty attempt here instead stripped a still-serving embedded
+ * Gateway's plugin capabilities for the whole pre-bind interval.
+ */
+export function stageProvisionalPluginRegistry(registry: PluginRegistry): void {
+  const liveRegistry = asPluginRegistry(state.activeRegistry);
+  if (liveRegistry && liveRegistry !== registry) {
+    stagedProvisionalAttempt = registry;
+    return;
+  }
+  installActivePluginRegistry({
+    registry,
+    key: null,
+    runtimeSubagentMode: "default",
+    workspaceDir: null,
+    retirePrevious: false,
+  });
+}
+
+/** True while a pre-bind attempt is staged off-slot (kernel failure paths must discard it). */
+export function hasStagedProvisionalPluginRegistry(): boolean {
+  return stagedProvisionalAttempt !== null;
+}
+
 export function stageActivePluginRegistry(
   registry: PluginRegistry,
   cacheKey: string | null,
   runtimeSubagentMode: RegistryState["runtimeSubagentMode"],
   workspaceDir?: string,
 ): void {
+  // Consuming a pending pre-bind attempt marks this stage as gateway startup: the displaced
+  // process root must stay abortable past the commit, retiring only at startup-success
+  // finalize. The consumed intermediate attempt registry never entered the slot; it retires
+  // here so a failed load cannot leave it live.
+  const pendingAttempt = stagedProvisionalAttempt;
+  stagedProvisionalAttempt = null;
+  if (pendingAttempt && pendingAttempt !== registry) {
+    markPluginRegistryRetired(pendingAttempt);
+  }
   const displaced = captureActivePluginRegistrySnapshot();
   installActivePluginRegistry({
     registry,
@@ -194,16 +243,18 @@ export function stageActivePluginRegistry(
     workspaceDir: workspaceDir ?? null,
     retirePrevious: false,
   });
-  // Staging over a still-staged uncommitted attempt (the loader activating the fully loaded
-  // startup registry over the gateway's pre-bind provisional one) TRANSFERS the marker: the
-  // abort target stays the ORIGINAL displaced survivor, never the intermediate attempt
-  // registry — the commit retires that intermediate instead of the clear restoring it.
+  // Staging over a still-staged uncommitted attempt TRANSFERS the marker: the abort target
+  // stays the ORIGINAL displaced survivor, never the intermediate attempt registry.
   const revertSnapshot = displaced.stagedRevert ?? displaced;
   // A no-survivor stage keeps plain clear semantics (empty slot + host-state wipe); only a
   // displaced live registry earns the abort-by-clear revert.
   stagedRegistryRevert =
     revertSnapshot.activeRegistry && revertSnapshot.activeRegistry !== registry
-      ? { registry, snapshot: revertSnapshot }
+      ? {
+          registry,
+          snapshot: revertSnapshot,
+          deferToFinalize: pendingAttempt !== null || displaced.stagedRevert !== null,
+        }
       : null;
 }
 
@@ -211,17 +262,15 @@ export function commitStagedPluginRegistry(
   previousRegistry: PluginRegistry | null,
   registry: PluginRegistry,
 ): void {
-  // A transferred marker (nested stage) means the true displaced survivor lives in the marker
-  // snapshot; the caller's previousRegistry is then the intermediate attempt registry it
-  // captured before its own stage. Only the intermediate retires here: the survivor is still
-  // live and serving until the whole startup succeeds, so its destructive retirement DEFERS —
-  // the marker persists as the abortable handle until finalize consumes it, or a clear aborts
-  // back to the survivor. A direct marker (the caller's own stage, previousRegistry IS the
-  // survivor) has no deferred window and completes the replacement immediately.
+  // A defer-to-finalize marker (gateway startup: the stage consumed the pre-bind attempt)
+  // means the displaced survivor is still live and serving until the whole startup succeeds,
+  // so its destructive retirement DEFERS — the marker persists as the abortable handle until
+  // finalize consumes it, or a clear aborts back to the survivor. A direct marker (reload
+  // replacement) has no deferred window and completes the replacement immediately.
   const marker = stagedRegistryRevert?.registry === registry ? stagedRegistryRevert : null;
   const displacedSurvivor = marker ? marker.snapshot.activeRegistry : previousRegistry;
   const deferSurvivorRetirement =
-    marker !== null && displacedSurvivor !== previousRegistry && state.activeRegistry === registry;
+    marker !== null && marker.deferToFinalize && state.activeRegistry === registry;
   if (marker && !deferSurvivorRetirement) {
     // The attempt owns the slot from here: a later clear is a real clear, not an abort.
     stagedRegistryRevert = null;
@@ -266,6 +315,7 @@ export function captureActivePluginRegistrySnapshot(): ActivePluginRegistrySnaps
       stagedRegistryRevert && stagedRegistryRevert.registry === state.activeRegistry
         ? stagedRegistryRevert.snapshot
         : null,
+    provisionalAttempt: stagedProvisionalAttempt,
   };
 }
 
@@ -279,8 +329,15 @@ export function restoreActivePluginRegistrySnapshot(snapshot: ActivePluginRegist
   // Restoring a still-staged uncommitted attempt re-arms its abort so a later clear reverts
   // to the original displaced survivor instead of wiping the slot.
   if (snapshot.stagedRevert && snapshot.activeRegistry) {
-    stagedRegistryRevert = { registry: snapshot.activeRegistry, snapshot: snapshot.stagedRevert };
+    stagedRegistryRevert = {
+      registry: snapshot.activeRegistry,
+      snapshot: snapshot.stagedRevert,
+      deferToFinalize: true,
+    };
   }
+  // Re-arm a pending off-slot attempt (loader activation-failure rollback) so the attempt's
+  // later abort-by-clear discards the attempt instead of clearing the serving process root.
+  stagedProvisionalAttempt = snapshot.provisionalAttempt;
 }
 
 function installActivePluginRegistry(params: {
@@ -320,6 +377,16 @@ function installActivePluginRegistry(params: {
 
 export function getActivePluginRegistry(): PluginRegistry | null {
   return asPluginRegistry(state.activeRegistry);
+}
+
+/**
+ * Resolves the registry a gateway request read should serve from: the request's bound registry
+ * handle first, the process root otherwise. During a second embedded start the process slot
+ * temporarily holds the attempt's registry; a still-serving gateway's request paths must keep
+ * answering from their own pinned registry instead of losing capabilities to the attempt.
+ */
+export function resolveRequestPluginRegistry(): PluginRegistry | null {
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
 }
 
 export function getActivePluginRegistryWorkspaceDir(): string | undefined {
@@ -380,7 +447,7 @@ export function assertDirectPluginRegistrationReplacement(
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
+  return resolveRequestPluginRegistry();
 }
 
 export function getActivePluginHttpRouteRegistryVersion(): number {
@@ -396,7 +463,10 @@ export function requireActivePluginHttpRouteRegistry(): PluginRegistry {
 }
 
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return getActivePluginChannelRegistrySnapshotFromState().registry as PluginRegistry | null;
+  return (
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    (getActivePluginChannelRegistrySnapshotFromState().registry as PluginRegistry | null)
+  );
 }
 
 export function getActivePluginChannelRegistryVersion(): number {
@@ -404,11 +474,11 @@ export function getActivePluginChannelRegistryVersion(): number {
 }
 
 export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
+  return resolveRequestPluginRegistry();
 }
 
 export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
+  return resolveRequestPluginRegistry();
 }
 
 export function requireActivePluginChannelRegistry(): PluginRegistry {
@@ -420,7 +490,7 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
 }
 
 export function getActivePluginSessionExtensionRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
+  return resolveRequestPluginRegistry();
 }
 
 export function getActivePluginRegistryKey(): string | null {
@@ -468,6 +538,7 @@ export function listImportedRuntimePluginIds(): string[] {
 
 function clearActivePluginRegistryState(): PluginRegistry | null {
   stagedRegistryRevert = null;
+  stagedProvisionalAttempt = null;
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = null;
   state.activeVersion += 1;
@@ -483,6 +554,17 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
 }
 
 export async function clearActivePluginRegistry(): Promise<void> {
+  // Clearing while a pre-bind attempt is still staged OFF-SLOT aborts that attempt, never the
+  // serving process root it never displaced: the attempt registry retires, the slot — and the
+  // global host state its owner still serves with — stays untouched.
+  const pendingAttempt = stagedProvisionalAttempt;
+  if (pendingAttempt && pendingAttempt !== state.activeRegistry) {
+    stagedProvisionalAttempt = null;
+    if (retirePluginRegistryIfUnused(pendingAttempt)) {
+      cleanupRetiredPluginHostRegistry(pendingAttempt);
+    }
+    return;
+  }
   // Clearing an unfinalized attempt (staged, or committed with a retained marker awaiting
   // finalize) is an ABORT: capture the displaced survivor snapshot before the state clear
   // consumes the marker, restore it synchronously below. The attempt's own registry — by the

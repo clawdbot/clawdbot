@@ -941,12 +941,13 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
-      // The attempt's pre-bind registry holds the slot, but the displaced survivor must not
-      // retire at kernel return: transport creation and the listener bind still lie ahead.
-      expect(getActivePluginRegistry()).not.toBe(survivor);
+      // The attempt's pre-bind registry stays OFF-SLOT: the still-serving survivor remains
+      // the process root at kernel return — transport creation and the listener bind still
+      // lie ahead, and the survivor's readers must keep resolving its own registry.
+      expect(getActivePluginRegistry()).toBe(survivor);
       expect(isPluginRegistryRetired(survivor)).toBe(false);
       // The bind-failure close (startGatewayServerCore's catch) aborts the staged attempt
-      // and restores the survivor live — key, mode, lifecycle, and scheduler job intact.
+      // off-slot, leaving the survivor live — key, mode, lifecycle, and scheduler job intact.
       const closing = kernel.closeOnStartupFailure();
       kernel = undefined;
       await closing;

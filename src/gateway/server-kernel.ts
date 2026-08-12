@@ -14,7 +14,11 @@ import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { clearActivePluginRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  clearActivePluginRegistry,
+  getActivePluginRegistry,
+  hasStagedProvisionalPluginRegistry,
+} from "../plugins/runtime.js";
 import {
   clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeRefreshContext,
@@ -144,10 +148,11 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   // Startup-failure cleanup is scoped to state THIS attempt published: an embedded process
   // can already run a Gateway whose registry, config snapshot, and secrets runtime these
   // globals hold, and a second kernel attempt failing at ANY stage must not strip them from
-  // it. Bootstrap STAGES its pre-bind registry (no retirement) and clearing an unfinalized
-  // attempt reverts the slot to the displaced survivor snapshot; the displaced registry
-  // retires only when complete startup succeeds (startGatewayServerCore's finalize after
-  // finishGatewayStartup returns), never here.
+  // it. Bootstrap stages its pre-bind registry OFF-SLOT (the serving survivor keeps the slot
+  // through the whole pre-bind interval); the loader's post-bind activation installs the
+  // loaded registry while keeping the displaced survivor abortable, and it retires only when
+  // complete startup succeeds (startGatewayServerCore's finalize after finishGatewayStartup
+  // returns), never here.
   const priorRegistry = getActivePluginRegistry();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
@@ -257,50 +262,51 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       log,
       logHealth,
     });
-    // The pre-bind registry stays STAGED past kernel success: transport creation and the
-    // listener bind still lie ahead in startGatewayServerCore and can fail as a unit. The
-    // loader's post-bind activation then installs the fully loaded startup registry but
-    // RETAINS the transferred abort marker (loader-shared's activatePluginRegistry
-    // stage/commit, marker semantics in plugins/runtime); the displaced survivor retires
-    // exactly once — as a completed replacement — only when startGatewayServerCore's
-    // finalize runs after ALL startup work succeeds. Retiring any earlier let a later
-    // startup failure close the attempt with the survivor already retired and nothing live
-    // left to restore. The caller's failure path reuses this attempt's snapshot-family
-    // restore through the handle returned below.
+    // The pre-bind registry stays STAGED (off-slot over a live survivor) past kernel
+    // success: transport creation and the listener bind still lie ahead in
+    // startGatewayServerCore and can fail as a unit. The loader's post-bind activation then
+    // installs the fully loaded startup registry but RETAINS the defer-to-finalize abort
+    // marker (loader-shared's activatePluginRegistry stage/commit, marker semantics in
+    // plugins/runtime); the displaced survivor retires exactly once — as a completed
+    // replacement — only when startGatewayServerCore's finalize runs after ALL startup work
+    // succeeds. Retiring any earlier let a later startup failure close the attempt with the
+    // survivor already retired and nothing live left to restore. The caller's failure path
+    // reuses this attempt's snapshot-family restore through the handle returned below.
     return {
       ...requestRuntime,
       restorePriorSnapshotFamiliesAfterStartupFailure: restorePriorSnapshotFamilies,
     };
   } catch (error) {
     if (lifecycleRuntime) {
-      // The close's shutdown clears the attempt's staged (uncommitted) registry, which
-      // reverts the slot to the displaced survivor snapshot — key, subagent mode, workspace
-      // dir — and skips the host-state wipe the survivor still owns (see
-      // clearActivePluginRegistry). The survivor retires only at startup-success finalize,
-      // long after this kernel stage, so every failure landing here still holds an
-      // unretired survivor. The
-      // close then scrubs the snapshot families unconditionally (its secrets clear cascades
-      // into the config snapshot, applied hash, and ambient policy), so restore them to the
-      // captured prior state once teardown settles — even when the close itself throws.
+      // The close's shutdown clears the attempt's staged (uncommitted) registry: a pre-bind
+      // attempt discards off-slot with the surviving process root never displaced, while a
+      // loader-installed attempt reverts the slot to the displaced survivor snapshot — key,
+      // subagent mode, workspace dir — and skips the host-state wipe the survivor still owns
+      // (see clearActivePluginRegistry). The survivor retires only at startup-success
+      // finalize, long after this kernel stage, so every failure landing here still holds an
+      // unretired survivor. The close then scrubs the snapshot families unconditionally (its
+      // secrets clear cascades into the config snapshot, applied hash, and ambient policy),
+      // so restore them to the captured prior state once teardown settles — even when the
+      // close itself throws.
       try {
         await lifecycleRuntime.closeOnStartupFailure();
       } finally {
         restorePriorSnapshotFamilies();
       }
     } else {
-      // Bootstrap stages the process-global plugin registry and pins the runtime config
-      // snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear what THIS
-      // attempt published — or later validation (and a same-process retry) treats
-      // registrations from a Gateway that never started as LANDED channel owners — while a
-      // still-running embedded Gateway's state is preserved or restored: clearing the staged
-      // registry retires only the attempt's and reverts the slot to the displaced survivor.
-      // The attempt registry retires FIRST — plugin-host cleanup still reads the runtime
-      // config and secrets snapshots, exactly as normal shutdown orders it — and the
+      // Bootstrap stages the attempt's plugin registry and pins the runtime config snapshot
+      // BEFORE the lifecycle exists. A pre-lifecycle failure must clear what THIS attempt
+      // published — or later validation (and a same-process retry) treats registrations from
+      // a Gateway that never started as LANDED channel owners — while a still-running
+      // embedded Gateway's state is preserved: an off-slot staged attempt discards without
+      // the slot ever changing, and a slot the attempt actually installed (fresh start)
+      // clears. The attempt registry retires FIRST — plugin-host cleanup still reads the
+      // runtime config and secrets snapshots, exactly as normal shutdown orders it — and the
       // snapshots scrub (or restore to their prior state) afterwards even when that cleanup
       // throws.
       clearGatewayAgentCliShim();
       try {
-        if (getActivePluginRegistry() !== priorRegistry) {
+        if (getActivePluginRegistry() !== priorRegistry || hasStagedProvisionalPluginRegistry()) {
           await clearActivePluginRegistry();
         }
       } finally {
