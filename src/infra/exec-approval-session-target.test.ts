@@ -90,6 +90,29 @@ describe("native approval account selection", () => {
     ).toBe(false);
   });
 
+  it("rejects cross-channel requests when turnSourceChannel does not match expected channel", () => {
+    const whatsappRequest: ExecApprovalRequest = {
+      id: "req-whatsapp",
+      request: {
+        command: "echo test",
+        sessionKey: "agent:main:main",
+        turnSourceChannel: "whatsapp",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 6000,
+    };
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: whatsappRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(false);
+  });
+
   it("selects the recorded account even when several accounts are eligible", () => {
     const request = buildRequest({
       turnSourceChannel: "telegram",
