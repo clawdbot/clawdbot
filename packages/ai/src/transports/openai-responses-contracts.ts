@@ -59,7 +59,7 @@ export class OpenAIResponsesWebSocketPostDispatchError extends Error {
   }
 }
 
-export class OpenAIResponsesWebSocketServerError extends Error {
+class OpenAIResponsesWebSocketServerError extends Error {
   constructor(
     readonly code: string,
     readonly status: number | undefined,
