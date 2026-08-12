@@ -38,7 +38,8 @@ export async function createMatrixDraftController(params: {
     client,
     logVerboseMessage,
   } = params;
-  let draftConsumed = false;
+  type DraftDisposition = "active" | "retained" | "consumed";
+  let draftDisposition: DraftDisposition = "active";
 
   const draftStreamingEnabled = streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
@@ -238,7 +239,7 @@ export async function createMatrixDraftController(params: {
   const resetDraftDeliveryState = async () => {
     await draftStream?.discardPending();
     draftStream?.reset();
-    draftConsumed = false;
+    draftDisposition = "active";
     currentDraftMessageGeneration = 0;
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
@@ -259,12 +260,15 @@ export async function createMatrixDraftController(params: {
     resetPreviewToolProgress,
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
-    isDraftConsumed: () => draftConsumed,
-    markDraftConsumed: () => {
-      draftConsumed = true;
+    draftDisposition: () => draftDisposition,
+    beginDraftGeneration: () => {
+      draftDisposition = "active";
     },
-    clearDraftConsumed: () => {
-      draftConsumed = false;
+    markDraftConsumed: () => {
+      draftDisposition = "consumed";
+    },
+    markDraftRetained: () => {
+      draftDisposition = "retained";
     },
     currentReplyToId: () => currentDraftReplyToId,
     setCurrentReplyToId: (replyToId: string | undefined) => {

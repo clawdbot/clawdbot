@@ -618,7 +618,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStream = draftControllerRef?.draftStream;
       if (draftStream) {
         const draftEventId = await draftStream.stop().catch(() => undefined);
-        if (draftEventId && draftControllerRef?.isDraftConsumed() !== true) {
+        if (draftEventId && draftControllerRef?.draftDisposition() === "active") {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }
