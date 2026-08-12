@@ -99,7 +99,6 @@ describe("resolveWorkspaceIcon", () => {
     { relative: "assets/icon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "assets/logo.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "assets/logo.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: ".idea/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
   ] as const;
 
   it.each(conventions)("resolves $relative as $contentType", async (convention) => {

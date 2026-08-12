@@ -57,7 +57,6 @@ const WORKSPACE_ICON_RELATIVE_PATHS = [
   "assets/icon.png",
   "assets/logo.svg",
   "assets/logo.png",
-  ".idea/icon.svg",
 ] as const;
 
 /** Icons are small by construction; anything larger is not a favicon. */
