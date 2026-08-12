@@ -478,7 +478,7 @@ export function renderPlaceSelect(params: {
                           keepOpen: true,
                           onSelect: () => params.onCloneProject(project.cloneUrl),
                         },
-                        params.submitting || params.projectCloneBusy,
+                        params.submitting || params.projectCloneBusy || !params.projectAddAvailable,
                       ),
                     )}
                   `

@@ -70,6 +70,45 @@ suite.define(() => {
     }
   });
 
+  it("lets read-scoped operators search projects without exposing clone actions", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["projects.add", "projects.list", "projects.searchRemote"],
+      operatorScopes: ["operator.read"],
+      methodResponses: {
+        "projects.list": { projects: [] },
+        "projects.searchRemote": {
+          credential: "missing",
+          projects: [
+            {
+              name: "openclaw",
+              fullName: "openclaw/openclaw",
+              cloneUrl: "https://github.com/openclaw/openclaw.git",
+              webUrl: "https://github.com/openclaw/openclaw",
+              private: false,
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      await page.locator("#new-session-place-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await place.getByRole("searchbox").fill("openclaw");
+      await gateway.waitForRequest("projects.searchRemote");
+
+      const remote = place.getByRole("button", { name: /openclaw\/openclaw/u });
+      await expect.poll(() => remote.isDisabled()).toBe(true);
+      await remote.click({ force: true });
+      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("lets write-scoped operators browse and restore only workspace-contained folders", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

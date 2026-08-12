@@ -24,7 +24,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -263,8 +263,11 @@ class NewSessionPage extends OpenClawLightDomElement {
       [
         this.isConnected && this.gatewayConnected ? this.gatewayClient : null,
         this.context
-          ? isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote") ===
-            true
+          ? canCallGatewayMethod(
+              this.context.gateway.snapshot,
+              "projects.searchRemote",
+              "operator.read",
+            )
           : false,
         this.debouncedProjectQuery,
         this.gatewayConnectionEpoch,
@@ -814,7 +817,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       !this.gatewayConnected ||
       !this.gatewayClient ||
       !this.context ||
-      !isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote")
+      !canCallGatewayMethod(this.context.gateway.snapshot, "projects.searchRemote", "operator.read")
     ) {
       return;
     }
@@ -837,7 +840,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       !this.gatewayConnected ||
       this.projectCloneBusy ||
       !this.context ||
-      !isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.add")
+      !canCallGatewayMethod(this.context.gateway.snapshot, "projects.add", "operator.write")
     ) {
       return;
     }
@@ -2269,12 +2272,15 @@ class NewSessionPage extends OpenClawLightDomElement {
       projects: catalog.isTarget(this.data) ? [] : this.projects,
       recents: catalog.isTarget(this.data) ? [] : this.projectRecents,
       projectQuery: this.projectQuery,
-      projectSearchAvailable: Boolean(
-        this.context &&
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote"),
+      projectSearchAvailable: canCallGatewayMethod(
+        this.context?.gateway.snapshot,
+        "projects.searchRemote",
+        "operator.read",
       ),
-      projectAddAvailable: Boolean(
-        this.context && isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.add"),
+      projectAddAvailable: canCallGatewayMethod(
+        this.context?.gateway.snapshot,
+        "projects.add",
+        "operator.write",
       ),
       remoteProjects: this.projectSearchResult?.projects ?? [],
       projectSearchCredential: this.projectSearchResult?.credential ?? null,
