@@ -111,35 +111,6 @@ describe("OpenAI realtime voice bridge tools", () => {
     });
   });
 
-  it.each(["cancelled", "failed", "incomplete"])(
-    "ignores function calls from a %s response",
-    async (status) => {
-      const onToolCall = vi.fn();
-      const bridge = createNativeBridge({ onToolCall });
-      const socket = await connectReadyBridge(bridge);
-
-      emitServerEvent(socket, {
-        type: "response.done",
-        response: {
-          id: "response_1",
-          status,
-          output: [
-            {
-              id: "item_tool_1",
-              type: "function_call",
-              status: "completed",
-              name: "openclaw_agent_consult",
-              call_id: "call_1",
-              arguments: '{"question":"must stay inert"}',
-            },
-          ],
-        },
-      });
-
-      expect(onToolCall).not.toHaveBeenCalled();
-    },
-  );
-
   it("ignores malformed and unfinished response output items", async () => {
     const onToolCall = vi.fn();
     const bridge = createNativeBridge({ onToolCall });

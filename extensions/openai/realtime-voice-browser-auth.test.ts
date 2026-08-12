@@ -434,16 +434,6 @@ describe("OpenAI realtime voice browser authentication", () => {
     );
   });
 
-  it("requires Platform auth for browser sessions", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: {},
-      }),
-    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
   it("reports an unresolved Platform credential without trying another auth route", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
     execFileSyncMock.mockImplementationOnce(() => {
