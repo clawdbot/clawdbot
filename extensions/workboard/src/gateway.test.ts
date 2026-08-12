@@ -146,37 +146,25 @@ describe("workboard gateway methods", () => {
         idempotencyKey: "a",
         sourceUpdatedAt: 1,
         card: { title: "Reconciled" },
+        objectiveEvidence: {
+          projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+          trustedEvidence: [
+            { reference: "git://openclaw/deploy/manifest", sha256: "b".repeat(64) },
+          ],
+        },
       },
       respond: reconciled,
     } as never);
     const reconciledId = reconciled.mock.calls[0]?.[1]?.card.id as string;
-    await store.claim(reconciledId, { ownerId: "operator", token: "private-claim" });
-    const observed = vi.fn();
-    await methods.get("workboard.reconciliation.observeSource")?.handler({
-      params: {
-        cardId: reconciledId,
-        tenant: "acme",
-        objectiveKey: "deploy",
-        sourceUrl: "https://example.test/a",
-        observationId: "gateway-present",
-        sourceState: "present",
-        staleAfterMisses: 2,
-        observedAt: 2,
-      },
-      respond: observed,
-    } as never);
-    expect(observed.mock.calls[0]?.[1]?.card.metadata?.claim?.token).toBe("[redacted]");
-    expect(observed.mock.calls[0]?.[1]).toMatchObject({
-      association: {
-        cardId: reconciledId,
-        tenant: "acme",
-        objectiveKey: "deploy",
-        sourceUrl: "https://example.test/a",
-      },
-      observationId: "gateway-present",
-      revision: expect.any(Number),
-      evidence: { lastSourceObservationId: "gateway-present" },
+    expect(reconciled.mock.calls[0]?.[1]?.card.metadata?.reconciliationObjectiveEvidence).toEqual({
+      projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+      trustedEvidence: [{ reference: "git://openclaw/deploy/manifest", sha256: "b".repeat(64) }],
     });
+    const reconciliationBeforeObserve = vi.fn();
+    await methods.get("workboard.reconciliation.list")?.handler({
+      params: { tenant: "acme" },
+      respond: reconciliationBeforeObserve,
+    } as never);
     expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.notifications.list")?.opts).toEqual({
       scope: "operator.read",
@@ -204,8 +192,12 @@ describe("workboard gateway methods", () => {
     await listHandler?.({ params: {}, respond: listRespond } as never);
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
-      boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
+      boards: [expect.objectContaining({ id: "default", total: 3, active: 3 })],
     });
+    expect(
+      listRespond.mock.calls[0]?.[1]?.cards.find((card: { id: string }) => card.id === reconciledId)
+        ?.metadata?.reconciliationObjectiveEvidence,
+    ).toBeUndefined();
 
     const claimedCardId = createRespond.mock.calls[0]?.[1]?.card.id;
     await store.claim(claimedCardId, { ownerId: "operator", token: "private-claim-token" });
@@ -217,6 +209,14 @@ describe("workboard gateway methods", () => {
     expect(reconciliationRespond.mock.calls[0]?.[1]?.cards[0]?.metadata?.claim?.token).toBe(
       "[redacted]",
     );
+    expect(
+      reconciliationRespond.mock.calls[0]?.[1]?.cards.find(
+        (card: { id: string }) => card.id === reconciledId,
+      )?.metadata?.reconciliationObjectiveEvidence,
+    ).toEqual({
+      projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+      trustedEvidence: [{ reference: "git://openclaw/deploy/manifest", sha256: "b".repeat(64) }],
+    });
 
     const eventsRespond = vi.fn();
     await methods.get("workboard.notifications.events")?.handler({

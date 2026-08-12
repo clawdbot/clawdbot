@@ -446,6 +446,33 @@ describe("WorkboardReconciler", () => {
     ).toThrow("objectiveEvidence.rawBody is not allowed.");
   });
 
+  it("rejects unprojected objective evidence passed directly to the store", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await expect(
+      store.applyReconciliation(
+        {
+          sourceUrl: "https://example.test/runs/direct-store",
+          tenant: "acme",
+          idempotencyKey: "direct-store",
+          sourceUpdatedAt: 1,
+          card: { title: "Must not persist" },
+          objectiveEvidence: {
+            projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+            trustedEvidence: [],
+            rawBody: "untrusted",
+          },
+        } as never,
+        {
+          sourceUrl: "https://example.test/runs/direct-store",
+          tenant: "acme",
+          idempotencyKey: "direct-store",
+          sourceUpdatedAt: 1,
+        },
+      ),
+    ).rejects.toThrow("objectiveEvidence.rawBody is not allowed.");
+    expect(await store.list()).toHaveLength(0);
+  });
+
   it("rejects unsafe reconciliation triage before mutation and ignores generic metadata injection", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const reconciler = new WorkboardReconciler(store);

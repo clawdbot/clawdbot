@@ -178,6 +178,12 @@ describe("workboard tools", () => {
         position: 1000,
         createdAt: 1,
         updatedAt: 1,
+        metadata: {
+          reconciliationObjectiveEvidence: {
+            projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+            trustedEvidence: [],
+          },
+        },
       },
     });
     await store.register("archived-1", {
@@ -218,6 +224,10 @@ describe("workboard tools", () => {
     );
     expect(read.workerContext).toContain("Ship coordination");
     expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
+    expect(
+      (read.card as { metadata?: { reconciliationObjectiveEvidence?: unknown } }).metadata
+        ?.reconciliationObjectiveEvidence,
+    ).toBeUndefined();
 
     const released = readPayload(
       await byName
@@ -229,6 +239,10 @@ describe("workboard tools", () => {
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
     expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
+    expect(
+      (list.cards as Array<{ metadata?: { reconciliationObjectiveEvidence?: unknown } }>)[0]
+        ?.metadata?.reconciliationObjectiveEvidence,
+    ).toBeUndefined();
     const archivedList = readPayload(
       await byName.get("workboard_list")?.execute("call-6", { includeArchived: true }),
     );

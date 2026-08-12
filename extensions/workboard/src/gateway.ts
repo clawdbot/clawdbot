@@ -1,6 +1,6 @@
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactClaimToken, redactReconciliationClaimToken } from "./card-redaction.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
@@ -64,7 +64,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const page = await reconciler.list(requestParams);
-        respond(true, { ...page, cards: page.cards.map(redactClaimToken) });
+        respond(true, { ...page, cards: page.cards.map(redactReconciliationClaimToken) });
       } catch (error) {
         respondError(respond, error);
       }
@@ -77,7 +77,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const result = await reconciler.apply(projectReconciliationObservation(requestParams));
-        respond(true, { ...result, card: redactClaimToken(result.card) });
+        respond(true, { ...result, card: redactReconciliationClaimToken(result.card) });
       } catch (error) {
         respondError(respond, error);
       }
@@ -94,7 +94,7 @@ export function registerWorkboardGatewayMethods(params: {
         );
         respond(true, {
           ...result,
-          card: redactClaimToken(result.card),
+          card: redactReconciliationClaimToken(result.card),
         });
       } catch (error) {
         respondError(respond, error);

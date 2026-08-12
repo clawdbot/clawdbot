@@ -7,6 +7,7 @@ import type {
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
   WorkboardReconciliationObjectiveEvidence,
+  WorkboardReconciliationTriageEvidence,
   WorkboardReconciliationSourceObservation,
   WorkboardReconciliationSourceObservationResult,
   WorkboardLink,
@@ -255,6 +256,99 @@ function mergeObjectiveEvidence(
   };
 }
 
+function projectStoreObjectiveEvidence(value: unknown): WorkboardReconciliationObjectiveEvidence {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("objectiveEvidence must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  for (const key of Object.keys(input)) {
+    if (!new Set(["projectCanonicalId", "branch", "trustedEvidence"]).has(key)) {
+      throw new Error(`objectiveEvidence.${key} is not allowed.`);
+    }
+  }
+  const projectCanonicalId = input.projectCanonicalId;
+  if (
+    typeof projectCanonicalId !== "string" ||
+    projectCanonicalId.length > 160 ||
+    !/^git:sha256:[a-f0-9]{64}$/i.test(projectCanonicalId)
+  ) {
+    throw new Error("projectCanonicalId must be a git:sha256 opaque identity.");
+  }
+  const branch = input.branch;
+  if (
+    branch !== undefined &&
+    (typeof branch !== "string" ||
+      Buffer.byteLength(branch, "utf8") > 160 ||
+      !branch.trim() ||
+      /\p{C}/u.test(branch))
+  ) {
+    throw new Error("branch must be a bounded string without control characters.");
+  }
+  if (!Array.isArray(input.trustedEvidence) || input.trustedEvidence.length > 20) {
+    throw new Error("trusted evidence supports at most 20 entries.");
+  }
+  const trustedEvidence = input.trustedEvidence.map(
+    (value): WorkboardReconciliationTriageEvidence => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("trusted evidence must be an object.");
+      }
+      const evidence = value as Record<string, unknown>;
+      for (const key of Object.keys(evidence)) {
+        if (key !== "reference" && key !== "sha256") {
+          throw new Error(`trusted evidence.${key} is not allowed.`);
+        }
+      }
+      const reference = evidence.reference;
+      if (
+        typeof reference !== "string" ||
+        reference.length > 1024 ||
+        !isSafeStoreEvidenceReference(reference)
+      ) {
+        throw new Error("trusted evidence reference is unsupported.");
+      }
+      if (typeof evidence.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(evidence.sha256)) {
+        throw new Error("trusted evidence sha256 must be 64 hexadecimal characters.");
+      }
+      return { reference, sha256: evidence.sha256.toLowerCase() };
+    },
+  );
+  const result = {
+    projectCanonicalId: projectCanonicalId.toLowerCase(),
+    ...(branch === undefined ? {} : { branch: branch.trim() }),
+    trustedEvidence: trustedEvidence.filter(
+      (entry, index) =>
+        trustedEvidence.findIndex(
+          (other) => other.reference === entry.reference && other.sha256 === entry.sha256,
+        ) === index,
+    ),
+  };
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 16 * 1024) {
+    throw new Error("reconciliation objective evidence must be 16384 bytes or fewer.");
+  }
+  return result;
+}
+
+function isSafeStoreEvidenceReference(reference: string): boolean {
+  if (
+    /\p{C}/u.test(reference) ||
+    reference.includes("%") ||
+    /(?:^|\/)\.{1,2}(?:\/|$)/.test(reference)
+  )
+    return false;
+  try {
+    const url = new URL(reference);
+    if (url.search || url.hash || url.username || url.password) return false;
+    if (url.protocol === "codex:")
+      return url.hostname === "thread" && /^\/[A-Za-z0-9_-]{1,200}$/.test(url.pathname);
+    if (url.protocol !== "git:" && url.protocol !== "file:") return false;
+    if (url.protocol === "file:" && url.hostname) return false;
+    if (url.protocol === "git:" && !/^[A-Za-z0-9._-]{1,120}$/.test(url.hostname)) return false;
+    return /^(?:\/[A-Za-z]:)?\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
   /**
@@ -266,7 +360,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
     link: WorkboardExternalExecutionLink,
     options: { requireExpectedRevision?: boolean } = {},
   ): Promise<WorkboardReconciliationApplyResult> {
+    const projectedObservation = {
+      ...observation,
+      ...(observation.objectiveEvidence === undefined
+        ? {}
+        : { objectiveEvidence: projectStoreObjectiveEvidence(observation.objectiveEvidence) }),
+    };
     return await this.enqueueMutation(async () => {
+      observation = projectedObservation;
       const cards = await this.list();
       const explicit = observation.cardId ? await this.get(observation.cardId) : undefined;
       if (observation.cardId && !explicit) {

@@ -42,4 +42,18 @@ describe("redactClaimToken", () => {
     expect(redacted.metadata?.claim?.token).toBe("[redacted]");
     expect(card.metadata?.claim?.token).toBe("secret-token");
   });
+
+  it("strips reconciliation objective evidence from generic card reads", () => {
+    const card = createCard({
+      reconciliationObjectiveEvidence: {
+        projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+        trustedEvidence: [],
+      },
+    });
+
+    expect(redactClaimToken(card).metadata?.reconciliationObjectiveEvidence).toBeUndefined();
+    expect(card.metadata?.reconciliationObjectiveEvidence?.projectCanonicalId).toBe(
+      `git:sha256:${"a".repeat(64)}`,
+    );
+  });
 });
