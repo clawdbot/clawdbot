@@ -296,12 +296,25 @@ export function createChannelIngressDrain<
 
   const releaseClaim = async (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+<<<<<<< HEAD
     releaseOptions?: { lastError?: string; recordAttempt?: boolean },
+=======
+    lastError?: string,
+    releaseOptions?: { recordAttempt?: boolean },
+>>>>>>> d7dc50bd567d (fix(telegram): requeue aborted ingress claims)
   ) => {
     await commitClaimWriteWithRetry({
       claim,
       label: "release",
+<<<<<<< HEAD
       write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
+=======
+      write: () =>
+        queue.release(claim, {
+          ...(lastError === undefined ? {} : { lastError, releasedAt: now() }),
+          ...(releaseOptions?.recordAttempt === false ? { recordAttempt: false } : {}),
+        }),
+>>>>>>> d7dc50bd567d (fix(telegram): requeue aborted ingress claims)
       falseMeansReclaimed: false,
     });
   };
@@ -507,7 +520,10 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
+        await releaseUnadopted(state, {
+          lastError: "turn-abandoned",
+          recordAttempt: false,
+        });
       },
     };
   };
