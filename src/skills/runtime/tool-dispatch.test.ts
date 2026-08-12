@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => {
   function makeTool(name: string) {
     return {
       name,
+      label: name,
       description: `${name} tool`,
       parameters: { type: "object", properties: {} },
       execute: vi.fn(),
