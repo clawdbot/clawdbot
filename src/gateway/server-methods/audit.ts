@@ -15,6 +15,10 @@ import type {
   AuditEventRecord,
   ToolActionAuditEventRecord,
 } from "../../audit/audit-event-types.js";
+import {
+  ExecutionDecisionCursorError,
+  isExecutionDecisionCursor,
+} from "../../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -162,10 +166,18 @@ export const auditHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateAuditRunInspectParams, "audit.run.inspect", respond)) {
       return;
     }
-    const decisionOffset = parsePositiveCursor(params.decisionCursor);
+    const decisionCursor = params.decisionCursor;
     const executionOffset =
-      typeof params.runId === "string" ? parsePositiveCursor(params.executionCursor) : undefined;
-    if (decisionOffset === null || executionOffset === null) {
+      typeof params.runId !== "string" ||
+      (params.executionCursor === decisionCursor &&
+        decisionCursor !== undefined &&
+        isExecutionDecisionCursor(decisionCursor))
+        ? undefined
+        : parsePositiveCursor(params.executionCursor);
+    if (
+      (decisionCursor !== undefined && !isExecutionDecisionCursor(decisionCursor)) ||
+      executionOffset === null
+    ) {
       respond(
         false,
         undefined,
@@ -173,19 +185,27 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(
-      true,
-      inspectExecutionIdentityRun({
-        ...(typeof params.runId === "string"
-          ? {
-              runId: params.runId,
-              ...(executionOffset !== undefined ? { executionOffset } : {}),
-              executionLimit: params.executionLimit ?? 50,
-            }
-          : { executionId: params.executionId! }),
-        ...(decisionOffset !== undefined ? { decisionOffset } : {}),
-        decisionLimit: params.decisionLimit ?? 50,
-      }),
-    );
+    try {
+      respond(
+        true,
+        inspectExecutionIdentityRun({
+          ...(typeof params.runId === "string"
+            ? {
+                runId: params.runId,
+                ...(executionOffset !== undefined ? { executionOffset } : {}),
+                executionLimit: params.executionLimit ?? 50,
+              }
+            : { executionId: params.executionId! }),
+          ...(decisionCursor !== undefined ? { decisionCursor } : {}),
+          decisionLimit: params.decisionLimit ?? 50,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ExecutionDecisionCursorError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      throw error;
+    }
   },
 };

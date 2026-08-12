@@ -6,10 +6,9 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  countOperatorApprovalReceiptsForRun,
   forceDenyOperatorApproval,
   insertOperatorApproval,
-  listOperatorApprovalReceiptsForRun,
+  pageOperatorApprovalReceiptsForRun,
   resolveOperatorApproval,
   summarizeOperatorApprovalReceiptsForRun,
 } from "./operator-approval-store.js";
@@ -151,20 +150,12 @@ describe("operator approval decision receipts", () => {
       .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
       .run("{", "payload-corrupt");
 
-    const receipts = listOperatorApprovalReceiptsForRun({
+    const receipts = pageOperatorApprovalReceiptsForRun({
       context,
-      offset: 0,
       limit: 20,
       nowMs: 3_000,
       databaseOptions: database,
-    });
-    expect(
-      countOperatorApprovalReceiptsForRun({
-        runId: context.runId,
-        nowMs: 3_000,
-        databaseOptions: database,
-      }),
-    ).toBe(7);
+    }).receipts;
     expect(
       summarizeOperatorApprovalReceiptsForRun({
         context,
@@ -237,13 +228,12 @@ describe("operator approval decision receipts", () => {
       }),
     ).toMatchObject({ outcome: "already-resolved", retry: "conflict" });
     expect(
-      listOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRun({
         context,
-        offset: 0,
         limit: 10,
         nowMs: 2_001,
         databaseOptions: database,
-      })[0],
+      }).receipts[0],
     ).toMatchObject({
       decision: { outcome: "denied", reasonCode: "operator_approval_denied_by_reviewer" },
       enforcement: {
@@ -252,6 +242,78 @@ describe("operator approval decision receipts", () => {
       },
       source: { owner: "operator_approvals" },
     });
+  });
+
+  it("keeps high-cardinality summary work bounded and conservative", () => {
+    const database = databaseOptions();
+    for (let index = 0; index < 130; index += 1) {
+      const id = `bounded-${String(index).padStart(3, "0")}`;
+      insertOperatorApproval({ approval: approval(id), databaseOptions: database });
+      resolveOperatorApproval({
+        id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device-secret" },
+        nowMs: 2_000 + index,
+        databaseOptions: database,
+      });
+    }
+
+    expect(
+      summarizeOperatorApprovalReceiptsForRun({
+        context,
+        nowMs: 3_000,
+        databaseOptions: database,
+      }),
+    ).toEqual({
+      count: 129,
+      coverageState: "unknown",
+      missingEvidence: ["operator_approval.summary_bounded"],
+    });
+  });
+
+  it("pages equal-time approvals by row key and bounds oversized presentations", () => {
+    const database = databaseOptions();
+    for (const id of ["page-a", "page-b", "page-c"]) {
+      insertOperatorApproval({ approval: approval(id), databaseOptions: database });
+      resolveOperatorApproval({
+        id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs: 2_000,
+        databaseOptions: database,
+      });
+    }
+    const db = openOpenClawStateDatabase(database).db;
+    db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?").run(
+      JSON.stringify({ kind: "exec", commandText: "x".repeat(70_000) }),
+      "page-b",
+    );
+
+    const first = pageOperatorApprovalReceiptsForRun({
+      context,
+      limit: 1,
+      nowMs: 3_000,
+      databaseOptions: database,
+    });
+    expect(first.receipts[0]?.receiptId).toContain("approval:");
+    expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: expect.any(Number) });
+    expect(
+      pageOperatorApprovalReceiptsForRun({
+        context,
+        after: first.nextCursor,
+        limit: 2,
+        nowMs: 3_000,
+        databaseOptions: database,
+      }).receipts,
+    ).toEqual([
+      expect.objectContaining({
+        decision: { outcome: "unknown", reasonCode: "operator_approval_payload_bounded" },
+        missingEvidence: ["operator_approval.payload_bounded"],
+      }),
+      expect.objectContaining({
+        decision: { outcome: "denied", reasonCode: "operator_approval_denied_by_reviewer" },
+      }),
+    ]);
   });
 
   it("never enforces a later unrelated approval that reuses the retained run id", () => {
@@ -279,13 +341,12 @@ describe("operator approval decision receipts", () => {
     }
 
     expect(
-      listOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRun({
         context,
-        offset: 0,
         limit: 10,
         nowMs: 4_000,
         databaseOptions: database,
-      }).map((receipt) => receipt.enforcement.coverageState),
+      }).receipts.map((receipt) => receipt.enforcement.coverageState),
     ).toEqual(["enforced", "unknown"]);
   });
 
@@ -322,13 +383,12 @@ describe("operator approval decision receipts", () => {
       });
 
       expect(
-        listOperatorApprovalReceiptsForRun({
+        pageOperatorApprovalReceiptsForRun({
           context,
-          offset: 0,
           limit: 10,
           nowMs: 4_000,
           databaseOptions: database,
-        }),
+        }).receipts,
       ).toEqual([
         expect.objectContaining({
           decision: { outcome: "unknown", reasonCode },
@@ -354,13 +414,12 @@ describe("operator approval decision receipts", () => {
       databaseOptions: database,
     });
     expect(
-      listOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRun({
         context,
-        offset: 0,
         limit: 10,
         nowMs: RETENTION_MS + 2,
         databaseOptions: database,
-      }),
+      }).receipts,
     ).toEqual([]);
     expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(
       false,

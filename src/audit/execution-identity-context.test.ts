@@ -940,7 +940,13 @@ describe("execution identity context storage", () => {
     ]);
     expect(
       inspectExecutionIdentityRun(
-        { runId: "run-receipt", decisionOffset: 1 },
+        { runId: "run-receipt", decisionLimit: 1 },
+        { ...database, now: 123 },
+      ).nextDecisionCursor,
+    ).toBeUndefined();
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-receipt", decisionCursor: "a:0:0" },
         { ...database, now: 123 },
       ).decisions,
     ).toEqual([]);
@@ -993,7 +999,7 @@ describe("execution identity context storage", () => {
     ).toEqual(beforeRestart);
     expect(
       inspectExecutionIdentityRun(
-        { runId: "run-denied-receipt", decisionOffset: 1, decisionLimit: 1 },
+        { runId: "run-denied-receipt", decisionCursor: "a:0:0", decisionLimit: 1 },
         { ...database, now: 300 },
       ),
     ).toMatchObject({
@@ -1029,7 +1035,7 @@ describe("execution identity context storage", () => {
         missingEvidence: expect.arrayContaining(["operator_approval.valid"]),
       },
       decisions: [{ decision: { outcome: "not-applicable" } }],
-      nextDecisionCursor: "1",
+      nextDecisionCursor: "a:0:0",
     });
   });
 

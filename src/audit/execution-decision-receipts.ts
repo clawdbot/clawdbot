@@ -5,16 +5,79 @@ import type {
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  listOperatorApprovalReceiptsForRun,
+  pageOperatorApprovalReceiptsForRun,
   summarizeOperatorApprovalReceiptsForRun,
 } from "../gateway/operator-approval-store.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
-  listExecutionDecisionFactsForContext,
+  pageExecutionDecisionFactsForContext,
   summarizeExecutionDecisionFactsForContext,
 } from "./execution-decision-facts.js";
 
 type ExecutionDecisionReadOptions = OpenClawStateDatabaseOptions & { now?: number };
+
+const MAX_AGGREGATE_MISSING_EVIDENCE = 16;
+const MISSING_EVIDENCE_TRUNCATED = "decision.missing_evidence_truncated";
+type DecisionCursor = {
+  stage: "approval" | "generic";
+  after?: { occurredAt: number; rowId: number };
+};
+
+export class ExecutionDecisionCursorError extends Error {
+  constructor(message = "invalid execution decision cursor") {
+    super(message);
+    this.name = "ExecutionDecisionCursorError";
+  }
+}
+
+function parseDecisionCursor(value: string | undefined): DecisionCursor | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  const match = /^([ag]):(0|[1-9]\d*):(0|[1-9]\d*)$/.exec(value);
+  if (!match) {
+    return null;
+  }
+  const occurredAt = Number(match[2]);
+  const rowId = Number(match[3]);
+  if (!Number.isSafeInteger(occurredAt) || !Number.isSafeInteger(rowId)) {
+    return null;
+  }
+  return {
+    stage: match[1] === "a" ? "approval" : "generic",
+    ...(occurredAt === 0 && rowId === 0 ? {} : { after: { occurredAt, rowId } }),
+  };
+}
+
+export function isExecutionDecisionCursor(value: string): boolean {
+  return parseDecisionCursor(value) !== null;
+}
+
+function formatDecisionCursor(
+  stage: "approval" | "generic",
+  cursor?: { occurredAt: number; rowId: number },
+): string {
+  return `${stage === "approval" ? "a" : "g"}:${cursor?.occurredAt ?? 0}:${cursor?.rowId ?? 0}`;
+}
+
+function boundMissingEvidence(values: readonly string[]): {
+  missingEvidence: string[];
+  truncated: boolean;
+} {
+  const unique = [...new Set(values)].toSorted();
+  if (unique.length <= MAX_AGGREGATE_MISSING_EVIDENCE) {
+    return { missingEvidence: unique, truncated: false };
+  }
+  return {
+    missingEvidence: [
+      ...unique
+        .filter((value) => value !== MISSING_EVIDENCE_TRUNCATED)
+        .slice(0, MAX_AGGREGATE_MISSING_EVIDENCE - 1),
+      MISSING_EVIDENCE_TRUNCATED,
+    ].toSorted(),
+    truncated: true,
+  };
+}
 
 function admissionDecision(context: ExecutionIdentityContextV1): DecisionReceiptV1 {
   return {
@@ -56,11 +119,14 @@ function admissionDecision(context: ExecutionIdentityContextV1): DecisionReceipt
 
 export function presentExecutionDecisionReceipts(params: {
   context: ExecutionIdentityContextV1;
-  decisionOffset?: number;
+  decisionCursor?: string;
   decisionLimit?: number;
   options: ExecutionDecisionReadOptions;
 }): AuditRunInspectResult {
-  const offset = params.decisionOffset ?? 0;
+  const cursor = parseDecisionCursor(params.decisionCursor);
+  if (cursor === null) {
+    throw new ExecutionDecisionCursorError();
+  }
   const limit = params.decisionLimit ?? 50;
   const now = params.options.now ?? Date.now();
   const approvalSummary = summarizeOperatorApprovalReceiptsForRun({
@@ -72,69 +138,92 @@ export function presentExecutionDecisionReceipts(params: {
     nowMs: now,
     databaseOptions: params.options,
   });
-  const approvalCount = approvalSummary.count;
   const genericSummary = summarizeExecutionDecisionFactsForContext({
     context: params.context,
     now,
     database: params.options,
   });
-  const genericCount = genericSummary.count;
-  const totalDecisions = 1 + approvalCount + genericCount;
   const decisions: DecisionReceiptV1[] = [];
-  let remainingOffset = offset;
   let remainingLimit = limit;
+  let nextDecisionCursor: string | undefined;
 
-  if (remainingOffset === 0 && remainingLimit > 0) {
+  if (cursor === undefined && remainingLimit > 0) {
     decisions.push(admissionDecision(params.context));
     remainingLimit -= 1;
-  } else {
-    remainingOffset = Math.max(0, remainingOffset - 1);
+    if (remainingLimit === 0 && (approvalSummary.count > 0 || genericSummary.count > 0)) {
+      nextDecisionCursor = formatDecisionCursor("approval");
+    }
   }
-  if (remainingLimit > 0 && remainingOffset < approvalCount) {
-    const page = listOperatorApprovalReceiptsForRun({
-      context: {
-        contextId: params.context.contextId,
-        executionId: params.context.executionId,
-        runId: params.context.runId,
-      },
-      offset: remainingOffset,
-      limit: remainingLimit,
-      nowMs: now,
-      databaseOptions: params.options,
-    });
-    decisions.push(...page);
-    remainingLimit -= page.length;
-    remainingOffset = 0;
-  } else {
-    remainingOffset = Math.max(0, remainingOffset - approvalCount);
+  if (remainingLimit > 0 && cursor?.stage !== "generic") {
+    let page;
+    try {
+      page = pageOperatorApprovalReceiptsForRun({
+        context: {
+          contextId: params.context.contextId,
+          executionId: params.context.executionId,
+          runId: params.context.runId,
+        },
+        after: cursor?.stage === "approval" ? cursor.after : undefined,
+        limit: remainingLimit,
+        nowMs: now,
+        databaseOptions: params.options,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("cursor is no longer retained")) {
+        throw new ExecutionDecisionCursorError(
+          "decision cursor is no longer retained; restart inspection without --cursor",
+        );
+      }
+      throw error;
+    }
+    decisions.push(...page.receipts);
+    remainingLimit -= page.receipts.length;
+    if (page.nextCursor) {
+      nextDecisionCursor = formatDecisionCursor("approval", page.nextCursor);
+    } else if (remainingLimit === 0 && genericSummary.count > 0) {
+      nextDecisionCursor = formatDecisionCursor("generic");
+    }
   }
-  if (remainingLimit > 0 && remainingOffset < genericCount) {
-    decisions.push(
-      ...listExecutionDecisionFactsForContext({
+  if (remainingLimit > 0 && nextDecisionCursor?.startsWith("a:") !== true) {
+    let page;
+    try {
+      page = pageExecutionDecisionFactsForContext({
         context: params.context,
-        offset: remainingOffset,
+        after: cursor?.stage === "generic" ? cursor.after : undefined,
         limit: remainingLimit,
         now,
         database: params.options,
-      }),
-    );
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("cursor is no longer retained")) {
+        throw new ExecutionDecisionCursorError(
+          "decision cursor is no longer retained; restart inspection without --cursor",
+        );
+      }
+      throw error;
+    }
+    decisions.push(...page.receipts);
+    if (page.nextCursor) {
+      nextDecisionCursor = formatDecisionCursor("generic", page.nextCursor);
+    } else {
+      nextDecisionCursor = undefined;
+    }
   }
-  const nextOffset = offset + decisions.length;
   const ownerCoverage = new Set([approvalSummary.coverageState, genericSummary.coverageState]);
-  const coverageState = ownerCoverage.has("unsupported")
-    ? "unsupported"
-    : ownerCoverage.has("unknown")
-      ? "unknown"
-      : ownerCoverage.has("enforced")
-        ? "enforced"
-        : params.context.coverageState;
-  const missingEvidence = [
-    ...new Set([
-      ...params.context.missingEvidence,
-      ...approvalSummary.missingEvidence,
-      ...genericSummary.missingEvidence,
-    ]),
-  ].toSorted();
+  const boundedEvidence = boundMissingEvidence([
+    ...params.context.missingEvidence,
+    ...approvalSummary.missingEvidence,
+    ...genericSummary.missingEvidence,
+  ]);
+  const coverageState = boundedEvidence.truncated
+    ? "unknown"
+    : ownerCoverage.has("unsupported")
+      ? "unsupported"
+      : ownerCoverage.has("unknown")
+        ? "unknown"
+        : ownerCoverage.has("enforced")
+          ? "enforced"
+          : params.context.coverageState;
   return {
     schemaVersion: 1,
     run: {
@@ -144,7 +233,7 @@ export function presentExecutionDecisionReceipts(params: {
     },
     identity: { state: "present", context: params.context },
     decisions,
-    coverage: { state: coverageState, missingEvidence },
-    ...(nextOffset < totalDecisions ? { nextDecisionCursor: String(nextOffset) } : {}),
+    coverage: { state: coverageState, missingEvidence: boundedEvidence.missingEvidence },
+    ...(nextDecisionCursor ? { nextDecisionCursor } : {}),
   };
 }

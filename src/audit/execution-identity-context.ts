@@ -6,7 +6,7 @@ import type {
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { countOperatorApprovalReceiptsForRun } from "../gateway/operator-approval-store.js";
+import { hasOperatorApprovalReceiptsForRun } from "../gateway/operator-approval-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,7 +22,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
-import { countExecutionDecisionFactsForRun } from "./execution-decision-facts.js";
+import { hasExecutionDecisionFactsForRun } from "./execution-decision-facts.js";
 import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
 import {
   parseExecutionIdentityAdmissionEnvelope,
@@ -434,7 +434,7 @@ function unavailableIdentityContext(
 }
 
 function inspectExactExecution(
-  params: { executionId: string; decisionOffset?: number; decisionLimit?: number },
+  params: { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions,
 ): AuditRunInspectResult {
   const executionId = ensureBoundedExecutionIdentityRef(params.executionId, "execution id");
@@ -443,7 +443,7 @@ function inspectExactExecution(
   if (contextResult.status === "found") {
     return presentExecutionDecisionReceipts({
       context: contextResult.context,
-      decisionOffset: params.decisionOffset,
+      decisionCursor: params.decisionCursor,
       decisionLimit: params.decisionLimit,
       options,
     });
@@ -525,7 +525,7 @@ function inspectRunSelector(
     runId: string;
     executionOffset?: number;
     executionLimit?: number;
-    decisionOffset?: number;
+    decisionCursor?: string;
     decisionLimit?: number;
   },
   options: ExecutionIdentityReadOptions,
@@ -538,13 +538,9 @@ function inspectRunSelector(
         ? readRowsByRunId(db, runId, now, 0, 2)
         : [];
       if (firstMatches.length === 1) {
+        let context: ExecutionIdentityContextV1;
         try {
-          return presentExecutionDecisionReceipts({
-            context: parseExecutionIdentityRow(firstMatches[0]!),
-            decisionOffset: params.decisionOffset,
-            decisionLimit: params.decisionLimit,
-            options,
-          });
+          context = parseExecutionIdentityRow(firstMatches[0]!);
         } catch {
           return unavailableResult({
             selector: { runId },
@@ -560,6 +556,12 @@ function inspectRunSelector(
             ],
           });
         }
+        return presentExecutionDecisionReceipts({
+          context,
+          decisionCursor: params.decisionCursor,
+          decisionLimit: params.decisionLimit,
+          options,
+        });
       }
       if (firstMatches.length > 1) {
         const offset = params.executionOffset ?? 0;
@@ -591,8 +593,8 @@ function inspectRunSelector(
         };
       }
       if (
-        countOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) > 0 ||
-        countExecutionDecisionFactsForRun({ runId, now, database: options }) > 0
+        hasOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) ||
+        hasExecutionDecisionFactsForRun({ runId, now, database: options })
       ) {
         return unavailableResult({
           selector: { runId },
@@ -671,10 +673,10 @@ export function inspectExecutionIdentityRun(
         runId: string;
         executionOffset?: number;
         executionLimit?: number;
-        decisionOffset?: number;
+        decisionCursor?: string;
         decisionLimit?: number;
       }
-    | { executionId: string; decisionOffset?: number; decisionLimit?: number },
+    | { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions = {},
 ): AuditRunInspectResult {
   return "executionId" in params

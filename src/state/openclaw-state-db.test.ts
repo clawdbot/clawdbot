@@ -2970,6 +2970,37 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     database?.walMaintenance.close();
   });
 
+  it("accepts a missing same-version approval index read-only and repairs it on writable open", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const olderV6 = new DatabaseSync(databasePath);
+    try {
+      olderV6.exec("DROP INDEX idx_operator_approvals_source_run_resolved;");
+      expect(olderV6.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    } finally {
+      olderV6.close();
+    }
+
+    const beforeRepair = await openExistingOpenClawStateDatabaseReadOnly(options);
+    expect(beforeRepair?.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    beforeRepair?.walMaintenance.close();
+
+    const writable = openOpenClawStateDatabase(options);
+    expect(
+      writable.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get("idx_operator_approvals_source_run_resolved"),
+    ).toEqual({ name: "idx_operator_approvals_source_run_resolved" });
+    expect(writable.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    closeOpenClawStateDatabaseForTest();
+
+    const afterRepair = await openExistingOpenClawStateDatabaseReadOnly(options);
+    expect(afterRepair?.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    afterRepair?.walMaintenance.close();
+  });
+
   it("reports success when retrying transient read-only snapshot cleanup", async () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeCurrentStateDatabase(stateDir);

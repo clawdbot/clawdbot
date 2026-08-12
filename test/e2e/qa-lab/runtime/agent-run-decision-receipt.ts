@@ -269,7 +269,13 @@ async function runProof(options: ProducerOptions): Promise<string> {
       });
     const approvalId = await waitForPendingApproval(gateway, () => agentFailure);
     await gateway.call("exec.approval.resolve", { id: approvalId, decision: "deny" });
-    await agentRun;
+    const agentOutput = await agentRun;
+    if (agentFailure) {
+      throw new Error(`trusted agent run failed after approval resolution: ${agentFailure}`);
+    }
+    if (typeof agentOutput !== "string" || !agentOutput.includes("DECISION-RECEIPT-DONE")) {
+      throw new Error("trusted agent run omitted its post-approval completion marker");
+    }
     const runId = findApprovalRunId(gateway, approvalId);
     let conflictingRetryRejected = false;
     try {
@@ -328,6 +334,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
             remediationCode: receipt.remediation[0]?.code,
           },
           firstAnswerPreserved: true,
+          agentCompletionObserved: true,
           genericDuplicateAbsent: true,
           byteEquivalentAfterRestart: true,
           redaction: { command: true, toolCall: true },

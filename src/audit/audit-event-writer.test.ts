@@ -8,7 +8,7 @@ import {
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import { listExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
+import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -179,13 +179,12 @@ describe("audit event worker", () => {
 
     expect(errors).toEqual([]);
     expect(
-      listExecutionDecisionFactsForContext({
+      pageExecutionDecisionFactsForContext({
         context: receipt,
-        offset: 0,
         limit: 10,
         now: receipt.occurredAt,
         database,
-      }),
+      }).receipts,
     ).toEqual([receipt]);
   });
 
