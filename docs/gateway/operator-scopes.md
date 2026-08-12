@@ -88,7 +88,8 @@ request reaches its handler. Params-aware methods derive that scope before
 dispatch so authorization failures have one canonical structured response:
 
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
-  `/new` or `/reset` session lifecycle commands.
+  `/new` or `/reset` session lifecycle commands, or whenever the request
+  supplies `restartRecoveryOwner` to transfer restart recovery ownership.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
   `operator.admin` when relaying `browser.proxy`, `browser.proxy.upload.v1`,
   `fs.listDir`, or `terminal.upload` to a node.
