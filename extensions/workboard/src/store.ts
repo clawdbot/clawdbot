@@ -118,6 +118,19 @@ function appendExternalLink(card: WorkboardCard, link: WorkboardExternalExecutio
   ];
 }
 
+function advanceExternalLink(card: WorkboardCard, link: WorkboardExternalExecutionLink) {
+  const current = externalLinkFor(card, link);
+  if (!current) return appendExternalLink(card, link);
+  return (card.metadata?.links ?? []).map((entry) =>
+    entry === current
+      ? {
+          ...entry,
+          sourceUpdatedAt: link.sourceUpdatedAt,
+        }
+      : entry,
+  );
+}
+
 function objectiveKeyFor(card: WorkboardCard): string | undefined {
   return card.metadata?.automation?.objectiveKey;
 }
@@ -390,7 +403,17 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (explicit && duplicate.id !== explicit.id) {
           throw new Error("idempotency association does not match card.");
         }
-        return reconciliationResult(duplicate, "duplicate", reconciliationLinkFor(duplicate, link));
+        const persisted = reconciliationLinkFor(duplicate, link);
+        if (link.sourceUpdatedAt < persisted.sourceUpdatedAt) {
+          return reconciliationResult(duplicate, "stale", persisted);
+        }
+        if (link.sourceUpdatedAt === persisted.sourceUpdatedAt) {
+          return reconciliationResult(duplicate, "duplicate", persisted);
+        }
+        const advanced = await this.updateCard(duplicate.id, {
+          metadata: { ...duplicate.metadata, links: advanceExternalLink(duplicate, link) },
+        });
+        return reconciliationResult(advanced, "duplicate", reconciliationLinkFor(advanced, link));
       }
 
       const existing = explicit
@@ -418,19 +441,25 @@ export class WorkboardStore extends WorkboardNotificationStore {
           return reconciliationResult(existing, "conflict", link);
         }
         if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
-          if (!observation.objectiveEvidence)
-            return reconciliationResult(existing, "protected", link);
           const protectedCard = await this.updateCard(
             existing.id,
             {
               metadata: {
                 ...existing.metadata,
-                reconciliationObjectiveEvidence: objectiveEvidence,
+                links: appendExternalLink(existing, link),
+                ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+                ...(objectiveEvidence
+                  ? { reconciliationObjectiveEvidence: objectiveEvidence }
+                  : {}),
               },
             },
-            { allowReconciliationObjectiveEvidence: true },
+            { allowReconciliationTriage: true, allowReconciliationObjectiveEvidence: true },
           );
-          return reconciliationResult(protectedCard, "protected", link);
+          return reconciliationResult(
+            protectedCard,
+            "protected",
+            reconciliationLinkFor(protectedCard, link),
+          );
         }
         const latestAssociationSourceUpdatedAt = latestExternalSourceUpdatedAt(existing);
         if (

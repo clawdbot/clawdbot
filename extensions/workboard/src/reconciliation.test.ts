@@ -218,7 +218,7 @@ describe("WorkboardReconciler", () => {
       idempotencyKey: "outcomes-old",
       observationId: "outcomes-stale",
       sourceUpdatedAt: 99,
-      expectedRevision: created.card.updatedAt,
+      expectedRevision: duplicate.card.updatedAt,
     });
     const protectedCard = await store.update(created.card.id, { status: "blocked" });
     const protectedResult = await provider.apply({
@@ -652,7 +652,7 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       objectiveKey: "deploy-api",
       idempotencyKey: "a",
-      sourceUpdatedAt: 100,
+      sourceUpdatedAt: 999,
       card: { title: "Deploy API" },
     });
     await reconciler.apply({
@@ -1572,6 +1572,109 @@ describe("WorkboardReconciler", () => {
     expect(repeated.card.title).toBe("External run");
   });
 
+  it("atomically advances one stable association timestamp and durably acknowledges stale input", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-association-time-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const firstStores = createWorkboardSqliteStores({ dbPath });
+      const first = new WorkboardReconciler(new WorkboardStore(firstStores.cards));
+      const observation = {
+        sourceUrl: "codex://thread/stable-time",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "stable-time",
+        card: { title: "Stable association" },
+      };
+      const created = await first.apply({ ...observation, sourceUpdatedAt: 100 });
+      const advanced = await first.apply({ ...observation, sourceUpdatedAt: 200 });
+      const stale = await first.apply({ ...observation, sourceUpdatedAt: 150 });
+      expect(advanced).toMatchObject({ applied: true, link: { sourceUpdatedAt: 200 } });
+      expect(stale).toMatchObject({ applied: true, link: { sourceUpdatedAt: 200 } });
+      expect(
+        advanced.card.metadata?.links?.filter(
+          (link) => link.reconciliationAssociationKey === created.link.reconciliationAssociationKey,
+        ),
+      ).toHaveLength(1);
+      firstStores.close();
+      const reopened = createWorkboardSqliteStores({ dbPath });
+      try {
+        const card = (await reopened.cards.lookup(created.card.id))?.card;
+        expect(
+          card?.metadata?.links?.filter(
+            (link) =>
+              link.reconciliationAssociationKey === created.link.reconciliationAssociationKey,
+          ),
+        ).toEqual([expect.objectContaining({ sourceUpdatedAt: 200 })]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  it("persists a new protected association while preserving manual lifecycle and title", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-protected-association-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const reconciler = new WorkboardReconciler(new WorkboardStore(stores.cards));
+      const created = await reconciler.apply({
+        sourceUrl: "codex://thread/protected-a",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "protected-a",
+        sourceUpdatedAt: 100,
+        card: { title: "Manual title", status: "running" },
+      });
+      const blocked = await new WorkboardStore(stores.cards).update(created.card.id, {
+        title: "Operator title",
+        status: "blocked",
+      });
+      const observation = {
+        cardId: created.card.id,
+        sourceUrl: "codex://thread/protected-b",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "protected-b",
+        sourceUpdatedAt: 200,
+        expectedRevision: blocked.updatedAt,
+        card: { title: "Scanner title", status: "running" as const },
+      };
+      const associated = await reconciler.apply(observation);
+      expect(associated).toMatchObject({
+        applied: false,
+        card: { title: "Operator title", status: "blocked" },
+        link: { sourceUrl: "codex://thread/protected-b", sourceUpdatedAt: 200 },
+      });
+      const replay = await reconciler.apply({ ...observation, expectedRevision: 0 });
+      expect(replay.link.reconciliationAssociationKey).toBe(
+        associated.link.reconciliationAssociationKey,
+      );
+      stores.close();
+      const reopened = createWorkboardSqliteStores({ dbPath });
+      try {
+        const card = (await reopened.cards.lookup(created.card.id))?.card;
+        expect(card).toMatchObject({ title: "Operator title", status: "blocked" });
+        expect(card?.metadata?.links?.filter((link) => link.url === observation.sourceUrl)).toEqual(
+          [
+            expect.objectContaining({
+              reconciliationAssociationKey: associated.link.reconciliationAssociationKey,
+            }),
+          ],
+        );
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
   it("replays an older persisted association after a newer link without creating another card", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const first = await reconciler.apply({
@@ -1587,7 +1690,7 @@ describe("WorkboardReconciler", () => {
       sourceUrl: "https://example.test/runs/17/b",
       tenant: "acme",
       idempotencyKey: "run-17-b",
-      sourceUpdatedAt: 200,
+      sourceUpdatedAt: 999,
       cardId: first.card.id,
       card: { title: "Newer title" },
     });
@@ -1605,7 +1708,7 @@ describe("WorkboardReconciler", () => {
     expect(replayed.link).toEqual({
       sourceUrl: "https://example.test/runs/17/a",
       tenant: "acme",
-      sourceUpdatedAt: 100,
+      sourceUpdatedAt: 999,
       reconciliationAssociationKey: first.link.reconciliationAssociationKey,
       title: "First association",
     });
@@ -1671,7 +1774,7 @@ describe("WorkboardReconciler", () => {
     expect(replayed.link).toEqual({
       sourceUrl: "https://example.test/b",
       tenant: "acme",
-      sourceUpdatedAt: 200,
+      sourceUpdatedAt: 999,
       reconciliationAssociationKey: persisted.link.reconciliationAssociationKey,
       title: "Persisted B",
     });

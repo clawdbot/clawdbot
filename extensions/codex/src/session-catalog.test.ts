@@ -1581,7 +1581,6 @@ describe("Codex supervision catalog", () => {
           threadId: "current-thread",
           sessionId: "session-1",
           name: "Current session",
-          fallbackName: "ignored fallback",
           cwd: "/workspace",
           status: "idle",
           activeFlags: ["running"],
@@ -1872,6 +1871,128 @@ describe("Codex supervision catalog", () => {
       }),
     ).rejects.toThrow("Codex reconciliation catalog is unavailable");
     expect(listHistoryPage).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps reconciliation cursors valid across fifteen minutes, a failed page, and provider restart", async () => {
+    let failPage = true;
+    const listHistoryPage = vi.fn(async ({ cursor }: { archived: boolean; cursor?: string }) => {
+      if (!cursor) {
+        return {
+          sessions: [{ threadId: "current-1", status: "idle", archived: false }],
+          nextCursor: "page-2",
+        };
+      }
+      if (failPage) {
+        failPage = false;
+        throw new Error("temporary upstream failure");
+      }
+      return {
+        sessions: [{ threadId: "current-2", status: "idle", archived: false }],
+      };
+    });
+    const register = () => {
+      const { runtime } = createRuntime();
+      let provider: CodexReconciliationProvider | undefined;
+      (
+        runtime as PluginRuntime & {
+          codexReconciliation: { register: (candidate: CodexReconciliationProvider) => void };
+        }
+      ).codexReconciliation = { register: (candidate) => void (provider = candidate) };
+      const { api } = createGatewayApi(runtime, {
+        gateway: { auth: { mode: "token", token: "restart-stable-test-secret" } },
+      });
+      registerCodexSessionReconciliationRuntime!({
+        api,
+        control: createControl({ listHistoryPage }),
+      });
+      return () => provider!;
+    };
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    const firstProvider = register();
+    const first = await firstProvider().list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      limit: 1,
+    });
+    const cursor = first.nextCursor!;
+    now.mockReturnValue(15 * 60_000 + 1_000);
+    const restartedProvider = register();
+    await expect(
+      restartedProvider().list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        cursor,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
+    await expect(
+      restartedProvider().list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        cursor,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({ sessions: [{ threadId: "current-2" }], complete: true });
+    now.mockRestore();
+  });
+
+  it("rejects tampered, host-mismatched, and A-B-A reconciliation cursors", async () => {
+    const listHistoryPage = vi.fn(async ({ cursor }: { archived: boolean; cursor?: string }) => ({
+      sessions: [{ threadId: cursor ?? "first", status: "idle", archived: false }],
+      nextCursor: cursor === "cursor-a" ? "cursor-b" : "cursor-a",
+    }));
+    const { runtime } = createRuntime();
+    let provider: CodexReconciliationProvider | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (candidate: CodexReconciliationProvider) => void };
+      }
+    ).codexReconciliation = { register: (candidate) => void (provider = candidate) };
+    const { api } = createGatewayApi(runtime, {
+      gateway: { auth: { mode: "token", token: "cursor-integrity-test-secret" } },
+    });
+    registerCodexSessionReconciliationRuntime!({
+      api,
+      control: createControl({ listHistoryPage }),
+    });
+    const first = await provider!.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      limit: 1,
+    });
+    const cursorA = first.nextCursor!;
+    await expect(
+      provider!.list({
+        hostId: "node:other",
+        archived: false,
+        cursor: cursorA,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
+    const tampered = `${cursorA.slice(0, -1)}${cursorA.endsWith("A") ? "B" : "A"}`;
+    await expect(
+      provider!.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        cursor: tampered,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
+    const second = await provider!.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      cursor: cursorA,
+      limit: 1,
+    });
+    await expect(
+      provider!.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        cursor: second.nextCursor,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
   });
 
   it("forwards in-flight reconciliation history cancellation to node invocation", async () => {

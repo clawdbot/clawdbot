@@ -125,7 +125,6 @@ export type CodexReconciliationSession = {
   threadId: string;
   sessionId?: string;
   name?: string;
-  fallbackName?: string;
   cwd?: string;
   status: string;
   activeFlags?: string[];

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { resolveDefaultAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -134,8 +134,8 @@ const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 const MAX_RECONCILIATION_TRANSCRIPT_ITEMS = 1000;
 const MAX_RECONCILIATION_TIME_MS = 8_640_000_000_000_000;
-const MAX_RECONCILIATION_SCAN_STATES = 128;
-const RECONCILIATION_SCAN_STATE_TTL_MS = 5 * 60_000;
+const MAX_RECONCILIATION_CURSOR_PAGES = MAX_ACTION_CATALOG_PAGES;
+const MAX_RECONCILIATION_CURSOR_LENGTH = 16 * 1024;
 const MAX_RECONCILIATION_TRANSCRIPT_CAPABILITIES = 128;
 const RECONCILIATION_TRANSCRIPT_CAPABILITY_TTL_MS = 60_000;
 
@@ -955,7 +955,7 @@ function readReconciliationListRequest(value: unknown) {
   if (typeof value.archived !== "boolean") {
     throw new CatalogParamsError("Codex reconciliation archived partition must be explicit");
   }
-  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const cursor = readOptionalString(value, "cursor", MAX_RECONCILIATION_CURSOR_LENGTH);
   return {
     hostId: readReconciliationHostId(value.hostId),
     archived: value.archived,
@@ -1030,6 +1030,83 @@ function boundedReconciliationTime(value: unknown): number | undefined {
     : undefined;
 }
 
+type ReconciliationCursorState = {
+  v: 1;
+  h: string;
+  a: boolean;
+  c: string;
+  p: number;
+  s: string[];
+};
+
+function reconciliationCursorKey(config: OpenClawConfig): Buffer {
+  const auth = config.gateway?.auth;
+  const configuredSecret =
+    typeof auth?.token === "string" && auth.token.trim()
+      ? auth.token.trim()
+      : typeof auth?.password === "string" && auth.password.trim()
+        ? auth.password.trim()
+        : "private-in-process-provider";
+  return createHash("sha256")
+    .update("openclaw:codex-reconciliation-cursor:v1\0")
+    .update(configuredSecret)
+    .digest();
+}
+
+function reconciliationCursorHash(cursor: string): string {
+  return createHash("sha256").update(cursor).digest("base64url");
+}
+
+function encodeReconciliationCursor(state: ReconciliationCursorState, key: Buffer): string {
+  const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
+  const signature = createHmac("sha256", key).update(payload).digest("base64url");
+  const cursor = `${payload}.${signature}`;
+  if (cursor.length > MAX_RECONCILIATION_CURSOR_LENGTH)
+    throw new Error("reconciliation cursor is too large");
+  return cursor;
+}
+
+function decodeReconciliationCursor(value: string, key: Buffer): ReconciliationCursorState {
+  const parts = value.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1])
+    throw new Error("reconciliation cursor is invalid");
+  const expected = createHmac("sha256", key).update(parts[0]).digest();
+  const actual = Buffer.from(parts[1], "base64url");
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new Error("reconciliation cursor is invalid");
+  }
+  let state: unknown;
+  try {
+    const bytes = Buffer.from(parts[0], "base64url");
+    if (bytes.toString("base64url") !== parts[0]) throw new Error();
+    state = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("reconciliation cursor is invalid");
+  }
+  if (
+    !isRecord(state) ||
+    Object.keys(state).some((field) => !["v", "h", "a", "c", "p", "s"].includes(field)) ||
+    state.v !== 1 ||
+    typeof state.h !== "string" ||
+    readReconciliationHostId(state.h) !== state.h ||
+    typeof state.a !== "boolean" ||
+    typeof state.c !== "string" ||
+    !state.c ||
+    state.c.length > MAX_CURSOR_LENGTH ||
+    !Number.isInteger(state.p) ||
+    (state.p as number) < 1 ||
+    (state.p as number) >= MAX_RECONCILIATION_CURSOR_PAGES ||
+    !Array.isArray(state.s) ||
+    state.s.length !== state.p ||
+    state.s.some((hash) => typeof hash !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(hash)) ||
+    new Set(state.s).size !== state.s.length ||
+    state.s.at(-1) !== reconciliationCursorHash(state.c)
+  ) {
+    throw new Error("reconciliation cursor is invalid");
+  }
+  return state as ReconciliationCursorState;
+}
+
 function projectCodexReconciliationSessions(
   sessions: readonly unknown[],
   archived: boolean,
@@ -1058,7 +1135,6 @@ function projectCodexReconciliationSessions(
     const updatedAt = boundedReconciliationTime(session.updatedAt);
     const recencyAt = boundedReconciliationTime(session.recencyAt);
     const name = boundedReconciliationString(session.name, 500);
-    const fallbackName = boundedReconciliationString(session.fallbackName, 500);
     const cwd = boundedReconciliationString(session.cwd, 4096);
     const sessionId = boundedReconciliationString(session.sessionId, MAX_SESSION_ID_LENGTH);
     const source = boundedReconciliationString(session.source, 500);
@@ -1073,7 +1149,6 @@ function projectCodexReconciliationSessions(
         archived,
         ...(sessionId ? { sessionId } : {}),
         ...(name ? { name } : {}),
-        ...(fallbackName ? { fallbackName } : {}),
         ...(cwd ? { cwd } : {}),
         ...(activeFlags?.length ? { activeFlags } : {}),
         ...(createdAt !== undefined ? { createdAt } : {}),
@@ -1160,20 +1235,10 @@ function registerCodexSessionReconciliation(params: {
   api: OpenClawPluginApi;
   control: CodexSessionCatalogControl;
 }): void {
+  const cursorKey = reconciliationCursorKey(params.api.config);
   const transcriptCapabilities = new Map<
     string,
     { hostId: string; threadId: string; expiresAt: number }
-  >();
-  const scanStates = new Map<
-    string,
-    {
-      hostId: string;
-      archived: boolean;
-      cursor: string;
-      seen: Set<string>;
-      pages: number;
-      expiresAt: number;
-    }
   >();
   const pruneTranscriptCapabilities = (now: number) => {
     for (const [token, capability] of transcriptCapabilities) {
@@ -1183,16 +1248,6 @@ function registerCodexSessionReconciliation(params: {
       const token = transcriptCapabilities.keys().next().value;
       if (!token) break;
       transcriptCapabilities.delete(token);
-    }
-  };
-  const pruneScanStates = (now: number) => {
-    for (const [token, state] of scanStates) {
-      if (state.expiresAt <= now) scanStates.delete(token);
-    }
-    while (scanStates.size >= MAX_RECONCILIATION_SCAN_STATES) {
-      const token = scanStates.keys().next().value;
-      if (!token) break;
-      scanStates.delete(token);
     }
   };
   params.api.runtime.codexReconciliation.register({
@@ -1206,21 +1261,18 @@ function registerCodexSessionReconciliation(params: {
         });
         assertReconciliationNotAborted(input.signal);
         const now = Date.now();
-        pruneScanStates(now);
-        const prior = request.cursor ? scanStates.get(request.cursor) : undefined;
-        if (request.cursor && (!prior || prior.expiresAt <= now)) {
-          throw new Error("reconciliation cursor is unavailable");
-        }
-        if (prior && (prior.hostId !== request.hostId || prior.archived !== request.archived)) {
+        const prior = request.cursor
+          ? decodeReconciliationCursor(request.cursor, cursorKey)
+          : undefined;
+        if (prior && (prior.h !== request.hostId || prior.a !== request.archived)) {
           throw new Error("reconciliation cursor is invalid");
         }
-        if (request.cursor) scanStates.delete(request.cursor);
         const page =
           request.hostId === CODEX_LOCAL_SESSION_HOST_ID
             ? await enumerateLocalCodexSessionHistory({
                 control: params.control,
                 archived: request.archived,
-                ...(prior ? { cursor: prior.cursor } : {}),
+                ...(prior ? { cursor: prior.c } : {}),
                 limit: request.limit,
                 pageLimit: 1,
                 signal: input.signal,
@@ -1230,7 +1282,7 @@ function registerCodexSessionReconciliation(params: {
                 nodeId: request.hostId.slice("node:".length),
                 clientScopes: ["operator.admin"],
                 archived: request.archived,
-                ...(prior ? { cursor: prior.cursor } : {}),
+                ...(prior ? { cursor: prior.c } : {}),
                 limit: request.limit,
                 pageLimit: 1,
                 signal: input.signal,
@@ -1251,28 +1303,30 @@ function registerCodexSessionReconciliation(params: {
           }
         }
         const nextUpstreamCursor = page.nextCursor;
-        if (nextUpstreamCursor && prior?.seen.has(nextUpstreamCursor)) {
+        const nextUpstreamCursorHash = nextUpstreamCursor
+          ? reconciliationCursorHash(nextUpstreamCursor)
+          : undefined;
+        if (nextUpstreamCursorHash && prior?.s.includes(nextUpstreamCursorHash)) {
           throw new Error("history cursor loop");
         }
-        const pages = (prior?.pages ?? 0) + 1;
-        if (nextUpstreamCursor && pages >= MAX_ACTION_CATALOG_PAGES) {
+        const pages = (prior?.p ?? 0) + 1;
+        if (nextUpstreamCursor && pages >= MAX_RECONCILIATION_CURSOR_PAGES) {
           throw new Error("history page limit exceeded");
         }
-        let nextCursor: string | undefined;
-        if (nextUpstreamCursor) {
-          pruneScanStates(now);
-          nextCursor = randomUUID();
-          const seen = new Set(prior?.seen);
-          seen.add(nextUpstreamCursor);
-          scanStates.set(nextCursor, {
-            hostId: request.hostId,
-            archived: request.archived,
-            cursor: nextUpstreamCursor,
-            seen,
-            pages,
-            expiresAt: now + RECONCILIATION_SCAN_STATE_TTL_MS,
-          });
-        }
+        const nextCursor =
+          nextUpstreamCursor && nextUpstreamCursorHash
+            ? encodeReconciliationCursor(
+                {
+                  v: 1,
+                  h: request.hostId,
+                  a: request.archived,
+                  c: nextUpstreamCursor,
+                  p: pages,
+                  s: [...(prior?.s ?? []), nextUpstreamCursorHash],
+                },
+                cursorKey,
+              )
+            : undefined;
         return {
           hostId: request.hostId,
           sessions,
