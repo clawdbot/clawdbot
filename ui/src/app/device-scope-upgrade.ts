@@ -23,7 +23,8 @@ export function readScopeUpgradeAvailability(
     return { phase: "hidden" };
   }
   return isGatewayMethodAdvertised(snapshot, "device.scopes.requestUpgrade") === true &&
-    isGatewayMethodAdvertised(snapshot, "device.scopes.waitUpgrade") === true
+    isGatewayMethodAdvertised(snapshot, "device.scopes.waitUpgrade") === true &&
+    snapshot.client?.scopeUpgradeReady === true
     ? { phase: "available" }
     : { phase: "guidance" };
 }

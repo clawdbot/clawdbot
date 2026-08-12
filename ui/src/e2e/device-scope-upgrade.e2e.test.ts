@@ -194,6 +194,24 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     },
   );
 
+  it("shows manual repair guidance without a signed browser device", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    const gateway = await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
+
+    expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+  });
+
   it("never shows the upgrade banner or files a request for admin connections", async () => {
     const context = await createContext();
     const page = await context.newPage();

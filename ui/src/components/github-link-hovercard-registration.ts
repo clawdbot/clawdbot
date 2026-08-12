@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 import type { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
@@ -11,8 +12,6 @@ const HOVERCARD_TAG = "openclaw-github-link-hovercard-provider";
 type HovercardProviderElement = HTMLElement & {
   client: GatewayBrowserClient | null;
 };
-
-let runtimePromise: Promise<typeof import("./github-link-hovercard.runtime.ts")> | null = null;
 
 function providerForAnchor(anchor: HTMLAnchorElement): GitHubLinkHovercardProvider | null {
   return anchor.closest<GitHubLinkHovercardProvider>(HOVERCARD_TAG);
@@ -39,14 +38,13 @@ async function activateHovercard(event: Event, trigger: "focus" | "pointer"): Pr
       provider.client,
     ]),
   );
-  runtimePromise ??= import("./github-link-hovercard.runtime.ts");
-  const runtime = await runtimePromise;
-  if (!customElements.get(HOVERCARD_TAG)) {
+  await ensureCustomElementDefined(HOVERCARD_TAG, async () => {
+    const runtime = await import("./github-link-hovercard.runtime.ts");
     customElements.define(HOVERCARD_TAG, runtime.GitHubLinkHovercardProvider);
     for (const [provider, client] of pendingClients) {
       provider.client = client;
     }
-  }
+  });
   removeBootstrapListeners();
   const provider = providerForAnchor(anchor);
   const stillActive =

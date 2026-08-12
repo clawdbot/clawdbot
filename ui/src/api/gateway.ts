@@ -421,6 +421,11 @@ export class GatewayBrowserClient {
   get recoveryScopeReady() {
     return this.recoveryScopeResolved;
   }
+
+  get scopeUpgradeReady() {
+    return this.connected && this.scopeUpgradeBinding !== null;
+  }
+
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
     return {
       secureContext: Boolean(plan.deviceIdentity),
