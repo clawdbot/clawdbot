@@ -1,6 +1,7 @@
 // Slack tests cover send.blocks plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -9,6 +10,9 @@ import {
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 

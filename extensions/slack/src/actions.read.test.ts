@@ -1,7 +1,12 @@
 // Slack tests cover actions.read plugin behavior.
 import type { WebClient } from "@slack/web-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 const createSlackLookupClientMock = vi.hoisted(() =>
   vi.fn(() => ({ conversations: { info: vi.fn(), replies: vi.fn(), history: vi.fn() } })),

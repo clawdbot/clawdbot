@@ -5,8 +5,9 @@ import {
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
@@ -18,6 +19,9 @@ const cfg = {
     },
   },
 } as OpenClawConfig;
+const workspaceInstallation = registerSlackInstallationState("default", "workspace");
+
+afterAll(() => workspaceInstallation.release());
 
 type SlackMessageAdapter = NonNullable<typeof slackPlugin.message>;
 type SlackMessageSender = NonNullable<SlackMessageAdapter["send"]>;

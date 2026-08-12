@@ -47,7 +47,6 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
 const threadFailureNotices = resolveGlobalSingleton(
   SLACK_THREAD_FAILURE_NOTICES_KEY,
   () => new Map<string, string>(),
-  (notices) => notices.clear(),
 );
 
 function makeKey(accountId: string, channelId: string, threadTs: string, teamId?: string): string {

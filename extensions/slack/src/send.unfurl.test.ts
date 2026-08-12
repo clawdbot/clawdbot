@@ -1,8 +1,19 @@
 // Slack tests cover send.unfurl plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { sendMessageSlack } from "./send.js";
+
+const workspaceInstallations = ["default", "work"].map((accountId) =>
+  registerSlackInstallationState(accountId, "workspace"),
+);
+
+afterAll(() => {
+  for (const installation of workspaceInstallations) {
+    installation.release();
+  }
+});
 
 type SlackUnfurlTestClient = WebClient & {
   chat: { postMessage: ReturnType<typeof vi.fn> };
