@@ -57,7 +57,7 @@ describe("stripModelSpecialTokens", () => {
   // classifier must read the whole code point, not a lone surrogate half, or
   // adjacent astral letters get merged instead of separated.
   it("inserts a separator between adjacent supplementary-plane letters", () => {
-    // 𐐀 (U+10400, Deseret) is a surrogate pair on either side of the token.
+    // U+10400 (Deseret) is a surrogate pair on either side of the token.
     expect(stripModelSpecialTokens("𐐀<|assistant|>𐐀")).toBe("𐐀 𐐀");
   });
 
@@ -67,9 +67,33 @@ describe("stripModelSpecialTokens", () => {
   });
 
   // A word ending in a decomposed combining mark (e + U+0301 = é) must still
-  // count as word content at the boundary so the mark is not split off.
+  // count as word content at the left boundary so the mark is not split off.
   it("inserts a separator after a word ending in a combining mark", () => {
-    // "café" is decomposed café; the combining acute is \p{M}, word content.
-    expect(stripModelSpecialTokens("café<|assistant|>world")).toBe("café world");
+    // Decomposed café; the combining acute is \p{M}, word content on the left.
+    expect(stripModelSpecialTokens("café<|assistant|>world")).toBe("café world");
+  });
+
+  // Contiguous removable tokens must be coalesced into one removal run; if each
+  // token is judged against its immediate neighbor, the inner boundaries see
+  // only the adjacent token delimiters and the surrounding words merge.
+  it("inserts a separator across a contiguous removable-token run", () => {
+    expect(stripModelSpecialTokens("Question<|assistant|><|end|>Answer")).toBe("Question Answer");
+  });
+
+  it("coalesces three contiguous removable tokens between words", () => {
+    expect(stripModelSpecialTokens("a<|x|><|y|><|z|>b")).toBe("a b");
+  });
+
+  it("does not insert a separator when one side of a run is punctuation", () => {
+    expect(stripModelSpecialTokens("Hello<|a|><|b|>.")).toBe("Hello.");
+  });
+
+  // A combining mark immediately after a removed token attaches to the base
+  // before the token, not to the word after it, so no separator is inserted.
+  // Inserting one would split a decomposed grapheme (cafe + U+0301 = café).
+  it("does not split a combining sequence that follows a removed token", () => {
+    // "cafe" + U+0301 (combining acute) rejoins across the removed token; the
+    // output stays decomposed (cafe + U+0301 + word), not split by a space.
+    expect(stripModelSpecialTokens("cafe<|assistant|>\u0301word")).toBe("cafe\u0301word");
   });
 });
