@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { backupGitCreateCommand } from "../commands/backup-git.js";
+import { readBackupFreshness } from "../commands/backup-health.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -12,7 +15,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { createPathResolutionEnv } from "../test-utils/env.js";
+import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
 
@@ -410,6 +413,62 @@ describe("Git-backed SQLite snapshots", () => {
     expect(result.pushWarning).not.toContain(username);
     expect(result.pushWarning).not.toContain(password);
     expect(result.pushWarning?.length).toBeLessThanOrEqual(500);
+  });
+
+  it("refuses adopted non-backup ancestry and records local push degradation", async () => {
+    const root = await tempRoot();
+    const { stateDir } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "adopted-repository");
+    const remotePath = path.join(root, "remote.git");
+    await requireGit(root, ["init", "--bare", remotePath]);
+    await initializeGitBackupRepository({ repositoryPath, stateDir, remote: remotePath });
+    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+    await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
+    await requireGit(repositoryPath, ["add", "unrelated.txt"]);
+    await requireGit(repositoryPath, ["commit", "-m", "operator history"]);
+
+    const warning =
+      "repository history contains non-backup commits; use a dedicated backup repository";
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const result = await backupGitCreateCommand(createTestRuntime(), {
+        repository: repositoryPath,
+        global: true,
+        push: true,
+        excludeSecrets: true,
+      });
+
+      expect(result).toMatchObject({ noChanges: false, pushed: false, pushWarning: warning });
+      expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
+      expect(readBackupFreshness(process.env)).toMatchObject({
+        latest: { status: "ok", kind: "git", pushFailed: true, error: warning },
+        latestOk: { status: "ok", kind: "git", pushFailed: true, error: warning },
+      });
+    });
+    expect((await executeGitCommand(remotePath, ["show-ref"])).code).not.toBe(0);
+  });
+
+  it("pushes backup-only ancestry to a new remote", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "backup-repository");
+    const remotePath = path.join(root, "remote.git");
+    await requireGit(root, ["init", "--bare", remotePath]);
+    await initializeGitBackupRepository({ repositoryPath, stateDir, remote: remotePath });
+    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+
+    const result = await createGitBackup({
+      repositoryPath,
+      stateDir,
+      databases: [database],
+      push: true,
+    });
+
+    const branch = await requireGit(repositoryPath, ["branch", "--show-current"]);
+    expect(result).toMatchObject({ noChanges: false, pushed: true });
+    expect(result).not.toHaveProperty("pushWarning");
+    expect(await requireGit(remotePath, ["rev-parse", `refs/heads/${branch}`])).toBe(result.commit);
   });
 
   it("redacts credential-bearing origins in conflict errors", async () => {

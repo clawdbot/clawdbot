@@ -25,6 +25,8 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
 const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
+const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
+  "repository history contains non-backup commits; use a dedicated backup repository";
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -268,15 +270,26 @@ export async function createGitBackup(params: {
   let pushed = false;
   let pushWarning: string | undefined;
   if (params.push) {
-    const pushedResult = await runGit(repositoryPath, ["push", "-u", "origin", "HEAD"], {
-      env: params.gitEnv,
-    });
-    if (pushedResult.code === 0) {
-      pushed = true;
+    // Staging is path-scoped, but push ships HEAD's full ancestry. A dedicated
+    // repository is the supported remote shape.
+    const nonBackupCommitCount = await requireGit(
+      repositoryPath,
+      ["rev-list", "HEAD", "--invert-grep", "--grep=^openclaw backup ", "--count"],
+      { env: params.gitEnv },
+    );
+    if (nonBackupCommitCount !== "0") {
+      pushWarning = GIT_BACKUP_NON_BACKUP_HISTORY_WARNING;
     } else {
-      pushWarning = sanitizeGitBackupDiagnostic(
-        (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
-      );
+      const pushedResult = await runGit(repositoryPath, ["push", "-u", "origin", "HEAD"], {
+        env: params.gitEnv,
+      });
+      if (pushedResult.code === 0) {
+        pushed = true;
+      } else {
+        pushWarning = sanitizeGitBackupDiagnostic(
+          (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
+        );
+      }
     }
   }
   return {
