@@ -151,6 +151,10 @@ export class DraftPlaceState {
     );
   }
 
+  refreshNodes() {
+    return this.loadNodes({ quiet: true });
+  }
+
   isAdmin(): boolean {
     return hasOperatorAdminAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
   }
@@ -592,9 +596,11 @@ export class DraftPlaceState {
       });
   }
 
-  private async loadNodes() {
+  private async loadNodes(options: { quiet?: boolean } = {}) {
     const requestId = ++this.nodesRequestToken;
-    this.nodesHydrated = false;
+    if (!options.quiet) {
+      this.nodesHydrated = false;
+    }
     const snapshot = this.read().context?.gateway.snapshot;
     const client = snapshot?.client;
     if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
@@ -626,7 +632,7 @@ export class DraftPlaceState {
       }
       this.callbacks.requestUpdate();
     } catch {
-      if (requestId === this.nodesRequestToken) {
+      if (requestId === this.nodesRequestToken && !options.quiet) {
         this.nodesValue = [];
         this.nodesHydrated = true;
         this.callbacks.requestUpdate();

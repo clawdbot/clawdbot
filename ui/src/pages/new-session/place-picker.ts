@@ -533,7 +533,6 @@ export function renderPlaceSelect(params: {
 
               ${params.showDestinations
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.places")}</div>
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
                     ${renderSessionMenuItem(
                       {
@@ -547,7 +546,9 @@ export function renderPlaceSelect(params: {
                     )}
                     ${deviceNodes.length > 0
                       ? html`
-                          <div class="new-session-page__menu-title">${t("tabs.devices")}</div>
+                          <div class="new-session-page__menu-title">
+                            ${t("newSession.yourDevices")}
+                          </div>
                           ${deviceNodes.map((node, index) =>
                             renderSessionMenuItem(
                               {
@@ -567,41 +568,42 @@ export function renderPlaceSelect(params: {
                         `
                       : nothing}
                     ${cloudProfiles.length > 0 || (params.cloudProfileId && !activeProfile)
-                      ? html`<div class="new-session-page__menu-title">
-                          ${t("newSession.cloud")}
-                        </div>`
-                      : nothing}
-                    ${renderCloudProfileMenuItems({
-                      profiles: cloudProfiles,
-                      selectedId: params.cloudProfileId,
-                      submitting: params.submitting,
-                      icon: icons.server,
-                      disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
-                      disabledReason: params.cloudDisabledReason,
-                      onSelect: params.onSelectCloudProfile,
-                    })}
-                    ${params.cloudProfileId && !activeProfile
-                      ? renderSessionMenuItem(
-                          {
-                            value: `cloud:${params.cloudProfileId}`,
-                            label: t("newSession.cloudWorker", {
-                              profile: params.cloudProfileId,
-                            }),
+                      ? html`
+                          <div class="new-session-page__menu-title">${t("newSession.cloud")}</div>
+                          ${renderCloudProfileMenuItems({
+                            profiles: cloudProfiles,
+                            selectedId: params.cloudProfileId,
+                            submitting: params.submitting,
                             icon: icons.server,
-                            checked: true,
-                            disabled: true,
-                            title: t("newSession.catalogUnavailable"),
-                            onSelect: () => undefined,
-                          },
-                          params.submitting,
-                        )
-                      : nothing}
-                    ${params.cloudProfileId && params.syncFolder
-                      ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.cloudSyncsFolder", {
-                            folder: folderDisplayName(params.syncFolder),
+                            disabled:
+                              !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
+                            disabledReason: params.cloudDisabledReason,
+                            onSelect: params.onSelectCloudProfile,
                           })}
-                        </div>`
+                          ${params.cloudProfileId && !activeProfile
+                            ? renderSessionMenuItem(
+                                {
+                                  value: `cloud:${params.cloudProfileId}`,
+                                  label: t("newSession.cloudWorker", {
+                                    profile: params.cloudProfileId,
+                                  }),
+                                  icon: icons.server,
+                                  checked: true,
+                                  disabled: true,
+                                  title: t("newSession.catalogUnavailable"),
+                                  onSelect: () => undefined,
+                                },
+                                params.submitting,
+                              )
+                            : nothing}
+                          ${params.cloudProfileId && params.syncFolder
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.cloudSyncsFolder", {
+                                  folder: folderDisplayName(params.syncFolder),
+                                })}
+                              </div>`
+                            : nothing}
+                        `
                       : nothing}
                   `
                 : nothing}

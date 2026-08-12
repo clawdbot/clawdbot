@@ -30,6 +30,7 @@ export type DraftNode = {
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  trust?: "persistent" | "disposable";
 };
 
 export type DraftEnvironment = {
@@ -92,16 +93,17 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const profile = raw as {
-        id?: unknown;
-        providerId?: unknown;
-      };
+      const profile = raw as { id?: unknown; providerId?: unknown; trust?: unknown };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
       if (!id || !providerId) {
         return [];
       }
-      return [{ id, providerId }];
+      const trust: DraftCloudProfile["trust"] =
+        profile.trust === "persistent" || profile.trust === "disposable"
+          ? profile.trust
+          : undefined;
+      return [{ id, providerId, trust }];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
