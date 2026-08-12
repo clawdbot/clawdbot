@@ -302,6 +302,31 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("carries a per-call execOverrides.mode through as the most specific policy layer (#112376)", () => {
+    // Mirrors the CLI loopback grant: only `mode` is forwarded (no explicit
+    // security/ask), so mode must still win over the configured deny policy
+    // instead of being silently dropped and leaving the stale deny/off pair.
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({
+          tools: {
+            exec: {
+              mode: "deny",
+            },
+          },
+        }),
+        execOverrides: {
+          mode: "auto",
+        },
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+  });
+
   it("uses the configured default agent for an unscoped session", () => {
     expect(
       resolveExecDefaults({

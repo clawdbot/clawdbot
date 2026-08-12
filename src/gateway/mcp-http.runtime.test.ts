@@ -201,6 +201,28 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
+  it("does not share cache rows across different exec modes (#112376)", () => {
+    // ask and auto both resolve to security=allowlist/ask=on-miss but differ
+    // on autoReview, so a shared cache row would serve the wrong tool
+    // closure to one of the two modes.
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(
+      scopeParams({ cfg, execOverrides: { mode: "ask", security: "allowlist", ask: "on-miss" } }),
+    );
+    cache.resolve(
+      scopeParams({ cfg, execOverrides: { mode: "auto", security: "allowlist", ask: "on-miss" } }),
+    );
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+
+    // Same mode reuses the cached row.
+    cache.resolve(
+      scopeParams({ cfg, execOverrides: { mode: "ask", security: "allowlist", ask: "on-miss" } }),
+    );
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts only the revoked grant's cached tool closures", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

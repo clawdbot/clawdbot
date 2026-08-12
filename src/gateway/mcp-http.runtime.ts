@@ -211,6 +211,10 @@ export class McpLoopbackToolCache {
       params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
       params.execOverrides?.host ?? "",
+      // ask and auto both derive security=allowlist/ask=on-miss but differ on
+      // autoReview, so mode must stay in the key to avoid serving one mode's
+      // cached tool closure to the other (#112376).
+      params.execOverrides?.mode ?? "",
       params.execOverrides?.security ?? "",
       params.execOverrides?.ask ?? "",
       params.execOverrides?.node ?? "",

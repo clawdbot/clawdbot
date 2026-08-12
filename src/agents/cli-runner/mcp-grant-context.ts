@@ -29,6 +29,9 @@ function buildCliMcpExecOverrides(
   }
   const scopedOverrides = {
     ...(execOverrides.host !== undefined ? { host: execOverrides.host } : {}),
+    // Carry mode through the loopback grant so a configured mode:auto still
+    // enables auto-review once resolved on the Gateway side (#112376).
+    ...(execOverrides.mode !== undefined ? { mode: execOverrides.mode } : {}),
     ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
     ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
     ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),

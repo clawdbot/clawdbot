@@ -40,7 +40,9 @@ type ResolvedExecConfig = {
   node?: string;
 };
 
-export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
+// Includes mode so a configured mode:auto (auto-review) is not flattened
+// away once it crosses the CLI loopback / MCP grant boundary (#112376).
+export type ExecPolicyOverrides = ResolvedExecConfig;
 
 // Layering keeps the most specific mode/security/ask while preserving policy
 // bounds from approvals and sandbox availability later in resolution.

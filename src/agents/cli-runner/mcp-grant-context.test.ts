@@ -67,3 +67,27 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
 });
+
+describe("buildCliMcpGrantContext exec overrides", () => {
+  it("carries execOverrides.mode across the CLI loopback boundary (#112376)", () => {
+    const grant = buildGrant({
+      execOverrides: {
+        host: "gateway",
+        mode: "auto",
+        security: "allowlist",
+        ask: "on-miss",
+      },
+    });
+
+    expect(grant.execOverrides).toEqual({
+      host: "gateway",
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+  });
+
+  it("omits mode from the grant when no exec overrides are resolved", () => {
+    expect(buildGrant({ execOverrides: undefined }).execOverrides).toBeUndefined();
+  });
+});
