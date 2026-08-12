@@ -3360,7 +3360,12 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 0, skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Resume in new session") }),
+      expect.objectContaining({
+        text: expect.stringContaining("Resume in new session"),
+      }),
+    );
+    expect(sendRecoveryNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
     );
     expect(
       loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),

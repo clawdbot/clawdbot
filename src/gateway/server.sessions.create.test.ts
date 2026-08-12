@@ -3530,6 +3530,12 @@ test.each([
     target: "agent:main:dashboard:foreign-owned",
   },
   {
+    name: "recovering a foreign plugin transcript",
+    params: { parentSessionKey: "agent:main:dashboard:foreign-owned", recover: true },
+    action: "recover",
+    target: "agent:main:dashboard:foreign-owned",
+  },
+  {
     name: "forking an operator-owned transcript",
     params: { parentSessionKey: "agent:main:dashboard:operator-owned", fork: true },
     action: "fork",
@@ -3884,8 +3890,15 @@ test("sessions.create recovers a tombstoned locked session into a fresh continui
     storePath,
   });
   const { chatHandlers } = await import("./server-methods/chat.js");
+  let sendAttempt = 0;
   const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
-    respond(true, { runId: "recovery-run", status: "started" });
+    sendAttempt += 1;
+    respond(
+      true,
+      { runId: "recovery-run", status: "started" },
+      undefined,
+      sendAttempt > 1 ? { cached: true } : undefined,
+    );
   });
 
   const created = await directSessionReq<{
@@ -3969,6 +3982,23 @@ test("sessions.create recovers a tombstoned locked session into a fresh continui
       }),
     }),
   );
+  const repeated = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: parentKey,
+    recover: true,
+  });
+  expect(repeated).toMatchObject({
+    ok: true,
+    payload: {
+      key: created.payload?.key,
+      sessionId: created.payload?.sessionId,
+      runStarted: false,
+    },
+  });
+  expect(chatSend).toHaveBeenCalledTimes(2);
+  const firstIdempotencyKey = chatSend.mock.calls[0]?.[0].params.idempotencyKey;
+  expect(firstIdempotencyKey).toMatch(/^restart-recovery-rollover:/);
+  expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).toBe(firstIdempotencyKey);
   chatSend.mockRestore();
   testState.sessionConfig = undefined;
 });

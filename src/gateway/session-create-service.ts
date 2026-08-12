@@ -17,6 +17,7 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
+import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -97,6 +98,17 @@ type TrustedCatalogSessionTarget = {
   agentRuntime: string;
   pluginOwnerId: string;
 };
+
+function recoveryEligibilityError(entry: SessionEntry): ErrorShape | undefined {
+  const eligibility = inspectMainRestartRecoveryRolloverEligibility(entry);
+  if (eligibility.eligible || eligibility.reason === "already_recovered") {
+    return undefined;
+  }
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    "Session recovery requires a tombstoned parent session.",
+  );
+}
 
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
@@ -205,7 +217,12 @@ type CreatedGatewaySession = {
   agentId: string;
   entry: SessionEntry;
   storePath: string;
+  initialTurnIdempotencyKey?: string;
 };
+
+function recoveryContinuationIdempotencyKey(sessionId: string): string {
+  return `restart-recovery-rollover:${sessionId}`;
+}
 
 type TrustedInitialSessionEntry = {
   agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
@@ -526,14 +543,12 @@ export async function createGatewaySession(params: {
         ),
       };
     }
-    const parentOwnershipError = params.recover
-      ? undefined
-      : resolvePluginSessionOwnershipError({
-          action: params.fork === true ? "fork" : "link",
-          entry: parent.entry,
-          key: parent.canonicalKey,
-          pluginOwnerId: params.authorizedPluginId,
-        });
+    const parentOwnershipError = resolvePluginSessionOwnershipError({
+      action: params.recover === true ? "recover" : params.fork === true ? "fork" : "link",
+      entry: parent.entry,
+      key: parent.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
     if (parentOwnershipError) {
       return { ok: false, error: parentOwnershipError };
     }
@@ -545,14 +560,11 @@ export async function createGatewaySession(params: {
     }
     canonicalParentSessionKey = parent.canonicalKey;
     parentSessionEntry = parent.entry;
-    if (params.recover === true && !(parent.entry as SessionEntry).mainRestartRecovery?.tombstone) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery requires a tombstoned parent session.",
-        ),
-      };
+    if (params.recover === true) {
+      const eligibilityError = recoveryEligibilityError(parent.entry as SessionEntry);
+      if (eligibilityError) {
+        return { ok: false, error: eligibilityError };
+      }
     }
     parentSessionTarget = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
@@ -751,9 +763,27 @@ export async function createGatewaySession(params: {
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );
       const currentParentEntry = currentParent.entry;
+      const currentParentOwnershipError = resolvePluginSessionOwnershipError({
+        action: params.recover === true ? "recover" : params.fork === true ? "fork" : "link",
+        entry: currentParentEntry,
+        key: canonicalParentSessionKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (currentParentOwnershipError) {
+        return { ok: false, error: currentParentOwnershipError };
+      }
+      const currentRecoveryEligibility =
+        params.recover === true && currentParentEntry
+          ? inspectMainRestartRecoveryRolloverEligibility(currentParentEntry as SessionEntry)
+          : undefined;
+      const hasRecordedRecoverySuccessor =
+        currentRecoveryEligibility !== undefined &&
+        !currentRecoveryEligibility.eligible &&
+        currentRecoveryEligibility.reason === "already_recovered";
       if (
         !currentParentEntry?.sessionId ||
-        currentParentEntry.sessionId !== parentSessionEntry?.sessionId
+        (currentParentEntry.sessionId !== parentSessionEntry?.sessionId &&
+          !hasRecordedRecoverySuccessor)
       ) {
         return {
           ok: false,
@@ -764,28 +794,75 @@ export async function createGatewaySession(params: {
         };
       }
       currentParentSessionEntry = currentParentEntry;
-      if (
-        params.recover === true &&
-        !(currentParentEntry as SessionEntry).mainRestartRecovery?.tombstone
-      ) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Session recovery requires a tombstoned parent session.",
-          ),
-        };
-      }
-      const parentOwnershipError = params.recover
-        ? undefined
-        : resolvePluginSessionOwnershipError({
-            action: params.fork === true ? "fork" : "link",
-            entry: currentParentEntry,
-            key: canonicalParentSessionKey,
+      if (params.recover === true) {
+        const eligibility =
+          currentRecoveryEligibility ??
+          inspectMainRestartRecoveryRolloverEligibility(currentParentEntry as SessionEntry);
+        if (!eligibility.eligible && eligibility.reason === "already_recovered") {
+          const recoveredSessionKey = eligibility.recoveredSessionKey;
+          const recoveredSessionId = eligibility.recoveredSessionId;
+          const recovered = recoveredSessionKey
+            ? loadGatewaySessionEntryReadOnly(recoveredSessionKey, {
+                agentId: parentSessionTarget.agentId,
+              })
+            : undefined;
+          if (
+            !recoveredSessionKey ||
+            !recoveredSessionId ||
+            recovered?.entry?.sessionId !== recoveredSessionId
+          ) {
+            return {
+              ok: false,
+              error: errorShape(
+                ErrorCodes.UNAVAILABLE,
+                "Session recovery replacement is unavailable.",
+              ),
+            };
+          }
+          const recoveredOwnershipError = resolvePluginSessionOwnershipError({
+            action: "recover",
+            entry: recovered.entry,
+            key: recoveredSessionKey,
             pluginOwnerId: params.authorizedPluginId,
           });
-      if (parentOwnershipError) {
-        return { ok: false, error: parentOwnershipError };
+          if (recoveredOwnershipError) {
+            return { ok: false, error: recoveredOwnershipError };
+          }
+          const selectedModel = resolveSessionModelRef(
+            params.cfg,
+            recovered.entry,
+            parentSessionTarget.agentId,
+          );
+          createdContext = {
+            key: recoveredSessionKey,
+            agentId: parentSessionTarget.agentId,
+            entry: recovered.entry,
+            storePath: resolveGatewaySessionStoreTarget({
+              cfg: params.cfg,
+              key: recoveredSessionKey,
+              agentId: parentSessionTarget.agentId,
+            }).storePath,
+            initialTurnIdempotencyKey: recoveryContinuationIdempotencyKey(recoveredSessionId),
+          };
+          return {
+            ok: true,
+            key: recoveredSessionKey,
+            agentId: parentSessionTarget.agentId,
+            entry: recovered.entry,
+            resolved: {
+              modelProvider: selectedModel.provider,
+              model: selectedModel.model,
+            },
+            resetExisting: false,
+            archivedParentSessionKey: canonicalParentSessionKey,
+          };
+        }
+        const eligibilityError = eligibility.eligible
+          ? undefined
+          : recoveryEligibilityError(currentParentEntry as SessionEntry);
+        if (eligibilityError) {
+          return { ok: false, error: eligibilityError };
+        }
       }
       if (
         (params.emitCommandHooks === true || params.fork === true) &&
@@ -1263,6 +1340,8 @@ export async function createGatewaySession(params: {
                     sessionKey: forkParentSessionKey,
                     entry: buildArchivedRecoverySourceEntry(currentParentSessionEntry, {
                       archivedBy: params.creation?.actor,
+                      recoveredSessionId: recoveredEntry.sessionId,
+                      recoveredSessionKey: target.canonicalKey,
                     }),
                   },
                 ],
@@ -1297,6 +1376,9 @@ export async function createGatewaySession(params: {
       agentId: target.agentId,
       entry: created.entry,
       storePath: target.storePath,
+      ...(params.recover === true
+        ? { initialTurnIdempotencyKey: recoveryContinuationIdempotencyKey(created.entry.sessionId) }
+        : {}),
     };
     lifecyclePreparationCommitted = true;
     if (createdNewEntry) {

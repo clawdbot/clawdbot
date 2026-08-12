@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import {
+  buildArchivedRecoverySourceEntry,
+  buildForkedGatewaySessionEntry,
+} from "./session-create-fork-entry.js";
 
 describe("buildForkedGatewaySessionEntry", () => {
   it("preserves adopted node ancestry and links the replaced generation", () => {
@@ -39,5 +42,41 @@ describe("buildForkedGatewaySessionEntry", () => {
       sessionId: "parent-generation",
     });
     expect(forked.previousSessionId).toBeUndefined();
+  });
+});
+
+describe("buildArchivedRecoverySourceEntry", () => {
+  it("preserves existing archival provenance while recording the successor", () => {
+    const source: SessionEntry = {
+      sessionId: "source-session",
+      updatedAt: 100,
+      archivedAt: 50,
+      archivedBy: { type: "human", id: "original-archiver" },
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 3,
+        tombstone: { reason: "exhausted" },
+      },
+    };
+
+    const archived = buildArchivedRecoverySourceEntry(source, {
+      archivedBy: { type: "human", id: "recovery-actor" },
+      now: 200,
+      recoveredSessionId: "recovered-session",
+      recoveredSessionKey: "agent:main:dashboard:recovered",
+    });
+
+    expect(archived).toMatchObject({
+      archivedAt: 50,
+      archivedBy: { type: "human", id: "original-archiver" },
+      updatedAt: 200,
+      mainRestartRecovery: {
+        tombstone: {
+          recoveredSessionId: "recovered-session",
+          recoveredSessionKey: "agent:main:dashboard:recovered",
+        },
+      },
+    });
   });
 });

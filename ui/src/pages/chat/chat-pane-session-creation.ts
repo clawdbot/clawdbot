@@ -106,6 +106,21 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     if (!state || !state.client || !state.connected || this.recoveringSession) {
       return false;
     }
+    const context = this.context;
+    const sessions = context.sessions;
+    const client = state.client;
+    const connectionGeneration = this.connectionGeneration;
+    const isCurrent = () =>
+      this.isConnected &&
+      this.state === state &&
+      this.context === context &&
+      this.context.sessions === sessions &&
+      state.client === client &&
+      state.connected &&
+      this.connectedClient === client &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.phase === "connected" &&
+      this.connectionGeneration === connectionGeneration;
     const sourceSessionKey = state.sessionKey;
     const agentId =
       scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
@@ -115,7 +130,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       parentSessionKey: sourceSessionKey,
       recover: true,
     };
-    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.create",
       params,
     });
@@ -129,9 +144,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     this.requestUpdate();
     setChatError(state, null);
     try {
-      const nextSessionKey = await this.context.sessions.create(params);
-      if (!nextSessionKey || this.state !== state || state.sessionKey !== sourceSessionKey) {
-        if (!nextSessionKey) {
+      const nextSessionKey = await sessions.create(params);
+      if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
+        return false;
+      }
+      if (!nextSessionKey) {
+        if (isCurrent()) {
           setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
           state.requestUpdate?.();
         }

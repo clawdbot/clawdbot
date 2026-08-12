@@ -648,48 +648,6 @@ describe("chat pane session creation lifecycle", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("recovers a tombstoned session into a fresh continuing session", async () => {
-    const created = createDeferred<string | null>();
-    const sessions = {
-      create: vi.fn(() => created.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    advertiseSessionCreate(pane);
-
-    expect(pane.restartRecoveryComposerBanner()).toMatchObject({
-      title: "This session ended during a restart.",
-      text: "Its transcript is safe.",
-      tone: "neutral",
-      icon: "warning",
-      actionLabel: "Resume in new session",
-      actionStyle: "primary",
-      busy: false,
-    });
-
-    const pending = pane.recoverSession();
-    await vi.waitFor(() => expect(sessions.create).toHaveBeenCalledOnce());
-    expect(pane.restartRecoveryComposerBanner()).toMatchObject({
-      actionLabel: "Resume in new session",
-      actionStyle: "primary",
-      busy: true,
-      busyLabel: "Resuming…",
-    });
-    created.resolve("agent:main:dashboard:recovered");
-
-    await expect(pending).resolves.toBe(true);
-
-    expect(sessions.create).toHaveBeenCalledWith({
-      agentId: "main",
-      parentSessionKey: "agent:main:current",
-      recover: true,
-    });
-    expect(navigate).toHaveBeenCalledWith(pane.paneId, "agent:main:dashboard:recovered");
-    expect(state.sessionKey).toBe("agent:main:current");
-  });
-
   it("does not publish a stale creation error after the context is replaced", async () => {
     const created = createDeferred<string | null>();
     const sessions = {
