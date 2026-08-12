@@ -621,6 +621,62 @@ describe("createTopLevelChannelConfigBase", () => {
   });
 });
 
+describe("top-level section key precedence mirrors activation", () => {
+  const base = createTopLevelChannelConfigBase({
+    sectionKey: "clickclack",
+    resolveAccount: () => ({ accountId: "default" }),
+  });
+
+  it("skips a non-record exact section and writes the record-shaped authored variant", () => {
+    const next = base.setAccountEnabled!({
+      cfg: {
+        channels: {
+          ClickClack: { botToken: "clack-token" },
+          clickclack: "stale-marker",
+        } as never,
+      },
+      accountId: "default",
+      enabled: true,
+    });
+    expect(next.channels?.ClickClack).toEqual({ botToken: "clack-token", enabled: true });
+    expect((next.channels as Record<string, unknown>).clickclack).toBe("stale-marker");
+  });
+
+  it("keeps exact-record priority when both spellings hold records", () => {
+    const next = base.setAccountEnabled!({
+      cfg: {
+        channels: {
+          ClickClack: { botToken: "clack-token" },
+          clickclack: { botToken: "canonical-token" },
+        } as never,
+      },
+      accountId: "default",
+      enabled: true,
+    });
+    expect(next.channels?.clickclack).toEqual({ botToken: "canonical-token", enabled: true });
+    expect(next.channels?.ClickClack).toEqual({ botToken: "clack-token" });
+  });
+
+  it("writes an authored variant record in place when no exact section exists", () => {
+    const next = base.setAccountEnabled!({
+      cfg: { channels: { ClickClack: { botToken: "clack-token" } } as never },
+      accountId: "default",
+      enabled: true,
+    });
+    expect(next.channels?.ClickClack).toEqual({ botToken: "clack-token", enabled: true });
+    expect((next.channels as Record<string, unknown>).clickclack).toBeUndefined();
+  });
+
+  it("replaces a lone non-record exact section instead of spreading it", () => {
+    const next = base.setAccountEnabled!({
+      cfg: { channels: { clickclack: "stale-marker" } as never },
+      accountId: "default",
+      enabled: true,
+    });
+    expect(next.channels?.clickclack).toEqual({ enabled: true });
+  });
+});
+
 describe("createTopLevelChannelConfigAdapter", () => {
   it("combines top-level CRUD with separate accessor account resolution", () => {
     const adapter = createTopLevelChannelConfigAdapter<

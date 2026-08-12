@@ -21,6 +21,7 @@ import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 
 export {
   ensureOpenDmPolicyAllowFromWildcard,
@@ -363,20 +364,22 @@ export function createScopedChannelConfigAdapter<
  * of a channel (case variant, built-in alias) against the canonical identity, so a plugin
  * reading its declared section key must resolve through the same identity — an exact-key read
  * silently ignores settings validation accepted under another admitted spelling, and a write
- * must land on the authored key instead of splitting the section across two spellings.
+ * must land on the authored key instead of splitting the section across two spellings. The
+ * precedence is record-gated exactly like activation's config-record resolver: a non-record
+ * exact entry never claims the section, or a mutation lands on a key activation ignores.
  */
 function resolveChannelSectionKey(cfg: OpenClawConfig, sectionKey: string): string {
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels || Object.hasOwn(channels, sectionKey)) {
+  if (!channels || isRecord(channels[sectionKey])) {
     return sectionKey;
   }
   // The pure ids primitive, NOT the config claimant resolver: the public SDK path must not
   // load auto-enable ownership planning to resolve a channel spelling.
   const canonical = normalizeChatChannelId(sectionKey) ?? sectionKey;
-  return (
-    Object.keys(channels).find((key) => (normalizeChatChannelId(key) ?? key) === canonical) ??
-    sectionKey
+  const authoredKey = Object.keys(channels).find(
+    (key) => (normalizeChatChannelId(key) ?? key) === canonical,
   );
+  return authoredKey !== undefined && isRecord(channels[authoredKey]) ? authoredKey : sectionKey;
 }
 
 function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>(params: {
@@ -385,7 +388,10 @@ function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>
   enabled: boolean;
 }): Config {
   const sectionKey = resolveChannelSectionKey(params.cfg, params.sectionKey);
-  const section = params.cfg.channels?.[sectionKey] as Record<string, unknown> | undefined;
+  const entry = params.cfg.channels?.[sectionKey];
+  // A non-record entry (only possible on the fallback key) is replaced, not spread: spreading
+  // a string merges its character indexes into the section.
+  const section = isRecord(entry) ? entry : undefined;
   return {
     ...params.cfg,
     channels: {
@@ -419,11 +425,12 @@ function clearTopLevelChannelConfigFields<Config extends OpenClawConfig>(params:
   clearBaseFields: string[];
 }): Config {
   const sectionKey = resolveChannelSectionKey(params.cfg, params.sectionKey);
-  const section = params.cfg.channels?.[sectionKey] as Record<string, unknown> | undefined;
-  if (!section) {
+  const entry = params.cfg.channels?.[sectionKey];
+  // A non-record entry holds no clearable fields; spreading it would merge character indexes.
+  if (!isRecord(entry)) {
     return params.cfg;
   }
-  const nextSection = { ...section };
+  const nextSection = { ...entry };
   for (const field of params.clearBaseFields) {
     delete nextSection[field];
   }
