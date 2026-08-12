@@ -58,6 +58,11 @@ tool before an update, reset, uninstall, or machine move, and a reasonable
 daily routine for small installs. For large workspaces or frequent backups,
 prefer snapshots or continuous replication below.
 
+On ephemeral container hosts, keep the archive outside the container and use
+`openclaw backup restore` as the disaster-recovery primitive for rebuilding a
+fresh persistent state tree. Restore stages files only; activation remains an
+explicit offline deployment step.
+
 ## Per-database snapshots
 
 ```bash
@@ -233,32 +238,29 @@ verify` checks archive structure and payload layout, but it does not
 authenticate the archive or make untrusted content safe.
 
 Before a full restore, review [What gets backed
-up](/cli/backup#what-gets-backed-up). Archives intentionally omit volatile
-files, plugin dependency trees, and installer-managed runtime roots such as
-state-local `tmp/`. Recreate those artifacts after restore.
-
-Verify before extracting, then stage the archive in a private temporary
-directory:
+up](/cli/backup#what-gets-backed-up). Then verify and extract into a fresh
+staging directory with one command:
 
 ```bash
-set -euo pipefail
-
 ARCHIVE=./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
-
-openclaw backup verify "$ARCHIVE"
-
-restore_dir="$(mktemp -d -t openclaw-restore.XXXXXX)"
-trap 'rm -rf "$restore_dir"' EXIT
-
-tar -xzf "$ARCHIVE" -C "$restore_dir"
-manifest_path="$(find "$restore_dir" -mindepth 2 -maxdepth 2 -name manifest.json -print -quit)"
-test -n "$manifest_path"
-cat "$manifest_path"
+openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 ```
 
-Treat the staging directory as sensitive. It can contain credentials, auth
-profiles, sessions, and workspace data. The `trap` removes it when the shell
-exits.
+The target must not exist or must be empty. OpenClaw verifies archive structure,
+the manifest, hardlinks, and SQLite databases before it writes the target. A
+non-empty target is refused, and a failed extraction cleans its incomplete
+output. The command never touches the live state directory and has no force or
+in-place mode. Treat the restored directory as sensitive: it can contain
+credentials, auth profiles, sessions, and workspace data.
+
+<Warning>
+  Restoring an archive is time travel. Messaging-channel credentials with
+  ratchet state, especially WhatsApp, may desynchronize after rollback and need
+  relinking. Approvals and delivery/dedupe state also roll back, so review
+  pending approvals before resuming the Gateway. Plugin `node_modules` trees
+  are not archived; after activation, run `openclaw plugins update <id>` or
+  reinstall with `openclaw plugins install <spec> --force`.
+</Warning>
 
 The manifest records `archiveRoot`, the original paths under `paths`, and an
 `assets[]` list. Each asset includes its `kind`, original `sourcePath`, and
@@ -274,48 +276,13 @@ The archive layout is:
 <archive-root>/payload/relative/<relative-source-path>/...
 ```
 
-Before copying files back, stop the Gateway and any node hosts that use them.
-Make a fresh backup of the current state or move the current directories
-aside. Restore the smallest set of assets needed.
-
-For example, this restores the state asset to the current user's default
-state directory. The target stays absent until `cp -a` creates it, preserving
-the staged directory's mode and metadata:
-
-```bash
-set -euo pipefail
-
-state_archive_path="$(
-  node -e 'const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(manifest.assets.find((asset) => asset.kind === "state")?.archivePath ?? "");' "$manifest_path"
-)"
-test -n "$state_archive_path"
-
-state_source="$restore_dir/$state_archive_path"
-state_target="$HOME/.openclaw"
-state_backup="$HOME/.openclaw.pre-restore.$(date +%s)"
-
-test -d "$state_source"
-openclaw gateway stop
-
-if [ -e "$state_target" ] || [ -L "$state_target" ]; then
-  mv "$state_target" "$state_backup"
-fi
-test ! -e "$state_target"
-test ! -L "$state_target"
-cp -a "$state_source" "$state_target"
-
-openclaw doctor
-openclaw gateway start
-openclaw health
-openclaw status
-```
-
-For a same-machine restore, the manifest `sourcePath` values are usually the
-intended targets. On a new machine or under a different home directory,
-choose the new targets first, then copy only the matching asset payloads.
-Typical full-restore targets are the state directory, active config file,
-credentials directory, and workspace directories. See
-[Updating](/install/updating#rollback) for the rollback workflow.
+To activate, stop the Gateway and any node hosts that use the restored files.
+Make a fresh backup of current state or move it aside. Then move the extracted
+state asset into place, or point `OPENCLAW_STATE_DIR` at that asset, and run
+`openclaw doctor` before restarting the Gateway. On a new machine or under a
+different home directory, use the manifest to map config, credentials, and
+workspace assets to their new paths. See [Updating](/install/updating#rollback)
+for the rollback workflow.
 
 ### Restore a database
 
