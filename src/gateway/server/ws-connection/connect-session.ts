@@ -33,6 +33,7 @@ import {
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import { resolveLoopbackGatewayHttpOrigin } from "../../gateway-http-origin.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
@@ -325,8 +326,20 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiOrigin = state.isControlUi
     ? normalizeControlUiOrigin(context.handler.requestOrigin)
     : undefined;
+  const gatewayHttpOrigin = state.isControlUi
+    ? resolveLoopbackGatewayHttpOrigin({
+        requestHost: context.handler.requestHost,
+        directLocal: isLocalClient,
+        encrypted:
+          (context.handler.upgradeReq.socket as { encrypted?: boolean }).encrypted === true,
+      })
+    : undefined;
   const internal =
-    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity || controlUiOrigin
+    isLocalClient ||
+    isTrustedApprovalRuntime ||
+    trustedAgentRuntimeIdentity ||
+    controlUiOrigin ||
+    gatewayHttpOrigin
       ? {
           ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
@@ -334,6 +347,7 @@ export async function attachAuthenticatedGatewayConnect(
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
             : {}),
           ...(controlUiOrigin ? { controlUiOrigin } : {}),
+          ...(gatewayHttpOrigin ? { gatewayHttpOrigin } : {}),
         }
       : undefined;
   const localUserIngress = prepareGatewayLocalUserIngress({

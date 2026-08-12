@@ -25,6 +25,7 @@ function createGateway(
   options: {
     connected?: boolean;
     admin?: boolean;
+    gatewayUrl?: string;
     request?: ReturnType<typeof vi.fn>;
   } = {},
 ): ApplicationGateway {
@@ -56,7 +57,12 @@ function createGateway(
   };
   return {
     snapshot,
-    connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
+    connection: {
+      gatewayUrl: options.gatewayUrl ?? window.location.origin.replace(/^http/u, "ws"),
+      token: "",
+      password: "",
+      bootstrapToken: "",
+    },
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,
@@ -111,6 +117,7 @@ async function mountCard(
     config?: Record<string, unknown>;
     connected?: boolean;
     admin?: boolean;
+    gatewayUrl?: string;
     request?: ReturnType<typeof vi.fn>;
   } = {},
 ): Promise<{
@@ -123,6 +130,7 @@ async function mountCard(
     gateway: createGateway({
       connected: options.connected,
       admin: options.admin,
+      gatewayUrl: options.gatewayUrl,
       request:
         options.request ??
         vi.fn(async (method: string) => {
@@ -303,6 +311,27 @@ describe("openclaw-mcp-servers-card", () => {
 
     const row = expectDefined(card.querySelector('[data-mcp-name="docs"]'), "docs row");
     expect(row.textContent).toContain("openclaw mcp login docs");
+    expect(row.textContent).not.toContain("Loading");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the CLI login fallback when the active Gateway has no safe HTTP origin", async () => {
+    const request = vi.fn();
+    const { card } = await mountCard({
+      gatewayUrl: "file:///tmp/openclaw-gateway",
+      request,
+      config: {
+        mcp: {
+          servers: {
+            docs: { url: "https://mcp.example.com/mcp", auth: "oauth" },
+          },
+        },
+      },
+    });
+
+    const row = expectDefined(card.querySelector('[data-mcp-name="docs"]'), "docs row");
+    expect(row.textContent).toContain("openclaw mcp login docs");
+    expect(row.textContent).not.toContain("Authorize");
     expect(row.textContent).not.toContain("Loading");
     expect(request).not.toHaveBeenCalled();
   });
@@ -497,7 +526,7 @@ describe("openclaw-mcp-servers-card", () => {
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
-  it("opens an opaque Gateway launch path without receiving or rendering the provider URL", async () => {
+  it("resolves an opaque launch path against the active cross-origin Gateway", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "mcp.oauth.status") {
         return { status: { state: "authorization-required", credentialPresent: false } };
@@ -523,6 +552,7 @@ describe("openclaw-mcp-servers-card", () => {
       close,
     } as unknown as Window);
     const { card } = await mountCard({
+      gatewayUrl: "wss://gateway.example.test/ws",
       request,
       config: {
         mcp: {
@@ -538,7 +568,10 @@ describe("openclaw-mcp-servers-card", () => {
 
     await waitForFast(() => expect(replace).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("mcp.oauth.start", { serverName: "docs" });
-    expect(replace).toHaveBeenCalledWith(`${window.location.origin}/oauth/mcp/authorize/attempt-1`);
+    expect(window.location.origin).not.toBe("https://gateway.example.test");
+    expect(replace).toHaveBeenCalledWith(
+      "https://gateway.example.test/oauth/mcp/authorize/attempt-1",
+    );
     expect(card.textContent).toContain("Waiting for browser");
     expect(card.textContent).not.toContain("accounts.example.com");
   });

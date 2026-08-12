@@ -47,7 +47,12 @@ const methodRegistry = createGatewayMethodRegistry(
 async function dispatch(
   method: string,
   params: Record<string, unknown>,
-  options: { scopes?: string[]; controlUiOrigin?: string; config?: object } = {},
+  options: {
+    scopes?: string[];
+    controlUiOrigin?: string;
+    gatewayHttpOrigin?: string | null;
+    config?: object;
+  } = {},
 ) {
   const respond = vi.fn();
   await handleGatewayRequest({
@@ -64,6 +69,9 @@ async function dispatch(
       },
       internal: {
         controlUiOrigin: options.controlUiOrigin ?? "http://127.0.0.1:18789",
+        ...(options.gatewayHttpOrigin === null
+          ? {}
+          : { gatewayHttpOrigin: options.gatewayHttpOrigin ?? "http://127.0.0.1:18789" }),
       },
     } as Parameters<typeof handleGatewayRequest>[0]["client"],
     isWebchatConnect: () => false,
@@ -139,7 +147,7 @@ describe("MCP OAuth Gateway methods", () => {
     });
   });
 
-  it("starts the shared operator identity with the admitted Control UI origin", async () => {
+  it("starts the shared operator identity with the Gateway-owned loopback origin", async () => {
     mocks.readStatus.mockReturnValue({
       state: "authorizing",
       credentialPresent: true,
@@ -169,6 +177,60 @@ describe("MCP OAuth Gateway methods", () => {
       },
       authorizationPath: "/oauth/mcp/authorize/attempt-1",
     });
+  });
+
+  it("uses the configured Gateway origin instead of the cross-origin Control UI page", async () => {
+    mocks.readStatus.mockReturnValue({
+      state: "authorizing",
+      credentialPresent: false,
+      authorizationId: "attempt-1",
+      startedAt: 1,
+    });
+
+    const respond = await dispatch(
+      "mcp.oauth.start",
+      { serverName: "docs" },
+      {
+        controlUiOrigin: "https://static-ui.example.test",
+        gatewayHttpOrigin: "http://127.0.0.1:18789",
+        config: { ...CONFIG, gateway: { publicOrigin: "https://gateway.example.test" } },
+      },
+    );
+
+    expect(mocks.start).toHaveBeenCalledWith(
+      operatorMcpOAuthIdentity("docs", SERVER_URL),
+      expect.objectContaining({ kind: "http", url: SERVER_URL, auth: "oauth" }),
+      {
+        redirectUrl: "https://gateway.example.test/oauth/mcp/callback",
+        forceAuthorization: false,
+      },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ authorizationPath: "/oauth/mcp/authorize/attempt-1" }),
+    );
+  });
+
+  it("fails closed when only the cross-origin Control UI page origin is available", async () => {
+    const options = {
+      controlUiOrigin: "https://static-ui.example.test",
+      gatewayHttpOrigin: null,
+    };
+    const status = await dispatch("mcp.oauth.status", { serverName: "docs" }, options);
+    const start = await dispatch("mcp.oauth.start", { serverName: "docs" }, options);
+
+    for (const respond of [status, start]) {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "MCP OAuth authorization is unavailable for this server.",
+        }),
+      );
+    }
+    expect(mocks.readStatus).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
   });
 
   it("rejects requester identities and unexpected identity selectors", async () => {

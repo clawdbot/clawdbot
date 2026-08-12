@@ -16,6 +16,7 @@ import {
   startMcpOAuthAuthorization,
 } from "../../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../../agents/mcp-transport-config.js";
+import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -63,7 +64,7 @@ function resolveSharedOAuthServer(
 }
 
 function resolveCallbackUrl(config: OpenClawConfig, client: GatewayClient | null): string | null {
-  const origin = config.gateway?.publicOrigin ?? client?.internal?.controlUiOrigin;
+  const origin = resolveGatewayPublicOrigin(config) ?? client?.internal?.gatewayHttpOrigin;
   if (!origin) {
     return null;
   }
@@ -75,12 +76,13 @@ function resolveCallbackUrl(config: OpenClawConfig, client: GatewayClient | null
 }
 
 export const mcpOAuthHandlers: GatewayRequestHandlers = {
-  "mcp.oauth.status": async ({ params, respond, context }) => {
+  "mcp.oauth.status": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateMcpOAuthStatusParams, "mcp.oauth.status", respond)) {
       return;
     }
-    const server = resolveSharedOAuthServer(context.getRuntimeConfig(), params.serverName);
-    if (!server) {
+    const config = context.getRuntimeConfig();
+    const server = resolveSharedOAuthServer(config, params.serverName);
+    if (!server || !resolveCallbackUrl(config, client)) {
       unavailable(respond);
       return;
     }

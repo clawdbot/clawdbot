@@ -33,6 +33,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
+import { resolveGatewayHttpOrigin } from "./sandbox-host.ts";
 import {
   renderDocsLink,
   renderSettingsEmpty,
@@ -44,6 +45,7 @@ type McpServerMessage = { kind: "error" | "success"; text: string };
 type McpOAuthUiErrorCategory = McpOAuthErrorCategory | "start-failed";
 type McpOAuthUiStatus =
   | McpOAuthControlStatus
+  | { state: "unavailable" }
   | {
       state: "error";
       credentialPresent: boolean;
@@ -140,6 +142,26 @@ class McpServersCard extends OpenClawLightDomElement {
     }
   }
 
+  private resolveOauthGatewayOrigin(): string | null {
+    const gatewayUrl = this.context?.gateway.connection.gatewayUrl.trim();
+    if (!gatewayUrl) {
+      return null;
+    }
+    try {
+      const parsed = new URL(gatewayUrl);
+      if (
+        (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") ||
+        parsed.username ||
+        parsed.password
+      ) {
+        return null;
+      }
+      return resolveGatewayHttpOrigin(gatewayUrl, window.location.origin);
+    } catch {
+      return null;
+    }
+  }
+
   private scheduleOauthPoll() {
     this.clearOauthPoll();
     if (!Object.values(this.oauthStatuses).some((status) => status.state === "authorizing")) {
@@ -164,6 +186,13 @@ class McpServersCard extends OpenClawLightDomElement {
       this.clearOauthPoll();
       return;
     }
+    if (!this.resolveOauthGatewayOrigin()) {
+      this.oauthStatuses = Object.fromEntries(
+        servers.map((server) => [server.name, { state: "unavailable" as const }]),
+      );
+      this.clearOauthPoll();
+      return;
+    }
     const entries = await Promise.all(
       servers.map(async (server): Promise<[string, McpOAuthUiStatus]> => {
         try {
@@ -172,10 +201,7 @@ class McpServersCard extends OpenClawLightDomElement {
           });
           return [server.name, result.status];
         } catch {
-          return [
-            server.name,
-            { state: "error", credentialPresent: false, category: "start-failed" },
-          ];
+          return [server.name, { state: "unavailable" }];
         }
       }),
     );
@@ -201,9 +227,15 @@ class McpServersCard extends OpenClawLightDomElement {
     this.scheduleOauthPoll();
   }
 
+  private oauthCredentialPresent(serverName: string): boolean {
+    const status = this.oauthStatuses[serverName];
+    return status !== undefined && status.state !== "unavailable" && status.credentialPresent;
+  }
+
   private async startOauth(serverName: string, reauthorize: boolean) {
     const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.canMutate() || this.oauthBusy[serverName]) {
+    const gatewayOrigin = this.resolveOauthGatewayOrigin();
+    if (!client || !gatewayOrigin || !this.canMutate() || this.oauthBusy[serverName]) {
       return;
     }
     const browserWindow = reserveExternalWindowForDeferredNavigation();
@@ -215,10 +247,7 @@ class McpServersCard extends OpenClawLightDomElement {
       });
       this.setOauthStatus(serverName, result.status);
       if (result.authorizationPath?.startsWith(MCP_OAUTH_LAUNCH_PATH_PREFIX)) {
-        const authorizationUrl = resolveSafeExternalUrl(
-          result.authorizationPath,
-          window.location.href,
-        );
+        const authorizationUrl = resolveSafeExternalUrl(result.authorizationPath, gatewayOrigin);
         if (authorizationUrl && browserWindow) {
           browserWindow.location.replace(authorizationUrl);
         } else if (authorizationUrl) {
@@ -231,7 +260,7 @@ class McpServersCard extends OpenClawLightDomElement {
       }
     } catch {
       browserWindow?.close();
-      const credentialPresent = this.oauthStatuses[serverName]?.credentialPresent === true;
+      const credentialPresent = this.oauthCredentialPresent(serverName);
       this.setOauthStatus(serverName, {
         state: "error",
         credentialPresent,
@@ -255,7 +284,7 @@ class McpServersCard extends OpenClawLightDomElement {
       });
       this.setOauthStatus(serverName, result.status);
     } catch {
-      const credentialPresent = this.oauthStatuses[serverName]?.credentialPresent === true;
+      const credentialPresent = this.oauthCredentialPresent(serverName);
       this.setOauthStatus(serverName, {
         state: "error",
         credentialPresent,
@@ -304,6 +333,9 @@ class McpServersCard extends OpenClawLightDomElement {
       return html`<code>${fallbackCommand}</code>`;
     }
     const status = this.oauthStatuses[server.name];
+    if (status?.state === "unavailable") {
+      return html`<code>${fallbackCommand}</code>`;
+    }
     if (!status) {
       return renderSettingsStatus({ kind: "muted", label: t("common.loading") });
     }
