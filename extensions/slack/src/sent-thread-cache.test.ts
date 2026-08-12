@@ -9,9 +9,11 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "./runtime.js";
 import {
+  clearSlackThreadFailureNotice,
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
   hasSlackThreadParticipationWithPersistence,
+  recordSlackThreadFailureNotice,
   recordSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
@@ -52,6 +54,87 @@ describe("slack sent-thread-cache", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
   });
 
+  it("announces a repeated thread failure only once until its message changes", () => {
+    const notice = {
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000001",
+      failureText: "Model login expired",
+    };
+
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(false);
+    expect(
+      recordSlackThreadFailureNotice({ ...notice, failureText: "Model   login\nexpired" }),
+    ).toBe(false);
+    expect(
+      recordSlackThreadFailureNotice({ ...notice, failureText: "App server unavailable" }),
+    ).toBe(true);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+  });
+
+  it("isolates thread failures by account, channel, thread, and enterprise workspace", () => {
+    const notice = {
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000001",
+      failureText: "Model login expired",
+      teamId: "T1",
+    };
+
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+    expect(recordSlackThreadFailureNotice({ ...notice, accountId: "A2" })).toBe(true);
+    expect(recordSlackThreadFailureNotice({ ...notice, channelId: "C456" })).toBe(true);
+    expect(recordSlackThreadFailureNotice({ ...notice, threadTs: "1700000000.000002" })).toBe(true);
+    expect(recordSlackThreadFailureNotice({ ...notice, teamId: "T2" })).toBe(true);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(false);
+  });
+
+  it("allows the same thread failure again after a successful turn clears its notice", () => {
+    const notice = {
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000001",
+      failureText: "Model login expired",
+    };
+
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+    clearSlackThreadFailureNotice(notice);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+  });
+
+  it("does not treat failure notices as thread participation", () => {
+    recordSlackThreadFailureNotice({
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000001",
+      failureText: "Model login expired",
+    });
+
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+  });
+
+  it("bounds failure notices and evicts the oldest thread", () => {
+    const firstNotice = {
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000000",
+      failureText: "Model login expired",
+    };
+    expect(recordSlackThreadFailureNotice(firstNotice)).toBe(true);
+
+    for (let index = 1; index <= 1000; index += 1) {
+      expect(
+        recordSlackThreadFailureNotice({
+          ...firstNotice,
+          threadTs: `1700000000.${String(index).padStart(6, "0")}`,
+        }),
+      ).toBe(true);
+    }
+
+    expect(recordSlackThreadFailureNotice(firstNotice)).toBe(true);
+  });
+
   it("ignores empty accountId, channelId, or threadTs", () => {
     recordSlackThreadParticipation("", "C123", "1700000000.000001");
     recordSlackThreadParticipation("A1", "", "1700000000.000001");
@@ -84,9 +167,18 @@ describe("slack sent-thread-cache", () => {
     try {
       cacheA.recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
       expect(cacheB.hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+      const failureNotice = {
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000001",
+        failureText: "Model login expired",
+      };
+      expect(cacheA.recordSlackThreadFailureNotice(failureNotice)).toBe(true);
+      expect(cacheB.recordSlackThreadFailureNotice(failureNotice)).toBe(false);
 
       cacheB.clearSlackThreadParticipationCache();
       expect(cacheA.hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+      expect(cacheA.recordSlackThreadFailureNotice(failureNotice)).toBe(true);
     } finally {
       cacheA.clearSlackThreadParticipationCache();
     }
