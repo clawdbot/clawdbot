@@ -15,7 +15,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -32,7 +32,7 @@ import {
   stripBom,
   validateNoOpEditTargets,
 } from "./edit-diff.js";
-import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { withTrackedFileMutationQueue } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
@@ -213,6 +213,11 @@ type EditToolResultLike = {
     mimeType?: string;
   }>;
   details?: EditToolDetails;
+};
+
+type QueuedEditOutcome = {
+  result: AgentToolResult<EditToolDetails>;
+  persistedContent?: string;
 };
 
 type EditCallRenderComponent = Box & {
@@ -407,119 +412,157 @@ export function createEditToolDefinition(
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
+      const fingerprint = `edit:${JSON.stringify(
+        originalEdits.map((edit) => ({
+          oldText: normalizeToLF(edit.oldText),
+          newText: normalizeToLF(edit.newText),
+        })),
+      )}`;
 
-      return withFileMutationQueue(absolutePath, async () => {
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
-
-        let realEdits: Edit[] = [];
-        let expectedContent: string | undefined;
-
-        try {
-          await ops.access(absolutePath);
-        } catch (error: unknown) {
-          const errorMessage =
-            error instanceof Error && "code" in error
-              ? `Error code: ${String(error.code)}`
-              : String(error);
-          throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
-            cause: error,
-          });
-        }
-
-        const buffer = await ops.readFile(absolutePath);
-        const rawContent = decodeUtf8File(buffer, absolutePath);
-        try {
+      const queued = await withTrackedFileMutationQueue<QueuedEditOutcome>(
+        absolutePath,
+        fingerprint,
+        async (leader) => {
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-
-          const { bom, text: content } = stripBom(rawContent);
-          const normalizedContent = normalizeToLF(content);
-          const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
-          const noOpEdits = editSets.noOpEdits;
-          realEdits = editSets.realEdits;
-          validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
-          if (realEdits.length === 0) {
-            return {
-              ...textResult(
-                `No changes made to ${path}. The replacement text is identical to the original.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
-            };
-          }
-          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
-            content,
-            realEdits,
-            path,
-          );
-          expectedContent = bom + finalContent;
-          await ops.writeFile(absolutePath, expectedContent);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
-          if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
-            throw new Error(
-              `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
-            );
-          }
-
-          const diffResult = generateDiffString(baseContent, newContent);
-          const patch = generateUnifiedPatch(path, baseContent, newContent);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-              },
-            ],
-            details: {
-              changed: true,
-              diff: diffResult.diff,
-              patch,
-              ...(diffResult.firstChangedLine === undefined
-                ? {}
-                : { firstChangedLine: diffResult.firstChangedLine }),
-            },
-          };
-        } catch (error: unknown) {
-          const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await ops
-            .readFile(absolutePath)
-            .then((current) => current.toString("utf-8"))
-            .catch(() => rawContent);
           if (
-            expectedContent !== undefined &&
-            (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
+            leader?.persistedContent !== undefined &&
+            (await verifyPersistedUtf8File(absolutePath, leader.persistedContent, ops))
           ) {
+            if (signal?.aborted) {
+              throw new Error("Operation aborted");
+            }
             return {
-              content: [
-                {
-                  type: "text",
-                  text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+              result: {
+                ...textResult(
+                  `No changes made to ${path}. An identical concurrent edit already produced the requested content.`,
+                  { changed: false } satisfies EditToolDetails,
+                ),
+                terminate: true,
+              },
+            };
+          }
+
+          let realEdits: Edit[] = [];
+          let expectedContent: string | undefined;
+
+          try {
+            await ops.access(absolutePath);
+          } catch (error: unknown) {
+            const errorMessage =
+              error instanceof Error && "code" in error
+                ? `Error code: ${String(error.code)}`
+                : String(error);
+            throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
+              cause: error,
+            });
+          }
+
+          const buffer = await ops.readFile(absolutePath);
+          const rawContent = decodeUtf8File(buffer, absolutePath);
+          try {
+            if (signal?.aborted) {
+              throw new Error("Operation aborted");
+            }
+
+            const { bom, text: content } = stripBom(rawContent);
+            const normalizedContent = normalizeToLF(content);
+            const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
+            const noOpEdits = editSets.noOpEdits;
+            realEdits = editSets.realEdits;
+            validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+            if (realEdits.length === 0) {
+              return {
+                result: {
+                  ...textResult(
+                    `No changes made to ${path}. The replacement text is identical to the original.`,
+                    { changed: false } satisfies EditToolDetails,
+                  ),
+                  terminate: true,
                 },
-              ],
-              details: { changed: true, diff: "", patch: "" },
-            };
-          }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
-          }
-          // Terminal no-op: the edit matched but produced identical content.
-          if (normalizedError instanceof EditNoChangeError) {
+              };
+            }
+            const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
+              content,
+              realEdits,
+              path,
+            );
+            expectedContent = bom + finalContent;
+            await ops.writeFile(absolutePath, expectedContent);
+            if (signal?.aborted) {
+              throw new Error("Operation aborted");
+            }
+            if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
+              throw new Error(
+                `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+              );
+            }
+
+            const diffResult = generateDiffString(baseContent, newContent);
+            const patch = generateUnifiedPatch(path, baseContent, newContent);
             return {
-              ...textResult(
-                `No changes made to ${path}. The replacement produced identical content.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+                  },
+                ],
+                details: {
+                  changed: true,
+                  diff: diffResult.diff,
+                  patch,
+                  ...(diffResult.firstChangedLine === undefined
+                    ? {}
+                    : { firstChangedLine: diffResult.firstChangedLine }),
+                },
+              },
+              persistedContent: expectedContent,
             };
+          } catch (error: unknown) {
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
+            const currentContent = await ops
+              .readFile(absolutePath)
+              .then((current) => current.toString("utf-8"))
+              .catch(() => rawContent);
+            if (
+              expectedContent !== undefined &&
+              (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
+            ) {
+              return {
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+                    },
+                  ],
+                  details: { changed: true, diff: "", patch: "" },
+                },
+                persistedContent: expectedContent,
+              };
+            }
+            if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+              throw appendMismatchHint(normalizedError, currentContent);
+            }
+            // Terminal no-op: the edit matched but produced identical content.
+            if (normalizedError instanceof EditNoChangeError) {
+              return {
+                result: {
+                  ...textResult(
+                    `No changes made to ${path}. The replacement produced identical content.`,
+                    { changed: false } satisfies EditToolDetails,
+                  ),
+                  terminate: true,
+                },
+              };
+            }
+            throw normalizedError;
           }
-          throw normalizedError;
-        }
-      });
+        },
+      );
+      return queued.result;
     },
     renderCall(args, theme, context) {
       const component = getEditCallRenderComponent(context.state, context.lastComponent);

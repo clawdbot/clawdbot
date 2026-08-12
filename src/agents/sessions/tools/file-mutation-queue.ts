@@ -11,6 +11,10 @@ const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
   Symbol.for("openclaw.fileMutationTails"),
   "close-only",
 );
+const fileMutationLeaders = resolveGlobalMap<string, Promise<unknown>>(
+  Symbol.for("openclaw.fileMutationLeaders"),
+  "close-only",
+);
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
@@ -27,6 +31,29 @@ function getMutationQueueKey(filePath: string): string {
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   return await withFileMutationQueues([filePath], fn);
+}
+
+export async function withTrackedFileMutationQueue<T>(
+  filePath: string,
+  fingerprint: string,
+  fn: (leaderResult: T | undefined) => Promise<T>,
+): Promise<T> {
+  // Followers only inherit results from an identical mutation already in flight.
+  const trackingKey = `${getMutationQueueKey(filePath)}\0${fingerprint}`;
+  const leader = fileMutationLeaders.get(trackingKey) as Promise<T> | undefined;
+  if (leader) {
+    return await withFileMutationQueue(filePath, async () => {
+      const leaderResult = await leader.catch(() => undefined);
+      return await fn(leaderResult);
+    });
+  }
+
+  const current = withFileMutationQueue(filePath, () => fn(undefined));
+  fileMutationLeaders.set(trackingKey, current);
+  const cleanup = () =>
+    fileMutationLeaders.get(trackingKey) === current && fileMutationLeaders.delete(trackingKey);
+  void current.then(cleanup, cleanup);
+  return await current;
 }
 
 export async function withFileMutationQueues<T>(
