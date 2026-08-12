@@ -276,8 +276,8 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-media-ui", 196],
   ["core-runtime-secrets", 58],
   ["core-runtime-shared", 52],
-  // PTY timing suites still need a lightly packed lane; the exclusive-bin cap
-  // leaves only trivial co-groups next to this measured runtime.
+  // This dist-only group is outside the sampled nondist logs and retains its
+  // prior measured hint. The exclusive-bin cap keeps its lane lightly packed.
   ["core-runtime-tui-pty", 116],
   ["core-tooling-1", 112],
   ["core-tooling-2", 128],

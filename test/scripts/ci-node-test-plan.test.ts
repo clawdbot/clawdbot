@@ -359,8 +359,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-commands-doctor-config-state",
       "auto-reply-reply-agent-runner",
     ];
-    expect(new Set(largeTailAnchors.map(jobOf)).size).toBe(largeTailAnchors.length);
-    expect(new Set(smallTailAnchors.map(jobOf)).size).toBe(smallTailAnchors.length);
+    expect(
+      largeJobs.map(
+        (shard) =>
+          shard.groups.filter((group) => largeTailAnchors.includes(group.shard_name)).length,
+      ),
+    ).toEqual(Array.from({ length: largeTailAnchors.length }, () => 1));
+    expect(
+      regularSmallJobs.map(
+        (shard) =>
+          shard.groups.filter((group) => smallTailAnchors.includes(group.shard_name)).length,
+      ),
+    ).toEqual(Array.from({ length: smallTailAnchors.length }, () => 1));
     expect(compact).toEqual(
       createNodeTestShardBundles({
         includeReleaseOnlyPluginShards: false,
