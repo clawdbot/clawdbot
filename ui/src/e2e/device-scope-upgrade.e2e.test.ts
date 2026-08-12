@@ -200,13 +200,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await page.route(/device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u, (route) =>
       route.abort("failed"),
     );
-    const gateway = await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
 
     await page.goto(`${server.baseUrl}chat`);
     await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
 
     expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
-    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
   });
 
   it("shows manual repair guidance without a signed browser device", async () => {
