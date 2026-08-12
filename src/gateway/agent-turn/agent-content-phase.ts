@@ -180,6 +180,7 @@ export async function prepareAgentContentPhase(params: {
   const explicitVoiceWakeSessionTarget = params.requestedSessionKeyRaw
     ? (() => {
         const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+          ...(agentId ? { agentId } : {}),
           clone: false,
         });
         const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
