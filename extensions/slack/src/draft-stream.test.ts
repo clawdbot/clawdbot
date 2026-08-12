@@ -213,6 +213,66 @@ describe("createSlackDraftStream", () => {
     });
   });
 
+  it("drains previews detached during an in-flight removal", async () => {
+    const accountId = "detach-during-drop";
+    let finishFirstRemove: (() => void) | undefined;
+    const firstRemove = new Promise<void>((resolve) => {
+      finishFirstRemove = resolve;
+    });
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
+      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const remove = vi
+      .fn<DraftRemoveFn>()
+      .mockImplementationOnce(async () => await firstRemove)
+      .mockResolvedValueOnce(undefined);
+    const { stream } = createDraftStreamHarness({
+      accountId,
+      threadTs: "100.000",
+      send,
+      remove,
+    });
+
+    stream.update("_first card_");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.200",
+      userId: "U_OWNER",
+    });
+
+    const dropping = stream.dropDetachedMessages();
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledOnce();
+    });
+
+    stream.update("_second card_");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.400",
+      userId: "U_OWNER",
+    });
+
+    finishFirstRemove?.();
+    await dropping;
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenNthCalledWith(1, "C123", "100.100", {
+      token: "xoxb-test",
+      accountId,
+    });
+    expect(remove).toHaveBeenNthCalledWith(2, "C123", "100.300", {
+      token: "xoxb-test",
+      accountId,
+    });
+  });
+
   it("does not drop a finalized preview after forceNewMessage", async () => {
     const { stream, remove } = createDraftStreamHarness();
 

@@ -628,6 +628,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     !(agentRunFailed && progress.useDraftProgressCard)
   ) {
     await draftStream?.clear();
+    await progress.dropDetachedProgressCards();
     return;
   }
 

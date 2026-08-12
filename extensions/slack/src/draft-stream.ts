@@ -218,8 +218,11 @@ export function createSlackDraftStream(params: {
   };
 
   const dropDetachedMessages = async () => {
-    const messages = detachedMessages.splice(0);
-    for (const { channelId, messageId } of messages) {
+    // The boundary notifier can append synchronously while removal awaits.
+    // Re-read the live queue so this drain also owns those later detachments.
+    let message: { channelId: string; messageId: string } | undefined;
+    while ((message = detachedMessages.shift()) !== undefined) {
+      const { channelId, messageId } = message;
       await removeMessage(channelId, messageId);
     }
   };
