@@ -26,6 +26,7 @@ type DesktopSessionObserver = {
 
 type DesktopSessionAcquireResult = {
   attachment: RfbAttachment;
+  auth?: "vnc-password" | "ard-account";
   vncPassword?: string;
 };
 

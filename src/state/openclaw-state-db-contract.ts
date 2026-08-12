@@ -28,6 +28,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "projects",
   "user_preferences",
   "gateway_origin_device_tokens",
+  "device_pairing_join_codes",
   "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",

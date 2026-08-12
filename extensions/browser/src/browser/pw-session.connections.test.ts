@@ -24,7 +24,8 @@ const {
 } = pwAi;
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
+const getChromeWebSocketUrlSpy = getChromeWebSocketEndpointSpy;
 
 type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
@@ -244,7 +245,7 @@ describe("pw-session connection scoping", () => {
     const wsUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
     const release = vi.fn();
     registerManagedProxyBrowserCdpBypassMock.mockReturnValue(release);
-    getChromeWebSocketUrlSpy.mockResolvedValue(wsUrl);
+    getChromeWebSocketUrlSpy.mockResolvedValue({ url: wsUrl });
     connectOverCdpSpy.mockImplementationOnce(async () => {
       expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(wsUrl);
       expect(release).not.toHaveBeenCalled();
@@ -303,7 +304,7 @@ describe("pw-session connection scoping", () => {
       releases.push(release);
       return release;
     });
-    getChromeWebSocketUrlSpy.mockResolvedValue(discoveredUrl);
+    getChromeWebSocketUrlSpy.mockResolvedValue({ url: discoveredUrl });
     connectOverCdpSpy
       .mockRejectedValueOnce(new Error("stale discovered endpoint"))
       .mockResolvedValueOnce(browser.browser);
@@ -362,10 +363,42 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to Playwright discovery for guarded non-loopback CDP hosts", async () => {
+    getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("discovery unavailable"));
+
+    const connection = listPagesViaPlaywright({
+      cdpUrl: "http://93.184.216.34:9222",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    await expect(connection).rejects.toThrow(
+      "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+    );
+    await expect(connection).rejects.toThrow("discovery unavailable");
+
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to Playwright discovery for guarded loopback HTTP CDP hosts", async () => {
+    getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("loopback discovery blocked"));
+
+    const connection = listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      ssrfPolicy: {},
+    });
+    await expect(connection).rejects.toThrow(
+      "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+    );
+    await expect(connection).rejects.toThrow("loopback discovery blocked");
+
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");
     connectOverCdpSpy.mockResolvedValue(browser.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketUrlSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:9222/devtools/browser/local",
+    });
     const ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["example.com"],

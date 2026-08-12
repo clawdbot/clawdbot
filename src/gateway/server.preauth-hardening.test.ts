@@ -2,8 +2,15 @@
  * Gateway pre-auth hardening tests.
  */
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -23,9 +30,16 @@ import {
   createGatewayHttpServer,
 } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
+import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
+import {
+  createGatewayWsTestLogger,
+  createGatewayWsTestRequestContext,
+} from "./server/ws-connection.test-helpers.js";
+import type { WorkerConnectionService } from "./server/ws-connection/worker-connection.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
@@ -67,12 +81,15 @@ function setGatewayAuthNoneForTest() {
   });
 }
 
-async function requestUpgradeRejection(port: number): Promise<{ status: number; body: string }> {
+async function requestUpgradeRejection(
+  port: number,
+  path = "/",
+): Promise<{ status: number; body: string }> {
   return await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = http.request({
       host: "127.0.0.1",
       port,
-      path: "/",
+      path,
       headers: {
         Connection: "Upgrade",
         Upgrade: "websocket",
@@ -143,6 +160,7 @@ describe("gateway pre-auth hardening", () => {
       const socket = await accepted;
       expect(socket[GATEWAY_WS_CONNECTION_KIND_PROPERTY]).toBe("worker");
       expect(socket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]).toBe(workerBudget);
+      expect(socket[GATEWAY_WS_WORKER_INGRESS_PROPERTY]).toBe("loopback");
     } finally {
       client.close();
       await new Promise<void>((resolve) => {
@@ -151,6 +169,239 @@ describe("gateway pre-auth hardening", () => {
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());
       });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("reserves the public worker path before plugin upgrade routing", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const pluginUpgrade = vi.fn(async () => false);
+    const accepted = new Promise<GatewayIngressWebSocket>((resolve) => {
+      wss.once("connection", (socket) => resolve(socket as GatewayIngressWebSocket));
+    });
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      handlePluginUpgrade: pluginUpgrade,
+      clients,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+      resolvedAuth,
+      workerIngressEnabled: true,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new WebSocket(`ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`);
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", resolve);
+        client.once("error", reject);
+      });
+      const socket = await accepted;
+      expect(socket[GATEWAY_WS_CONNECTION_KIND_PROPERTY]).toBe("worker");
+      expect(socket[GATEWAY_WS_WORKER_INGRESS_PROPERTY]).toBe("public");
+      expect(socket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]).toBeUndefined();
+      expect(pluginUpgrade).not.toHaveBeenCalled();
+    } finally {
+      client.close();
+      await new Promise<void>((resolve) => {
+        client.once("close", () => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("admits a valid worker over the public path without a gateway challenge", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 64 * 1024, noServer: true });
+    const preauthConnectionBudget = createPreauthConnectionBudget(1);
+    const workerConnectionService: WorkerConnectionService = {
+      admitWorker: vi.fn(async () => ({
+        ok: true as const,
+        identity: {
+          environmentId: "worker-public",
+          credentialHash: "h".repeat(43),
+          bundleHash: "a".repeat(64),
+          sessionId: null,
+          runId: null,
+          ownerEpoch: 1,
+          rpcSetVersion: 1,
+          protocolFeatures: [],
+          credentialExpiresAtMs: Date.now() + 60_000,
+        },
+      })),
+      validateWorkerConnection: vi.fn(() => null),
+      commitTranscript: vi.fn(async () => {
+        throw new Error("unexpected transcript commit");
+      }),
+      pushLiveEvent: vi.fn(async () => {
+        throw new Error("unexpected live event");
+      }),
+    };
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      clients,
+      preauthConnectionBudget,
+      resolvedAuth,
+      workerIngressEnabled: true,
+    });
+    const logGateway = createGatewayWsTestLogger();
+    const logHealth = createGatewayWsTestLogger();
+    const logWsControl = createGatewayWsTestLogger();
+    attachGatewayWsConnectionHandler({
+      wss,
+      clients,
+      preauthConnectionBudget,
+      port: 0,
+      getResolvedAuth: () => resolvedAuth,
+      preauthHandshakeTimeoutMs: 2_000,
+      gatewayMethods: [],
+      events: [],
+      refreshHealthSnapshot: vi.fn(async () => ({}) as never),
+      logGateway: logGateway as never,
+      logHealth: logHealth as never,
+      logWsControl: logWsControl as never,
+      extraHandlers: {},
+      broadcast: vi.fn(),
+      buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      workerConnectionService,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new WebSocket(`ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`);
+    const received: unknown[] = [];
+    client.on("message", (data) => received.push(JSON.parse(rawDataToString(data))));
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", resolve);
+        client.once("error", reject);
+      });
+      client.send(
+        JSON.stringify({
+          type: "req",
+          id: "connect-public-worker",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: GATEWAY_CLIENT_IDS.WORKER,
+              version: "2026.8.12",
+              platform: "linux",
+              mode: GATEWAY_CLIENT_MODES.WORKER,
+            },
+            role: "worker",
+            admission: {
+              environmentId: "worker-public",
+              credential: "public-worker-credential",
+              sessionId: null,
+              runId: null,
+              ownerEpoch: 1,
+              rpcSetVersion: 1,
+              handshake: {
+                bundleHash: "a".repeat(64),
+                openclawVersion: "2026.8.12",
+                protocolFeatures: [],
+              },
+            },
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      expect(received[0]).toMatchObject({
+        type: "res",
+        id: "connect-public-worker",
+        ok: true,
+        payload: { type: "worker-hello-ok", environmentId: "worker-public" },
+      });
+      expect(received).not.toContainEqual(
+        expect.objectContaining({ type: "event", event: "connect.challenge" }),
+      );
+      expect(workerConnectionService.admitWorker).toHaveBeenCalledOnce();
+    } finally {
+      client.close();
+      await new Promise<void>((resolve) => {
+        client.once("close", () => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("rejects the reserved worker path when worker admission is unavailable", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    wss.on("connection", (socket) => socket.close());
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      clients,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+      resolvedAuth,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    try {
+      await expect(requestUpgradeRejection(port, WORKER_PUBLIC_INGRESS_PATH)).resolves.toEqual({
+        status: 503,
+        body: "Worker websocket ingress unavailable",
+      });
+    } finally {
+      wss.close();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
       });

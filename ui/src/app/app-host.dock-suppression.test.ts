@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell dock suppression", () => {
-  it("applies route and session ownership to shell panels", () => {
+  it("applies route ownership to shell panels without session-gating desktop", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",
@@ -41,12 +41,7 @@ describe("OpenClaw shell dock suppression", () => {
           hello: {
             auth: { role: "operator", scopes: ["operator.admin"] },
             features: {
-              methods: [
-                "terminal.open",
-                "browser.request",
-                "openclaw.chat",
-                "worker.desktop.observe",
-              ],
+              methods: ["terminal.open", "browser.request", "openclaw.chat", "desktop.observe"],
             },
           },
           lastError: null,
@@ -157,7 +152,7 @@ describe("OpenClaw shell dock suppression", () => {
         }
       ).suppressed,
     ).toBe(false);
-    expect(desktopAvailable()).toBe(false);
+    expect(desktopAvailable()).toBe(true);
 
     context.sessions.state.result!.sessions = [
       {
@@ -174,10 +169,10 @@ describe("OpenClaw shell dock suppression", () => {
       { key: "agent:main:main", kind: "direct", updatedAt: 0 },
     ];
     renderLit(shell.render(), container);
-    expect(desktopAvailable()).toBe(false);
+    expect(desktopAvailable()).toBe(true);
 
     context.sessions.state.result = null;
     renderLit(shell.render(), container);
-    expect(desktopAvailable()).toBe(false);
+    expect(desktopAvailable()).toBe(true);
   });
 });

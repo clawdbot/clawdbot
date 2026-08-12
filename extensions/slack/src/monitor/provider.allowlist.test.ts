@@ -120,7 +120,8 @@ describe("slack startup user allowlist resolution", () => {
       },
     });
     getSlackClient().auth.test.mockResolvedValueOnce({
-      user_id: "U123BOT",
+      user_id: "UENTERPRISE",
+      bot_id: "BENTERPRISE",
       enterprise_id: "E123",
       app_id: "A123",
       is_enterprise_install: true,

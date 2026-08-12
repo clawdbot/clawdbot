@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -102,6 +103,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...DESKTOP_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",

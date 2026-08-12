@@ -30,6 +30,8 @@ type NodeHostRunOptions = {
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
   preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -509,6 +511,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       connectedGatewayProtocol = hello.protocol;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
+        return;
+      }
       publishInventory();
     },
     onConnectError: (error) => {

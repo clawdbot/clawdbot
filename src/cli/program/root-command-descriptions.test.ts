@@ -128,6 +128,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp serve",
       "node worker",
       "node run",
+      "connect",
       "worker",
       "fleet logs",
       "proxy start",

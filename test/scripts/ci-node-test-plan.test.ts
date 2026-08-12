@@ -332,6 +332,45 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(largeJobs).toHaveLength(7);
     expect(smallJobs).toHaveLength(14);
     expect(distJobs).toHaveLength(2);
+    const regularSmallJobs = smallJobs.filter((shard) =>
+      shard.groups.every((group) => !exclusiveGroupRe.test(group.shard_name)),
+    );
+    expect(regularSmallJobs).toHaveLength(10);
+    // The refreshed hosted medians give every regular bin one known tail
+    // anchor. Stale hints paired two of these slow groups in each runner class.
+    const largeTailAnchors = [
+      "core-unit-src-security",
+      "agentic-gateway-core",
+      "core-runtime-media-ui",
+      "agentic-agents-support",
+      "agentic-gateway-methods",
+      "agentic-agents-core-runtime",
+      "agentic-agents-embedded-base",
+    ];
+    const smallTailAnchors = [
+      "agentic-control-plane-auth-node",
+      "agentic-control-plane-agent-chat",
+      "core-runtime-infra-process",
+      "agentic-cli",
+      "core-runtime-cron-isolated-agent",
+      "core-runtime-infra-storage-state",
+      "agentic-agents-tools",
+      "agentic-commands-agent-channel",
+      "agentic-commands-doctor-config-state",
+      "auto-reply-reply-agent-runner",
+    ];
+    expect(
+      largeJobs.map(
+        (shard) =>
+          shard.groups.filter((group) => largeTailAnchors.includes(group.shard_name)).length,
+      ),
+    ).toEqual(Array.from({ length: largeTailAnchors.length }, () => 1));
+    expect(
+      regularSmallJobs.map(
+        (shard) =>
+          shard.groups.filter((group) => smallTailAnchors.includes(group.shard_name)).length,
+      ),
+    ).toEqual(Array.from({ length: smallTailAnchors.length }, () => 1));
     expect(compact).toEqual(
       createNodeTestShardBundles({
         includeReleaseOnlyPluginShards: false,

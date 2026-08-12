@@ -146,6 +146,76 @@ describe("sessions_history redaction", () => {
     );
   });
 
+  it("returns not-found for an unknown explicit key without reading history", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:missing";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          throw new Error(`No session found: ${sessionKey}`);
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("missing-explicit-key", { sessionKey });
+
+    expect(result.details).toEqual({
+      status: "error",
+      error: `No session found: ${sessionKey}`,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "self" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        throw new Error("No session found: agent:main:missing");
+      },
+    });
+
+    const result = await tool.execute("hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("returns an empty history for an existing explicit key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:empty";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { key: sessionKey } as T;
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("existing-empty-key", { sessionKey });
+
+    expect(result.details).toMatchObject({
+      sessionKey,
+      messages: [],
+      bytes: 2,
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.list",
+      "chat.history",
+    ]);
+  });
+
   it("redacts recalled session text even when log redaction is disabled", async () => {
     // Recalled transcript content is model-visible, so it is always redacted
     // even when normal logging redaction is configured off.
@@ -445,7 +515,11 @@ describe("sessions_history redaction", () => {
         sessionKey: targetSessionKey,
         messages: [{ role: "assistant", content: "visible" }],
       });
-      expect(requests.map((request) => request.method)).toEqual(["sessions.list", "chat.history"]);
+      expect(requests.map((request) => request.method)).toEqual([
+        "sessions.resolve",
+        "sessions.list",
+        "chat.history",
+      ]);
     } finally {
       unregister();
     }

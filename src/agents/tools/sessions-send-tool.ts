@@ -69,6 +69,7 @@ import {
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
@@ -205,57 +206,39 @@ function isConfiguredAgentMainSessionKey(params: {
   );
 }
 
-async function ensureConfiguredAgentMainSession(params: {
+async function createConfiguredAgentMainSession(params: {
   cfg: OpenClawConfig;
   callGateway: GatewayCaller;
   sessionKey: string;
-  mainKey: string;
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (
-    !isConfiguredAgentMainSessionKey({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      mainKey: params.mainKey,
-    })
-  ) {
-    return { ok: true };
-  }
-
   try {
-    await params.callGateway({
-      method: "sessions.resolve",
-      params: { key: params.sessionKey },
-      timeoutMs: 10_000,
-    });
-    return { ok: true };
-  } catch {
-    try {
-      const createParams = {
-        key: params.sessionKey,
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey, resolveDefaultAgentId(params.cfg)),
-      };
-      if (
-        params.useTrustedInProcessCreation &&
-        params.requesterSessionKey &&
-        hasInProcessGatewayToolContext()
-      ) {
-        await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
-          via: "internal",
-          actor: { type: "agent", id: params.requesterSessionKey },
-        });
-      } else {
-        await params.callGateway({
-          method: "sessions.create",
-          params: createParams,
-          timeoutMs: 10_000,
-        });
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: formatErrorMessage(err) };
+    const createParams = {
+      key: params.sessionKey,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey, resolveDefaultAgentId(params.cfg)),
+    };
+    if (
+      params.useTrustedInProcessCreation &&
+      params.requesterSessionKey &&
+      hasInProcessGatewayToolContext()
+    ) {
+      // sessions.create serializes keyed creation and adopts an existing row,
+      // so concurrent first sends can safely race after the missing resolution.
+      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
+        via: "internal",
+        actor: { type: "agent", id: params.requesterSessionKey },
+      });
+    } else {
+      await params.callGateway({
+        method: "sessions.create",
+        params: createParams,
+        timeoutMs: 10_000,
+      });
     }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -591,6 +574,11 @@ export function createSessionsSendTool(opts?: {
           error: "Either sessionKey or label is required",
         });
       }
+      const allowMissingKey = isConfiguredAgentMainSessionKey({
+        cfg,
+        sessionKey,
+        mainKey,
+      });
       const resolvedSession = await resolveSessionReference({
         sessionKey,
         alias,
@@ -606,12 +594,21 @@ export function createSessionsSendTool(opts?: {
           error: resolvedSession.error,
         });
       }
+      const resolutionAccess = createSessionVisibilityRowChecker({
+        action: "send",
+        defaultAgentId: resolveDefaultAgentId(cfg),
+        requesterSessionKey: effectiveRequesterKey,
+        visibility: sessionVisibility,
+        a2aPolicy,
+      }).check({ key: resolvedSession.key });
       const visibleSession = await resolveVisibleSessionReference({
         action: "send",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKey,
+        allowMissingKey,
+        concealResolutionError: resolutionAccess.allowed ? undefined : resolutionAccess.error,
         callGateway: gatewayCall,
       });
       const unresolvedDisplayKey = sessionKey;
@@ -772,21 +769,22 @@ export function createSessionsSendTool(opts?: {
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
-          const ensuredSession = await ensureConfiguredAgentMainSession({
-            cfg,
-            callGateway: gatewayCall,
-            sessionKey: resolvedKey,
-            mainKey,
-            requesterSessionKey,
-            useTrustedInProcessCreation: opts?.callGateway === undefined,
-          });
-          if (!ensuredSession.ok) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "error",
-              error: ensuredSession.error,
-              sessionKey: displayKey,
+          if (visibleSession.missing) {
+            const createdSession = await createConfiguredAgentMainSession({
+              cfg,
+              callGateway: gatewayCall,
+              sessionKey: resolvedKey,
+              requesterSessionKey,
+              useTrustedInProcessCreation: opts?.callGateway === undefined,
             });
+            if (!createdSession.ok) {
+              return jsonResult({
+                runId: crypto.randomUUID(),
+                status: "error",
+                error: createdSession.error,
+                sessionKey: displayKey,
+              });
+            }
           }
 
           const requesterChannel = opts?.agentChannel;
