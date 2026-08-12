@@ -25,9 +25,12 @@ const RESUME_HANDOFF_UNRESOLVED =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
 
 type ParsedHandoffSessionResolveResult =
-  | { kind: "success"; key: string }
+  | { kind: "success"; key: string; agentId: string }
   | { kind: "missing" }
-  | { kind: "ambiguous"; candidates: Array<{ key: string; displayName?: string }> }
+  | {
+      kind: "ambiguous";
+      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
+    }
   | { kind: "error"; error: ErrorShape }
   | { kind: "malformed" };
 
@@ -46,10 +49,15 @@ function hasExactKeys(
   );
 }
 
-function isHandoffSessionCandidate(value: unknown): value is { key: string; displayName?: string } {
+function isHandoffSessionCandidate(
+  value: unknown,
+): value is { key: string; agentId: string; displayName?: string } {
   return (
-    hasExactKeys(value, ["key"], ["displayName"]) &&
+    hasExactKeys(value, ["key", "agentId"], ["displayName"]) &&
     typeof value.key === "string" &&
+    value.key.length > 0 &&
+    typeof value.agentId === "string" &&
+    value.agentId.length > 0 &&
     (!Object.hasOwn(value, "displayName") || typeof value.displayName === "string")
   );
 }
@@ -74,8 +82,15 @@ function isHandoffErrorShape(value: unknown): value is ErrorShape {
 }
 
 function parseHandoffSessionResolveResult(value: unknown): ParsedHandoffSessionResolveResult {
-  if (hasExactKeys(value, ["ok", "key"]) && value.ok === true && typeof value.key === "string") {
-    return { kind: "success", key: value.key };
+  if (
+    hasExactKeys(value, ["ok", "key", "agentId"]) &&
+    value.ok === true &&
+    typeof value.key === "string" &&
+    value.key.length > 0 &&
+    typeof value.agentId === "string" &&
+    value.agentId.length > 0
+  ) {
+    return { kind: "success", key: value.key, agentId: value.agentId };
   }
   if (hasExactKeys(value, ["ok", "missing"]) && value.ok === true && value.missing === true) {
     return { kind: "missing" };
@@ -176,6 +191,10 @@ async function resolveHandoffConnection(
     }
     const parsed = parseHandoffSessionResolveResult(result);
     if (parsed.kind === "success") {
+      const canonicalKeyOwner = parseAgentSessionKey(parsed.key)?.agentId;
+      if (parsed.agentId !== handoff.agentId || canonicalKeyOwner !== parsed.agentId) {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
       return { connection: client.connection, sessionKey: parsed.key };
     }
     if (parsed.kind === "missing") {

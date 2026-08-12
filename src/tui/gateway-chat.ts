@@ -158,12 +158,12 @@ type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
 type HandoffSessionResolveResult =
-  | { ok: true; key: string }
+  | { ok: true; key: string; agentId: string }
   | { ok: true; missing: true }
   | {
       ok: true;
       ambiguous: true;
-      candidates: Array<{ key: string; displayName?: string }>;
+      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
     }
   | { ok: false; error: ErrorShape };
 

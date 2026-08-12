@@ -191,7 +191,7 @@ describe("runResumeCommand", () => {
       password: "explicit-password",
       tlsFingerprint: "sha256:explicit-pin",
     });
-    client.resolveSession.mockResolvedValue({ ok: true, key: sessionKey });
+    client.resolveSession.mockResolvedValue({ ok: true, key: sessionKey, agentId: "main" });
 
     await runResumeCommand(undefined, {
       handoff,
@@ -234,7 +234,7 @@ describe("runResumeCommand", () => {
       {
         ok: true,
         ambiguous: true,
-        candidates: [{ key: "agent:main:one", displayName: "One" }],
+        candidates: [{ key: "agent:main:one", agentId: "main", displayName: "One" }],
       },
       "Could not resolve the session handoff.",
     ],
@@ -251,13 +251,47 @@ describe("runResumeCommand", () => {
     ],
     ["malformed success", { ok: true }, "Could not resolve the session handoff."],
     [
+      "old success without agent ownership",
+      { ok: true, key: "agent:main:alpha" },
+      "Could not resolve the session handoff.",
+    ],
+    [
       "extra success field",
-      { ok: true, key: "agent:main:alpha", extra: true },
+      { ok: true, key: "agent:main:alpha", agentId: "main", extra: true },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "empty success owner",
+      { ok: true, key: "agent:main:alpha", agentId: "" },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "old ambiguity candidate without agent ownership",
+      { ok: true, ambiguous: true, candidates: [{ key: "agent:main:one" }] },
       "Could not resolve the session handoff.",
     ],
     [
       "malformed candidate",
-      { ok: true, ambiguous: true, candidates: [{ key: "agent:main:one", extra: true }] },
+      {
+        ok: true,
+        ambiguous: true,
+        candidates: [{ key: "agent:main:one", agentId: "main", extra: true }],
+      },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "mismatched returned agent",
+      { ok: true, key: "agent:main:alpha", agentId: "work" },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "unqualified canonical key",
+      { ok: true, key: "alpha", agentId: "main" },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "mismatched canonical key owner",
+      { ok: true, key: "agent:work:alpha", agentId: "main" },
       "Could not resolve the session handoff.",
     ],
     [

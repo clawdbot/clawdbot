@@ -224,7 +224,9 @@ describe("GatewayChatClient", () => {
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
-    const request = vi.fn().mockResolvedValue({ ok: true, key: "agent:main:alpha" });
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     await expect(
@@ -234,7 +236,7 @@ describe("GatewayChatClient", () => {
         includeGlobal: true,
         allowMissing: true,
       }),
-    ).resolves.toEqual({ ok: true, key: "agent:main:alpha" });
+    ).resolves.toEqual({ ok: true, key: "agent:main:alpha", agentId: "main" });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
       key: "Agent:Main:ALPHA",
       agentId: "main",
