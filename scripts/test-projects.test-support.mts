@@ -1484,15 +1484,25 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
     return cachedImportGraphGrepMatches.get(cacheKey) ?? null;
   }
 
-  const result = spawnSync(
-    "git",
+  const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
+  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  let result = spawnSync(
+    "rg",
     [
-      "grep",
-      "-l",
+      "--files-with-matches",
       "--fixed-strings",
+      "--hidden",
+      "--no-ignore",
+      ...extensions.flatMap((ext) => ["--glob", `*${ext}`]),
+      "--glob",
+      "!**/node_modules/**",
+      "--glob",
+      "!**/dist/**",
+      "--glob",
+      "!**/vendor/**",
       term,
       "--",
-      ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
+      ...roots,
     ],
     {
       cwd,
@@ -1500,6 +1510,24 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    result = spawnSync(
+      "git",
+      [
+        "grep",
+        "-l",
+        "--fixed-strings",
+        term,
+        "--",
+        ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  }
   if (result.status === 1) {
     cachedImportGraphGrepMatches.set(cacheKey, []);
     return [];
@@ -1508,16 +1536,19 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
     cachedImportGraphGrepMatches.set(cacheKey, null);
     return null;
   }
+  const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
   const matches = result.stdout
     .split("\n")
     .map((line) => normalizePathPattern(line.trim()))
     .filter(
       (line) =>
         line.length > 0 &&
+        trackedFiles.has(line) &&
         (tooling
           ? TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => line.endsWith(ext))
           : isImportableGraphFile(line)),
-    );
+    )
+    .toSorted((left, right) => left.localeCompare(right));
   cachedImportGraphGrepMatches.set(cacheKey, matches);
   return matches;
 }
