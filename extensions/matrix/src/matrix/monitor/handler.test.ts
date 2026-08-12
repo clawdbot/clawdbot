@@ -3770,35 +3770,27 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("preserves a surviving draft receipt when redaction and media delivery fail", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-
-    opts.onPartialReply?.({ text: "Visible preview" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-
-    redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("media send failed"));
-    const error = await deliver(
-      { mediaUrl: "https://example.com/image.png" },
-      { kind: "final" },
-    ).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-        receipt: { primaryPlatformMessageId: "$draft1" },
+  // A visible draft is the only copy of the reply until its replacement lands, so every
+  // delivery path must leave it intact — and unredacted — when the replacement never arrives.
+  it.each([
+    {
+      name: "media delivery",
+      arrange: () => {},
+      payload: { mediaUrl: "https://example.com/image.png" },
+    },
+    {
+      name: "final-edit fallback delivery",
+      arrange: () => {
+        editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
       },
-    });
-    await finish();
-  });
-
-  it("preserves a surviving draft receipt when final-edit fallback also fails", async () => {
+      payload: { text: "Final text" },
+    },
+    {
+      name: "generic fallback delivery",
+      arrange: () => {},
+      payload: { text: "Something failed", isError: true },
+    },
+  ])("keeps the visible draft when $name fails", async ({ arrange, payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -3807,10 +3799,9 @@ describe("matrix monitor handler draft streaming", () => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
-    editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
-    redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-    const error = await deliver({ text: "Final text" }, { kind: "final" }).catch(
+    arrange();
+    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("send failed"));
+    const error = await deliver(payload as never, { kind: "final" }).catch(
       (caught: unknown) => caught,
     );
 
@@ -3823,10 +3814,39 @@ describe("matrix monitor handler draft streaming", () => {
         receipt: { primaryPlatformMessageId: "$draft1" },
       },
     });
+    expect(redactEventMock).not.toHaveBeenCalled();
     await finish();
+    // End-of-turn cleanup must not delete the draft that is now the delivered reply.
+    expect(redactEventMock).not.toHaveBeenCalled();
   });
 
-  it("preserves a surviving draft receipt when generic fallback delivery fails", async () => {
+  it("keeps the visible draft when the replacement delivery reports nothing visible", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockResolvedValueOnce({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    const result = await deliver({ text: "Something failed", isError: true } as never, {
+      kind: "final",
+    });
+
+    expect(result).toMatchObject({
+      messageIds: ["$draft1"],
+      visibleReplySent: true,
+      content: "Visible preview",
+    });
+    await finish();
+    expect(redactEventMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the draft alongside the reply when superseding redaction fails", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -3836,19 +3856,15 @@ describe("matrix monitor handler draft streaming", () => {
     });
 
     redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-    const error = await deliver({ text: "Something failed", isError: true } as never, {
+    const result = await deliver({ text: "Something failed", isError: true } as never, {
       kind: "final",
-    }).catch((caught: unknown) => caught);
+    });
 
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-        receipt: { primaryPlatformMessageId: "$draft1" },
-      },
+    // The draft event is still visible, so settlement must not read as a total failure.
+    expect(result).toMatchObject({
+      messageIds: ["$draft1", "$reply1"],
+      visibleReplySent: true,
+      content: "Visible preview\ndelivered",
     });
     await finish();
   });

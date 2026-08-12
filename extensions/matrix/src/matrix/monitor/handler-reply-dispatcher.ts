@@ -122,16 +122,57 @@ export function createMatrixReplyDispatcher(config: {
           content,
         };
       };
-      const createSurvivingDraftDelivery = (
-        id: string,
-        redacted: boolean,
-      ): MatrixReplyDeliveryResult => {
-        const content = redacted ? undefined : draftStream?.content();
-        return content
-          ? // Failed redaction leaves an accepted provider event visible. Preserve it so
-            // settlement and retries cannot mistake a partial delivery for total failure.
-            createDraftDeliveryResult(id, content)
-          : mergeMatrixReplyDeliveryResults([]);
+      const noDelivery = mergeMatrixReplyDeliveryResults([]);
+      const createRetainedDraftDelivery = (id: string): MatrixReplyDeliveryResult => {
+        const content = draftStream?.content();
+        return content ? createDraftDeliveryResult(id, content) : noDelivery;
+      };
+      // A draft may only be superseded once its replacement is confirmed visible.
+      // Redacting first turns any failed or non-visible send into permanent, silent loss
+      // of content the user already saw, leaving no event behind to replace it.
+      const deliverAndSettleDraft = async (params: {
+        replies: Parameters<typeof deliverMatrixReplies>[0]["replies"];
+        draftEventId: string | undefined;
+        supersedesDraft: boolean;
+        retainedDraft: MatrixReplyDeliveryResult;
+      }): Promise<MatrixReplyDeliveryResult> => {
+        let delivered: MatrixReplyDeliveryResult;
+        try {
+          delivered = await deliverMatrixReplies({
+            cfg,
+            replies: params.replies,
+            roomId,
+            client,
+            runtime,
+            textLimit,
+            replyToMode,
+            hasRepliedRef,
+            threadId: threadTarget,
+            replyToId: threadTarget ?? replyToEventId ?? undefined,
+            accountId,
+            mediaLocalRoots,
+            tableMode,
+          });
+        } catch (error: unknown) {
+          // The draft is now the only visible copy of this reply. Mark it consumed so the
+          // handler's end-of-turn draft cleanup cannot redact it on the way out. With no
+          // draft event there is nothing to preserve, and claiming otherwise would strand
+          // the flag across the next block.
+          if (params.draftEventId) {
+            draftController.markDraftConsumed();
+          }
+          throw toMatrixPartialDeliveryError(error, [params.retainedDraft]);
+        }
+        if (!params.supersedesDraft || !params.draftEventId || !delivered.visibleReplySent) {
+          return mergeMatrixReplyDeliveryResults([params.retainedDraft, delivered]);
+        }
+        const draftRedacted = await redactMatrixDraftEvent(client, roomId, params.draftEventId);
+        // Failed redaction leaves an accepted provider event visible. Preserve it so
+        // settlement and retries cannot mistake a partial delivery for total failure.
+        return mergeMatrixReplyDeliveryResults([
+          draftRedacted ? noDelivery : params.retainedDraft,
+          delivered,
+        ]);
       };
       if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -265,29 +306,12 @@ export function createMatrixReplyDispatcher(config: {
               },
             }),
             deliverNormally: async () => {
-              const draftRedacted = await redactMatrixDraftEvent(client, roomId, draftEventId);
-              const survivingDraft = createSurvivingDraftDelivery(draftEventId, draftRedacted);
-              let deliveredFallback: MatrixReplyDeliveryResult;
-              try {
-                deliveredFallback = await deliverMatrixReplies({
-                  cfg,
-                  replies: [fallbackPayload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  hasRepliedRef,
-                  threadId: threadTarget,
-                  replyToId: threadTarget ?? replyToEventId ?? undefined,
-                  accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-              } catch (error: unknown) {
-                throw toMatrixPartialDeliveryError(error, [survivingDraft]);
-              }
-              fallbackResult = mergeMatrixReplyDeliveryResults([survivingDraft, deliveredFallback]);
+              fallbackResult = await deliverAndSettleDraft({
+                replies: [fallbackPayload],
+                draftEventId,
+                supersedesDraft: true,
+                retainedDraft: createRetainedDraftDelivery(draftEventId),
+              });
               return fallbackResult.visibleReplySent;
             },
           });
@@ -298,7 +322,7 @@ export function createMatrixReplyDispatcher(config: {
                   draftEventId,
                   finalizedDraftContent ?? preparedFinalPreviewContent,
                 )
-              : (fallbackResult ?? mergeMatrixReplyDeliveryResults([]));
+              : (fallbackResult ?? noDelivery);
           return await completeDelivery(settledResult);
         } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
           let textEditOk = !mustDeliverFinalNormally;
@@ -350,10 +374,6 @@ export function createMatrixReplyDispatcher(config: {
             finalizedDraftContent = draftStream.content();
           }
           const reusesDraftAsFinalText = Boolean(payloadText?.trim()) && textEditOk;
-          const draftContent = draftStream.content();
-          const draftRedacted = reusesDraftAsFinalText
-            ? false
-            : await redactMatrixDraftEvent(client, roomId, draftEventId);
           const mediaPayload =
             ttsSupplement && reusesDraftAsFinalText
               ? buildTtsSupplementMediaPayload(payload)
@@ -370,33 +390,15 @@ export function createMatrixReplyDispatcher(config: {
           const previewDelivery =
             reusesDraftAsFinalText && providerDraftContent
               ? createDraftDeliveryResult(draftEventId, providerDraftContent)
-              : !draftRedacted && draftContent
-                ? createDraftDeliveryResult(draftEventId, draftContent)
-                : mergeMatrixReplyDeliveryResults([]);
-          let mediaDelivery: MatrixReplyDeliveryResult;
-          try {
-            mediaDelivery = await deliverMatrixReplies({
-              cfg,
-              replies: [mediaPayload],
-              roomId,
-              client,
-              runtime,
-              textLimit,
-              replyToMode,
-              hasRepliedRef,
-              threadId: threadTarget,
-              replyToId: threadTarget ?? replyToEventId ?? undefined,
-              accountId,
-              mediaLocalRoots,
-              tableMode,
-            });
-          } catch (error: unknown) {
-            throw toMatrixPartialDeliveryError(error, [previewDelivery]);
-          }
+              : createRetainedDraftDelivery(draftEventId);
+          const settledMedia = await deliverAndSettleDraft({
+            replies: [mediaPayload],
+            draftEventId,
+            supersedesDraft: !reusesDraftAsFinalText,
+            retainedDraft: previewDelivery,
+          });
           draftController.markDraftConsumed();
-          return await completeDelivery(
-            mergeMatrixReplyDeliveryResults([previewDelivery, mediaDelivery]),
-          );
+          return await completeDelivery(settledMedia);
         }
         const shouldRedactDraft =
           Boolean(draftEventId) &&
@@ -404,40 +406,19 @@ export function createMatrixReplyDispatcher(config: {
             payloadReplyMismatch ||
             mustDeliverFinalNormally ||
             draftFinalTextNeedsNormalMentionDelivery);
-        const draftRedacted =
-          shouldRedactDraft && draftEventId
-            ? await redactMatrixDraftEvent(client, roomId, draftEventId)
-            : false;
-        const survivingDraft =
-          shouldRedactDraft && draftEventId
-            ? createSurvivingDraftDelivery(draftEventId, draftRedacted)
-            : mergeMatrixReplyDeliveryResults([]);
-        let deliveredFallback: MatrixReplyDeliveryResult;
-        try {
-          deliveredFallback = await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            textLimit,
-            replyToMode,
-            hasRepliedRef,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-            tableMode,
-          });
-        } catch (error: unknown) {
-          throw toMatrixPartialDeliveryError(error, [survivingDraft]);
-        }
-        if (shouldRedactDraft || deliveredFallback.visibleReplySent) {
+        const settledFallback = await deliverAndSettleDraft({
+          replies: [fallbackPayload],
+          draftEventId,
+          supersedesDraft: shouldRedactDraft,
+          retainedDraft:
+            shouldRedactDraft && draftEventId
+              ? createRetainedDraftDelivery(draftEventId)
+              : noDelivery,
+        });
+        if (shouldRedactDraft || settledFallback.visibleReplySent) {
           draftController.markDraftConsumed();
         }
-        return await completeDelivery(
-          mergeMatrixReplyDeliveryResults([survivingDraft, deliveredFallback]),
-        );
+        return await completeDelivery(settledFallback);
       }
       return await completeDelivery(
         await deliverMatrixReplies({
