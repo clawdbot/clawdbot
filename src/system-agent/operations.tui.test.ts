@@ -66,7 +66,7 @@ describe("system-agent TUI operations", () => {
     const result = await executeSystemAgentOperation(
       { kind: "open-tui", agentId: "work" },
       runtime,
-      { deps: { runTui } },
+      { deps: { runTui, loadOverview: async () => createOverview(false) } },
     );
 
     expect(runTui).toHaveBeenCalledWith({
@@ -127,7 +127,7 @@ describe("system-agent TUI operations", () => {
     }));
 
     const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
-      deps: { runTui },
+      deps: { runTui, loadOverview: async () => createOverview(false) },
     });
 
     expect(result).toMatchObject({
