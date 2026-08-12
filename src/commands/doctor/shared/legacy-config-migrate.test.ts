@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { resolveChannelConfigKey } from "../../../config/channel-configured-shared.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -1930,6 +1931,119 @@ describe("legacy WebChat channel config migrate", () => {
       "Removed retired channels.webchat config.",
       "Removed retired gateway.webchat config.",
     ]);
+  });
+});
+
+// ClawSweeper cycle 39 (P1): cycle 32 made alias-equivalent duplicate `channels.*` sections a
+// hard validation error, but main accepted those configs independently — doctor --fix owns the
+// upgrade path. The merge keeps the ONE section the activation resolver serves, folds loser-only
+// keys in, and reports conflicting fields whose winner values it kept.
+describe("duplicate alias-equivalent channel sections migrate", () => {
+  it("merges the variant section into the exact canonical section activation reads", () => {
+    const authored = {
+      channels: {
+        ClickClack: { botToken: "a", threadGuardMode: "strict" },
+        clickclack: { botToken: "b" },
+      },
+    };
+    // The winner is the activation resolver's own pick, not a key-order assumption.
+    expect(resolveChannelConfigKey(authored as OpenClawConfig, "clickclack")).toBe("clickclack");
+
+    const res = migrateLegacyConfigForTest(authored);
+
+    expect(res.config?.channels).toEqual({
+      clickclack: { botToken: "b", threadGuardMode: "strict" },
+    });
+    expect(res.changes).toContain(
+      'Merged channels key "ClickClack" into "clickclack"; kept existing values for conflicting fields: botToken.',
+    );
+  });
+
+  it("keeps the first authored variant when no exact canonical section exists", () => {
+    const authored = {
+      channels: {
+        ClickClack: { botToken: "a" },
+        CLICKCLACK: { botToken: "a", workspace: "hq" },
+      },
+    };
+    expect(resolveChannelConfigKey(authored as OpenClawConfig, "clickclack")).toBe("ClickClack");
+
+    const res = migrateLegacyConfigForTest(authored);
+
+    expect(res.config?.channels).toEqual({
+      ClickClack: { botToken: "a", workspace: "hq" },
+    });
+    // Equal botToken values are not conflicts; only the fold is reported.
+    expect(res.changes).toContain('Merged channels key "CLICKCLACK" into "ClickClack".');
+  });
+
+  it("folds every alias-equivalent loser into the winner in authored order", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        ClickClack: { botToken: "a", region: "eu" },
+        clickclack: { botToken: "b" },
+        CLICKCLACK: { botToken: "c", region: "us", workspace: "hq" },
+      },
+    });
+
+    expect(res.config?.channels).toEqual({
+      clickclack: { botToken: "b", region: "eu", workspace: "hq" },
+    });
+    expect(res.changes).toContain(
+      'Merged channels key "ClickClack" into "clickclack"; kept existing values for conflicting fields: botToken.',
+    );
+    expect(res.changes).toContain(
+      'Merged channels key "CLICKCLACK" into "clickclack"; kept existing values for conflicting fields: botToken, region.',
+    );
+  });
+
+  it("deep-merges nested records and reports dotted conflict paths", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        clickclack: { accounts: { main: { token: "x" } } },
+        CLICKCLACK: { accounts: { main: { token: "y" }, alt: { token: "z" } }, workspace: "hq" },
+      },
+    });
+
+    expect(res.config?.channels).toEqual({
+      clickclack: {
+        accounts: { main: { token: "x" }, alt: { token: "z" } },
+        workspace: "hq",
+      },
+    });
+    expect(res.changes).toContain(
+      'Merged channels key "CLICKCLACK" into "clickclack"; kept existing values for conflicting fields: accounts.main.token.',
+    );
+  });
+
+  it("reports duplicate alias-equivalent sections before doctor fix", () => {
+    const issues = findLegacyConfigIssues({
+      channels: { ClickClack: { botToken: "a" }, clickclack: { botToken: "b" } },
+    });
+
+    expect(
+      issues.some(
+        (issue) => issue.path === "channels" && issue.message.includes('"openclaw doctor --fix"'),
+      ),
+    ).toBe(true);
+    // Non-record duplicates never shadow through the resolver, so they are not reported.
+    expect(
+      findLegacyConfigIssues({
+        channels: { ClickClack: "oops", clickclack: { botToken: "b" } },
+      }).filter((issue) => issue.path === "channels"),
+    ).toEqual([]);
+  });
+
+  it("leaves non-record duplicates and distinct sections alone", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        ClickClack: "oops",
+        clickclack: { botToken: "b" },
+        discord: { token: "d" },
+      },
+    });
+
+    expect(res.config).toBeNull();
   });
 });
 

@@ -717,11 +717,12 @@ function validateConfigObjectWithPluginsBase(
         if (firstSectionKey !== undefined) {
           // The winning key comes from the activation resolver itself, so the message states
           // exactly which section the runtime reads (exact canonical key first, else the first
-          // authored record that folds).
+          // authored record that folds). The named repair is the doctor merge migration
+          // (channels.duplicate-alias-sections-merge), which keeps that same winner.
           const servedKey = resolveChannelConfigKey(config, canonicalChannelId);
           issues.push({
             path: `channels.${trimmed}`,
-            message: `duplicate channel config: "${firstSectionKey}" and "${trimmed}" both configure channel "${canonicalChannelId}" and activation reads only channels.${servedKey}; merge these sections into one key`,
+            message: `duplicate channel config: "${firstSectionKey}" and "${trimmed}" both configure channel "${canonicalChannelId}" and activation reads only channels.${servedKey}; run openclaw doctor --fix to merge these sections`,
           });
           continue;
         }

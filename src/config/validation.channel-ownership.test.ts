@@ -2,6 +2,7 @@
 // authored variant spellings, and ownership planning from the defaulted config the gateway's
 // auto-enable pass actually consumes.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_CONFIG_MIGRATIONS_CHANNELS } from "../commands/doctor/shared/legacy-config-migrations.channels.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -135,6 +136,8 @@ describe("duplicate alias-equivalent channel sections are rejected", () => {
         expect(duplicate?.message).toContain('"clickclack"');
         // The exact canonical key takes priority in the resolver, whichever key came first.
         expect(duplicate?.message).toContain("activation reads only channels.clickclack");
+        // The reject has a repair; the message must point operators at it.
+        expect(duplicate?.message).toContain("run openclaw doctor --fix to merge these sections");
       }
     }
   });
@@ -183,6 +186,26 @@ describe("duplicate alias-equivalent channel sections are rejected", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("clears the reject after the doctor merge migration folds the sections", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [variantClaimant("ClickClack")],
+    });
+
+    const raw: Record<string, unknown> = {
+      channels: { ClickClack: { token: "tok" }, clickclack: { enabled: false } },
+    };
+    const changes: string[] = [];
+    for (const migration of LEGACY_CONFIG_MIGRATIONS_CHANNELS) {
+      migration.apply(raw, changes);
+    }
+
+    // The doctor merge keeps the runtime-selected section and folds the loser's keys in, so
+    // the migrated config must pass the duplicate reject above without further edits.
+    expect(raw.channels).toEqual({ clickclack: { enabled: false, token: "tok" } });
+    expect(validateConfigObjectWithPlugins(raw).ok).toBe(true);
   });
 
   it("ignores non-record duplicates the resolver walk skips", () => {

@@ -1,4 +1,7 @@
 // Legacy channel config migrations for routing, streaming, groups, and account aliases.
+import { isDeepStrictEqual } from "node:util";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
+import { resolveChannelConfigKey } from "../../../config/channel-configured-shared.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -6,6 +9,8 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { hasOwnKey, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 function cleanupEmptyRecord(parent: Record<string, unknown>, key: string): void {
@@ -448,8 +453,142 @@ function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, change
   changes.push("Removed retired channels.webchat config.");
 }
 
+// ClawSweeper cycle 39 (P1): validation rejects two record-shaped `channels.*` sections whose
+// keys fold onto one canonical identity (cycle 32) because `resolveChannelConfigKey` serves
+// exactly one of them, but main accepted those configs independently — this merge is the
+// doctor --fix upgrade path the reject points at. Only catalog-foldable keys can collide:
+// a key the catalog cannot fold (canonical id null) is its own identity.
+function hasDuplicateAliasChannelSections(value: unknown): boolean {
+  const channels = getRecord(value);
+  if (!channels) {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const key of Object.keys(channels)) {
+    if (isBlockedObjectKey(key) || !getRecord(channels[key])) {
+      continue;
+    }
+    const canonicalId = normalizeChatChannelId(key);
+    if (!canonicalId) {
+      continue;
+    }
+    if (seen.has(canonicalId)) {
+      return true;
+    }
+    seen.add(canonicalId);
+  }
+  return false;
+}
+
+const DUPLICATE_CHANNEL_SECTION_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels"],
+    message:
+      'multiple channels.* sections configure one channel and activation reads only one of them. Run "openclaw doctor --fix" to merge them.',
+    match: (value) => hasDuplicateAliasChannelSections(value),
+  },
+];
+
+// Deep-folds a losing duplicate section into the winner: loser-only keys copy over, nested
+// records merge recursively, and differing values keep the winner's (the value activation
+// already served) while returning the dotted conflict paths for the doctor change line.
+function foldDuplicateChannelSection(
+  winner: Record<string, unknown>,
+  loser: Record<string, unknown>,
+): string[] {
+  const conflicts: string[] = [];
+  for (const [field, loserValue] of Object.entries(loser)) {
+    if (loserValue === undefined || isBlockedObjectKey(field)) {
+      continue;
+    }
+    if (!Object.hasOwn(winner, field) || winner[field] === undefined) {
+      winner[field] = loserValue;
+      continue;
+    }
+    const winnerValue = winner[field];
+    if (isDeepStrictEqual(winnerValue, loserValue)) {
+      continue;
+    }
+    const winnerRecord = getRecord(winnerValue);
+    const loserRecord = getRecord(loserValue);
+    if (winnerRecord && loserRecord) {
+      conflicts.push(
+        ...foldDuplicateChannelSection(winnerRecord, loserRecord).map((c) => `${field}.${c}`),
+      );
+      continue;
+    }
+    conflicts.push(field);
+  }
+  return conflicts;
+}
+
+function migrateDuplicateAliasChannelSections(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  const channels = getRecord(raw.channels);
+  if (!channels) {
+    return;
+  }
+  // Group record-shaped sections by the identity fold the activation resolver applies,
+  // preserving the resolver's own walk order (authored key order) for deterministic folding.
+  const sectionKeysByCanonicalId = new Map<string, string[]>();
+  for (const key of Object.keys(channels)) {
+    if (isBlockedObjectKey(key) || !getRecord(channels[key])) {
+      continue;
+    }
+    const canonicalId = normalizeChatChannelId(key);
+    if (!canonicalId) {
+      continue;
+    }
+    const keys = sectionKeysByCanonicalId.get(canonicalId);
+    if (keys) {
+      keys.push(key);
+    } else {
+      sectionKeysByCanonicalId.set(canonicalId, [key]);
+    }
+  }
+  for (const [canonicalId, keys] of sectionKeysByCanonicalId) {
+    if (keys.length < 2) {
+      continue;
+    }
+    // The winner is the resolver's own pick (exact canonical key when record-shaped, else the
+    // first authored record that folds), so the merged section serves the values the runtime
+    // already served. A non-record first-folding key makes the resolver return an unconfigured
+    // canonical key; leave that pathological shape for its own schema error.
+    const winnerKey = resolveChannelConfigKey(raw as OpenClawConfig, canonicalId);
+    const winner = getRecord(channels[winnerKey]);
+    if (!winner) {
+      continue;
+    }
+    for (const loserKey of keys) {
+      if (loserKey === winnerKey) {
+        continue;
+      }
+      const loser = getRecord(channels[loserKey]);
+      if (!loser) {
+        continue;
+      }
+      const conflicts = foldDuplicateChannelSection(winner, loser).toSorted();
+      delete channels[loserKey];
+      changes.push(
+        conflicts.length > 0
+          ? `Merged channels key ${JSON.stringify(loserKey)} into ${JSON.stringify(winnerKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`
+          : `Merged channels key ${JSON.stringify(loserKey)} into ${JSON.stringify(winnerKey)}.`,
+      );
+    }
+  }
+}
+
 /** Legacy config migration specs for channel-owned compatibility keys. */
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  // Runs before per-channel migrations so they see one merged section per channel identity.
+  defineLegacyConfigMigration({
+    id: "channels.duplicate-alias-sections-merge",
+    describe: "Merge alias-equivalent duplicate channel sections onto the section activation reads",
+    legacyRules: DUPLICATE_CHANNEL_SECTION_RULES,
+    apply: migrateDuplicateAliasChannelSections,
+  }),
   defineLegacyConfigMigration({
     id: "channels.webchat-remove",
     describe: "Remove retired WebChat channel config",

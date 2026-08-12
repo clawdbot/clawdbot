@@ -158,6 +158,7 @@ Flags:
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
     - Safe migration of legacy default HTTPS Tailscale Serve routes from a LAN-bound Gateway to managed loopback ingress. Retired named-Service config is removed with managed ingress disabled until the operator chooses a device route; custom external routes receive manual guidance.
+    - Duplicate `channels.*` section merge when two authored spellings resolve to the same channel: the section activation reads wins, missing keys fold in from the losing sections, and conflicting fields are reported with the kept values.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
