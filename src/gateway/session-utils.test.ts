@@ -3655,7 +3655,7 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(true);
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
       agentId: "qa",
-      readOnly: false,
+      readOnly: true,
     });
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });

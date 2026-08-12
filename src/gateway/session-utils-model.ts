@@ -445,9 +445,11 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
+    // Attachment admission is a turn hot path. Consume lifecycle-prepared capabilities so a
+    // user send never starts full provider discovery before it can be acknowledged.
     const loadParams = {
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      readOnly: false,
+      readOnly: true,
     };
     const snapshot = params.loadGatewayModelCatalogSnapshot
       ? await params.loadGatewayModelCatalogSnapshot(loadParams)
