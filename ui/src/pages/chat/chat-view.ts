@@ -59,7 +59,6 @@ import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
 import type { ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
 import {
-  renderChatPinnedMessages,
   renderTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
@@ -257,7 +256,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRevealWorkspaceFile?: (path: string) => void;
     onChatScroll?: (event: Event) => void;
     basePath?: string;
-    gatewayUrl?: string;
     composerControls?: TemplateResult | typeof nothing;
     replyTarget?: ChatReplyTarget | null;
     onClearReply?: () => void;
@@ -349,7 +347,6 @@ export function renderChat(props: ChatProps) {
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
-      gatewayUrl: props.gatewayUrl,
       boardProvider: props.boardProvider,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
@@ -423,7 +420,6 @@ export function renderChat(props: ChatProps) {
             persistCommentary: props.persistCommentary,
             sessions: props.sessions,
             sessionHost: props.sessionHost,
-            gatewayUrl: props.gatewayUrl,
             assistantName: props.assistantName,
             assistantAvatar: props.assistantAvatar,
             assistantAvatarUrl: props.assistantAvatarUrl,
@@ -588,16 +584,6 @@ export function renderChat(props: ChatProps) {
       }}
     >
       ${renderChatViewNotices(props)} ${renderTranscriptSearch(props.paneId, requestUpdate)}
-      ${renderChatPinnedMessages(
-        {
-          paneId: props.paneId,
-          sessionKey: props.sessionKey,
-          messages: props.messages,
-          userName: props.userName,
-          userAvatar: props.userAvatar,
-        },
-        requestUpdate,
-      )}
       <div
         class="chat-workbench ${workspaceCollapsed
           ? "chat-workbench--workspace-collapsed"

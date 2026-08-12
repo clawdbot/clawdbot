@@ -4,7 +4,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -16,16 +15,13 @@ import {
   buildCompanionQuestionPrefill,
   buildMoreDetailsCompanionQuestion,
 } from "../../../lib/chat/companion-question.ts";
-import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -37,15 +33,12 @@ import {
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
-const pinnedMessagesMap = new Map<string, PinnedMessages>();
-
 export type ChatThreadState = {
   searchOpen: boolean;
   searchQuery: string;
   searchFocusPending: boolean;
   searchReturnFocusTarget: HTMLElement | null;
   searchReturnFocusOwner: HTMLElement | null;
-  pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
     onSetReply?: (target: MessageReplyTarget) => void;
@@ -87,7 +80,6 @@ export type ChatThreadProps = {
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
   sessionHost?: UiSessionDefaultsHost | null;
-  gatewayUrl?: string;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -142,14 +134,6 @@ export type TranscriptInteractionProps = Pick<
   | "onCompanionPrefill"
 >;
 
-type ChatPinnedMessagesProps = {
-  paneId: string;
-  sessionKey: string;
-  messages: unknown[];
-  userName?: string | null;
-  userAvatar?: string | null;
-};
-
 function createTranscriptState(): ChatThreadState {
   return {
     searchOpen: false,
@@ -157,7 +141,6 @@ function createTranscriptState(): ChatThreadState {
     searchFocusPending: false,
     searchReturnFocusTarget: null,
     searchReturnFocusOwner: null,
-    pinnedExpanded: false,
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
@@ -173,18 +156,6 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   const state = createTranscriptState();
   transcriptStates.set(paneId, state);
   return state;
-}
-
-function getPinnedMessages(sessionKey: string): PinnedMessages {
-  return getOrCreateSessionCacheValue(
-    pinnedMessagesMap,
-    sessionKey,
-    () => new PinnedMessages(sessionKey),
-  );
-}
-
-function getPinnedMessageSummary(message: unknown): string {
-  return extractTextCached(message) ?? "";
 }
 
 function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
@@ -312,79 +283,6 @@ export function toggleTranscriptSearch(
       ? returnFocusOwner
       : null;
   requestUpdate();
-}
-
-export function renderChatPinnedMessages(
-  props: ChatPinnedMessagesProps,
-  requestUpdate: () => void,
-): TemplateResult | typeof nothing {
-  const state = getTranscriptState(props.paneId);
-  const pinned = getPinnedMessages(props.sessionKey);
-  const userRoleLabel = resolveLocalUserName({
-    name: props.userName ?? null,
-    avatar: props.userAvatar ?? null,
-  });
-  const messages = Array.isArray(props.messages) ? props.messages : [];
-  const entries: Array<{ index: number; text: string; role: string }> = [];
-  for (const idx of pinned.indices) {
-    const msg = messages[idx] as Record<string, unknown> | undefined;
-    if (!msg) {
-      continue;
-    }
-    const text = getPinnedMessageSummary(msg);
-    const role = typeof msg.role === "string" ? msg.role : "unknown";
-    entries.push({ index: idx, text, role });
-  }
-  if (entries.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="agent-chat__pinned">
-      <button
-        class="agent-chat__pinned-toggle"
-        aria-expanded=${state.pinnedExpanded}
-        @click=${() => {
-          state.pinnedExpanded = !state.pinnedExpanded;
-          requestUpdate();
-        }}
-      >
-        ${icons.bookmark} ${t("chat.thread.pinnedCount", { count: String(entries.length) })}
-        <span class="collapse-chevron ${state.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
-          >${icons.chevronDown}</span
-        >
-      </button>
-      ${state.pinnedExpanded
-        ? html`
-            <div class="agent-chat__pinned-list">
-              ${entries.map(
-                ({ index, text, role }) => html`
-                  <div class="agent-chat__pinned-item">
-                    <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : t("common.assistant")}</span
-                    >
-                    <span class="agent-chat__pinned-text"
-                      >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
-                    >
-                    <openclaw-tooltip .content=${t("chat.thread.unpin")}>
-                      <button
-                        class="btn btn--ghost"
-                        aria-label=${t("chat.thread.unpin")}
-                        @click=${() => {
-                          pinned.unpin(index);
-                          requestUpdate();
-                        }}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  </div>
-                `,
-              )}
-            </div>
-          `
-        : nothing}
-    </div>
-  `;
 }
 
 let activeReplyContextMenu: HTMLElement | null = null;

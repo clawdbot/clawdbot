@@ -5093,10 +5093,8 @@ export const en: TranslationMap = {
       search: "Search messages",
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
-      unpin: "Unpin",
       loading: "Loading chat",
       noMatches: "No matching messages",
-      pinnedCount: "{count} pinned",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",

@@ -621,7 +621,6 @@ export function projectChatTranscript(
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
     props.sessionKey,
-    props.gatewayUrl,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,
