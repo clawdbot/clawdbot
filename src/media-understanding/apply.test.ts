@@ -2296,10 +2296,16 @@ describe("applyMediaUnderstanding", () => {
     );
     expect(ctx.Body).not.toContain("approved local file path");
 
-    result.enableLocalPathSelfServe?.(ctx);
+    result.enableLocalPathSelfServe?.([ctx], new Map());
+
+    expect(ctx.Body).not.toContain("approved local file path");
+
+    const stagedPath = "media/inbound/sandboxed.doc";
+    result.enableLocalPathSelfServe?.([ctx], new Map([[0, stagedPath]]));
 
     expect(ctx.Body).toContain("approved local file path");
-    expect(ctx.Body).toContain(filePath);
+    expect(ctx.Body).toContain(stagedPath);
+    expect(ctx.Body).not.toContain(filePath);
     expect(ctx.Body).not.toContain("PDF and plain-text attachments can be read");
   });
 

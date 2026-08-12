@@ -169,4 +169,20 @@ describe("renderFileAttachmentOutcome", () => {
     const normalized = rendered?.replace(/[a-f0-9]{16}/g, "<id>") ?? null;
     expect(normalized).toBe(expected);
   });
+
+  it("accepts normalized staged paths but rejects workspace traversal", () => {
+    const outcome = { kind: "unsupported-format" as const, mime: "application/msword" };
+    expect(
+      renderFileAttachmentOutcome(outcome, {
+        selfServeLocalPath: "media/inbound/report.doc",
+      }),
+    ).toContain("media/inbound/report.doc");
+    expect(
+      renderFileAttachmentOutcome(outcome, {
+        selfServeLocalPath: "media/inbound/../secrets.txt",
+      }),
+    ).toBe(
+      "[Unsupported document format: application/msword. PDF and plain-text attachments can be read.]",
+    );
+  });
 });

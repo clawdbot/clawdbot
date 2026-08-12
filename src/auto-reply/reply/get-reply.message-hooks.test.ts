@@ -428,7 +428,29 @@ describe("getReplyFromConfig message hooks", () => {
     expect(enable).toHaveBeenCalledOnce();
   });
 
-  it("withholds local document self-service from a sandboxed external conversation", async () => {
+  it("promotes the staged document path for a sandboxed external conversation", async () => {
+    const stagedPath = "media/inbound/report.docx";
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map([[0, stagedPath]]),
+    });
+    const enable = await runLocalPathSelfServeCase({
+      ctx: {
+        ...hostDocumentCtx,
+        OriginatingChannel: "telegram",
+        AccountId: "default",
+        SenderId: "42",
+      },
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
+  });
+
+  it("withholds local document self-service when sandbox staging fails", async () => {
     const enable = await runLocalPathSelfServeCase({
       ctx: {
         ...hostDocumentCtx,
