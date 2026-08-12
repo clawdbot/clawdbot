@@ -10,10 +10,23 @@ export const DesktopSourceSchema = Type.Union([
   closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
 ]);
 
-export const DesktopObserveParamsSchema = closedObject({
-  source: DesktopSourceSchema,
-  control: Type.Optional(Type.Boolean()),
+const DesktopObserveCredentialsSchema = closedObject({
+  username: Type.Optional(NonEmptyString),
+  password: Type.Optional(NonEmptyString),
 });
+
+export const DesktopObserveParamsSchema = Type.Union([
+  closedObject({
+    source: closedObject({ kind: Type.Literal("host") }),
+    control: Type.Optional(Type.Boolean()),
+    // Credentials exist only for this observe attempt and are never persisted or returned.
+    credentials: Type.Optional(DesktopObserveCredentialsSchema),
+  }),
+  closedObject({
+    source: closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
+    control: Type.Optional(Type.Boolean()),
+  }),
+]);
 
 export const DesktopObserveResultSchema = closedObject({
   transport: Type.String({ enum: ["rfb"] }),

@@ -5,7 +5,7 @@ export type DesktopHostConfig = {
   enabled: boolean;
   /** Loopback RFB port of an already-running VNC server (default: 5900). */
   port?: number;
-  /** Absolute VNC password-file path; omit on macOS for future account/ARD auth support. */
+  /** Absolute VNC password-file path; macOS ARD account credentials stay per-observation. */
   passwordFile?: string;
 };
 

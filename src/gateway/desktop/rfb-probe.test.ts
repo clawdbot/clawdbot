@@ -24,7 +24,9 @@ async function listenScriptedRfb(script: (socket: net.Socket) => void): Promise<
     for (const socket of sockets) {
       socket.destroy();
     }
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
   const address = server.address();
   if (typeof address === "string" || !address) {
@@ -77,6 +79,17 @@ describe("RFB server probe", () => {
     await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
   });
 
+  it("does not negotiate above an RFB 3.7 server", async () => {
+    const port = await listenScriptedRfb((socket) => {
+      socket.write(Buffer.from("RFB 003.007\n", "ascii"));
+      socket.once("data", (reply) => {
+        expect(reply.toString("ascii")).toBe("RFB 003.007\n");
+        socket.write(Buffer.from([1, 2]));
+      });
+    });
+    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
+  });
+
   it("surfaces a rejected handshake as an empty security offer", async () => {
     const port = await listenScriptedRfb((socket) => {
       socket.write(Buffer.from("RFB 003.008\n", "ascii"));
@@ -86,6 +99,21 @@ describe("RFB server probe", () => {
         header.writeUInt8(0, 0);
         header.writeUInt32BE(reason.length, 1);
         socket.write(Buffer.concat([header, reason]));
+      });
+    });
+    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [] });
+  });
+
+  it.each([
+    ["RFB 3.3", "RFB 003.003\n", Buffer.alloc(4)],
+    ["RFB 3.8", "RFB 003.008\n", Buffer.from([0])],
+  ])("does not buffer the %s failure reason", async (_name, banner, rejection) => {
+    const port = await listenScriptedRfb((socket) => {
+      socket.write(Buffer.from(banner, "ascii"));
+      socket.once("data", () => {
+        const reasonLength = Buffer.alloc(4);
+        reasonLength.writeUInt32BE(0xffff_ffff);
+        socket.write(Buffer.concat([rejection, reasonLength]));
       });
     });
     await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [] });

@@ -3,6 +3,7 @@ import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RfbAttachment } from "./attachment.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
+import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
@@ -12,6 +13,7 @@ const HOST_DESKTOP_PROBE_TIMEOUT_MS = 1_500;
 
 export type HostDesktopAcquireResult = {
   attachment: RfbAttachment;
+  auth: "vnc-password" | "ard-account";
   vncPassword?: string;
 };
 
@@ -25,6 +27,7 @@ export type HostDesktopStatus = {
 export type HostDesktopInspection = {
   status: HostDesktopStatus;
   detail: string;
+  unavailableReason?: "not-listening" | "not-rfb" | "unsupported";
 };
 
 function nonRfbError(port: number): string {
@@ -72,17 +75,19 @@ export async function inspectHostDesktop(params: {
     return {
       status: { enabled: true, state: "unavailable", port },
       detail: unavailableError(port, platform),
+      unavailableReason: "not-listening",
     };
   }
   if (probe.kind === "not-rfb") {
     return {
       status: { enabled: true, state: "unavailable", port },
       detail: nonRfbError(port),
+      unavailableReason: "not-rfb",
     };
   }
   const security = securityLabel(probe);
   const auth = classifyRfbSecurity(probe.securityTypes);
-  if (auth === "vnc-password") {
+  if (auth === "vnc-password" || auth === "ard-account") {
     return {
       status: { enabled: true, state: "attached", port, security },
       detail: `attached (127.0.0.1:${port}, security: ${security})`,
@@ -91,12 +96,11 @@ export async function inspectHostDesktop(params: {
   const detail =
     auth === "none"
       ? `unavailable: unauthenticated VNC server at 127.0.0.1:${port}; require a password-protected VncAuth server, then retry`
-      : auth === "ard-account"
-        ? "unavailable: macOS Screen Sharing uses ARD account authentication, which is not supported yet; configure a VncAuth server and desktop.host.passwordFile, then restart the gateway"
-        : `unavailable: ${security} security is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`;
+      : `unavailable: ${security} security is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`;
   return {
     status: { enabled: true, state: "unavailable", port, security },
     detail,
+    unavailableReason: "unsupported",
   };
 }
 
@@ -124,11 +128,6 @@ export function createHostDesktopSource(params: {
     if (security === "none") {
       throw new Error(
         `refusing unauthenticated VNC server on 127.0.0.1:${port}; require a password-protected VncAuth server, then retry`,
-      );
-    }
-    if (security === "ard-account") {
-      throw new Error(
-        "macOS Screen Sharing uses ARD account authentication, which is not supported yet; configure a VncAuth server and desktop.host.passwordFile, then restart the gateway",
       );
     }
     if (security === "unsupported") {
@@ -161,6 +160,7 @@ export function createHostDesktopSource(params: {
     }
     return {
       attachment: { kind: "tcp", host: "127.0.0.1", port },
+      auth: security,
       ...(vncPassword ? { vncPassword } : {}),
     };
   };
@@ -169,12 +169,15 @@ export function createHostDesktopSource(params: {
 }
 
 export type HostDesktopService = {
-  observe(control: boolean): Promise<{
+  observe(params: {
+    control: boolean;
+    credentials?: { username?: string; password?: string };
+  }): Promise<{
     transport: "rfb";
     wsPath: string;
     expiresAtMs: number;
     control: boolean;
-    auth: "vnc-password";
+    auth: "vnc-password" | "ard-account";
     vncPassword?: string;
   }>;
   status(): Promise<HostDesktopStatus>;
@@ -191,27 +194,47 @@ export function createHostDesktopService(params: {
     ...(params.platform ? { platform: params.platform } : {}),
   });
   return {
-    async observe(control) {
+    async observe(observeParams) {
       const acquired = await params.registry.acquire({
         sourceKey: "host",
         ownerEpoch: 0,
         start: source.acquire,
       });
+      const auth = acquired.auth;
+      if (!auth) {
+        throw new Error("gateway host desktop authentication state is unavailable; retry observe");
+      }
+      let preauth:
+        | {
+            auth: "ard-account";
+            credentials: { username: string; password: string };
+          }
+        | undefined;
+      if (auth === "ard-account") {
+        const username = observeParams.credentials?.username?.trim() ?? "";
+        const password = observeParams.credentials?.password ?? "";
+        if (!username || !password) {
+          throw new HostDesktopCredentialsRequiredError();
+        }
+        registerSecretValueForRedaction(password);
+        preauth = { auth: "ard-account", credentials: { username, password } };
+      }
       const minted = mintDesktopObserverToken({
         sourceKey: "host",
         ownerEpoch: 0,
-        control,
+        control: observeParams.control,
         attachment: acquired.attachment,
+        ...(preauth ? { preauth } : {}),
       });
       return {
         transport: "rfb",
         wsPath: `/desktop/observe?token=${minted.token}`,
         expiresAtMs: minted.expiresAtMs,
-        control,
-        // Host attach only reaches this point for VncAuth servers; every other
-        // security type is refused in acquire(). ARD lands in a later milestone.
-        auth: "vnc-password",
-        ...(acquired.vncPassword ? { vncPassword: acquired.vncPassword } : {}),
+        control: observeParams.control,
+        auth,
+        ...(auth === "vnc-password" && acquired.vncPassword
+          ? { vncPassword: acquired.vncPassword }
+          : {}),
       };
     },
     async status() {

@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
-import { createHostDesktopSource } from "./host-source.js";
+import {
+  createHostDesktopService,
+  createHostDesktopSource,
+  inspectHostDesktop,
+} from "./host-source.js";
+import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -81,6 +86,7 @@ describe("gateway host desktop source", () => {
     });
     await expect(source.acquire()).resolves.toEqual({
       attachment: { kind: "tcp", host: "127.0.0.1", port },
+      auth: "vnc-password",
       vncPassword: password,
     });
     expect(isSecretValueRegisteredForRedaction(password)).toBe(true);
@@ -91,18 +97,55 @@ describe("gateway host desktop source", () => {
     const source = createHostDesktopSource({ config: { enabled: true, port } });
     await expect(source.acquire()).resolves.toEqual({
       attachment: { kind: "tcp", host: "127.0.0.1", port },
+      auth: "vnc-password",
     });
   });
 
-  it("refuses ARD account auth with the supported alternative", async () => {
+  it("attaches ARD and keeps account credentials only in the observer token", async () => {
     const port = await listenRfb({ banner: "RFB 003.889\n", securityTypes: [30] });
     const source = createHostDesktopSource({
       config: { enabled: true, port },
       platform: "darwin",
     });
-    await expect(source.acquire()).rejects.toThrow(
-      "macOS Screen Sharing uses ARD account authentication, which is not supported yet; configure a VncAuth server and desktop.host.passwordFile, then restart the gateway",
+    await expect(source.acquire()).resolves.toEqual({
+      attachment: { kind: "tcp", host: "127.0.0.1", port },
+      auth: "ard-account",
+    });
+
+    const registry = createDesktopSessionRegistry();
+    const service = createHostDesktopService({
+      config: { enabled: true, port },
+      platform: "darwin",
+      registry,
+    });
+    cleanups.push(async () => registry.stopAll());
+    await expect(service.observe({ control: false })).rejects.toThrow(
+      "macOS account credentials are required",
     );
+    const password = "mac-account-password";
+    const observed = await service.observe({
+      control: false,
+      credentials: { username: "operator", password },
+    });
+    expect(observed).toMatchObject({ auth: "ard-account", control: false });
+    expect(observed).not.toHaveProperty("vncPassword");
+    expect(observed.wsPath).toMatch(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u);
+    expect(observed.wsPath).not.toContain("operator");
+    expect(observed.wsPath).not.toContain(password);
+    expect(isSecretValueRegisteredForRedaction(password)).toBe(true);
+
+    await expect(
+      inspectHostDesktop({ config: { enabled: true, port }, platform: "darwin" }),
+    ).resolves.toMatchObject({
+      status: { state: "attached", security: "ARD" },
+      detail: `attached (127.0.0.1:${port}, security: ARD)`,
+    });
+  });
+
+  it("still refuses VeNCrypt", async () => {
+    const port = await listenRfb({ securityTypes: [19] });
+    const source = createHostDesktopSource({ config: { enabled: true, port } });
+    await expect(source.acquire()).rejects.toThrow("VeNCrypt is not supported");
   });
 
   it("reports a non-VNC occupant and the port config next step", async () => {

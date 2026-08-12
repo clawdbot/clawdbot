@@ -48,7 +48,7 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
     (
       element as HTMLElement & {
         desktopClientFactory: () => {
-          connect(options: { credentials?: { password?: string } }): Promise<{
+          connect(options: { credentials?: { username?: string; password?: string } }): Promise<{
             disconnect(): void;
           }>;
         };
@@ -110,6 +110,27 @@ suite.define(() => {
     });
   });
 
+  it("keeps a right-docked desktop above bottom-docked panels", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["environments.list", "desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": { environments: [] },
+        },
+      });
+      const panel = await openDesktopPanel(page);
+      await panel.getByRole("button", { name: "Dock to right", exact: true }).click();
+      const bottom = await panel.evaluate((element) => {
+        document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "40px");
+        document.documentElement.style.setProperty("--oc-browser-reserve-bottom", "80px");
+        const section = element.shadowRoot?.querySelector<HTMLElement>(".bp--right");
+        return section ? getComputedStyle(section).bottom : null;
+      });
+      expect(bottom).toBe("120px");
+    });
+  });
+
   it("connects the host source after an in-memory VNC password prompt", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -135,11 +156,25 @@ suite.define(() => {
             ],
           },
           "desktop.observe": {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=host",
-            expiresAtMs: 60_000,
-            control: false,
-            auth: "vnc-password",
+            sequence: [
+              {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "VNC password is required to observe this machine",
+                  details: {
+                    code: "DESKTOP_CREDENTIALS_REQUIRED",
+                    auth: "vnc-password",
+                  },
+                },
+              },
+              {
+                transport: "rfb",
+                wsPath: "/desktop/observe?token=host",
+                expiresAtMs: 60_000,
+                control: false,
+                auth: "vnc-password",
+              },
+            ],
           },
         },
       });
@@ -162,8 +197,76 @@ suite.define(() => {
       expect(await panel.getAttribute("data-used-credentials")).toBe("true");
       expect(await panel.getByRole("button", { name: "Browser", exact: true }).count()).toBe(0);
       expect(await panel.getByRole("button", { name: "Terminal", exact: true }).count()).toBe(0);
-      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      const observeRequests = await gateway.getRequests("desktop.observe");
+      expect(observeRequests).toHaveLength(2);
+      expect(observeRequests[1]?.params).toEqual({
+        source: { kind: "host" },
+        control: false,
+        credentials: { password: "memory-only-test-password" },
+      });
       expect(await gateway.getRequests("desktop.launch")).toHaveLength(0);
+    });
+  });
+
+  it("retries host observe with ARD credentials without passing them to noVNC", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": {
+            environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+          },
+          "desktop.observe": {
+            sequence: [
+              {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "macOS account credentials are required to observe Screen Sharing",
+                  details: {
+                    code: "DESKTOP_CREDENTIALS_REQUIRED",
+                    auth: "ard-account",
+                  },
+                },
+              },
+              {
+                transport: "rfb",
+                wsPath: "/desktop/observe?token=ard-host",
+                expiresAtMs: 60_000,
+                control: false,
+                auth: "ard-account",
+              },
+            ],
+          },
+        },
+      });
+
+      const panel = await openDesktopPanel(page);
+      await gateway.waitForRequest("environments.list");
+      await installDesktopClientFake(panel);
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await panel
+        .getByText("Enter a macOS account to authenticate Screen Sharing.", { exact: true })
+        .waitFor();
+      expect((await gateway.getRequests("desktop.observe"))[0]?.params).toEqual({
+        source: { kind: "host" },
+        control: false,
+      });
+
+      await panel.getByLabel("macOS username", { exact: true }).fill("operator");
+      await panel
+        .getByLabel("macOS password", { exact: true })
+        .fill("memory-only-account-password");
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect.poll(async () => await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getAttribute("data-used-credentials")).toBe("false");
+      const requests = await gateway.getRequests("desktop.observe");
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.params).toEqual({
+        source: { kind: "host" },
+        control: false,
+        credentials: { username: "operator", password: "memory-only-account-password" },
+      });
     });
   });
 

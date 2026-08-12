@@ -11,10 +11,28 @@ describe("desktop protocol schemas", () => {
     expect(validateDesktopObserveParams({ source: { kind: "host" }, control: true })).toBe(true);
     expect(
       validateDesktopObserveParams({
+        source: { kind: "host" },
+        credentials: { username: "operator", password: "secret" },
+      }),
+    ).toBe(true);
+    expect(
+      validateDesktopObserveParams({
         source: { kind: "environment", environmentId: "worker:one" },
       }),
     ).toBe(true);
     expect(validateDesktopObserveParams({ source: { kind: "node", nodeId: "one" } })).toBe(false);
+    expect(
+      validateDesktopObserveParams({
+        source: { kind: "environment", environmentId: "worker:one" },
+        credentials: { password: "secret" },
+      }),
+    ).toBe(false);
+    expect(
+      validateDesktopObserveParams({
+        source: { kind: "host" },
+        credentials: { username: "", password: "secret" },
+      }),
+    ).toBe(false);
     expect(validateDesktopObserveParams({ source: { kind: "host", environmentId: "one" } })).toBe(
       false,
     );

@@ -1,6 +1,7 @@
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { HostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { createHostDesktopService } from "../desktop/host-source.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { environmentsHandlers } from "./environments.js";
@@ -108,6 +109,51 @@ describe("desktop gateway methods", () => {
     );
     expect(alias).toEqual(generic);
     expect(alias[1]).not.toHaveProperty("auth");
+  });
+
+  it("reports ARD credentials as required and forwards an in-memory retry", async () => {
+    const observe = vi.fn(
+      async (params: { credentials?: { username?: string; password?: string } }) => {
+        if (!params.credentials) {
+          throw new HostDesktopCredentialsRequiredError();
+        }
+        return {
+          transport: "rfb" as const,
+          wsPath: "/desktop/observe?token=fixed",
+          expiresAtMs: 42,
+          control: false,
+          auth: "ard-account" as const,
+        };
+      },
+    );
+    const context = {
+      getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
+      hostDesktopService: { observe },
+    };
+    const [firstOk, , firstError] = await invoke(
+      "desktop.observe",
+      { source: { kind: "host" } },
+      context,
+    );
+    expect(firstOk).toBe(false);
+    expect(firstError).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      details: {
+        code: "DESKTOP_CREDENTIALS_REQUIRED",
+        auth: "ard-account",
+      },
+    });
+
+    const credentials = { username: "operator", password: "account-password" };
+    const [retryOk, result] = await invoke(
+      "desktop.observe",
+      { source: { kind: "host" }, credentials },
+      context,
+    );
+    expect(retryOk).toBe(true);
+    expect(result).toMatchObject({ auth: "ard-account" });
+    expect(result).not.toHaveProperty("vncPassword");
+    expect(observe).toHaveBeenLastCalledWith({ control: false, credentials });
   });
 
   it("rejects unknown desktop source kinds before dispatch", async () => {

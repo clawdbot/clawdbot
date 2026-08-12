@@ -96,6 +96,8 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "desktop.observe",
+  "desktop.launch",
 ] as const;
 
 describe("core gateway method release trains", () => {
@@ -135,8 +137,5 @@ describe("core gateway method release trains", () => {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.8");
     }
     expect(methods.find((method) => method.name === "worker.desktop.launch")?.since).toBe("2026.8");
-    expect(
-      methods.filter((method) => method.since === "2026.9").map((method) => method.name),
-    ).toEqual(["desktop.observe", "desktop.launch"]);
   });
 });

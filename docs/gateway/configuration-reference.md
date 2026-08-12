@@ -567,6 +567,47 @@ See [Plugins](/tools/plugin).
 
 ---
 
+## Desktop
+
+The host desktop source lets the Control UI Desktop panel connect to an RFB
+server already running on the Gateway machine. It is a Labs feature and is off
+by default.
+
+```json5
+{
+  desktop: {
+    host: {
+      enabled: true,
+      port: 5900,
+      // passwordFile: "/path/to/vnc-password.txt",
+    },
+  },
+}
+```
+
+- `desktop.host.enabled`: advertises **This machine** as a desktop source after
+  the Gateway restarts.
+- `desktop.host.port`: loopback RFB port on `127.0.0.1` (default: `5900`).
+- `desktop.host.passwordFile`: optional UTF-8 VNC password file. Without it,
+  the Control UI prompts for a VNC password and keeps it in browser memory for
+  that connection.
+
+OpenClaw connects only through loopback and does not install or manage a VNC
+server. Configure third-party servers to listen on loopback when they support
+it. On Linux, use a loopback-only TigerVNC or `x11vnc` listener; GNOME Remote
+Desktop's VeNCrypt mode is not supported. On Windows, enable VNC authentication
+and loopback access in the VNC server.
+
+On macOS, enable **System Settings → General → Sharing → Screen Sharing**.
+Modern Screen Sharing uses ARD account authentication, so the Gateway performs
+that handshake and gives the browser an already-authenticated no-auth RFB
+stream. The macOS account password is not returned in the observe result, URL,
+or logs. `openclaw doctor` can offer an explicitly confirmed `sudo launchctl`
+repair when Screen Sharing is off; enabling the macOS system service may expose
+it on other network interfaces according to macOS Sharing settings.
+
+---
+
 ## Gateway
 
 ```json5

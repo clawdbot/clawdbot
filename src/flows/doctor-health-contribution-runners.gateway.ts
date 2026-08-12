@@ -58,7 +58,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteHostDesktopHealth } = await import("../commands/doctor-host-desktop.js");
-  await noteHostDesktopHealth(ctx.cfg);
+  await noteHostDesktopHealth(ctx.cfg, { prompter: ctx.prompter });
 }
 
 export async function runStartupChannelMaintenanceHealth(

@@ -2,6 +2,7 @@ import net from "node:net";
 
 const RFB_BANNER_BYTES = 12;
 const RFB_37_MINOR = 7;
+const RFB_37_BANNER = Buffer.from("RFB 003.007\n", "ascii");
 const RFB_38_BANNER = Buffer.from("RFB 003.008\n", "ascii");
 
 export type RfbProbeResult =
@@ -32,7 +33,12 @@ function parseRfbVersionBanner(
   return {
     kind: "rfb",
     minor,
-    reply: minor >= RFB_37_MINOR ? RFB_38_BANNER : Buffer.from("RFB 003.003\n", "ascii"),
+    reply:
+      minor > RFB_37_MINOR
+        ? RFB_38_BANNER
+        : minor === RFB_37_MINOR
+          ? RFB_37_BANNER
+          : Buffer.from("RFB 003.003\n", "ascii"),
   };
 }
 
@@ -47,17 +53,11 @@ function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfb
       return { kind: "incomplete", requiredBytes: 4 };
     }
     const securityType = buffer.readUInt32BE(0);
-    if (securityType !== 0) {
-      return { kind: "complete", securityTypes: [securityType], bytesConsumed: 4 };
-    }
-    if (buffer.length < 8) {
-      return { kind: "incomplete", requiredBytes: 8 };
-    }
-    const reasonLength = buffer.readUInt32BE(4);
-    const requiredBytes = 8 + reasonLength;
-    return buffer.length < requiredBytes
-      ? { kind: "incomplete", requiredBytes }
-      : { kind: "complete", securityTypes: [], bytesConsumed: requiredBytes };
+    return {
+      kind: "complete",
+      securityTypes: securityType === 0 ? [] : [securityType],
+      bytesConsumed: 4,
+    };
   }
 
   if (buffer.length < 1) {
@@ -74,14 +74,7 @@ function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfb
           bytesConsumed: requiredBytes,
         };
   }
-  if (buffer.length < 5) {
-    return { kind: "incomplete", requiredBytes: 5 };
-  }
-  const reasonLength = buffer.readUInt32BE(1);
-  const requiredBytes = 5 + reasonLength;
-  return buffer.length < requiredBytes
-    ? { kind: "incomplete", requiredBytes }
-    : { kind: "complete", securityTypes: [], bytesConsumed: requiredBytes };
+  return { kind: "complete", securityTypes: [], bytesConsumed: 1 };
 }
 
 class SocketEndedError extends Error {
@@ -147,13 +140,15 @@ export async function probeRfbServer(params: {
   timeoutMs: number;
 }): Promise<RfbProbeResult> {
   const socket = net.createConnection(params.port, params.host);
-  socket.setTimeout(params.timeoutMs);
+  const deadline = setTimeout(() => {
+    socket.destroy(new SocketTimeoutError("RFB handshake timed out"));
+  }, params.timeoutMs);
+  deadline.unref();
   const reader = createSocketReader(socket);
   try {
     await new Promise<void>((resolve, reject) => {
       socket.once("connect", resolve);
       socket.once("error", reject);
-      socket.once("timeout", () => reject(new SocketTimeoutError("RFB connect timed out")));
     });
     let bannerBytes: Buffer;
     try {
@@ -187,6 +182,7 @@ export async function probeRfbServer(params: {
     }
     return { kind: "unreachable" };
   } finally {
+    clearTimeout(deadline);
     socket.end();
     socket.destroy();
   }

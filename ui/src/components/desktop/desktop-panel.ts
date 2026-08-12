@@ -6,7 +6,7 @@ import type {
   WorkerDesktopAppId,
   WorkerDesktopLaunchResult,
 } from "@openclaw/gateway-protocol";
-import { css, html, nothing, svg } from "lit";
+import { html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -21,7 +21,9 @@ import {
 } from "../panel-toggle-contract.ts";
 import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
+import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
+import { desktopPanelStyles } from "./desktop-panel-styles.ts";
 
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
@@ -36,15 +38,16 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-
 type DesktopPanelState = "picker" | "credentials" | "connecting" | "connected" | "disconnected";
 type DesktopAppId = WorkerDesktopAppId;
 type DesktopCredentials = { username?: string; password?: string };
 type PendingDesktopConnection = {
   environmentId: string;
-  observed: DesktopObserveResult;
+  control: boolean;
+  observed?: DesktopObserveResult;
   operationId: number;
 };
+type ObservedDesktopConnection = PendingDesktopConnection & { observed: DesktopObserveResult };
 
 function desktopSourceForEnvironment(environment: Pick<EnvironmentSummary, "id">): DesktopSource {
   return environment.id === "gateway"
@@ -76,6 +79,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
 
   private connection: DesktopConnectionHandle | null = null;
   private credentials: DesktopCredentials | undefined;
+  private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
   private operationId = 0;
   private launchOperationId = 0;
@@ -87,174 +91,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
 
-  static override styles = [
-    dockPanelStyles,
-    desktopPanelLauncherStyles,
-    css`
-      .bp--bottom {
-        left: var(--shell-nav-width, 0);
-        right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
-        bottom: calc(
-          var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px)
-        );
-      }
-      .bp--right {
-        top: var(--shell-topbar-height, 0);
-        right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
-        bottom: var(--oc-terminal-reserve-bottom, 0px);
-      }
-      .bp-title {
-        min-width: 0;
-        padding-left: 8px;
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .bp-icon.is-active {
-        color: var(--accent, #ff5c5c);
-        background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
-      }
-      .desktop-content {
-        display: flex;
-        flex: 1;
-        min-height: 0;
-        flex-direction: column;
-      }
-      .desktop-toolbar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        border-bottom: 1px solid var(--border, #262b34);
-      }
-      .desktop-toolbar--connection {
-        min-height: 42px;
-        gap: 12px;
-      }
-      .desktop-toolbar__spacer {
-        flex: 1;
-      }
-      .desktop-button {
-        border: 1px solid var(--border, #262b34);
-        border-radius: 6px;
-        padding: 5px 10px;
-        background: transparent;
-        color: var(--text, #d7dae0);
-        font: inherit;
-        font-size: 12px;
-      }
-      .desktop-button:hover:not(:disabled) {
-        background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-      }
-      .desktop-button--primary {
-        border-color: var(--accent, #ff5c5c);
-        color: var(--accent, #ff5c5c);
-      }
-      .desktop-button:disabled {
-        opacity: 0.5;
-      }
-      .desktop-session {
-        overflow: hidden;
-        max-width: 100%;
-        color: var(--muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .desktop-note {
-        padding: 7px 12px;
-        border-bottom: 1px solid var(--border, #262b34);
-        color: var(--muted, #8a919e);
-        font-size: 12px;
-      }
-      .desktop-note--error {
-        color: var(--danger, #ff6b6b);
-      }
-      .desktop-picker,
-      .desktop-status {
-        display: flex;
-        flex: 1;
-        min-height: 0;
-        flex-direction: column;
-        gap: 10px;
-        overflow: auto;
-        padding: 14px;
-        background: var(--panel);
-      }
-      .desktop-status {
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        color: var(--muted, #8a919e);
-      }
-      .desktop-credentials {
-        display: flex;
-        width: min(320px, 100%);
-        flex-direction: column;
-        gap: 10px;
-        text-align: left;
-      }
-      .desktop-credentials__label {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-        color: var(--text, #d7dae0);
-        font-size: 12px;
-      }
-      .desktop-credentials__input {
-        border: 1px solid var(--border, #262b34);
-        border-radius: 6px;
-        padding: 7px 9px;
-        background: var(--bg, #111318);
-        color: var(--text, #d7dae0);
-        font: inherit;
-      }
-      .desktop-environment {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px;
-        border: 1px solid var(--border, #262b34);
-        border-radius: 8px;
-      }
-      .desktop-environment__details {
-        display: flex;
-        flex: 1;
-        min-width: 0;
-        flex-direction: column;
-        gap: 5px;
-      }
-      .desktop-environment__id {
-        overflow: hidden;
-        color: var(--text, #d7dae0);
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 12px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .desktop-environment__meta,
-      .desktop-environment__sessions {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 5px;
-        color: var(--muted, #8a919e);
-        font-size: 11px;
-      }
-      .desktop-stage {
-        position: relative;
-        flex: 1;
-        min-height: 0;
-        overflow: hidden;
-        background: var(--bg);
-      }
-      .desktop-surface {
-        position: absolute;
-        inset: 0;
-        background: var(--bg);
-      }
-    `,
-  ];
+  static override styles = [dockPanelStyles, desktopPanelLauncherStyles, desktopPanelStyles];
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -330,6 +167,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.environmentId = null;
     this.source = null;
     this.credentials = undefined;
+    this.credentialAuth = undefined;
     this.desktopApps = [];
     this.controlling = false;
     this.disconnectedReason = null;
@@ -386,6 +224,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (this.environmentId !== environmentId) {
       this.clearLaunchState();
       this.credentials = undefined;
+      this.credentialAuth = undefined;
       this.desktopApps = [
         ...(this.environments.find((environment) => environment.id === environmentId)?.worker
           ?.desktopApps ?? []),
@@ -408,9 +247,17 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
     try {
+      const observeCredentials =
+        source.kind === "host" &&
+        this.credentials?.password &&
+        (this.credentialAuth === "vnc-password" ||
+          (this.credentialAuth === "ard-account" && this.credentials.username))
+          ? this.credentials
+          : undefined;
       const observed = await client.request<DesktopObserveResult>("desktop.observe", {
         source,
         control,
+        ...(observeCredentials ? { credentials: observeCredentials } : {}),
       });
       if (operationId !== this.operationId) {
         return;
@@ -421,18 +268,32 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
           ? this.credentials
           : undefined;
       if (observed.auth === "vnc-password" && !credentials?.password) {
-        this.pendingConnection = { environmentId, observed, operationId };
+        this.credentialAuth = "vnc-password";
+        this.pendingConnection = { environmentId, control, observed, operationId };
         this.state = "credentials";
         return;
       }
-      await this.connectObserved({ environmentId, observed, operationId }, credentials);
+      if (observed.auth === "ard-account") {
+        this.credentialAuth = "ard-account";
+      }
+      await this.connectObserved(
+        { environmentId, control, observed, operationId },
+        observed.auth === "vnc-password" ? credentials : undefined,
+      );
     } catch (error) {
+      const requiredAuth = desktopCredentialRequirement(error);
+      if (requiredAuth && operationId === this.operationId) {
+        this.credentialAuth = requiredAuth;
+        this.pendingConnection = { environmentId, control, operationId };
+        this.state = "credentials";
+        return;
+      }
       this.failConnection(operationId, error);
     }
   }
 
   private async connectObserved(
-    pending: PendingDesktopConnection,
+    pending: ObservedDesktopConnection,
     credentials?: DesktopCredentials,
   ): Promise<void> {
     const client = this.client;
@@ -498,19 +359,49 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!pending || pending.operationId !== this.operationId) {
       return;
     }
-    const password = new FormData(event.currentTarget as HTMLFormElement).get("password");
+    const formData = new FormData(event.currentTarget as HTMLFormElement);
+    const password = formData.get("password");
     if (typeof password !== "string" || password.length === 0) {
       return;
     }
-    const credentials = { password };
+    const username = formData.get("username");
+    if (
+      this.credentialAuth === "ard-account" &&
+      (typeof username !== "string" || username.trim().length === 0)
+    ) {
+      return;
+    }
+    const credentials = {
+      ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
+      password,
+    };
     this.credentials = credentials;
     this.pendingConnection = null;
-    void this.connectObserved(pending, credentials);
+    if (pending.observed) {
+      void this.connectObserved({ ...pending, observed: pending.observed }, credentials);
+    } else {
+      void this.connectEnvironment(pending.environmentId, pending.control);
+    }
   }
 
   private handleDesktopDisconnect(environmentId: string, code?: number, reason?: string): void {
     this.connection = null;
     this.clearLaunchState();
+    if (code === 1008 && this.credentialAuth === "ard-account") {
+      this.credentials = this.credentials?.username
+        ? { username: this.credentials.username }
+        : undefined;
+      this.pendingConnection = {
+        environmentId,
+        control: this.controlling,
+        operationId: this.operationId,
+      };
+      this.state = "credentials";
+      this.errorText = t("desktop.errors.securityFailed", {
+        reason: reason || t("desktop.unknownReason"),
+      });
+      return;
+    }
     if (
       code === 4000 &&
       reason === "control-taken" &&
@@ -749,12 +640,29 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   private renderCredentials() {
+    const ardAccount = this.credentialAuth === "ard-account";
     return html`
       <div class="desktop-status">
-        <form class="desktop-credentials" @submit=${this.handleCredentialsSubmit}>
-          <div>${t("desktop.passwordPrompt")}</div>
+        <form
+          class="desktop-credentials"
+          @submit=${(event: SubmitEvent) => this.handleCredentialsSubmit(event)}
+        >
+          <div>${t(ardAccount ? "desktop.accountPrompt" : "desktop.passwordPrompt")}</div>
+          ${ardAccount
+            ? html`<label class="desktop-credentials__label">
+                ${t("desktop.usernameLabel")}
+                <input
+                  class="desktop-credentials__input"
+                  name="username"
+                  type="text"
+                  autocomplete="off"
+                  .value=${this.credentials?.username ?? ""}
+                  required
+                />
+              </label>`
+            : nothing}
           <label class="desktop-credentials__label">
-            ${t("desktop.passwordLabel")}
+            ${t(ardAccount ? "desktop.accountPasswordLabel" : "desktop.passwordLabel")}
             <input
               class="desktop-credentials__input"
               name="password"

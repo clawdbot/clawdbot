@@ -572,6 +572,8 @@ enum class GatewayMethod(
   UsersPrefsSet("users.prefs.set"),
   ProjectsAdd("projects.add"),
   ProjectsSearchRemote("projects.searchRemote"),
+  DesktopObserve("desktop.observe"),
+  DesktopLaunch("desktop.launch"),
 }
 
 enum class GatewayEvent(

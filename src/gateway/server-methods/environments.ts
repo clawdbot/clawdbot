@@ -16,6 +16,7 @@ import {
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
+import { isHostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
@@ -197,10 +198,28 @@ async function respondDesktopObserve(params: {
     try {
       params.respond(
         true,
-        await params.context.hostDesktopService.observe(params.request.control ?? false),
+        await params.context.hostDesktopService.observe({
+          control: params.request.control ?? false,
+          ...("credentials" in params.request && params.request.credentials
+            ? { credentials: params.request.credentials }
+            : {}),
+        }),
         undefined,
       );
     } catch (error) {
+      if (isHostDesktopCredentialsRequiredError(error)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: {
+              code: error.detailCode,
+              auth: error.auth,
+            },
+          }),
+        );
+        return;
+      }
       params.respond(
         false,
         undefined,

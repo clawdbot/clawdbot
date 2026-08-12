@@ -1,7 +1,7 @@
 /** Platform-specific next steps for preparing a loopback-only host VNC server. */
 const HOST_DESKTOP_GUIDANCE = {
   darwin:
-    "Enable System Settings -> General -> Sharing -> Screen Sharing, or run `sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing`. Built-in Screen Sharing uses ARD auth, which is not supported yet; use a VncAuth server for this milestone.",
+    "Enable System Settings -> General -> Sharing -> Screen Sharing, or run `sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing`.",
   linux:
     "Install TigerVNC with `apt install tigervnc-standalone-server` and run it loopback-only on port 5900, or run `x11vnc -display :0 -localhost -rfbport 5900 -forever -passwdfile <file>`. gnome-remote-desktop uses unsupported VeNCrypt.",
   win32:

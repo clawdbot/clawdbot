@@ -1,40 +1,122 @@
 import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { createHostDesktopService } from "./host-source.js";
 import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
+const VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-function readSocketBytes(socket: net.Socket, length: number): Promise<Buffer> {
-  return new Promise((resolve) => {
-    let buffered = Buffer.alloc(0);
-    const onData = (chunk: Buffer) => {
-      buffered = Buffer.concat([buffered, chunk]);
-      if (buffered.length >= length) {
-        socket.off("data", onData);
-        resolve(buffered);
+class SocketReader {
+  private buffered = Buffer.alloc(0);
+  private readonly waiters = new Set<() => void>();
+
+  constructor(socket: net.Socket) {
+    socket.on("data", (chunk) => {
+      this.buffered = Buffer.concat([
+        this.buffered,
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+      ]);
+      for (const waiter of this.waiters) {
+        waiter();
       }
-    };
-    socket.on("data", onData);
-  });
+      this.waiters.clear();
+    });
+  }
+
+  async readExactly(length: number): Promise<Buffer> {
+    while (this.buffered.length < length) {
+      await new Promise<void>((resolve) => {
+        this.waiters.add(resolve);
+      });
+    }
+    const value = this.buffered.subarray(0, length);
+    this.buffered = this.buffered.subarray(length);
+    return value;
+  }
+}
+
+class WebSocketReader {
+  private readonly chunks: Buffer[] = [];
+  private readonly waiters: Array<(chunk: Buffer) => void> = [];
+
+  constructor(ws: WebSocket) {
+    ws.on("message", (data: RawData) => {
+      const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+      const waiter = this.waiters.shift();
+      if (waiter) {
+        waiter(chunk);
+      } else {
+        this.chunks.push(chunk);
+      }
+    });
+  }
+
+  async next(): Promise<Buffer> {
+    const chunk = this.chunks.shift();
+    return (
+      chunk ??
+      (await new Promise<Buffer>((resolve) => {
+        this.waiters.push(resolve);
+      }))
+    );
+  }
 }
 
 describe("gateway host desktop observe integration", () => {
-  it("upgrades a host token, proxies bytes, and filters view-only input", async () => {
-    const peers: net.Socket[] = [];
+  it("pre-authenticates ARD, synthesizes None, and starts view-only filtering at ClientInit", async () => {
+    const peers = new Set<net.Socket>();
+    let connectionCount = 0;
+    let resolveObserverScript!: () => void;
+    let rejectObserverScript!: (error: Error) => void;
+    const observerScript = new Promise<void>((resolve, reject) => {
+      resolveObserverScript = resolve;
+      rejectObserverScript = reject;
+    });
     const rfbServer = net.createServer((socket) => {
-      peers.push(socket);
-      socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-      if (peers.length === 1) {
-        socket.once("data", () => socket.write(Buffer.from([1, 2])));
-      }
+      peers.add(socket);
+      socket.once("close", () => peers.delete(socket));
+      connectionCount += 1;
+      const connectionIndex = connectionCount;
+      const reader = new SocketReader(socket);
+      void (async () => {
+        try {
+          socket.write(Buffer.from("RFB 003.889\n", "ascii"));
+          expect(await reader.readExactly(12)).toEqual(VERSION);
+          socket.write(Buffer.from([4, 30, 33, 36, 35]));
+          if (connectionIndex === 1) {
+            return;
+          }
+
+          expect(await reader.readExactly(1)).toEqual(Buffer.from([30]));
+          const keyLength = 16;
+          const header = Buffer.alloc(4);
+          header.writeUInt16BE(5, 0);
+          header.writeUInt16BE(keyLength, 2);
+          const modulus = Buffer.alloc(keyLength);
+          modulus.writeUInt16BE(7919, keyLength - 2);
+          const serverPublic = Buffer.alloc(keyLength);
+          serverPublic.writeUInt16BE(6817, keyLength - 2);
+          socket.write(Buffer.concat([header, modulus, serverPublic]));
+          expect(await reader.readExactly(128 + keyLength)).toHaveLength(128 + keyLength);
+          socket.write(Buffer.alloc(4));
+
+          // Browser version/security bytes were consumed by the Gateway. ClientInit is first.
+          expect(await reader.readExactly(1)).toEqual(Buffer.from([1]));
+          socket.write(Buffer.from("server-init", "ascii"));
+          const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+          expect(await reader.readExactly(framebufferRequest.length)).toEqual(framebufferRequest);
+          resolveObserverScript();
+        } catch (error) {
+          rejectObserverScript(error instanceof Error ? error : new Error(String(error)));
+        }
+      })();
     });
     await new Promise<void>((resolve, reject) => {
       rfbServer.once("error", reject);
@@ -60,8 +142,11 @@ describe("gateway host desktop observe integration", () => {
       registry,
     });
     cleanups.push(async () => registry.stopAll());
-    const observed = await service.observe(false);
-    expect(observed.auth).toBe("vnc-password");
+    const observed = await service.observe({
+      control: false,
+      credentials: { username: "operator", password: "account-password" },
+    });
+    expect(observed.auth).toBe("ard-account");
     expect(observed.vncPassword).toBeUndefined();
 
     const httpServer = http.createServer();
@@ -83,23 +168,23 @@ describe("gateway host desktop observe integration", () => {
     );
 
     const ws = new WebSocket(`ws://127.0.0.1:${httpAddress.port}${observed.wsPath}`);
+    const browser = new WebSocketReader(ws);
     cleanups.push(async () => ws.terminate());
-    const banner = new Promise<Buffer>((resolve, reject) => {
-      ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", resolve);
       ws.once("error", reject);
     });
-    await expect(banner).resolves.toEqual(Buffer.from("RFB 003.008\n", "ascii"));
-    await vi.waitFor(() => expect(peers).toHaveLength(2));
-    const observerPeer = peers[1];
-    if (!observerPeer) {
-      throw new Error("expected observer RFB peer");
-    }
+    expect(await browser.next()).toEqual(VERSION);
+    // Coalesce the synthetic handshake replies with exclusive ClientInit.
+    ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
+    expect(await browser.next()).toEqual(Buffer.from([1, 1]));
+    expect(await browser.next()).toEqual(Buffer.alloc(4));
+    expect(await browser.next()).toEqual(Buffer.from("server-init", "ascii"));
 
-    const handshake = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1])]);
     const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
     const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
-    const forwarded = readSocketBytes(observerPeer, handshake.length + framebufferRequest.length);
-    ws.send(Buffer.concat([handshake, keyEvent, framebufferRequest]));
-    await expect(forwarded).resolves.toEqual(Buffer.concat([handshake, framebufferRequest]));
+    ws.send(Buffer.concat([keyEvent, framebufferRequest]));
+    await expect(observerScript).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(connectionCount).toBe(2));
   });
 });
