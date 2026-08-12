@@ -12,7 +12,6 @@ import {
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -22,7 +21,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
@@ -47,11 +45,7 @@ import {
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-} from "../session-store-key.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
@@ -80,6 +74,7 @@ import {
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
+import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import {
   filterSessionStoreToConfiguredAgents,
   loadSessionEntriesForTarget,
@@ -104,61 +99,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const canSearchSessionKey = (sessionKey: string) =>
       !isIncognitoSessionKey(sessionKey) ||
       canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
-    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const resolvedSessionKeys:
-      | Array<{ sessionKey: string; agentId: string | undefined }>
-      | undefined = params.sessionKeys ? [] : undefined;
-    for (const sessionKey of params.sessionKeys ?? []) {
-      // Retired per-agent stores remain read-compatible when the caller explicitly scopes them.
-      // A durable fixed-store owner still wins, so this exception cannot cross agent ownership.
-      const requestedAgent =
-        requestedAgentId &&
-        !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
-        resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none"
-          ? ({ ok: true, agentId: requestedAgentId } as const)
-          : resolveRequestedGlobalAgentId(cfg, sessionKey, requestedAgentId);
-      if (!requestedAgent.ok) {
-        respond(false, undefined, requestedAgent.error);
-        return;
-      }
-      resolvedSessionKeys?.push({
-        sessionKey: requestedAgent.agentId
-          ? resolveStoredSessionKeyForAgentStore({
-              cfg,
-              agentId: requestedAgent.agentId,
-              sessionKey,
-            })
-          : resolveSessionStoreKey({ cfg, sessionKey }),
-        agentId: requestedAgent.agentId,
-      });
-    }
-    const sessionKeys = resolvedSessionKeys?.map((resolved) => resolved.sessionKey);
-    const agentIds = new Set(
-      resolvedSessionKeys?.map((resolved) =>
-        resolved.agentId ? resolved.agentId : resolveSessionStoreAgentId(cfg, resolved.sessionKey),
-      ),
-    );
-    if (
-      agentIds.size > 1 ||
-      (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
-      );
+    const scope = resolveSessionSearchScope(cfg, params);
+    if (!scope.ok) {
+      respond(false, undefined, scope.error);
       return;
     }
-    let agentId = requestedAgentId ?? agentIds.values().next().value;
-    if (!agentId) {
-      const fallbackAgent = resolveRequestedGlobalAgentId(cfg, "main");
-      if (!fallbackAgent.ok) {
-        respond(false, undefined, fallbackAgent.error);
-        return;
-      }
-      agentId = fallbackAgent.agentId;
-    }
-    const configured = isConfiguredSessionStoreAgentId(cfg, agentId);
+    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
     if (requestedAgentId && !params.sessionKeys && configured) {
       respond(
         false,

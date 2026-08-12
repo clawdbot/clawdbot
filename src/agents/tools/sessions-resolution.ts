@@ -345,7 +345,17 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
-  return buildReference(resolvedKey, false);
+  const semanticAliasAgentId =
+    params.agentId ??
+    (rawInput === "current"
+      ? (parseAgentSessionKey(resolvedKey)?.agentId ?? params.keyAgentId)
+      : rawInput === "main" || rawInput === params.mainKey
+        ? params.keyAgentId
+        : undefined);
+  return buildReference(
+    { key: resolvedKey, ...(semanticAliasAgentId ? { agentId: semanticAliasAgentId } : {}) },
+    false,
+  );
 }
 
 export async function resolveVisibleSessionReference(params: {
@@ -364,6 +374,7 @@ export async function resolveVisibleSessionReference(params: {
     params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
+  let verifiedSpawnedVisibility = false;
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
   if (isIncognitoSessionKey(resolvedKey)) {
@@ -399,6 +410,7 @@ export async function resolveVisibleSessionReference(params: {
         resolvedKey = resolved.key;
         resolvedAgentId = resolved.agentId ?? parseAgentSessionKey(resolved.key)?.agentId;
         displayKey = resolved.key;
+        verifiedSpawnedVisibility = params.restrictToSpawned;
       } else if (params.allowMissingKey) {
         missing = true;
       }
@@ -441,6 +453,7 @@ export async function resolveVisibleSessionReference(params: {
         });
   const visible =
     Boolean(scopedAccess) ||
+    verifiedSpawnedVisibility ||
     !shouldVerifySpawnedVisibility ||
     (await isRequesterSpawnedSessionVisible({
       requesterSessionKey: params.requesterSessionKey,

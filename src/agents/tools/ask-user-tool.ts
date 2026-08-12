@@ -1,6 +1,5 @@
 /** Built-in blocking user-question tool and its active-session answer bridge. */
 import { createHash } from "node:crypto";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type {
   QuestionAnswers,
@@ -10,15 +9,16 @@ import type {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
+import {
+  DEFAULT_ASK_USER_TIMEOUT_SECONDS,
+  type NormalizedAskUserParams,
+  normalizeAskUserParams,
+} from "./ask-user-tool-normalization.js";
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
-const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
-const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
-const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
-const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
 const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_ALREADY_TERMINAL",
   "QUESTION_NOT_FOUND",
@@ -104,107 +104,7 @@ const askUserQuestions = (() => {
   return questions;
 })();
 
-type NormalizedAskUserParams = {
-  questions: QuestionRequestQuestion[];
-  timeoutSeconds: number;
-};
-
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ToolInputError(`${label} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function normalizeOption(value: unknown, questionIndex: number, optionIndex: number) {
-  const labelPrefix = `questions[${questionIndex}].options[${optionIndex}]`;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new ToolInputError(`${labelPrefix} must be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  const label = readRequiredString(record.label, `${labelPrefix}.label`);
-  // Telegram button text caps at 64 chars — the tightest native transport.
-  // Bounding here keeps schema-valid prompts deliverable on every channel.
-  if (label.length > 64) {
-    throw new ToolInputError(`${labelPrefix}.label must be at most 64 characters (use 1-5 words)`);
-  }
-  if (record.description !== undefined && typeof record.description !== "string") {
-    throw new ToolInputError(`${labelPrefix}.description must be a string`);
-  }
-  const description =
-    typeof record.description === "string" ? record.description.trim() : undefined;
-  return { label, ...(description ? { description } : {}) };
-}
-
-/** Validates and canonicalizes model-authored ask_user arguments. */
-export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new ToolInputError("ask_user arguments must be an object");
-  }
-  const params = value as Record<string, unknown>;
-  if (
-    !Array.isArray(params.questions) ||
-    params.questions.length < 1 ||
-    params.questions.length > 3
-  ) {
-    throw new ToolInputError("questions must contain 1 to 3 questions");
-  }
-  const ids = new Set<string>();
-  const questions = params.questions.map(
-    (questionValue, questionIndex): QuestionRequestQuestion => {
-      const prefix = `questions[${questionIndex}]`;
-      if (!questionValue || typeof questionValue !== "object" || Array.isArray(questionValue)) {
-        throw new ToolInputError(`${prefix} must be an object`);
-      }
-      const question = questionValue as Record<string, unknown>;
-      const id = readRequiredString(question.id, `${prefix}.id`);
-      if (!QUESTION_ID_PATTERN.test(id)) {
-        throw new ToolInputError(`${prefix}.id must be snake_case (for example, deploy_target)`);
-      }
-      if (ids.has(id)) {
-        throw new ToolInputError(`duplicate question id '${id}'`);
-      }
-      ids.add(id);
-      const header = truncateUtf16Safe(readRequiredString(question.header, `${prefix}.header`), 12);
-      const questionText = readRequiredString(question.question, `${prefix}.question`);
-      if (
-        !Array.isArray(question.options) ||
-        question.options.length < 2 ||
-        question.options.length > 4
-      ) {
-        throw new ToolInputError(`${prefix}.options must contain 2 to 4 options`);
-      }
-      if (question.multiSelect !== undefined && typeof question.multiSelect !== "boolean") {
-        throw new ToolInputError(`${prefix}.multiSelect must be a boolean`);
-      }
-      return {
-        questionId: id,
-        header,
-        question: questionText,
-        options: question.options.map((option, optionIndex) =>
-          normalizeOption(option, questionIndex, optionIndex),
-        ),
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-        isOther: true,
-      };
-    },
-  );
-
-  const rawTimeoutSeconds = params.timeoutSeconds;
-  if (
-    rawTimeoutSeconds !== undefined &&
-    (typeof rawTimeoutSeconds !== "number" ||
-      !Number.isFinite(rawTimeoutSeconds) ||
-      !Number.isInteger(rawTimeoutSeconds))
-  ) {
-    throw new ToolInputError("timeoutSeconds must be an integer");
-  }
-  const timeoutSeconds = Math.min(
-    MAX_ASK_USER_TIMEOUT_SECONDS,
-    Math.max(MIN_ASK_USER_TIMEOUT_SECONDS, rawTimeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS),
-  );
-  return { questions, timeoutSeconds };
-}
+export { normalizeAskUserParams } from "./ask-user-tool-normalization.js";
 
 /** Stable client-generated gateway question id shared with tool-start delivery. */
 function buildAskUserQuestionId(

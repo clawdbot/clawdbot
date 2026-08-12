@@ -28,6 +28,11 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import {
+  readSessionSharingStringParam as readStringParam,
+  resolveDirectIncognitoTargets,
+  type SessionMutationTarget,
+} from "./session-sharing-target-input.js";
 import type {
   GatewaySessionStoreCache,
   GatewaySessionStoreDiscoveryCache,
@@ -44,11 +49,6 @@ type SessionSharingTarget = {
   storeKey: string;
   storeKeys: string[];
   storePath: string;
-};
-
-type SessionMutationTarget = {
-  sessionKey: string;
-  agentId?: string;
 };
 
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
@@ -265,36 +265,6 @@ export function authorizeSessionSharingTarget(params: {
           visibility,
         },
       });
-}
-
-function resolveDirectIncognitoTargets(method: string, params: unknown): SessionMutationTarget[] {
-  if (method === "sessions.create" || method === "sessions.list") {
-    return [];
-  }
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return [];
-  }
-  const record = params as Record<string, unknown>;
-  const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
-    candidates.push(...record.keys);
-  }
-  if (Array.isArray(record.sessionKeys)) {
-    candidates.push(...record.sessionKeys);
-  }
-  const agentId = normalizeOptionalString(record.agentId);
-  return candidates.flatMap((candidate): SessionMutationTarget[] =>
-    typeof candidate === "string" && isIncognitoSessionKey(candidate)
-      ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
-      : [],
-  );
-}
-
-function readStringParam(params: unknown, key: string): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  return normalizeOptionalString((params as Record<string, unknown>)[key]);
 }
 
 const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([

@@ -6,7 +6,6 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
   type SessionSharingIdentity,
   type SessionTypingEvent,
@@ -24,13 +23,9 @@ import {
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import {
-  resolveRequestedSessionAgentId,
-  tryResolveSessionCompatibilityOwnerAgentId,
-} from "../session-request-agent.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionSharingTarget,
   canManageSessionSharing,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
@@ -46,6 +41,11 @@ import {
   liveViewerIdentities,
   updateTypingConnections,
 } from "./session-typing-state.js";
+import {
+  publishSuggestion,
+  requireSuggestionTarget,
+  requireVisibleSuggestionRole,
+} from "./sessions-suggestions-access.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -75,75 +75,6 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
-}
-
-function requireSuggestionTarget(params: {
-  context: GatewayRequestContext;
-  sessionKey: string;
-  agentId?: string;
-  respond: RespondFn;
-}) {
-  const cfg = params.context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
-  if (!requestedAgent.ok) {
-    params.respond(false, undefined, requestedAgent.error);
-    return null;
-  }
-  const target = resolveSessionSharingTarget({
-    cfg,
-    sessionKey: params.sessionKey,
-    agentId: requestedAgent.agentId,
-  });
-  if (!target) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-    );
-    return null;
-  }
-  return target;
-}
-
-function requireVisibleSuggestionRole(params: {
-  client: GatewayClient | null;
-  sessionKey: string;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  respond: RespondFn;
-}) {
-  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
-  const incognitoError = authorizeIncognitoSessionTarget({
-    client: params.client,
-    sessionKey: params.sessionKey,
-    target: params.target,
-  });
-  if (incognitoError) {
-    params.respond(false, undefined, incognitoError);
-    return null;
-  }
-  if (resolveSessionVisibility(params.target.entry) !== "draft") {
-    return role;
-  }
-  const error = authorizeSessionSharingTarget({ client: params.client, target: params.target });
-  if (!error) {
-    return role;
-  }
-  params.respond(false, undefined, error);
-  return null;
-}
-
-function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
 }
 
 function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {

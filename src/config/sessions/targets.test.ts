@@ -19,72 +19,15 @@ import {
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
 } from "./targets.js";
-
-const EXPLICIT_MAIN_CONFIG: OpenClawConfig = {
-  agents: { list: [{ id: "main", default: true }] },
-};
-
-async function resolveRealStorePath(sessionsDir: string): Promise<string> {
-  return path.resolve(path.join(sessionsDir, "sessions.json"));
-}
-
-async function createAgentSessionStores(
-  root: string,
-  agentIds: string[],
-): Promise<Record<string, string>> {
-  const storePaths: Record<string, string> = {};
-  for (const agentId of agentIds) {
-    const sessionsDir = path.join(root, "agents", agentId, "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await replaceSessionEntry(
-      { storePath, sessionKey: "main" },
-      { sessionId: "sid", updatedAt: Date.now() },
-    );
-    storePaths[agentId] = await resolveRealStorePath(sessionsDir);
-  }
-  return storePaths;
-}
-
-function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenClawConfig {
-  return {
-    session: {
-      store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
-    },
-    agents: {
-      list: [{ id: defaultAgentId, default: true }],
-    },
-  };
-}
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
-  const customRoot = path.join(home, "custom-state");
-  const storePaths = await createAgentSessionStores(customRoot, agentIds);
-  const cfg = createCustomRootCfg(customRoot);
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env: process.env });
-  return { storePaths, targets };
-}
-
-function expectTargetsToContainStores(
-  targets: Array<{ agentId: string; storePath: string }>,
-  stores: Record<string, string>,
-): void {
-  for (const [agentId, storePath] of Object.entries(stores)) {
-    expect(
-      targets.some((target) => target.agentId === agentId && target.storePath === storePath),
-    ).toBe(true);
-  }
-}
+import {
+  countMatching,
+  createAgentSessionStores,
+  createCustomRootCfg,
+  EXPLICIT_MAIN_CONFIG,
+  expectTargetsToContainStores,
+  resolveTargetsForCustomRoot,
+  resolveRealStorePath,
+} from "./targets.test-support.js";
 
 describe("resolveSessionStoreTargets", () => {
   it("resolves all configured agent stores", async () => {

@@ -189,7 +189,7 @@ describe("resolved session visibility checks", () => {
         targetSessionKey: "agent:main:worker",
         restrictToSpawned: false,
         resolvedViaSessionId: false,
-        expectsGateway: false,
+        expectsGateway: true,
       },
       {
         requesterSessionKey: "agent:main:main",
@@ -203,7 +203,7 @@ describe("resolved session visibility checks", () => {
         targetSessionKey: "agent:main:main",
         restrictToSpawned: true,
         resolvedViaSessionId: false,
-        expectsGateway: false,
+        expectsGateway: true,
       },
     ];
 
@@ -275,7 +275,7 @@ describe("resolved session visibility checks", () => {
     });
   });
 
-  it("falls back to spawned-session listing when exact resolution is unsupported", async () => {
+  it("propagates strict explicit-key resolution failures without a list fallback", async () => {
     callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "sessions.resolve") {
         throw new Error("unsupported sessions.resolve shape");
@@ -297,10 +297,9 @@ describe("resolved session visibility checks", () => {
         restrictToSpawned: true,
         visibilitySessionKey: "agent:main:subagent:worker",
       }),
-    ).resolves.toMatchObject({ ok: true, key: "agent:main:subagent:worker" });
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
     expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
       "sessions.resolve",
-      "sessions.list",
     ]);
   });
 });

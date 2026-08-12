@@ -618,7 +618,10 @@ export function createSessionsSendTool(opts?: {
       }
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "send",
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        defaultAgentId:
+          resolvedSession.agentId ??
+          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,

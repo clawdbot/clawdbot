@@ -13,7 +13,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
@@ -435,7 +435,10 @@ export function createSessionsHistoryTool(opts?: {
       });
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "history",
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        defaultAgentId:
+          resolvedSession.agentId ??
+          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,

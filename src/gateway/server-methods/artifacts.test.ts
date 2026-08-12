@@ -2,8 +2,19 @@
 // session lookup, list/get/download responses, and validation errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { expectRecordFields } from "../test-helpers.assertions.js";
 import { artifactsHandlers } from "./artifacts.js";
+import {
+  assistantFileMessage,
+  assistantImageMessage,
+  expectArtifactList,
+  expectErrorDetails,
+  expectFields,
+  expectFirstArtifact,
+  expectOkPayload,
+  requireNonEmptyString,
+  resultImageMessage,
+  runtimeContext,
+} from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
@@ -69,8 +80,7 @@ function createResponder() {
 }
 
 type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
-type ResponderCalls = ReturnType<typeof createResponder>["calls"];
-type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
+type ArtifactResponderCalls = ReturnType<typeof createResponder>["calls"];
 
 async function invokeArtifactHandler(
   method: ArtifactMethod,
@@ -113,102 +123,8 @@ async function downloadArtifact(
   return await invokeArtifactHandler("artifacts.download", params, options);
 }
 
-function runtimeContext(config: Record<string, unknown>) {
-  return { getRuntimeConfig: () => config };
-}
-
-function expectOkPayload(calls: ResponderCalls): unknown {
-  expect(calls[0]?.ok).toBe(true);
-  return calls[0]?.payload;
-}
-
-function expectArtifactList(calls: ResponderCalls): ArtifactListPayload {
-  return expectOkPayload(calls) as ArtifactListPayload;
-}
-
-function expectFirstArtifact(calls: ResponderCalls): Record<string, unknown> | undefined {
-  const payload = expectArtifactList(calls);
-  return payload.artifacts?.[0];
-}
-
-function expectErrorDetails(calls: ResponderCalls): Record<string, unknown> | undefined {
-  expect(calls[0]?.ok).toBe(false);
-  const error = calls[0]?.error as { details?: Record<string, unknown> };
-  return error.details;
-}
-
-function assistantImageMessage(params: {
-  data?: string;
-  alt: string;
-  seq?: number;
-  runId?: string;
-  taskId?: string;
-}) {
-  return {
-    role: "assistant",
-    content: [{ type: "image", data: params.data ?? "aGVsbG8=", alt: params.alt }],
-    __openclaw: {
-      seq: params.seq ?? 2,
-      ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { messageTaskId: params.taskId } : {}),
-    },
-  };
-}
-
-function assistantFileMessage(params: {
-  data?: string;
-  title: string;
-  seq?: number;
-  runId?: string;
-  taskId?: string;
-}) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "file",
-        data: params.data ?? "aGVsbG8=",
-        mimeType: "text/plain",
-        title: params.title,
-      },
-    ],
-    __openclaw: {
-      seq: params.seq ?? 2,
-      ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { taskId: params.taskId } : {}),
-    },
-  };
-}
-
-function resultImageMessage() {
-  return {
-    role: "assistant",
-    content: [
-      { type: "text", text: "see attached" },
-      {
-        type: "image",
-        data: "aGVsbG8=",
-        mimeType: "image/png",
-        alt: "result.png",
-      },
-    ],
-    __openclaw: { seq: 2 },
-  };
-}
-
-function requireNonEmptyString(value: unknown, message: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(message);
-  }
-  return value;
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expectRecordFields(value, "fields", expected);
-}
-
 function expectArtifactScopeNotFound(
-  calls: ResponderCalls,
+  calls: ArtifactResponderCalls,
   params: { message?: string } = {},
 ): void {
   expect(calls[0]?.ok).toBe(false);

@@ -1,16 +1,21 @@
 /**
  * Tests chat abort authorization checks for gateway clients and session owners.
  */
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  type AbortResponsePayload,
+  createSingleAbortContext,
+  expectAbortPayload,
+  invokeAbort,
+  requireLastRespondCall,
+} from "./chat.abort-authorization.test-helpers.js";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
-import { chatHandlers } from "./chat.js";
 
 vi.mock("../session-utils.js", async () => {
   return {
@@ -18,84 +23,6 @@ vi.mock("../session-utils.js", async () => {
     loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
   };
 });
-
-type AbortResponsePayload = {
-  aborted?: boolean;
-  runIds?: string[];
-};
-type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
-
-async function invokeAbort({
-  context,
-  sessionKey = "main",
-  runId,
-  connId,
-  deviceId,
-  preserveSideRuns,
-  scopes = ["operator.write"],
-  onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
-}: {
-  context: ReturnType<typeof createChatAbortContext>;
-  sessionKey?: string;
-  runId?: string;
-  connId: string;
-  deviceId: string;
-  preserveSideRuns?: boolean;
-  scopes?: string[];
-  onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
-}) {
-  return await invokeChatAbortHandler({
-    handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
-        ? (options) =>
-            handleChatAbortRequestWithLifecycle(options, {
-              onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
-            })
-        : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
-    context,
-    request: {
-      sessionKey,
-      ...(runId ? { runId } : {}),
-      ...(preserveSideRuns ? { preserveSideRuns: true } : {}),
-    },
-    client: {
-      connId,
-      connect: { device: { id: deviceId }, scopes },
-    },
-  });
-}
-
-function createSingleAbortContext() {
-  return createChatAbortContext({
-    chatAbortControllers: new Map([
-      [
-        "run-1",
-        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-      ],
-    ]),
-  });
-}
-
-function requireLastRespondCall(respond: AbortRespond) {
-  const calls = respond.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
-}
-
-function expectAbortPayload(
-  payload: unknown,
-  expected: { aborted: boolean; runIds: string[] },
-): void {
-  const abortPayload = payload as AbortResponsePayload | undefined;
-  expect(abortPayload?.aborted).toBe(expected.aborted);
-  expect(abortPayload?.runIds).toEqual(expected.runIds);
-}
 
 describe("chat.abort authorization", () => {
   it("rejects non-admin worker-only inference aborts", async () => {
