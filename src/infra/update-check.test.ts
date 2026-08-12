@@ -628,7 +628,7 @@ describe("formatGitInstallLabel", () => {
 
 describe("checkUpdateStatus", () => {
   it("uses the tracked dev branch for detached exact-SHA deployments", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-detached-dev-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-check-detached-dev-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
       const localRoot = path.join(base, "local");
       await initGitRepo(sourceRoot);
