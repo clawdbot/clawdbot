@@ -898,6 +898,17 @@ jobs:
             echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
           fi
 
+          # StickyDisk's pinned on-change mode compares whole-filesystem
+          # allocation to its mount-time baseline. Only a successful real
+          # dependency capture creates this runner-local signal. Force and
+          # verify the delta after pruning so a same-size rebuild commits while
+          # validated warm restores remain read-only.
+          if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]; then
+            bash "$GITHUB_WORKSPACE/.github/actions/setup-node-env/sticky-importers.sh" \
+              ensure-change /var/tmp/openclaw-node-deps \
+              "${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"
+          fi
+
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
