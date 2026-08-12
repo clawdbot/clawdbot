@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
@@ -63,6 +63,32 @@ describe("Claw tool policy consent provenance", () => {
       }),
     ).not.toThrow();
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("fails an ordinary named profile closed when initial ownership is unreadable", () => {
+    const root = tempDirs.make("openclaw-unreadable-non-claw-tool-consent-");
+    const stateDir = join(root, "state");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    mkdirSync(dirname(databasePath), { recursive: true });
+    writeFileSync(databasePath, "not a sqlite database");
+    const before = readFileSync(databasePath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+
+    const config = {
+      agents: {
+        list: [{ id: "worker", tools: { profile: "coding" as const } }],
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config,
+      }),
+    ).toThrow("Cannot verify the installed tool authority");
+    expect(readFileSync(databasePath)).toEqual(before);
   });
 
   it("fails a known Claw closed without mutating unreadable consent provenance", async () => {
