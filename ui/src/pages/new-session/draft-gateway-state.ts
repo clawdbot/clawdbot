@@ -14,7 +14,11 @@ import {
   discoverCloudProfiles,
   selectProfiles,
 } from "./cloud-profile-discovery.ts";
-import { resolveScope, type SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
+import {
+  resolveScope,
+  resolveSubmissionOutcomeReason,
+  type SubmissionOutcomeReason,
+} from "./cloud-recovery-state.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -31,7 +35,7 @@ import {
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
-export type DraftGatewaySnapshot = Readonly<{
+type DraftGatewaySnapshot = Readonly<{
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   isConnected: boolean;
@@ -203,9 +207,10 @@ export class DraftGatewayState {
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScope.changed;
       this.invalidateDiscovery(
         gatewayIdentityChanged,
-        gatewayIdentityChanged || !this.read().pendingCloud.sessionKey
-          ? "gateway-changed"
-          : "cloud-interrupted",
+        resolveSubmissionOutcomeReason({
+          gatewayIdentityChanged,
+          cloudDraftOwned: Boolean(this.read().pendingCloud.sessionKey),
+        }),
       );
     }
     if (
@@ -227,11 +232,9 @@ export class DraftGatewayState {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
       }
     }
-    if (becameConnected || recoveryScope.changed) {
-      if (becameConnected) {
-        this.gatewayConnectionEpochValue += 1;
-        this.retryPendingCatalogTarget();
-      }
+    if (becameConnected) {
+      this.gatewayConnectionEpochValue += 1;
+      this.retryPendingCatalogTarget();
     }
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
     this.callbacks.requestUpdate();

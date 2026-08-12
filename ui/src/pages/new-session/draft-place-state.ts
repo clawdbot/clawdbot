@@ -185,12 +185,12 @@ export class DraftPlaceState {
     }
   }
 
-  folderSubmissionMode(): "blocked" | "approved" | "server" {
+  folderSubmissionBlocked(): boolean {
     if (this.projectIdValue) {
-      return this.selectedProject() ? "approved" : "blocked";
+      return !this.selectedProject();
     }
     if (this.restoredFolderValidation !== "none") {
-      return "blocked";
+      return true;
     }
     if (
       !this.usesCustomFolder() ||
@@ -198,11 +198,11 @@ export class DraftPlaceState {
       this.folderGatewayApproved ||
       isKnownWorkspacePath(this.knownWorkspaceRoots(), this.folderValue)
     ) {
-      return "approved";
+      return false;
     }
     // Free-typed paths still reach sessions.create so the Gateway can return
     // the authoritative missing-scope error instead of the UI dead-ending.
-    return "server";
+    return false;
   }
 
   adoptAgentDefaults(

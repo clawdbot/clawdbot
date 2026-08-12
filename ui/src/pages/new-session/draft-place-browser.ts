@@ -375,16 +375,7 @@ export class DraftPlaceBrowser {
   }
 
   close() {
-    this.browserRequestToken += 1;
-    this.browserLoadingValue = false;
-    this.browserErrorValue = null;
-    this.browserListingValue = null;
-    this.browserTargetValue = null;
-    this.browserProjectPathValue = null;
-    this.browserRegisteringValue = false;
-    this.browserPathDraftValue = "";
-    this.placePopoverOpenValue = false;
-    this.callbacks.requestUpdate();
+    this.resetBrowser(true);
     const popover = this.callbacks.querySelector(".new-session-page__place-popover") as
       | (HTMLElement & {
           open: boolean;
@@ -396,15 +387,7 @@ export class DraftPlaceBrowser {
   }
 
   showRoot() {
-    this.browserRequestToken += 1;
-    this.browserLoadingValue = false;
-    this.browserErrorValue = null;
-    this.browserListingValue = null;
-    this.browserTargetValue = null;
-    this.browserProjectPathValue = null;
-    this.browserRegisteringValue = false;
-    this.browserPathDraftValue = "";
-    this.callbacks.requestUpdate();
+    this.resetBrowser(false);
   }
 
   usableBrowserPath(): string | null {
@@ -579,6 +562,21 @@ export class DraftPlaceBrowser {
     this.clearProjectSearchTimer();
     void this.projectsTask.run([null, false, -1]);
     void this.projectSearchTask.run([null, false, "", -1]);
+  }
+
+  private resetBrowser(closePopover: boolean) {
+    this.browserRequestToken += 1;
+    this.browserLoadingValue = false;
+    this.browserErrorValue = null;
+    this.browserListingValue = null;
+    this.browserTargetValue = null;
+    this.browserProjectPathValue = null;
+    this.browserRegisteringValue = false;
+    this.browserPathDraftValue = "";
+    if (closePopover) {
+      this.placePopoverOpenValue = false;
+    }
+    this.callbacks.requestUpdate();
   }
 
   private clearProjectSearchTimer() {

@@ -561,5 +561,3 @@ class NewSessionPage extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-new-session-page")) {
   customElements.define("openclaw-new-session-page", NewSessionPage);
 }
-
-export type { NewSessionPage };

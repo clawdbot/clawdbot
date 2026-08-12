@@ -7,6 +7,7 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
+import type { CloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
 import { deleteCloudDraftSession } from "../../lib/sessions/cloud-startup.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -20,7 +21,7 @@ import * as catalog from "./catalog-target.ts";
 import { PendingCloudRecoveryState, type SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
-  buildDraftSessionCreateParams,
+  buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
   canStartSessionAsDraft,
   isWorktreeNameValid,
   type NewSessionVisibility,
@@ -141,15 +142,20 @@ export class DraftSubmissionFlow {
     );
   }
 
-  buildCreateParamsForAccess(
-    visibility: NewSessionVisibility = this.visibilityValue,
+  private buildDraftSessionCreateParams(
+    options: {
+      message?: string;
+      attachments?: unknown[];
+      visibility?: NewSessionVisibility;
+    } = {},
   ): Record<string, unknown> {
-    return buildDraftSessionCreateParams({
+    return assembleDraftSessionCreateParams({
       agentId: this.place.agentId,
-      message: "",
+      message: options.message ?? "",
       model: this.place.modelControl.selected,
       thinkingLevel: this.place.modelControl.thinkingLevel,
-      visibility,
+      visibility: options.visibility ?? this.visibilityValue,
+      attachments: options.attachments,
       projectId: this.place.projectId,
       worktree: this.place.worktree,
       baseRef: this.place.baseRef,
@@ -163,7 +169,7 @@ export class DraftSubmissionFlow {
 
   submissionAccess(
     createParams: Record<string, unknown> = this.pendingCloud.createParams ??
-      this.buildCreateParamsForAccess(),
+      this.buildDraftSessionCreateParams(),
   ): SessionMethodAccess {
     const gateway = this.read().context?.gateway.snapshot;
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
@@ -195,7 +201,7 @@ export class DraftSubmissionFlow {
   incognitoDisabledReason(): string | undefined {
     const access = readSessionMethodAccess(this.read().context?.gateway.snapshot, {
       method: "sessions.create",
-      params: this.buildCreateParamsForAccess("incognito"),
+      params: this.buildDraftSessionCreateParams({ visibility: "incognito" }),
     });
     return access.allowed ? undefined : access.reason;
   }
@@ -221,7 +227,7 @@ export class DraftSubmissionFlow {
       return false;
     }
     const access = kind === "terminal" ? this.terminalStartAccess() : this.submissionAccess();
-    if (!access.allowed || this.place.folderSubmissionMode() === "blocked") {
+    if (!access.allowed || this.place.folderSubmissionBlocked()) {
       return false;
     }
     if (this.place.modelControl.isRestoringPreference() || !this.place.worktreePreferenceReady) {
@@ -324,16 +330,11 @@ export class DraftSubmissionFlow {
       if (!this.pendingCloud.restored) {
         this.pendingCloud.retryAllowed = false;
       }
-      this.visibilityValue =
-        this.pendingCloud.createParams?.incognito === true ? "incognito" : "normal";
-      this.place.applyPendingCloud({
-        agentId: this.pendingCloud.agentId,
-        profileId: this.pendingCloud.profileId,
-        cwd: this.pendingCloud.createParams?.cwd,
-      });
+      const recovery = this.pendingCloud.capture();
+      if (recovery) {
+        this.applyRecoveryDraft(recovery);
+      }
       this.pendingCloud.restored = false;
-      this.messageValue = this.pendingCloud.message;
-      this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
     } else {
       this.clearPendingCloudRecovery();
       this.messageValue = "";
@@ -359,14 +360,7 @@ export class DraftSubmissionFlow {
     if (!recovery) {
       return;
     }
-    this.place.applyPendingCloud({
-      agentId: recovery.agentId,
-      profileId: recovery.profileId,
-      cwd: recovery.createParams?.cwd,
-    });
-    this.visibilityValue = recovery.createParams?.incognito === true ? "incognito" : "normal";
-    this.messageValue = recovery.message;
-    this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
+    this.applyRecoveryDraft(recovery);
     this.callbacks.requestUpdate();
   }
 
@@ -404,21 +398,10 @@ export class DraftSubmissionFlow {
     try {
       const cloudProfileId = this.cloudProfileForSubmission();
       const draftRetired = this.visibilityValue === "draft" && !this.canStartAsDraft();
-      const createParams = buildDraftSessionCreateParams({
-        agentId: this.place.agentId,
+      const createParams = this.buildDraftSessionCreateParams({
         message: cloudProfileId ? "" : message,
-        model: this.place.modelControl.selected,
-        thinkingLevel: this.place.modelControl.thinkingLevel,
         visibility: draftRetired ? "normal" : this.visibilityValue,
         attachments: cloudProfileId ? undefined : apiAttachments,
-        projectId: this.place.projectId,
-        worktree: this.place.worktree,
-        baseRef: this.place.baseRef,
-        worktreeName: this.place.worktreeName,
-        cwd: this.place.folder,
-        workspace: this.place.workspacePath(),
-        execNode: this.place.execNode,
-        catalogId: this.read().data?.catalogId,
       });
       const cloudCreateParams = cloudProfileId
         ? pendingCloud
@@ -692,5 +675,16 @@ export class DraftSubmissionFlow {
     return runtime && runtime !== "openclaw"
       ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
       : undefined;
+  }
+
+  private applyRecoveryDraft(recovery: CloudSessionRecovery) {
+    this.place.applyPendingCloud({
+      agentId: recovery.agentId,
+      profileId: recovery.profileId,
+      cwd: recovery.createParams?.cwd,
+    });
+    this.visibilityValue = recovery.createParams?.incognito === true ? "incognito" : "normal";
+    this.messageValue = recovery.message;
+    this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
 }
