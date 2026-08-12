@@ -33,6 +33,163 @@ export async function runPartialStreamingPreviewScenario(context: MatrixQaScenar
   });
 }
 
+const MATRIX_REPLACEMENT_FAULT_RULE_ID = "matrix-streaming-replacement-failure";
+
+export async function runStreamingReplacementRetentionScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  if (!context.installFaultRule) {
+    throw new Error("Matrix streaming replacement QA requires in-place fault injection");
+  }
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const firstText = `@room ${buildMatrixStreamingPreviewFinalText("MATRIX_QA_RETAINED_DRAFT")}`;
+  const firstToken = firstText.split(" ")[1]!;
+  const firstDriverEventId = await client.sendTextMessage({
+    body: buildMatrixPartialStreamingPrompt(context.sutUserId, firstText),
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const firstPreview = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.body?.includes(firstToken) === true &&
+        event.body !== firstText,
+      roomId: context.roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((error: unknown) => {
+      throw new Error("Matrix replacement QA timed out waiting for the first draft", {
+        cause: error,
+      });
+    });
+  const firstDraftEventId = firstPreview.event.replacesEventId ?? firstPreview.event.eventId;
+  const faultRule = context.installFaultRule({
+    id: MATRIX_REPLACEMENT_FAULT_RULE_ID,
+    match: (request) =>
+      request.bearerToken === context.sutAccessToken &&
+      request.path.includes("/send/m.room.message/"),
+    response: () => ({
+      body: { errcode: "M_UNKNOWN", error: "Matrix QA injected replacement failure" },
+      status: 503,
+    }),
+  });
+  let firstWindow;
+  try {
+    firstWindow = await client.waitForOptionalRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        (event.redactsEventId === firstDraftEventId || event.body === firstText),
+      roomId: context.roomId,
+      since: firstPreview.since,
+      timeoutMs: Math.min(8_000, context.timeoutMs),
+    });
+    if (firstWindow.matched) {
+      throw new Error(`Matrix failed replacement did not retain draft ${firstDraftEventId}`);
+    }
+    if (faultRule.hits().length === 0) {
+      throw new Error("Matrix replacement fault rule did not observe a replacement request");
+    }
+  } finally {
+    faultRule.remove();
+  }
+
+  const secondText = `@room ${buildMatrixStreamingPreviewFinalText("MATRIX_QA_SUPERSEDED_DRAFT")}`;
+  const secondToken = secondText.split(" ")[1]!;
+  const secondDriverEventId = await client.sendTextMessage({
+    body: buildMatrixPartialStreamingPrompt(context.sutUserId, secondText),
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const secondPreview = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.body?.includes(secondToken) === true &&
+        event.eventId !== firstPreview.event.eventId &&
+        event.body !== secondText,
+      roomId: context.roomId,
+      since: firstWindow.since,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((error: unknown) => {
+      throw new Error("Matrix replacement QA timed out waiting for the second draft", {
+        cause: error,
+      });
+    });
+  const secondDraftEventId = secondPreview.event.replacesEventId ?? secondPreview.event.eventId;
+  const secondReply = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.eventId !== secondDraftEventId &&
+        event.replacesEventId === undefined,
+      roomId: context.roomId,
+      since: secondPreview.since,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((error: unknown) => {
+      throw new Error("Matrix replacement QA timed out waiting for the healthy replacement", {
+        cause: error,
+      });
+    });
+  const secondRedaction = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.kind === "redaction",
+      roomId: context.roomId,
+      since: secondReply.since,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((error: unknown) => {
+      throw new Error("Matrix replacement QA timed out waiting for post-replacement redaction", {
+        cause: error,
+      });
+    });
+  if (secondRedaction.event.redactsEventId === firstDraftEventId) {
+    throw new Error("Matrix healthy replacement redacted the retained first-generation draft");
+  }
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: secondRedaction.since,
+    startSince,
+  });
+  return {
+    artifacts: {
+      faultHitCount: faultRule.hits().length,
+      faultRuleId: MATRIX_REPLACEMENT_FAULT_RULE_ID,
+      firstDriverEventId,
+      previewEventId: firstDraftEventId,
+      redactionEventId: secondRedaction.event.eventId,
+      secondDriverEventId,
+      secondReply: buildMatrixReplyArtifact(secondReply.event, secondText),
+    },
+    details: [
+      `retained draft event: ${firstDraftEventId}`,
+      `replacement fault hits: ${faultRule.hits().length}`,
+      `second draft event: ${secondDraftEventId}`,
+      `second replacement event: ${secondReply.event.eventId}`,
+      `second redaction event: ${secondRedaction.event.eventId}`,
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
 function buildMatrixStreamingPreviewFinalText(prefix: string) {
   const token = `${prefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
   return [
