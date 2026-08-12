@@ -488,13 +488,14 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     },
     account: {
       accountId: "default",
-      config: {
-        streaming: {
-          mode: progressCard ? "progress" : "partial",
-          nativeTransport: NATIVE_SCENARIOS.has(scenario),
-          ...(progressCard ? { progress: { label: "Working" } } : {}),
-        },
-      },
+      config: progressCard
+        ? {}
+        : {
+            streaming: {
+              mode: "partial",
+              nativeTransport: NATIVE_SCENARIOS.has(scenario),
+            },
+          },
     },
     message: {
       type: "message",

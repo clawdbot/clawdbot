@@ -507,25 +507,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         onModelSelected: undefined,
       };
     },
-    resolveChannelMessageSourceReplyDeliveryMode: (params: {
-      cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
-      ctx?: { ChatType?: string; InboundEventKind?: string };
-      requested?: "automatic" | "message_tool_only";
-    }) => {
-      if (params.requested) {
-        return params.requested;
-      }
-      if (params.ctx?.InboundEventKind === "room_event") {
-        return "message_tool_only";
-      }
-      const chatType = params.ctx?.ChatType;
-      if (chatType === "group" || chatType === "channel") {
-        return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
-          ? "automatic"
-          : "message_tool_only";
-      }
-      return "automatic";
-    },
+    resolveChannelMessageSourceReplyDeliveryMode:
+      actual.resolveChannelMessageSourceReplyDeliveryMode,
     resolveAgentOutboundIdentity: () => undefined,
     buildChannelProgressDraftLine: (params: {
       event?: string;
