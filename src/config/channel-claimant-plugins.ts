@@ -4,7 +4,6 @@
  * config validation reads must both consume these primitives, or validation applies one plugin's
  * channel schema while the runtime serves another's channel.
  */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizePluginsConfigWithResolver } from "../plugins/config-policy.js";
 import {
@@ -19,6 +18,7 @@ import {
   normalizePluginPolicyId,
 } from "../plugins/plugin-policy-id.js";
 import { listPluginRegistryNormalizerAliases } from "../plugins/plugin-registry-id-normalizer.js";
+import { resolveChannelConfigRecord } from "./channel-configured-shared.js";
 import { resolveChannelClaimPreferOver } from "./plugin-auto-enable.prefer-over.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -136,11 +136,10 @@ export function isPluginPolicyDisabled(
   registry: PluginManifestRegistry,
 ): boolean {
   const builtInChannelId = normalizeChatChannelId(pluginId);
-  if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    if (asOptionalRecord(channels?.[builtInChannelId])?.enabled === false) {
-      return true;
-    }
+  // The record resolves through canonical channel identity: an authored variant spelling
+  // (`channels.ClickClack`) is the operator's off switch for the canonical channel.
+  if (builtInChannelId && resolveChannelConfigRecord(cfg, builtInChannelId)?.enabled === false) {
+    return true;
   }
   return resolveFoldedPluginEntry(cfg, pluginId, registry)?.enabled === false;
 }

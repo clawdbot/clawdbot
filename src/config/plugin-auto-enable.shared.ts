@@ -52,6 +52,7 @@ import {
   type ChannelClaimCandidate,
   type ChannelClaimantDecision,
 } from "./channel-claimant-plugins.js";
+import { resolveChannelConfigRecord } from "./channel-configured-shared.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { resolveChannelClaimPreferOver } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -1163,10 +1164,14 @@ type PluginAutoEnablePlan = PluginAutoEnableResult & {
 
 type ChannelFallbackReselection = { index: number; candidate: PluginAutoEnableCandidate };
 
-/** True when the channel's own config carries `enabled: false` — the operator turned it off. */
+/**
+ * True when the channel's own config carries `enabled: false` — the operator turned it off. The
+ * record resolves through the same canonical identity presence detection uses: an authored
+ * variant spelling (`channels.ClickClack`) is the operator's record for the canonical channel,
+ * so its disable must filter the candidate that very record created.
+ */
 const isChannelExplicitlyDisabled = (cfg: OpenClawConfig, channelId: string): boolean =>
-  asOptionalRecord((cfg.channels as Record<string, unknown> | undefined)?.[channelId])?.enabled ===
-  false;
+  resolveChannelConfigRecord(cfg, channelId)?.enabled === false;
 
 type ChannelCandidateGroup = {
   channelId: string;

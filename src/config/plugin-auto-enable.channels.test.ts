@@ -22,6 +22,7 @@ import {
   makeTempDir,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 function applyWithApnChannelConfig(extra?: {
   plugins?: { entries?: Record<string, { enabled: boolean }> };
@@ -843,4 +844,49 @@ describe("applyPluginAutoEnable channels", () => {
       }
     }
   });
+});
+
+// #120332 ClawSweeper re-review (P1): the alias-aware config-record resolver admits an authored
+// variant record (`channels.ClickClack`) as a configured-channel candidate, but the explicit-
+// disable filter still read `channels[clickclack]` raw. The operator's `enabled: false` went
+// unseen, so a channel that was explicitly turned off could enable its claimants — or let a
+// replacement claim suppress the incumbent — while the canonical spelling was correctly
+// skipped. Disable checks must resolve the authored record through the same identity that
+// presence detection uses.
+describe("alias-spelled explicit disables reach the planner", () => {
+  const CLICKCLACK_INCUMBENT: Parameters<typeof makeRegistry>[0][number] = {
+    id: "clickclack",
+    origin: "bundled",
+    channels: ["clickclack"],
+    channelConfigs: { clickclack: { schema: { type: "object" } } },
+  };
+  const CLICKCLACK_REPLACEMENT: Parameters<typeof makeRegistry>[0][number] = {
+    id: "acme-clack-rep",
+    origin: "global",
+    channels: ["clickclack"],
+    channelConfigs: {
+      clickclack: { schema: { type: "object" }, preferOver: ["clickclack"] },
+    },
+  };
+
+  for (const [spelling, channels] of [
+    ["canonical", { clickclack: { botToken: "clack-token", enabled: false } }],
+    ["authored variant", { ClickClack: { botToken: "clack-token", enabled: false } }],
+  ] as const) {
+    it(`contributes no claims for a channel disabled under the ${spelling} spelling`, () => {
+      const registry = makeRegistry([CLICKCLACK_INCUMBENT, CLICKCLACK_REPLACEMENT]);
+      const result = applyPluginAutoEnable({
+        config: { channels } as OpenClawConfig,
+        env: makeIsolatedEnv(),
+        manifestRegistry: registry,
+      });
+
+      // The operator turned the channel off: no claimant is enabled on its behalf, no
+      // suppression fires against the incumbent, and no canonical-key enablement record is
+      // written beside the authored one.
+      expect(result.config.plugins?.entries?.["acme-clack-rep"]).toBeUndefined();
+      expect(result.config.plugins?.entries?.clickclack).toBeUndefined();
+      expect(result.config.channels).toStrictEqual(channels);
+    });
+  }
 });

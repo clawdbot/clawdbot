@@ -3,7 +3,7 @@
 // whether it loads; each channel claim's supersession must be recorded individually, or a loaded
 // plugin's replaced claim races first-wins registration over its planned replacement.
 import { beforeEach, describe, expect, it } from "vitest";
-import { channelClaimSuppressionKey } from "./channel-claimant-plugins.js";
+import { channelClaimSuppressionKey, isPluginPolicyDisabled } from "./channel-claimant-plugins.js";
 import { collectSupersededChannelClaims } from "./plugin-auto-enable.apply.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import {
@@ -334,4 +334,21 @@ describe("capability-backed reciprocal replacements ground on one claim", () => 
     expect(suppressed.has(channelClaimSuppressionKey("acme-ra", "rch"))).toBe(false);
     expect(suppressed.has(channelClaimSuppressionKey("acme-rb", "rch"))).toBe(true);
   });
+});
+
+// #120332 ClawSweeper re-review (P1): the claimant policy check is the second raw disable read —
+// a built-in channel switched off under an authored variant spelling must count as an explicit
+// plugin disable exactly like the canonical spelling, or the disabled channel's claimant stays
+// eligible for capability seeding, liveness, and supersession decisions.
+describe("isPluginPolicyDisabled resolves authored channel spellings", () => {
+  for (const [spelling, channels] of [
+    ["canonical", { clickclack: { enabled: false } }],
+    ["authored variant", { ClickClack: { enabled: false } }],
+  ] as const) {
+    it(`treats a built-in channel disabled under the ${spelling} spelling as disabled`, () => {
+      expect(
+        isPluginPolicyDisabled({ channels } as OpenClawConfig, "clickclack", makeRegistry([])),
+      ).toBe(true);
+    });
+  }
 });
