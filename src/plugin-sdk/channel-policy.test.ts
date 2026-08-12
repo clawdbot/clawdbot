@@ -44,7 +44,7 @@ describe("retained group policy helpers", () => {
         groupPolicy: "disabled" as const,
         groupAllowFrom: ["123"],
         senderId: "123",
-        isSenderAllowed: () => true,
+        isSenderAllowed: (): boolean => true,
       },
       expected: {
         allowed: false,
@@ -59,7 +59,7 @@ describe("retained group policy helpers", () => {
         groupPolicy: "allowlist" as const,
         groupAllowFrom: [],
         senderId: "123",
-        isSenderAllowed: () => true,
+        isSenderAllowed: (): boolean => true,
       },
       expected: {
         allowed: false,
