@@ -154,20 +154,22 @@ function truncateOpenItemText(value: string): string {
   return `${truncateUtf16Safe(value, WIKI_OPEN_ITEM_TEXT_MAX_CHARS - 1)}…`;
 }
 
-function boundMemoryWikiOpenItem<T extends {
-  text: string;
-  pagePath: string;
-  pageTitle: string;
-  claimId?: string;
-  variants?: Array<{
+function boundMemoryWikiOpenItem<
+  T extends {
     text: string;
-    status: string;
     pagePath: string;
     pageTitle: string;
-    confidence?: number;
-  }>;
-  relatedPagePaths?: string[];
-}>(item: T): T {
+    claimId?: string;
+    variants?: Array<{
+      text: string;
+      status: string;
+      pagePath: string;
+      pageTitle: string;
+      confidence?: number;
+    }>;
+    relatedPagePaths?: string[];
+  },
+>(item: T): T {
   return {
     ...item,
     text: truncateOpenItemText(item.text),
