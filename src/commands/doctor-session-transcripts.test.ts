@@ -15,6 +15,49 @@ const migrateLegacyMainSessionKeys = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
+const transcriptWriteFailure = vi.hoisted(() => ({ pending: false }));
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const writeFile = (async (
+    file: Parameters<typeof actual.writeFile>[0],
+    data: Parameters<typeof actual.writeFile>[1],
+    options?: Parameters<typeof actual.writeFile>[2],
+  ) => {
+    if (transcriptWriteFailure.pending) {
+      transcriptWriteFailure.pending = false;
+      // Simulate a mid-write failure (ENOSPC/EIO): partial bytes land on the
+      // write target, then the write errors out.
+      await actual.writeFile(file, '{"partial":', options);
+      throw new Error("ENOSPC: simulated mid-write failure");
+    }
+    return await actual.writeFile(file, data, options);
+  }) as typeof actual.writeFile;
+  return {
+    ...actual,
+    default: { ...actual, writeFile },
+    writeFile,
+  };
+});
+
+vi.mock("../infra/replace-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/replace-file.js")>();
+  const replaceFileAtomic = vi.fn(
+    async (options: Parameters<typeof actual.replaceFileAtomic>[0]) => {
+      if (transcriptWriteFailure.pending) {
+        transcriptWriteFailure.pending = false;
+        // Simulate fs-safe reporting a failed staged write (ENOSPC/EIO mid-write).
+        // The atomic contract keeps the destination untouched in this case.
+        throw new Error("ENOSPC: simulated mid-write failure");
+      }
+      return await actual.replaceFileAtomic(options);
+    },
+  );
+  return {
+    ...actual,
+    replaceFileAtomic,
+  };
+});
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -59,6 +102,7 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
 
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { shortenHomePath } from "../utils.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
@@ -131,6 +175,8 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    vi.mocked(replaceFileAtomic).mockClear();
+    transcriptWriteFailure.pending = false;
     repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
     repairCanonicalSessionDeliveryStates
       .mockReset()
@@ -361,6 +407,91 @@ describe("doctor session transcript repair", () => {
       expect(message).not.toContain("repair failed");
     },
   );
+  it("keeps the original transcript when a branch repair write fails mid-write", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "parent",
+        parentId: null,
+        message: { role: "assistant", content: "previous" },
+      },
+      {
+        type: "message",
+        id: "runtime-user",
+        parentId: "parent",
+        message: {
+          role: "user",
+          content: [
+            "visible ask",
+            "",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "secret",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        },
+      },
+      {
+        type: "message",
+        id: "runtime-assistant",
+        parentId: "runtime-user",
+        message: { role: "assistant", content: "stale" },
+      },
+      {
+        type: "message",
+        id: "plain-user",
+        parentId: "parent",
+        message: { role: "user", content: "visible ask" },
+      },
+      {
+        type: "message",
+        id: "plain-assistant",
+        parentId: "plain-user",
+        message: { role: "assistant", content: "answer" },
+      },
+    ]);
+    const originalRaw = await fs.readFile(filePath, "utf-8");
+    transcriptWriteFailure.pending = true;
+
+    await noteSessionTranscriptHealth({
+      sessionDirs: [path.dirname(filePath)],
+      shouldRepair: true,
+    });
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe(originalRaw);
+    expect(vi.mocked(replaceFileAtomic)).toHaveBeenCalled();
+    const siblings = await fs.readdir(path.dirname(filePath));
+    expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("keeps the original transcript when a metadata repair write fails mid-write", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+    const originalRaw = await fs.readFile(filePath, "utf-8");
+    transcriptWriteFailure.pending = true;
+
+    await noteSessionTranscriptHealth({
+      sessionDirs: [path.dirname(filePath)],
+      shouldRepair: true,
+    });
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe(originalRaw);
+    expect(vi.mocked(replaceFileAtomic)).toHaveBeenCalled();
+    const siblings = await fs.readdir(path.dirname(filePath));
+    expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
 
   it("reports affected transcripts without rewriting outside repair mode", async () => {
     const filePath = await writeTranscript([
