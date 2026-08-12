@@ -1,4 +1,6 @@
 // Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,
@@ -6,6 +8,42 @@ import {
 } from "../../scripts/check-runtime-sidecar-loaders.mts";
 
 describe("check-runtime-sidecar-loaders", () => {
+  it("keeps the memory runtime facade out of the manager sidecar graph", () => {
+    const sourcePath = new URL("../../extensions/memory-core/runtime-api.ts", import.meta.url);
+    const source = readFileSync(sourcePath, "utf8");
+    const sourceFile = ts.createSourceFile(
+      sourcePath.pathname,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const runtimeSpecifiers = sourceFile.statements.flatMap((statement) => {
+      if (
+        ts.isImportDeclaration(statement) &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        !statement.importClause?.isTypeOnly
+      ) {
+        return [statement.moduleSpecifier.text];
+      }
+      if (
+        ts.isExportDeclaration(statement) &&
+        statement.moduleSpecifier &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        !statement.isTypeOnly &&
+        !(
+          statement.exportClause &&
+          ts.isNamedExports(statement.exportClause) &&
+          statement.exportClause.elements.every((element) => element.isTypeOnly)
+        )
+      ) {
+        return [statement.moduleSpecifier.text];
+      }
+      return [];
+    });
+
+    expect(runtimeSpecifiers).not.toContain("./src/memory/manager-runtime.js");
+  });
+
   it("flags hidden createRequire runtime sidecars that are not build entries", () => {
     const source = `
       import { createRequire } from "node:module";
