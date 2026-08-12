@@ -335,8 +335,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     if (resetHostSelection) {
       this.submission.clearError();
-      this.closeConnectMachine();
     }
+    this.closeConnectMachine();
   }
 
   private resetDraft() {

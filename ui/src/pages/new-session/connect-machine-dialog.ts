@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { quoteCliArg } from "../../../../src/cli/quote-cli-arg.js";
 import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
@@ -22,7 +23,7 @@ export function renderConnectMachineDialog(props: ConnectMachineDialogProps) {
   }
   const title = t("newSession.connectMachineTitle");
   const joinUrl = props.setup?.joinUrl?.trim();
-  const command = joinUrl ? `npx openclaw connect ${joinUrl}` : null;
+  const command = joinUrl ? `npx openclaw connect ${quoteCliArg(joinUrl)}` : null;
   const expiresAt = props.setup?.expiresAtMs
     ? formatTimeMs(props.setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
     : "";

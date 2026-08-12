@@ -43,7 +43,7 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    const firstJoinUrl = "https://gateway.example.com/j/first-code";
+    const firstJoinUrl = "https://gateway.example.com/j/first-code?label=alpha&next=$(whoami)";
     const secondJoinUrl = "https://gateway.example.com/j/second-code";
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -84,7 +84,7 @@ suite.define(() => {
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
       expect(firstRequest.params).toEqual({ includeQr: false, joinUrl: true });
       const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
-      await dialog.getByText(`npx openclaw connect ${firstJoinUrl}`, { exact: true }).waitFor();
+      await dialog.getByText(`npx openclaw connect '${firstJoinUrl}'`, { exact: true }).waitFor();
       const copy = dialog.locator("button.chat-copy-btn");
       expect(await copy.count()).toBe(1);
       expect(await copy.getAttribute("aria-label")).toBe("Copy command");
@@ -123,6 +123,29 @@ suite.define(() => {
       await place.getByText("Projects", { exact: true }).waitFor();
       expect(await place.getByRole("button", { name: "Connect a machine…" }).count()).toBe(0);
       expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("closes an in-flight connection dialog when the Gateway reconnects", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["device.pair.setupCode"],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator("#new-session-place-trigger").click();
+      await page.getByRole("button", { name: "Connect a machine…" }).click();
+      await gateway.waitForRequest("device.pair.setupCode");
+      const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
+      await dialog.getByText("Creating a secure connection link…", { exact: true }).waitFor();
+
+      await gateway.closeLatest(1012, "test reconnect");
+
+      await expect.poll(() => dialog.count()).toBe(0);
     } finally {
       await context.close();
     }
