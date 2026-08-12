@@ -26,7 +26,7 @@ import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
-import type { SessionDiffLoader } from "./session-diff-panel.ts";
+import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -81,6 +81,7 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
+  loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void;
   revealFile?: (path: string) => void;
   rawText?: string | null;
@@ -594,6 +595,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               : content.kind === "session-diff"
                 ? html`<openclaw-session-diff
                     .loader=${content.load}
+                    .loadFileText=${content.loadFileText ?? null}
                     .openFile=${content.openFile ?? null}
                     .revealFile=${content.revealFile ?? null}
                   ></openclaw-session-diff>`

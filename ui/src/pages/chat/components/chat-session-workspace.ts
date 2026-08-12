@@ -835,6 +835,8 @@ export function createSessionWorkspaceProps(
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
 function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
   const sessionKey = state.sessionKey;
+  const canLoadFileText =
+    isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   return {
     kind: "session-diff",
     load: async (scope) => {
@@ -847,6 +849,27 @@ function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarCon
         ...scope,
       });
     },
+    loadFileText: canLoadFileText
+      ? async (path) => {
+          try {
+            const result = await state.sessions.getFile(sessionKey, path, {
+              agentId: scopedAgentParamsForSession(state, sessionKey).agentId,
+            });
+            const file = result?.file;
+            if (
+              !file ||
+              (file.previewKind !== undefined && file.previewKind !== "text") ||
+              (file.contentEncoding !== undefined && file.contentEncoding !== "utf8") ||
+              typeof file.content !== "string"
+            ) {
+              return null;
+            }
+            return file.content;
+          } catch {
+            return null;
+          }
+        }
+      : undefined,
     openFile: (path) => openFile(state, getWorkspaceState(state), path),
     revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
