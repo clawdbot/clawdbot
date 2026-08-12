@@ -56,17 +56,13 @@ function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
 }
 
-// Absolute host paths from the managed media store only; bounded, and
-// restricted by rejecting the characters that could smuggle prompt markup,
-// control tokens, or external-content markers into the directive. Letters and
-// digits of any script pass: filenames are routinely non-Latin, and dropping
-// the directive for them would silently restore the dead-end for those users.
+// Absolute host paths from the managed media store only; bounded to a positive
+// alphabet that cannot carry prompt markup or executable shell syntax. Letters
+// and digits of any script pass so ordinary non-Latin filenames keep working.
 const MARKER_LOCAL_PATH_MAX_CHARS = 300;
 const POSIX_ABSOLUTE_PATH = /^\//;
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:\\/;
-// Control chars, bidi/zero-width overrides, and prompt-structural punctuation.
-const MARKER_PATH_FORBIDDEN =
-  /[\p{C}\p{Zl}\p{Zp}\u200b-\u200f\u202a-\u202e\u2066-\u2069<>[\]{}"'`|*?]/u;
+const MARKER_PATH_SAFE = /^[\p{L}\p{M}\p{N} /\\:._-]+$/u;
 
 function markerSafeLocalPath(value?: string): string | undefined {
   if (!value || value.length > MARKER_LOCAL_PATH_MAX_CHARS) {
@@ -75,7 +71,7 @@ function markerSafeLocalPath(value?: string): string | undefined {
   if (!POSIX_ABSOLUTE_PATH.test(value) && !WINDOWS_ABSOLUTE_PATH.test(value)) {
     return undefined;
   }
-  return MARKER_PATH_FORBIDDEN.test(value) ? undefined : value;
+  return MARKER_PATH_SAFE.test(value) ? value : undefined;
 }
 
 const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([

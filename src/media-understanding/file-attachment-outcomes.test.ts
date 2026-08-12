@@ -97,6 +97,11 @@ describe("renderFileAttachmentOutcome", () => {
       expected: "[Unsupported document format. PDF and plain-text attachments can be read.]",
     },
     {
+      // Tool-driving markers must not carry shell syntax from user-controlled filenames.
+      outcome: { kind: "unsupported-format", localPath: "/tmp/report;$(&).doc" },
+      expected: "[Unsupported document format. PDF and plain-text attachments can be read.]",
+    },
+    {
       outcome: {
         kind: "unsupported-format",
         mime: "application/msword",

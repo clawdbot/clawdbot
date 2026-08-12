@@ -367,6 +367,49 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
+  it.each([
+    {
+      name: "sandboxes an external direct conversation that shares the main transcript",
+      ctx: {
+        SessionKey: "agent:main:main",
+        OriginatingChannel: "telegram" as MsgContext["OriginatingChannel"],
+        AccountId: "default",
+        ChatType: "direct",
+        SenderId: "42",
+      },
+      expected: false,
+    },
+    {
+      name: "keeps a local main-session conversation on the host",
+      ctx: {
+        SessionKey: "agent:main:main",
+        OriginatingChannel: undefined,
+        Provider: "webchat",
+        ChatType: "direct",
+        SenderId: "operator",
+      },
+      expected: true,
+    },
+  ])(
+    "sets local document self-service from runtime placement: $name",
+    async ({ ctx, expected }) => {
+      await getReplyFromConfig(
+        buildCtx(ctx),
+        undefined,
+        withFastReplyConfig({
+          agents: {
+            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+            list: [{ id: "main", default: true }],
+          },
+        }),
+      );
+
+      expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ selfServeLocalPaths: expected }),
+      );
+    },
+  );
+
   it("keeps unconfigured audio with a model-locked harness", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
     const sessionEntry = {

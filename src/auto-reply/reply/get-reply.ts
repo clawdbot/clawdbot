@@ -79,6 +79,7 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -469,12 +470,15 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
-          // Embedded runner placement: host unless this session sandboxes exec
-          // (non-main mode keeps the main session on the host).
+          // Use the same peer-scoped policy key as tool creation; an external
+          // direct chat may share the main transcript while its tools sandbox.
           selfServeLocalPaths: !resolveSandboxRuntimeStatus({
             cfg,
-            agentId,
-            sessionKey: agentSessionKey,
+            sessionKey: resolveRuntimePolicySessionKey({
+              cfg,
+              ctx: finalized,
+              sessionKey: agentSessionKey,
+            }),
           }).sandboxed,
           ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
