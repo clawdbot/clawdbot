@@ -434,7 +434,7 @@ struct GatewayClientInner {
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
-    sleep_cycle_active: AtomicBool,
+    sleep_cycle_depth: AtomicU64,
     running: AtomicBool,
 }
 
@@ -456,7 +456,7 @@ impl GatewayClient {
                 connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
                 reconnect_paused: AtomicBool::new(false),
-                sleep_cycle_active: AtomicBool::new(false),
+                sleep_cycle_depth: AtomicU64::new(0),
                 running: AtomicBool::new(false),
             }),
         }
@@ -718,12 +718,19 @@ impl GatewayClient {
 
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn begin_sleep_cycle(&self) {
-        self.inner.sleep_cycle_active.store(true, Ordering::SeqCst);
+        self.inner.sleep_cycle_depth.fetch_add(1, Ordering::SeqCst);
     }
 
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn end_sleep_cycle(&self) {
-        self.inner.sleep_cycle_active.store(false, Ordering::SeqCst);
+        // Depth, not a boolean: an older wake task ending late must not park the
+        // driver while a newer sleep cycle is still active. Saturate at zero so
+        // an unbalanced end can never wrap into a permanently active driver.
+        let _ = self.inner.sleep_cycle_depth.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |depth| depth.checked_sub(1),
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -772,7 +779,7 @@ impl GatewayClient {
         loop {
             if !driver_should_run(
                 app.get_webview_window(QUICKCHAT_LABEL).is_some(),
-                self.inner.sleep_cycle_active.load(Ordering::SeqCst),
+                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
                 self.set_connection_state(&app, GatewayConnectionState::Down, None);
@@ -849,7 +856,7 @@ impl GatewayClient {
             }
             if !driver_should_run(
                 app.get_webview_window(QUICKCHAT_LABEL).is_some(),
-                self.inner.sleep_cycle_active.load(Ordering::SeqCst),
+                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 continue;
             }
@@ -927,7 +934,7 @@ impl GatewayClient {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
                 || !driver_should_run(
                     app.get_webview_window(QUICKCHAT_LABEL).is_some(),
-                    self.inner.sleep_cycle_active.load(Ordering::SeqCst),
+                    self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
                 )
             {
                 return Ok(());
@@ -1732,18 +1739,30 @@ mod tests {
     #[test]
     fn sleep_cycle_runs_driver_without_quick_chat() {
         let client = GatewayClient::new();
+        let sleep_active =
+            |client: &GatewayClient| client.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0;
         assert!(!driver_should_run(false, false));
         assert!(driver_should_run(true, false));
         client.begin_sleep_cycle();
-        assert!(driver_should_run(
-            false,
-            client.inner.sleep_cycle_active.load(Ordering::SeqCst)
-        ));
+        assert!(driver_should_run(false, sleep_active(&client)));
         client.end_sleep_cycle();
-        assert!(!driver_should_run(
-            false,
-            client.inner.sleep_cycle_active.load(Ordering::SeqCst)
-        ));
+        assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[test]
+    fn late_wake_end_does_not_park_a_newer_sleep_cycle() {
+        let client = GatewayClient::new();
+        let sleep_active =
+            |client: &GatewayClient| client.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0;
+        client.begin_sleep_cycle(); // cycle 1 sleeps
+        client.begin_sleep_cycle(); // cycle 2 sleeps before cycle 1's wake task ends
+        client.end_sleep_cycle(); // cycle 1's wake ends late
+        assert!(driver_should_run(false, sleep_active(&client)));
+        client.end_sleep_cycle();
+        assert!(!driver_should_run(false, sleep_active(&client)));
+        // An unbalanced extra end saturates at zero instead of wrapping.
+        client.end_sleep_cycle();
+        assert!(!driver_should_run(false, sleep_active(&client)));
     }
 
     #[tokio::test]
