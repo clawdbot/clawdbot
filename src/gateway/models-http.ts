@@ -1,6 +1,6 @@
 // OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -15,6 +15,7 @@ import {
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   isOpenClawAgentModelId,
+  resolveAgentIdFromModel,
   type AuthorizedGatewayHttpRequest,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
@@ -62,9 +63,11 @@ async function authorizeRequest(
 
 function loadAgentModelIds(): string[] {
   const cfg = getRuntimeConfig();
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
-  ids.add(`openclaw/${defaultAgentId}`);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (compatibilityAgentId) {
+    ids.add(`openclaw/${compatibilityAgentId}`);
+  }
   for (const agentId of listAgentIds(cfg)) {
     ids.add(`openclaw/${agentId}`);
   }
@@ -129,6 +132,21 @@ export async function handleOpenAiModelsHttpRequest(
   if (!isOpenClawAgentModelId(decodedId)) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
+  }
+
+  const normalizedModelId = decodedId.trim().toLowerCase();
+  if (normalizedModelId !== OPENCLAW_MODEL_ID && normalizedModelId !== OPENCLAW_DEFAULT_MODEL_ID) {
+    const cfg = getRuntimeConfig();
+    const agentId = resolveAgentIdFromModel(decodedId, cfg);
+    if (!agentId || !listAgentIds(cfg).includes(agentId)) {
+      sendJson(res, 404, {
+        error: {
+          message: `Model '${decodedId}' not found.`,
+          type: "invalid_request_error",
+        },
+      });
+      return true;
+    }
   }
 
   if (!ids.includes(decodedId)) {

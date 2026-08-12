@@ -115,7 +115,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
 }
 
 /** Resolves the target agent encoded by an OpenAI-compatible model id. */
-function resolveAgentIdFromModel(
+export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
 ): string | undefined {
@@ -221,14 +221,14 @@ export function resolveAgentIdForRequest(params: {
   model: string | undefined;
 }): string {
   const cfg = getRuntimeConfig();
+  if (params.model?.trim() && !isOpenClawAgentModelId(params.model)) {
+    throw new InvalidGatewayModelError();
+  }
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     assertKnownAgentId(fromHeader, cfg);
     return fromHeader;
-  }
-
-  if (params.model?.trim() && !isOpenClawAgentModelId(params.model)) {
-    throw new InvalidGatewayModelError();
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
