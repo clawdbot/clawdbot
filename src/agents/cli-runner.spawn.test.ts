@@ -155,7 +155,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const context = buildPreparedCliRunContext({
       sessionKey: "agent:arthur:main",
-      workspaceAgentId: "arthur",
+      agentId: "arthur",
       workspaceDir,
       config: {
         agents: { entries: { arthur: { default: true, workspace: workspaceDir } } },
@@ -743,7 +743,6 @@ describe("runCliAgent spawn path", () => {
         extraSystemPrompt: "You are a helpful assistant.",
       },
       started: Date.now(),
-      workspaceAgentId: "main",
       workspaceDir: "/tmp",
       backendResolved: {
         id: "claude-cli",

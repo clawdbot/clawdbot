@@ -219,7 +219,6 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
     started: Date.now(),
-    workspaceAgentId: "main",
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,

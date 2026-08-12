@@ -419,7 +419,7 @@ describe("prepareCliRunContext", () => {
     fixture.cleanup();
   });
 
-  it("freezes the session-key-derived agent as the prepared workspace owner", async () => {
+  it("carries the session-key-derived workspace owner into prepared params", async () => {
     const { dir } = fixture.session;
     const arthurWorkspace = path.join(dir, "workspace-arthur");
     const context = await fixture.prepare({
@@ -435,8 +435,7 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    expect(context.params.agentId).toBeUndefined();
-    expect(context.workspaceAgentId).toBe("arthur");
+    expect(context.params.agentId).toBe("arthur");
     expect(context.workspaceDir).toBe(arthurWorkspace);
   });
 

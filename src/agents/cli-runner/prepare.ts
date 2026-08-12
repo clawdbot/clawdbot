@@ -444,7 +444,7 @@ export async function prepareCliRunContext(
       preparedRunAdmission: candidate.preparedRunAdmission,
     });
     const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
-    return { ...rest, admittedRunContext };
+    return { ...rest, agentId: workspaceResolution.agentId, admittedRunContext };
   };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -1669,7 +1669,6 @@ export async function prepareCliRunContext(
         ...(authStore ? { authProfileStore: authStore } : {}),
         agentDir,
         started,
-        workspaceAgentId: workspaceResolution.agentId,
         workspaceDir,
         cwd,
         backendResolved,
@@ -1763,7 +1762,6 @@ export async function prepareCliRunContext(
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
       started,
-      workspaceAgentId: workspaceResolution.agentId,
       workspaceDir,
       cwd,
       backendResolved,
