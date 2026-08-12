@@ -97,4 +97,42 @@ describe("chat pane session recovery", () => {
     expect(sessions.recover).toHaveBeenCalledTimes(2);
     expect(navigate).toHaveBeenCalledWith(pane.paneId, "agent:main:dashboard:recovered");
   });
+
+  it("keeps the recovery action available when continuation launch is rejected", async () => {
+    const successor = {
+      ok: true as const,
+      key: "agent:main:dashboard:recovered",
+      sessionId: "recovered-session",
+    };
+    const sessions = {
+      recover: vi
+        .fn<SessionCapability["recover"]>()
+        .mockResolvedValueOnce({
+          ...successor,
+          continuation: {
+            status: "rejected",
+            error: { code: "UNAVAILABLE", message: "Continuation was not started." },
+          },
+        })
+        .mockResolvedValueOnce({
+          ...successor,
+          continuation: { status: "started", runId: "recovery-run" },
+        }),
+    } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions,
+    });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    advertiseSessionRecovery(pane);
+
+    await expect(pane.recoverSession()).resolves.toBe(false);
+    expect(state.chatError).toBe("Continuation was not started.");
+    expect(navigate).not.toHaveBeenCalled();
+
+    await expect(pane.recoverSession()).resolves.toBe(true);
+    expect(sessions.recover).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledWith(pane.paneId, successor.key);
+  });
 });

@@ -153,6 +153,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         }
         return false;
       }
+      if (recovery.continuation.status === "rejected") {
+        setChatError(state, recovery.continuation.error.message);
+        state.requestUpdate?.();
+        return false;
+      }
       const nextSessionKey = recovery.key;
       if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
         return false;
