@@ -317,9 +317,13 @@ export async function createGatewaySession(params: {
   if (requestedKeyAgent && !requestedKeyAgent.ok) {
     return requestedKeyAgent;
   }
+  // Resolve the main alias under an explicit selection before compatibility ownership.
+  const implicitSelectionKey = explicitAgentId
+    ? `agent:${normalizeAgentId(explicitAgentId)}:main`
+    : "main";
   const implicitAgent = requestedKeyAgent
     ? undefined
-    : resolveRequestedSessionAgentId(params.cfg, "main", explicitAgentId, {
+    : resolveRequestedSessionAgentId(params.cfg, implicitSelectionKey, explicitAgentId, {
         allowUnconfiguredExplicitAgent: true,
       });
   if (implicitAgent && !implicitAgent.ok) {

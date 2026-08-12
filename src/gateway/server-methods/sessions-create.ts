@@ -79,10 +79,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitlyRequestedKey = normalizeOptionalString(p.key);
+    const explicitlyRequestedAgentId = normalizeOptionalString(p.agentId);
+    // An omitted key means the selected agent's main alias, not the compatibility owner's alias.
+    const agentSelectionKey =
+      explicitlyRequestedKey ??
+      (explicitlyRequestedAgentId
+        ? `agent:${normalizeAgentId(explicitlyRequestedAgentId)}:main`
+        : "main");
     const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
       cfg,
-      explicitlyRequestedKey ?? "main",
-      p.agentId,
+      agentSelectionKey,
+      explicitlyRequestedAgentId,
       { allowUnconfiguredExplicitAgent: true },
     );
     if (!explicitlyRequestedAgent.ok) {

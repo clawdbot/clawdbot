@@ -39,7 +39,7 @@ test("archiving a non-default agent ignores the compatibility owner's ownerless 
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         agentRunSeq: new Map(),
@@ -54,6 +54,6 @@ test("archiving a non-default agent ignores the compatibility owner's ownerless 
     },
   );
 
-  expect(archived.ok).toBe(true);
+  expect(archived.ok, JSON.stringify(archived)).toBe(true);
   expect(compatibilityRun.controller.signal.aborted).toBe(false);
 });

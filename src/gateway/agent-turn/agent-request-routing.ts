@@ -178,8 +178,9 @@ export async function prepareAgentRequestRouting(params: {
     requestedSessionKeyRaw ??
     sessionIdTarget?.sessionKey ??
     explicitRecipientSession?.sessionKey ??
+    // Ownership selection alone must not turn a sessionless run into a main-session write.
     (!requestedSessionId
-      ? resolveAgentExplicitRecipientSessionKey(params.cfg, agentId)
+      ? resolveAgentExplicitRecipientSessionKey(params.cfg, agentIdRaw ? agentId : undefined)
       : undefined);
   const expectedSessionTargetError = validateExpectedExistingSessionTarget({
     constraint: params.expectedSession,

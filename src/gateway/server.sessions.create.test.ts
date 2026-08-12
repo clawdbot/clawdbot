@@ -415,7 +415,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "sessions.create key agent (work) does not match agentId (main)",
+        message: 'agent "main" does not match session key agent "work"',
       },
     });
     const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
@@ -468,7 +468,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
       agentId: "work",
       incognito: true,
     });
-    expect(created.ok).toBe(true);
+    expect(created.ok, JSON.stringify(created)).toBe(true);
     const sessionKey = requireNonEmptyString(created.payload?.key, "incognito webchat key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "incognito webchat id");
 
