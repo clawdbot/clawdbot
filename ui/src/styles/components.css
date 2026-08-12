@@ -1962,6 +1962,10 @@ openclaw-chat-session-rail {
   color: var(--danger);
 }
 
+.chat-session-rail__retry {
+  justify-self: start;
+}
+
 .chat-session-rail__exchange--pending .chat-session-rail__hint {
   animation: chat-session-rail-pending-pulse 1.4s ease-in-out infinite;
 }
@@ -2335,10 +2339,20 @@ openclaw-chat-session-rail {
 }
 
 .json-collapse summary {
+  display: list-item;
   font-size: 12px;
   color: var(--muted);
   padding: 4px 8px;
+  border-radius: var(--radius-sm);
   user-select: none;
+}
+
+.json-collapse summary .code-block-copy {
+  float: right;
+}
+
+.json-collapse[open] summary {
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .json-collapse summary:hover {

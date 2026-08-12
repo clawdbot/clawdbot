@@ -1842,7 +1842,7 @@ jobs:
               fi
               ;;
             bun-launcher)
-              OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
+              OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -2115,6 +2115,7 @@ jobs:
       - name: Run channel contract shard
         env:
           OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "4"
         shell: bash
         run: |
           set -euo pipefail

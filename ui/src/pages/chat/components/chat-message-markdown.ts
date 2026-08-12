@@ -83,6 +83,16 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+export function resolveMessageReplyText(message: unknown): string {
+  const normalizedMessage = normalizeMessage(message);
+  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const visibleMarkdown =
+    normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+      ? stripThinkingTags(markdown).trim()
+      : markdown.trim();
+  return visibleMarkdown;
+}
+
 export function resolveMessageActionDetails(params: {
   message: unknown;
   messageId: string;
@@ -106,10 +116,8 @@ export function resolveMessageActionDetails(params: {
         ? record.messageId
         : undefined;
   const normalizedMessage = normalizeMessage(message);
-  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const previewMarkdown =
-    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
+  const previewMarkdown = resolveMessageReplyText(message);
   // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
   const shouldFetchFullMessage = Boolean(
     canFetchFullMessage &&

@@ -241,6 +241,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",

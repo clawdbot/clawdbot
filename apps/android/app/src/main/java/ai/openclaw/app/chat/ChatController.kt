@@ -101,6 +101,8 @@ class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
+  private val requestGatewayWithTimeout: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String =
+    { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
@@ -154,6 +156,9 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
+      session.request(method, paramsJson, timeoutMs)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
@@ -917,6 +922,7 @@ class ChatController internal constructor(
   suspend fun patchSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -932,11 +938,17 @@ class ChatController internal constructor(
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
     val hasPatch = clearLabel || label != null || clearCategory || category != null || pinned != null || archived != null || unread != null
     if (!hasPatch) return false
+    val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
+    if (archived != null && lifecycleSessionId == null) {
+      updateErrorText("Session lifecycle action requires a durable session identity.")
+      return false
+    }
     try {
       val params =
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
+          lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
           if (clearLabel) {
             put("label", JsonNull)
           } else if (label != null) {
@@ -951,7 +963,11 @@ class ChatController internal constructor(
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
         }
-      requestGateway("sessions.patch", params.toString())
+      if (archived == true) {
+        requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
+      } else {
+        requestGateway("sessions.patch", params.toString())
+      }
       if (archived == true) {
         fallBackFromRetiredActiveSession(sessionKey)
       }
@@ -6442,6 +6458,7 @@ class ChatController internal constructor(
     if (key.isEmpty()) return null
     return ChatSessionEntry(
       key = key,
+      sessionId = obj["sessionId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
@@ -7396,6 +7413,9 @@ internal fun mergeChatSessionEntry(
       status = if (next.hasRunMetadata) next.status else existing.status,
     )
   return existing.copy(
+    // Partial events may omit identity; retain the last observed occurrence until
+    // an authoritative event supplies the replacement session ID.
+    sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,

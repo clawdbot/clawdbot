@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,6 +47,8 @@ describe("coercion helper declaration AST guard", () => {
       "};",
       "function normalizeOptionalString() {}",
       "const parseDateFirstTimestampMs = () => 0;",
+      "function safeParseJsonRecord() {}",
+      "function resolveIntegerOption() {}",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -88,6 +91,18 @@ describe("coercion helper declaration AST guard", () => {
         line: 30,
         name: "parseDateFirstTimestampMs",
       },
+      {
+        file: "src/example.ts",
+        kind: "function",
+        line: 31,
+        name: "safeParseJsonRecord",
+      },
+      {
+        file: "src/example.ts",
+        kind: "function",
+        line: 32,
+        name: "resolveIntegerOption",
+      },
     ]);
   });
 
@@ -109,48 +124,100 @@ describe("coercion helper declaration AST guard", () => {
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([]);
   });
 
-  it("checks exact counts and rejects excess, stale, or malformed carve-outs", () => {
+  it("allows an exact function-kind declaration and reports ordinary excess/stale counts", () => {
     const declarations: CoercionHelperDeclaration[] = [
       { file: "src/allowed.ts", kind: "function", line: 2, name: "isRecord" },
-      { file: "src/allowed.ts", kind: "variable", line: 8, name: "isRecord" },
       { file: "src/new.ts", kind: "function", line: 4, name: "readString" },
     ];
     const carveOuts: CoercionHelperCarveOut[] = [
       {
         file: "src/allowed.ts",
         name: "isRecord",
+        kind: "function",
         count: 1,
         reason: "Dependency-free protocol boundary.",
       },
       {
         file: "src/removed.ts",
         name: "toError",
+        kind: "function",
         count: 1,
         reason: "Hostile object trap semantics.",
       },
-      { file: "src/blank.ts", name: "asRecord", count: 0, reason: "" },
     ];
 
     expect(auditCoercionHelperDeclarations(declarations, carveOuts)).toEqual({
-      excessDeclarations: [
-        { file: "src/allowed.ts", kind: "variable", line: 8, name: "isRecord" },
-        { file: "src/new.ts", kind: "function", line: 4, name: "readString" },
-      ],
-      invalidCarveOuts: [
-        "src/blank.ts [asRecord] must have a positive count",
-        "src/blank.ts [asRecord] needs a non-empty reason",
-      ],
+      excessDeclarations: [{ file: "src/new.ts", kind: "function", line: 4, name: "readString" }],
+      invalidCarveOuts: [],
       staleCarveOuts: [
         {
           file: "src/removed.ts",
           name: "toError",
+          kind: "function",
           count: 1,
           reason: "Hostile object trap semantics.",
           actualCount: 0,
-          lines: [],
         },
       ],
     });
+  });
+
+  it.each(["method", "field", "property"] as const)(
+    "treats %s drift as both excess and stale function ownership",
+    (kind) => {
+      const declaration: CoercionHelperDeclaration = {
+        file: "src/owner.ts",
+        kind,
+        line: 3,
+        name: "isRecord",
+      };
+      const carveOut: CoercionHelperCarveOut = {
+        file: "src/owner.ts",
+        name: "isRecord",
+        kind: "function",
+        count: 1,
+        reason: "Exact function owner.",
+      };
+
+      expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
+        excessDeclarations: [declaration],
+        invalidCarveOuts: [],
+        staleCarveOuts: [{ ...carveOut, actualCount: 0 }],
+      });
+    },
+  );
+
+  it("rejects duplicate, non-banned, and malformed carve-outs", () => {
+    const valid: CoercionHelperCarveOut = {
+      file: "src/owner.ts",
+      name: "isRecord",
+      kind: "function",
+      count: 1,
+      reason: "Exact function owner.",
+    };
+    const invalid = [
+      valid,
+      valid,
+      {
+        ...valid,
+        file: "src/not-banned.ts",
+        name: "domainParser",
+      } as unknown as CoercionHelperCarveOut,
+      { ...valid, file: "src/blank.ts", count: 0, reason: "" },
+      {
+        ...valid,
+        file: "src/kind.ts",
+        kind: "getter",
+      } as unknown as CoercionHelperCarveOut,
+    ];
+
+    expect(auditCoercionHelperDeclarations([], invalid).invalidCarveOuts).toEqual([
+      "src/owner.ts [isRecord] is listed more than once",
+      "src/not-banned.ts [domainParser] is not a banned helper name",
+      "src/blank.ts [isRecord] must have a positive count",
+      "src/blank.ts [isRecord] needs a non-empty reason",
+      "src/kind.ts [isRecord] has invalid kind getter",
+    ]);
   });
 
   it("excludes structural fixtures and generated sources without hiding authored fixture-named files", () => {
@@ -178,7 +245,7 @@ describe("coercion helper declaration AST guard", () => {
     fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "config"), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, "src", "z.ts"), "function readString() {}\n");
+    fs.writeFileSync(path.join(repoRoot, "src", "z.ts"), "class Owner { readString() {} }\n");
     fs.writeFileSync(
       path.join(repoRoot, "extensions", "demo", "a.ts"),
       "const asRecord = () => ({});\n",
@@ -191,7 +258,15 @@ describe("coercion helper declaration AST guard", () => {
     const stderr: string[] = [];
     expect(
       runCoercionHelperDeclarationGuard({
-        carveOuts: [],
+        carveOuts: [
+          {
+            file: "src/z.ts",
+            name: "readString",
+            kind: "function",
+            count: 1,
+            reason: "Exact function owner.",
+          },
+        ],
         repoRoot,
         io: {
           stdout: { write: (value) => stdout.push(value) },
@@ -206,8 +281,39 @@ describe("coercion helper declaration AST guard", () => {
       output.indexOf("extensions/demo/a.ts:1"),
     );
     expect(output.indexOf("extensions/demo/a.ts:1")).toBeLessThan(output.indexOf("src/z.ts:1"));
+    expect(output).toContain("Banned local coercion-helper declarations:");
+    expect(output).toContain("readString (method declaration)");
+    expect(output).toContain("Stale coercion-helper carve-outs:");
+    expect(output).toContain("expected 1 function declaration(s), found 0");
     expect(output).toContain("Core/package/UI/workspace-script code");
     expect(output).toContain("Plugin production code");
+    expect(output).toContain("number-runtime");
     expect(output).toContain("Dependency-free, copied, generated, or serialized code");
+  });
+
+  it("scans only tracked files when the repository has a Git index", () => {
+    const repoRoot = tempDirs.make("coercion-helper-tracked-guard-");
+    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "src", "tracked.ts"), "function readString() {}\n");
+    fs.writeFileSync(path.join(repoRoot, "src", "untracked.ts"), "function readNumber() {}\n");
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    execFileSync("git", ["add", "src/tracked.ts"], { cwd: repoRoot });
+    const stderr: string[] = [];
+
+    expect(
+      runCoercionHelperDeclarationGuard({
+        carveOuts: [],
+        repoRoot,
+        io: {
+          stdout: { write: () => undefined },
+          stderr: { write: (value) => stderr.push(value) },
+        },
+      }),
+    ).toBe(1);
+
+    const output = stderr.join("");
+    expect(output).toContain("src/tracked.ts:1 readString");
+    expect(output).not.toContain("src/untracked.ts");
+    expect(output).not.toContain("readNumber");
   });
 });

@@ -41,12 +41,15 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     isDisposed: () => disposed,
   });
 
-  const reset = (sessionKey: string) => {
+  const reset = (
+    sessionKey: string,
+    cancellation: "backing-session-revoked" | "explicit-reset",
+  ) => {
     const key = sessionKey.trim();
     if (!key) {
       return;
     }
-    askRuntime.cancel(key);
+    askRuntime.cancel(key, cancellation);
     threads.delete(key);
   };
 
@@ -54,13 +57,15 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     const cutoff = now() - SESSION_COMPANION_IDLE_TTL_MS;
     for (const [sessionKey, thread] of threads) {
       if (!thread.busy && thread.lastUsedAt <= cutoff) {
-        reset(sessionKey);
+        reset(sessionKey, "explicit-reset");
       }
     }
   };
   const sweepTimer = setIntervalFn(sweep, SESSION_COMPANION_SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
-  const unsubscribeReset = onGatewaySessionReset(reset);
+  const unsubscribeReset = onGatewaySessionReset((sessionKey) =>
+    reset(sessionKey, "backing-session-revoked"),
+  );
 
   return {
     ask: askRuntime.ask,
@@ -75,7 +80,9 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
         exchanges: thread.exchanges.map(({ question, answer, ts }) => ({ question, answer, ts })),
       };
     },
-    reset,
+    reset(sessionKey) {
+      reset(sessionKey, "explicit-reset");
+    },
     dispose() {
       if (disposed) {
         return;

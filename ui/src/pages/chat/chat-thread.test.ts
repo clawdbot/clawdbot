@@ -3016,6 +3016,22 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("renders reply metadata on queued user turns before chat.send ACK", () => {
+    const groups = messageGroups({
+      messages: [assistantMessage("Ready.", 1)],
+      queue: [
+        queuedSend("pending-send-1", "follow up", 2, "sending", {
+          replyToId: "transcript-123",
+          sendSubmittedAtMs: 10,
+        }),
+      ],
+    });
+
+    expect(groupAt(groups, 1).messages[0]?.message).toMatchObject({
+      __openclaw: { replyToId: "transcript-123" },
+    });
+  });
+
   it("keeps restored in-flight sends visible without process-local timing", () => {
     const restored = {
       id: "restored-send-1",

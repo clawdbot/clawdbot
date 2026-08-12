@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-42)).toEqual([
+    expect(listGatewayMethods().slice(-44)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -109,6 +109,8 @@ describe("listGatewayMethods", () => {
       "secrets.store.list",
       "secrets.store.set",
       "secrets.store.delete",
+      "users.prefs.get",
+      "users.prefs.set",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -200,7 +202,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-49)).toEqual([
+    expect(coreMethods.slice(-51)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -250,6 +252,8 @@ describe("listGatewayMethods", () => {
       "secrets.store.list",
       "secrets.store.set",
       "secrets.store.delete",
+      "users.prefs.get",
+      "users.prefs.set",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -271,6 +275,8 @@ describe("listGatewayMethods", () => {
     );
     expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
     expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
+    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
+    expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

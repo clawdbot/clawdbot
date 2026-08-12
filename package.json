@@ -1664,6 +1664,7 @@
     "lint:extensions:telegram-grammy-types": "node --import tsx scripts/check-telegram-grammy-types-imports.mts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
     "lint:extensions:no-guarded-wildcard-reexports": "node --import tsx scripts/check-extension-wildcard-reexports.mts",
+    "lint:extensions:no-normalization-core-bypass": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
     "lint:extensions:no-plugin-sdk-internal": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=plugin-sdk-internal",
     "lint:extensions:no-plugin-sdk-wildcard-reexports": "node --import tsx scripts/check-plugin-sdk-wildcard-reexports.mts",
     "lint:extensions:no-relative-outside-package": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=relative-outside-package",

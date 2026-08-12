@@ -442,6 +442,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           { toolName: "cron" },
           { toolName: "sessions_spawn" },
         ],
+        successfulNestedToolNames: ["read"],
         acceptedSessionSpawns,
         successfulCronAdds: 1,
         itemLifecycle: { startedCount: 3, completedCount: 3, activeCount: 0 },
@@ -484,6 +485,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       codeModeEngaged: true,
       assistantTurns: 2,
       bridgeCalls: { search: 1, describe: 2, call: 3 },
+      terminalReceipt: {
+        successfulToolNames: ["read"],
+      },
     });
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);

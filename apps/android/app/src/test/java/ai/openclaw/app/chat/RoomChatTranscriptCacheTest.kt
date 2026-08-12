@@ -301,6 +301,23 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun sessionCacheDoesNotPersistDurableSessionIdentity() =
+    runTest {
+      saveSessions(
+        sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 20L,
+              sessionId = "live-session-id",
+            ),
+          ),
+      )
+
+      assertEquals(null, loadSessions().single().sessionId)
+    }
+
+  @Test
   fun transcriptForSessionOutsideFullCachedListSurvivesEviction() =
     runTest {
       saveSessions(

@@ -30,9 +30,9 @@ export async function runE2eGlobalSetup(
   runCommand: SetupCommandRunner = runE2eSetupCommand,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  // Exact-run CI artifact consumers already have the complete built surface.
-  // Rebuilding here would discard that provenance and duplicate the slow step.
-  if (env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
+  // Some focused suites bring their own fixtures, while exact-run artifact consumers already
+  // have the complete built surface. In both cases rebuilding here would duplicate slow work.
+  if (env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
     return;
   }
   const commands = [
@@ -49,8 +49,8 @@ export async function runE2eGlobalSetup(
       env,
     },
   ];
-  for (const { args, env } of commands) {
-    const status = await runCommand(args, env);
+  for (const { args, env: commandEnv } of commands) {
+    const status = await runCommand(args, commandEnv);
     if (status !== 0) {
       throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
     }

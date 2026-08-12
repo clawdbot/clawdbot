@@ -5,9 +5,12 @@ import { property, state } from "lit/decorators.js";
 import type {
   FsListDirResult,
   ProjectRecord,
+  ProjectRecent,
   ProjectsListResult,
   ProjectsRegisterResult,
   SessionsCatalogStartTerminalResult,
+  UsersPrefsGetResult,
+  UsersPrefsSetResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -78,8 +81,13 @@ import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import {
+  decodeIdentityPreferences,
+  encodeIdentityPreferences,
+  loadBrowserPreferences,
   loadNewSessionPreference,
   patchNewSessionPreference,
+  PREFS_MIGRATION_KEY,
+  replaceBrowserPreference,
   type NewSessionPreference,
 } from "./preferences.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
@@ -96,6 +104,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private agentId = "";
   @state() private folder = "";
   @state() private projects: ProjectRecord[] = [];
+  @state() private projectRecents: ProjectRecent[] | undefined;
   @state() private projectId = "";
   @state() private worktree = false;
   @state() private visibility: NewSessionVisibility = "normal";
@@ -166,6 +175,11 @@ class NewSessionPage extends OpenClawLightDomElement {
   private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private cloudProfileRetryAttempt = 0;
   private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  private preferenceScope = "";
+  private preferenceMode: "local" | "loading" | "remote" = "local";
+  private identityPreferences: Record<string, NewSessionPreference> = {};
+  private preferenceLoad: Promise<void> = Promise.resolve();
+  private preferenceWrite: Promise<void> = Promise.resolve();
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
@@ -215,12 +229,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       ] as const,
     task: async ([client, advertised]) => {
       if (!client || !advertised) {
-        return [] as ProjectRecord[];
+        return { projects: [] } as ProjectsListResult;
       }
-      return (await client.request<ProjectsListResult>("projects.list", {})).projects ?? [];
+      return await client.request<ProjectsListResult>("projects.list", {});
     },
-    onComplete: (projects) => {
+    onComplete: (result) => {
+      const projects = result.projects ?? [];
       this.projects = projects;
+      this.projectRecents = result.recents;
       if (this.projectId && !projects.some((project) => project.id === this.projectId)) {
         this.projectId = "";
         this.maybeLoadBranches();
@@ -228,6 +244,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     },
     onError: () => {
       this.projects = [];
+      this.projectRecents = undefined;
       this.projectId = "";
     },
   });
@@ -360,6 +377,99 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.retryPendingCatalogTarget();
       }
     }
+    this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
+  }
+
+  private synchronizeIdentityPreferences(profileId: string | undefined) {
+    const client = this.gatewayConnected ? this.gatewayClient : null;
+    const advertised =
+      this.context &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "users.prefs.get") === true &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "users.prefs.set") === true;
+    const scope =
+      client && profileId && advertised ? `${this.gatewayConnectionEpoch}\0${profileId}` : "local";
+    if (scope === this.preferenceScope) {
+      return;
+    }
+    this.preferenceScope = scope;
+    this.identityPreferences = {};
+    if (!client || !profileId || !advertised) {
+      this.preferenceMode = "local";
+      this.preferenceLoad = Promise.resolve();
+      return;
+    }
+    this.preferenceMode = "loading";
+    this.preferenceLoad = this.loadIdentityPreferences({
+      client,
+      gatewayUrl: this.gatewayUrl,
+      scope,
+    });
+  }
+
+  private async loadIdentityPreferences(params: {
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+    gatewayUrl: string;
+    scope: string;
+  }): Promise<void> {
+    try {
+      const result = await params.client.request<UsersPrefsGetResult>("users.prefs.get", {});
+      if (this.preferenceScope !== params.scope) {
+        return;
+      }
+      if (result.status !== "ok") {
+        this.preferenceMode = "local";
+        return;
+      }
+      let preferences = decodeIdentityPreferences(result.entries);
+      const browserPreferences = loadBrowserPreferences(params.gatewayUrl);
+      if (result.entries[PREFS_MIGRATION_KEY] !== true) {
+        const missingBrowserPreferences = Object.fromEntries(
+          Object.entries(browserPreferences).filter(
+            ([agentId]) => !Object.hasOwn(preferences, agentId),
+          ),
+        );
+        const migrationEntries = [
+          ...Object.entries(encodeIdentityPreferences(missingBrowserPreferences)),
+          [PREFS_MIGRATION_KEY, true] as const,
+        ];
+        let migrationFailed = false;
+        for (let offset = 0; offset < migrationEntries.length; offset += 32) {
+          const batch = Object.fromEntries(migrationEntries.slice(offset, offset + 32));
+          let response: UsersPrefsSetResult;
+          try {
+            response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
+              entries: batch,
+            });
+          } catch {
+            migrationFailed = true;
+            break;
+          }
+          if (this.preferenceScope !== params.scope) {
+            return;
+          }
+          if (response.status !== "ok") {
+            migrationFailed = true;
+            break;
+          }
+          Object.assign(preferences, decodeIdentityPreferences(batch));
+        }
+        if (migrationFailed) {
+          preferences = { ...browserPreferences, ...preferences };
+        }
+      }
+      this.identityPreferences = preferences;
+      this.preferenceMode = "remote";
+      for (const [agentId, preference] of Object.entries(preferences)) {
+        replaceBrowserPreference(params.gatewayUrl, agentId, preference);
+      }
+      if (this.agentsHydrated) {
+        this.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+      }
+    } catch {
+      if (this.preferenceScope === params.scope) {
+        this.preferenceMode = "local";
+      }
+    }
   }
 
   private invalidateGatewayDiscovery(
@@ -397,6 +507,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentSelectedByUser = false;
     this.folder = "";
     this.projects = [];
+    this.projectRecents = undefined;
     this.projectId = "";
     this.folderSelectedByUser = false;
     this.preferredWorktreeRestore = false;
@@ -781,17 +892,51 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (catalog.isTarget(this.data) || this.pendingCloud.sessionKey) {
       return null;
     }
-    return loadNewSessionPreference(this.gatewayUrl, this.agentId);
+    return this.preferenceMode === "remote"
+      ? (this.identityPreferences[normalizeAgentId(this.agentId)] ?? null)
+      : loadNewSessionPreference(this.gatewayUrl, this.agentId);
   }
 
   private persistPreference(patch: NewSessionPreference) {
     if (catalog.isTarget(this.data) || this.pendingCloud.sessionKey) {
       return;
     }
-    patchNewSessionPreference(this.gatewayUrl, this.agentId, {
+    const agentId = normalizeAgentId(this.agentId);
+    const nextPatch = {
       workspace: this.workspacePath(),
       ...patch,
-    });
+    };
+    if (this.preferenceMode === "local") {
+      patchNewSessionPreference(this.gatewayUrl, agentId, nextPatch);
+      return;
+    }
+    const scope = this.preferenceScope;
+    const client = this.gatewayClient;
+    const gatewayUrl = this.gatewayUrl;
+    const write = async () => {
+      await this.preferenceLoad;
+      if (!client || this.preferenceScope !== scope) {
+        return;
+      }
+      if (this.preferenceMode === "local") {
+        patchNewSessionPreference(gatewayUrl, agentId, nextPatch);
+        return;
+      }
+      const next = { ...this.identityPreferences[agentId], ...nextPatch };
+      try {
+        const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
+          entries: encodeIdentityPreferences({ [agentId]: next }),
+        });
+        if (result.status !== "ok" || this.preferenceScope !== scope) {
+          return;
+        }
+        this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
+        replaceBrowserPreference(gatewayUrl, agentId, next);
+      } catch {
+        // Gateway state is authoritative for identified users; retain the last mirrored value.
+      }
+    };
+    this.preferenceWrite = this.preferenceWrite.then(write, write);
   }
 
   private cancelRestoredFolderValidation() {
@@ -1204,6 +1349,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gateway = this.context?.gateway;
     if (
       this.submitting ||
+      this.preferenceMode === "loading" ||
       this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
@@ -1967,6 +2113,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       workspace: this.workspacePath(),
       workspaceRoots: this.knownWorkspaceRoots(),
       projects: catalog.isTarget(this.data) ? [] : this.projects,
+      recents: catalog.isTarget(this.data) ? [] : this.projectRecents,
       projectId: this.projectId,
       sessions: this.context?.sessions.state.result?.sessions ?? [],
       execNodes: this.isAdmin() ? execNodes : [],

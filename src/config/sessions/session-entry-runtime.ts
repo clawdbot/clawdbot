@@ -160,6 +160,9 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
   }
+  if (existing.projectId !== undefined) {
+    next.projectId = existing.projectId;
+  }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;
   }

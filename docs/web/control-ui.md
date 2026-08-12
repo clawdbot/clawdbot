@@ -16,7 +16,7 @@ It speaks **directly to the Gateway WebSocket** on the same port.
 
 While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only companion thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
 
-The companion answers questions about the selected session and its project without entering or interrupting the main agent run. It uses the utility model with read-only access to the target session's history/search and agent workspace. The bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset, Gateway restart, or idle expiry. It never enters `chat.history`. Type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
+The companion answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded snapshot of the selected session before starting the utility model; the rail shows **Reading this session…** and then **Answering…**. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. The companion uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset, Gateway restart, or idle expiry. It never enters `chat.history`, and private context transport is not stored as operator dialogue. Type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
 
 Highlighting text in a chat message offers **More details**, which asks the companion immediately, and **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
@@ -109,6 +109,12 @@ An already paired administrator can create the iOS/Android connection QR without
 </Steps>
 
 Creating a setup code requires `operator.admin`; the button is disabled for sessions without it. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+
+## New-session preferences and recents
+
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, and thinking choices. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+
+On the first identified connection, the Control UI uploads existing browser-local new-session preferences only when the Gateway has no such preferences yet. Later changes write to the Gateway first and then update the browser mirror. Connections without a durable identity continue using browser-local preferences and the loaded session roster for recents.
 
 ## Personal identity (browser-local)
 
@@ -389,9 +395,18 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 
 ## Activity tab
 
-The Activity tab lives in **Settings › System**, next to Logs and Debug. It is an ephemeral browser-local observer for live tool activity, derived from the same Gateway `session.tool` / tool event stream that powers Chat tool cards. It does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.
+The Activity tab lives in **Settings › System**, next to Logs and Debug. It has two views with different durability:
 
-Activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, or **Clear**.
+- **Live activity** is the existing ephemeral browser-local observer for tool activity. It is derived from the same Gateway `session.tool` and tool event stream that powers Chat tool cards. It does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.
+- **Run inspector** reads the Gateway's durable, immutable `audit.run.inspect` projection. Open a run directly with `/activity?view=run&run=<percent-encoded-run-id>`. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
+
+Live activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, Gateway switch, or **Clear**.
+
+The Run inspector shows the retained trust domain, ingress, invoker, represented subject, sponsor, agent definition and principal, runtime instance, applicable grants, assurance evidence, lineage, and a bounded decision-receipt page summary. Every fact has a text evidence state. **Absent** means the owning boundary explicitly recorded no value; **unattributed** means a supported path had no usable invoker; **unknown** means expected evidence is missing or unreadable; and **unsupported** means the path has no Phase 0 evidence contract. Color is supplemental only.
+
+Run inspection requires `operator.read` and a Gateway that advertises `audit.run.inspect`. Execution identity collection is off by default; enable `logging.audit.executionIdentity`, restart the Gateway, and record a new run when you need this evidence. Retained contexts are limited to 30 days and 100,000 rows. A known run can therefore report unavailable or expired identity evidence, and a run reference can be ambiguous when it correlates more than one execution. The UI does not guess between executions: choose a returned candidate to navigate to `/activity?view=run&execution=<percent-encoded-execution-id>` and query that exact execution.
+
+The audit ledger is best-effort operational evidence, not a lossless compliance archive. A missing or expired record does not prove that a run or action did not occur. The inspector never displays prompt or message text, command bodies, arguments, file paths, credentials, environment values, raw source identifiers, or arbitrary plugin data. See [Audit history](/gateway/audit) for collection, privacy, retention, and CLI inspection details.
 
 ## Operator terminal
 

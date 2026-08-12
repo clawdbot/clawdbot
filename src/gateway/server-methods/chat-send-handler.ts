@@ -18,7 +18,6 @@ import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -37,10 +36,7 @@ import {
   settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import {
-  applyChatSendReplyContextFields,
-  resolveChatSendReplyContext,
-} from "./chat-send-reply-context.js";
+import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
@@ -54,7 +50,6 @@ import {
   type ChatSendServerTimingPhase,
 } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
-import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -77,7 +72,6 @@ export async function handleChatSend(
     supportsTaskSuggestions,
     p,
     systemInputProvenance,
-    rawMessage,
     reconnectResumeRequested,
   } = normalizedRequest.value;
   const {
@@ -97,7 +91,6 @@ export async function handleChatSend(
     expectedLeafEntryId,
     expectedRunId,
     resolvedSessionModel,
-    now,
   } = preparedSession.value;
   const {
     activeRunAbort,
@@ -167,39 +160,29 @@ export async function handleChatSend(
       storePath,
       ...terminalState,
     });
-
   try {
     const userTurn = createGatewayChatUserTurnController({
-      agentId,
-      cfg,
-      clientRunId,
-      initialSessionId: admittedSessionId,
-      now,
-      ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
-      rawMessage,
-      ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
-      ...gatewayClientSenderFields(client),
-      senderIsOwner: hasGatewayAdminScope(client),
-      sessionKey,
-      ...(sessionLoadOptions ? { sessionLoadOptions } : {}),
+      admission: admitted.value,
+      client,
+      request: normalizedRequest.value,
+      session: preparedSession.value,
       startedAt: admissionStartedAt,
-      traceAttributes: chatSendTraceAttributes,
       warn: (message) => context.logGateway.warn(message),
     });
     const {
       persist: persistGatewayUserTurnTranscript,
       persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
       recorder: userTurnRecorder,
+      replyContextFieldsPromise,
     } = userTurn;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
-      const admittedEntry = persistedUserTurn?.sessionEntry;
       // A matching idempotency row and lifecycle claim commit atomically, so
       // retries adopt the durable turn without submitting it twice.
       if (
         !persistedUserTurn ||
-        admittedEntry?.status !== "running" ||
-        admittedEntry.restartRecoveryDeliveryRunId !== clientRunId
+        persistedUserTurn.sessionEntry?.status !== "running" ||
+        persistedUserTurn.sessionEntry.restartRecoveryDeliveryRunId !== clientRunId
       ) {
         throw new Error("chat turn was not durably admitted");
       }
@@ -256,18 +239,6 @@ export async function handleChatSend(
       imageOrder,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
-    const replyContextFieldsPromise = p.replyToId
-      ? resolveChatSendReplyContext({
-          replyToId: p.replyToId,
-          cfg,
-          agentId,
-          sessionKey,
-          sessionEntry: entry,
-          storePath,
-          userSenderLabel: clientInfo?.displayName,
-          warn: (message) => context.logGateway.warn(message),
-        })
-      : undefined;
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
         ? replyContextFieldsPromise

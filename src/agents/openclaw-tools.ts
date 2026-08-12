@@ -378,6 +378,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
           }),

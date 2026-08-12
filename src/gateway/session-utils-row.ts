@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -29,7 +30,6 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
@@ -229,7 +229,7 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
@@ -274,7 +274,7 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     freshSessionTotalTokens !== undefined ||
     (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
@@ -326,14 +326,14 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
         entry,
         rowContext: params.rowContext,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
+      }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(

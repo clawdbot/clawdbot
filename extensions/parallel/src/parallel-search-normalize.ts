@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 // Transport-agnostic Parallel search normalization shared by the paid REST
 // provider (`parallel`) and the free Search MCP provider (`parallel-free`).
 // Both transports return the same v1 result shape, so query/result handling
@@ -53,7 +54,10 @@ export function resolveParallelSearchCount(
   const value =
     requestedCount ??
     (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
-  return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
+  return resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
+    min: 1,
+    max: PARALLEL_MAX_SEARCH_COUNT,
+  });
 }
 
 export function normalizeParallelSessionId(

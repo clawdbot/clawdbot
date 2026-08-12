@@ -1913,6 +1913,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.messageReceivedCalls).toHaveLength(1);
     expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      replyToId: "prior-message",
+      replyToPreview: {
+        text: "quoted deployment status",
+        senderLabel: "Alice",
+      },
+    });
     expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
       1,
     );

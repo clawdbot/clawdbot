@@ -2,6 +2,11 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import {
+  asNonArrayRecord,
+  asNullableRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
@@ -65,7 +70,7 @@ function applyLiveUserMessage(
   payload: unknown,
   runActive: boolean | undefined,
 ): void {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!isRecord(payload)) {
     return;
   }
   const event = payload as {
@@ -93,10 +98,7 @@ function applyLiveUserMessage(
   }
   const sourceRecord = sourceMessage as Record<string, unknown>;
   const marker = sourceRecord["__openclaw"];
-  const sourceMetadata =
-    marker && typeof marker === "object" && !Array.isArray(marker)
-      ? (marker as Record<string, unknown>)
-      : {};
+  const sourceMetadata = asNonArrayRecord(marker);
   const message = {
     ...sourceRecord,
     __openclaw: {
@@ -248,10 +250,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const matchesChat = Boolean(
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
-  const source =
-    payload && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : null;
+  const source = asNullableRecord(payload);
   const resetsSelectedSession =
     matchesChat && (source?.reason === "reset" || source?.phase === "reset");
   if (resetsSelectedSession) {

@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import {
@@ -37,6 +38,7 @@ export function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    sessionId?: string;
     category?: string;
     pinned?: boolean;
     pinnedAt?: number;
@@ -57,6 +59,7 @@ export function sessionRow(
     displayName: label,
     hasActiveRun: false,
     key,
+    sessionId: `session:${key}`,
     kind: "direct",
     label,
     model: "gpt-5.5",
@@ -95,12 +98,7 @@ export function sessionsListResponse(
   };
 }
 
-export function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export async function waitForPatch(
   gateway: MockGatewayControls,

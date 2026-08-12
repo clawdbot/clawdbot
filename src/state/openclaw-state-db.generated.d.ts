@@ -1488,6 +1488,13 @@ export interface UpdateCheckState {
   updated_at_ms: number;
 }
 
+export interface UserPreferences {
+  pref_key: string;
+  profile_id: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
 export interface VoicewakeRoutingConfig {
   config_key: string;
   default_target_agent_id: string | null;
@@ -1848,6 +1855,7 @@ export interface DB {
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
+  user_preferences: UserPreferences;
   voicewake_routing_config: VoicewakeRoutingConfig;
   voicewake_routing_routes: VoicewakeRoutingRoutes;
   voicewake_triggers: VoicewakeTriggers;

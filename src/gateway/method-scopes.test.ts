@@ -75,6 +75,8 @@ describe("method scope resolution", () => {
     ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
     ["projects.list", ["operator.read"]],
+    ["users.prefs.get", ["operator.read"]],
+    ["users.prefs.set", ["operator.write"]],
     ["projects.register", ["operator.admin"]],
     ["projects.remove", ["operator.admin"]],
     ["sessions.groups.list", ["operator.read"]],

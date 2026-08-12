@@ -1,6 +1,9 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import {
+  POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+} from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
@@ -21,7 +24,6 @@ import {
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-  POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_STARTED_AT_ENV,
   readPostCorePluginInstallRecordsFile,

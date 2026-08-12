@@ -402,6 +402,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
     worktree?: { id: string; branch: string; repoRoot: string };
+    /** Project registry id selected when this logical session node was created. */
+    projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */

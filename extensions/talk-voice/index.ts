@@ -6,6 +6,7 @@ import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -95,11 +96,7 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
 }
 
 function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function parsePositiveIntegerToken(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveCommandLabel(channel: string): string {
@@ -171,7 +168,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = parsePositiveIntegerToken(tokens[1]) ?? 12;
+          const limit = parseStrictPositiveInteger(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,

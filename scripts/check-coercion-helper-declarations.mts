@@ -10,42 +10,191 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
-export const BANNED_COERCION_HELPER_NAMES = [
+const ABSOLUTE_LEGACY_COERCION_HELPER_NAMES = [
   "asObject",
-  "asFiniteNumber",
-  "asNonArrayRecord",
-  "asNonNegativeFiniteNumber",
-  "asNullableRecord",
-  "asOptionalRecord",
-  "asPositiveFiniteNumber",
-  "asRecord",
   "asString",
-  "coerceErrorMessage",
-  "isRecord",
-  "isStringRecord",
-  "normalizeBoundedOptionalString",
-  "normalizeOptionalLowercaseString",
-  "normalizeOptionalString",
   "normalizeString",
   "optionalString",
-  "parseBooleanValue",
-  "parseDateFirstTimestampMs",
-  "parseDateStringTimestampMs",
-  "parseFiniteNumber",
   "readBoolean",
-  "readNonBlankString",
-  "readNonEmptyStringPreservingWhitespace",
   "readNumber",
   "readOptionalString",
   "readString",
-  "readStringField",
-  "readStringValue",
   "timestampMs",
-  "toError",
-  "toLintErrorObject",
-  "toErrorObject",
 ] as const;
-export type BannedCoercionHelperName = (typeof BANNED_COERCION_HELPER_NAMES)[number];
+
+export type CoercionHelperDeclarationKind =
+  | "field"
+  | "function"
+  | "method"
+  | "property"
+  | "variable";
+
+export const CANONICAL_COERCION_HELPER_OWNERS = [
+  {
+    file: "packages/normalization-core/src/string-coerce.ts",
+    kind: "function",
+    names: [
+      "lowercasePreservingWhitespace",
+      "localeLowercasePreservingWhitespace",
+      "normalizeBoundedOptionalString",
+      "normalizeFastMode",
+      "normalizeNullableString",
+      "normalizeOptionalLowercaseString",
+      "normalizeOptionalString",
+      "normalizeOptionalStringifiedId",
+      "normalizeStringifiedEntries",
+      "readNonBlankString",
+      "readNonEmptyStringPreservingWhitespace",
+      "readStringValue",
+      "resolvePrimaryStringValue",
+    ],
+  },
+  {
+    file: "packages/normalization-core/src/string-normalization.ts",
+    kind: "function",
+    names: ["filterStringEntries"],
+  },
+  {
+    file: "packages/normalization-core/src/number-coercion.ts",
+    kind: "function",
+    names: [
+      "addTimerTimeoutGraceMs",
+      "asDateTimestampMs",
+      "asFiniteNumber",
+      "asFiniteNumberInRange",
+      "asNonNegativeFiniteNumber",
+      "asPositiveFiniteNumber",
+      "asPositiveSafeInteger",
+      "asSafeIntegerInRange",
+      "clampPositiveTimerTimeoutMs",
+      "finiteSecondsToTimerSafeMilliseconds",
+      "isFutureDateTimestampMs",
+      "nonNegativeSecondsToSafeMilliseconds",
+      "parseDateFirstTimestampMs",
+      "parseDateStringTimestampMs",
+      "parseFiniteNumber",
+      "parseStrictFiniteNumber",
+      "parseStrictInteger",
+      "parseStrictNonNegativeInteger",
+      "positiveSecondsToSafeMilliseconds",
+      "resolveDateTimestampMs",
+      "resolveExpiresAtMsFromDurationMs",
+      "resolveExpiresAtMsFromDurationOrEpoch",
+      "resolveExpiresAtMsFromDurationSeconds",
+      "resolveExpiresAtMsFromEpochSeconds",
+      "resolveIntegerOption",
+      "resolveNonNegativeIntegerOption",
+      "resolveOptionalIntegerOption",
+      "resolvePositiveTimerTimeoutMs",
+      "resolveTimestampMsToIsoString",
+      "timestampMsToIsoFileStamp",
+      "timestampMsToIsoString",
+    ],
+  },
+  {
+    file: "packages/normalization-core/src/record-coerce.ts",
+    kind: "function",
+    names: [
+      "asNonArrayRecord",
+      "asNullableObjectRecord",
+      "asNullableRecord",
+      "asOptionalObjectRecord",
+      "asOptionalRecord",
+      "asRecord",
+      "filterStringRecord",
+      "isRecord",
+      "isStringRecord",
+      "readStringField",
+    ],
+  },
+  {
+    file: "packages/normalization-core/src/json-coercion.ts",
+    kind: "function",
+    names: ["safeParseJsonRecord"],
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    kind: "function",
+    names: ["coerceErrorMessage", "stringifyNonErrorCause", "toErrorObject", "toStringifiedError"],
+  },
+  {
+    file: "scripts/lib/error-format.mts",
+    kind: "function",
+    names: ["coerceErrorMessage", "toErrorObject"],
+  },
+  {
+    file: "src/utils/boolean.ts",
+    kind: "function",
+    names: ["parseBooleanValue"],
+  },
+] as const satisfies readonly {
+  file: string;
+  kind: CoercionHelperDeclarationKind;
+  names: readonly string[];
+}[];
+
+const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
+  {
+    file: "ui/src/test-helpers/control-ui-e2e.ts",
+    name: "isRecord",
+    kind: "function",
+    count: 1,
+    reason: "Serialized mock Gateway closure cannot capture module imports.",
+  },
+  {
+    file: "scripts/lib/kova-report-gate.mts",
+    name: "isRecord",
+    kind: "function",
+    count: 1,
+    reason: "Copied standalone report gate cannot rely on workspace package resolution.",
+  },
+  {
+    file: "scripts/lib/record-shared.mjs",
+    name: "isRecord",
+    kind: "function",
+    count: 1,
+    reason: "Plain-Node shared helper serves MJS and E2E callers without package resolution.",
+  },
+  {
+    file: "scripts/pr-lib/process-group-runner.mjs",
+    name: "toError",
+    kind: "function",
+    count: 1,
+    reason:
+      "Bootstrap process supervisor preserves fallback errors without workspace dependencies.",
+  },
+  {
+    file: "scripts/lib/bounded-response.mjs",
+    name: "toLintErrorObject",
+    kind: "function",
+    count: 1,
+    reason: "Standalone copied response reader cannot resolve workspace packages.",
+  },
+] as const satisfies readonly {
+  count: number;
+  file: string;
+  kind: CoercionHelperDeclarationKind;
+  name: string;
+  reason: string;
+}[];
+
+type CanonicalCoercionHelperName =
+  (typeof CANONICAL_COERCION_HELPER_OWNERS)[number]["names"][number];
+type AbsoluteLegacyCoercionHelperName = (typeof ABSOLUTE_LEGACY_COERCION_HELPER_NAMES)[number];
+type ExceptionalCoercionHelperName =
+  (typeof EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS)[number]["name"];
+export type BannedCoercionHelperName =
+  | AbsoluteLegacyCoercionHelperName
+  | CanonicalCoercionHelperName
+  | ExceptionalCoercionHelperName;
+
+export const BANNED_COERCION_HELPER_NAMES: readonly BannedCoercionHelperName[] = [
+  ...new Set<BannedCoercionHelperName>([
+    ...ABSOLUTE_LEGACY_COERCION_HELPER_NAMES,
+    ...CANONICAL_COERCION_HELPER_OWNERS.flatMap(({ names }) => names),
+    ...EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS.map(({ name }) => name),
+  ]),
+];
 const BANNED_HELPER_NAMES: ReadonlySet<string> = new Set(BANNED_COERCION_HELPER_NAMES);
 // One tracked-tree scan covers root configs plus config, Actions, skills, apps, plugins, and packages.
 const SCAN_ROOTS = ["."];
@@ -54,7 +203,7 @@ const GENERATED_OR_FIXTURE_PATH_RE =
 
 export type CoercionHelperDeclaration = {
   file: string;
-  kind: "field" | "function" | "method" | "property" | "variable";
+  kind: CoercionHelperDeclarationKind;
   line: number;
   name: BannedCoercionHelperName;
 };
@@ -62,16 +211,17 @@ export type CoercionHelperDeclaration = {
 export type CoercionHelperCarveOut = {
   count: number;
   file: string;
+  kind: CoercionHelperDeclarationKind;
   name: BannedCoercionHelperName;
   reason: string;
 };
 
 function canonicalOwnerCarveOuts(
-  file: string,
-  names: readonly BannedCoercionHelperName[],
+  owner: (typeof CANONICAL_COERCION_HELPER_OWNERS)[number],
 ): CoercionHelperCarveOut[] {
-  return names.map((name) => ({
-    file,
+  return owner.names.map((name) => ({
+    file: owner.file,
+    kind: owner.kind,
     name,
     count: 1,
     reason: "Canonical coercion helper owned by this module.",
@@ -79,118 +229,12 @@ function canonicalOwnerCarveOuts(
 }
 
 export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
-  ...canonicalOwnerCarveOuts("packages/normalization-core/src/string-coerce.ts", [
-    "normalizeBoundedOptionalString",
-    "normalizeOptionalLowercaseString",
-    "normalizeOptionalString",
-    "readNonBlankString",
-    "readNonEmptyStringPreservingWhitespace",
-    "readStringValue",
-  ]),
-  ...canonicalOwnerCarveOuts("packages/normalization-core/src/number-coercion.ts", [
-    "asFiniteNumber",
-    "asNonNegativeFiniteNumber",
-    "asPositiveFiniteNumber",
-    "parseDateFirstTimestampMs",
-    "parseDateStringTimestampMs",
-    "parseFiniteNumber",
-  ]),
-  ...canonicalOwnerCarveOuts("packages/normalization-core/src/record-coerce.ts", [
-    "asNonArrayRecord",
-    "asNullableRecord",
-    "asOptionalRecord",
-    "asRecord",
-    "isRecord",
-    "isStringRecord",
-    "readStringField",
-  ]),
-  ...canonicalOwnerCarveOuts("packages/normalization-core/src/error-coercion.ts", [
-    "coerceErrorMessage",
-    "toErrorObject",
-  ]),
-  ...canonicalOwnerCarveOuts("scripts/lib/error-format.mts", [
-    "coerceErrorMessage",
-    "toErrorObject",
-  ]),
-  ...canonicalOwnerCarveOuts("src/utils/boolean.ts", ["parseBooleanValue"]),
-  {
-    file: "ui/src/test-helpers/control-ui-e2e.ts",
-    name: "isRecord",
-    count: 1,
-    reason: "Serialized mock Gateway closure cannot capture module imports.",
-  },
-  {
-    file: "scripts/check-built-plugin-control-plane-modules.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Copied standalone build guard cannot rely on workspace package resolution.",
-  },
-  {
-    file: "scripts/copy-bundled-plugin-metadata.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Copied standalone metadata closure cannot rely on workspace package resolution.",
-  },
-  {
-    file: "scripts/lib/kova-report-gate.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Copied standalone report gate cannot rely on workspace package resolution.",
-  },
-  {
-    file: "scripts/lib/plugin-npm-package-manifest.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Copied standalone package-manifest closure cannot resolve workspace packages.",
-  },
-  {
-    file: "scripts/lib/record-shared.mjs",
-    name: "isRecord",
-    count: 1,
-    reason: "Plain-Node shared helper serves MJS and E2E callers without package resolution.",
-  },
-  {
-    file: "scripts/lib/static-extension-assets.mts",
-    name: "asRecord",
-    count: 1,
-    reason: "Copied standalone asset closure cannot rely on workspace package resolution.",
-  },
-  {
-    file: "scripts/pr-lib/process-group-runner.mjs",
-    name: "toError",
-    count: 1,
-    reason:
-      "Bootstrap process supervisor preserves fallback errors without workspace dependencies.",
-  },
-  {
-    file: "scripts/lib/bounded-response.mjs",
-    name: "toLintErrorObject",
-    count: 1,
-    reason: "Standalone copied response reader cannot resolve workspace packages.",
-  },
-  {
-    file: "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
-    name: "toLintErrorObject",
-    count: 1,
-    reason: "Installed-image runtime smoke runs as a copied standalone closure.",
-  },
-  {
-    file: "scripts/e2e/lib/openai-web-search-minimal/client.mjs",
-    name: "toLintErrorObject",
-    count: 1,
-    reason: "Minimal copied E2E client runs without workspace package resolution.",
-  },
-  {
-    file: "scripts/stage-bundled-plugin-runtime.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Copied standalone runtime-staging closure cannot resolve workspace packages.",
-  },
+  ...CANONICAL_COERCION_HELPER_OWNERS.flatMap(canonicalOwnerCarveOuts),
+  ...EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS,
 ];
 
 type CarveOutMismatch = CoercionHelperCarveOut & {
   actualCount: number;
-  lines: number[];
 };
 
 type CoercionHelperAudit = {
@@ -204,8 +248,16 @@ type ScriptIo = {
   stdout: { write(value: string): unknown };
 };
 
-function carveOutKey(entry: Pick<CoercionHelperCarveOut, "file" | "name">) {
-  return `${entry.file}\0${entry.name}`;
+const COERCION_HELPER_DECLARATION_KINDS = new Set<CoercionHelperDeclarationKind>([
+  "field",
+  "function",
+  "method",
+  "property",
+  "variable",
+]);
+
+function carveOutKey(entry: Pick<CoercionHelperCarveOut, "file" | "kind" | "name">) {
+  return `${entry.file}\0${entry.name}\0${entry.kind}`;
 }
 
 function unwrapCallableInitializer(expression: ts.Expression) {
@@ -349,6 +401,11 @@ export function auditCoercionHelperDeclarations(
     if (!BANNED_HELPER_NAMES.has(carveOut.name)) {
       invalidCarveOuts.push(`${carveOut.file} [${carveOut.name}] is not a banned helper name`);
     }
+    if (!COERCION_HELPER_DECLARATION_KINDS.has(carveOut.kind)) {
+      invalidCarveOuts.push(
+        `${carveOut.file} [${carveOut.name}] has invalid kind ${carveOut.kind}`,
+      );
+    }
     if (!Number.isInteger(carveOut.count) || carveOut.count < 1) {
       invalidCarveOuts.push(`${carveOut.file} [${carveOut.name}] must have a positive count`);
     }
@@ -380,7 +437,6 @@ export function auditCoercionHelperDeclarations(
         ? {
             ...carveOut,
             actualCount: actual.length,
-            lines: actual.map((entry) => entry.line),
           }
         : null;
     })
@@ -457,7 +513,7 @@ export function runCoercionHelperDeclarationGuard(
     for (const carveOut of audit.staleCarveOuts) {
       writeLine(
         io.stderr,
-        `- ${carveOut.file} [${carveOut.name}] expected ${carveOut.count}, found ${carveOut.actualCount}; remove or reduce the carve-out`,
+        `- ${carveOut.file} [${carveOut.name}] expected ${carveOut.count} ${carveOut.kind} declaration(s), found ${carveOut.actualCount}; remove or reduce the carve-out`,
       );
     }
   }
