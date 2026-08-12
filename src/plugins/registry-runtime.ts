@@ -890,6 +890,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             claim: () => base.claimFor?.(pluginId),
           } satisfies PluginRuntime["codexReconciliation"];
         }
+        if (prop === "workboardReconciliation") {
+          const base = getRuntimeProperty() as PluginRuntime["workboardReconciliation"] & {
+            claimFor?: (
+              consumerId: string,
+            ) => ReturnType<PluginRuntime["workboardReconciliation"]["claim"]>;
+          };
+          return {
+            register: (provider) => {
+              if (pluginId !== "workboard") {
+                throw new Error(
+                  "Only the Workboard plugin may register the reconciliation provider",
+                );
+              }
+              base.register(provider);
+            },
+            claim: () => base.claimFor?.(pluginId),
+          } satisfies PluginRuntime["workboardReconciliation"];
+        }
         if (prop !== "subagent") {
           return getRuntimeProperty();
         }

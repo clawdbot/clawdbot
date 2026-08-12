@@ -24,6 +24,7 @@ const sandboxContextMocks = vi.hoisted(() => ({
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
+import { createPluginRuntimeResolver } from "../registry-runtime.js";
 import { createPluginRuntime } from "./index.js";
 
 function createCommandResult() {
@@ -508,5 +509,36 @@ describe("plugin runtime Codex reconciliation source", () => {
     runtime.codexReconciliation.register(provider);
     expect(runtime.codexReconciliation.claim()).toBeUndefined();
     expect(() => runtime.codexReconciliation.register(provider)).toThrow("already registered");
+  });
+});
+
+describe("plugin runtime Workboard reconciliation source", () => {
+  it("limits registration and claiming to the Workboard owner and reconciler consumer", () => {
+    const runtime = createPluginRuntime();
+    const resolve = createPluginRuntimeResolver({
+      registry: { plugins: [] },
+      registryParams: { runtime },
+    } as never).resolvePluginRuntime;
+    const provider = {
+      list: vi.fn(async () => ({ cards: [] })),
+      apply: vi.fn(),
+      observeSource: vi.fn(),
+    };
+
+    const unrelated = resolve("unrelated");
+    expect(() => unrelated.workboardReconciliation.register(provider)).toThrow(
+      "Only the Workboard plugin may register",
+    );
+    expect(unrelated.workboardReconciliation.claim()).toBeUndefined();
+    expect(unrelated.workboardReconciliation).not.toHaveProperty("claimFor");
+
+    const workboard = resolve("workboard");
+    workboard.workboardReconciliation.register(provider);
+    expect(() => workboard.workboardReconciliation.register(provider)).toThrow(
+      "already registered",
+    );
+    expect(workboard.workboardReconciliation.claim()).toBeUndefined();
+
+    expect(resolve("codex-workboard-reconciler").workboardReconciliation.claim()).toBe(provider);
   });
 });

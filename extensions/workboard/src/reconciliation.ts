@@ -11,12 +11,19 @@ import type {
   WorkboardReconciliationSourceObservationResult,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import type {
+  WorkboardReconciliationApplyResult as RuntimeWorkboardReconciliationApplyResult,
+  WorkboardReconciliationProvider,
+} from "../../../src/plugins/runtime/types.js";
 import { WorkboardStore } from "./store.js";
 
 const MAX_PAGE_SIZE = 100;
 const MAX_OBJECTIVE_KEY_LENGTH = 160;
 const MAX_STALE_AFTER_MISSES = 1000;
 const MAX_OBSERVATION_ID_LENGTH = 200;
+const MAX_SOURCE_URL_LENGTH = 2000;
+const MAX_TENANT_LENGTH = 80;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const MAX_ASSOCIATION_KEY_LENGTH = 160;
 const MAX_TRIAGE_ENTRIES = 20;
 const MAX_TRIAGE_CARD_ID_LENGTH = 120;
@@ -271,8 +278,8 @@ export function projectReconciliationObservation(
     readTimestamp(input.expectedRevision, "expectedRevision");
   }
   return {
-    sourceUrl: input.sourceUrl as string,
-    tenant: input.tenant as string,
+    sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", MAX_SOURCE_URL_LENGTH),
+    tenant: readBoundedString(input.tenant, "tenant", MAX_TENANT_LENGTH),
     ...(input.objectiveKey === undefined
       ? {}
       : {
@@ -282,8 +289,12 @@ export function projectReconciliationObservation(
             MAX_OBJECTIVE_KEY_LENGTH,
           ),
         }),
-    idempotencyKey: input.idempotencyKey as string,
-    sourceUpdatedAt: input.sourceUpdatedAt as number,
+    idempotencyKey: readBoundedString(
+      input.idempotencyKey,
+      "idempotencyKey",
+      MAX_IDEMPOTENCY_KEY_LENGTH,
+    ),
+    sourceUpdatedAt: readTimestamp(input.sourceUpdatedAt, "sourceUpdatedAt"),
     ...(input.cardId === undefined ? {} : { cardId: readRequiredString(input.cardId, "cardId") }),
     ...(input.expectedRevision === undefined
       ? {}
@@ -368,11 +379,11 @@ export class WorkboardReconciler {
     observation: WorkboardReconciliationObservation,
   ): Promise<WorkboardReconciliationApplyResult> {
     const projected = projectReconciliationObservation(observation);
-    const link = linkFor(projected);
-    const result = await this.store.applyReconciliation(projected, link);
+    const result = await this.applyProjected(projected);
     const { idempotencyKey: _idempotencyKey, ...safeLink } =
       result.link as WorkboardExternalExecutionLink;
-    return { ...result, card: redactReconciliationApplyKey(result.card), link: safeLink };
+    const { outcome: _outcome, ...safeResult } = result as typeof result & { outcome?: unknown };
+    return { ...safeResult, card: redactReconciliationApplyKey(result.card), link: safeLink };
   }
 
   async observeSource(
@@ -383,4 +394,78 @@ export class WorkboardReconciler {
     );
     return { ...result, card: redactReconciliationApplyKey(result.card) };
   }
+
+  /**
+   * Private provider entrypoint. It shares the public reconciliation validation and
+   * mutation seam, but requires an observation acknowledgement for background callers.
+   */
+  async applyFromProvider(
+    value: unknown,
+    signal?: AbortSignal,
+  ): Promise<RuntimeWorkboardReconciliationApplyResult> {
+    signal?.throwIfAborted();
+    const input = objectWithOnly(value, "observation", OBSERVATION_FIELDS);
+    const observationId = readBoundedString(
+      input.observationId,
+      "observationId",
+      MAX_OBSERVATION_ID_LENGTH,
+    );
+    const projected = projectReconciliationObservation(input);
+    const existingCardMutation = projected.cardId !== undefined;
+    if (existingCardMutation && projected.expectedRevision === undefined) {
+      const card = await this.store.get(projected.cardId!);
+      if (!card) throw new Error(`card not found: ${projected.cardId}`);
+      return {
+        outcome: "conflict",
+        observationId,
+        card,
+        link: {
+          sourceUrl: projected.sourceUrl,
+          tenant: projected.tenant,
+          sourceUpdatedAt: projected.sourceUpdatedAt,
+          reconciliationAssociationKey: "",
+        },
+      };
+    }
+    const result = await this.applyProjected(projected);
+    signal?.throwIfAborted();
+    return {
+      outcome:
+        (
+          result as typeof result & {
+            outcome?: RuntimeWorkboardReconciliationApplyResult["outcome"];
+          }
+        ).outcome ?? (result.applied ? "applied" : "conflict"),
+      observationId,
+      card: redactReconciliationApplyKey(result.card),
+      link: result.link,
+    };
+  }
+
+  private async applyProjected(observation: WorkboardReconciliationObservation) {
+    return await this.store.applyReconciliation(observation, linkFor(observation));
+  }
+}
+
+/** Creates the only private capability Workboard grants to the Codex reconciler. */
+export function createWorkboardReconciliationProvider(
+  reconciler: WorkboardReconciler,
+): WorkboardReconciliationProvider {
+  return {
+    async list({ signal, ...input }) {
+      signal?.throwIfAborted();
+      const page = await reconciler.list(input);
+      signal?.throwIfAborted();
+      return page;
+    },
+    async apply({ signal, ...input }) {
+      return await reconciler.applyFromProvider(input, signal);
+    },
+    async observeSource({ signal, ...input }) {
+      signal?.throwIfAborted();
+      const result = await reconciler.observeSource(input);
+      signal?.throwIfAborted();
+      return result;
+    },
+  };
 }

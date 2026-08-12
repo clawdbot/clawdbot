@@ -30,6 +30,8 @@ export type {
 export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 export type {
   CodexReconciliationSession,
+  WorkboardReconciliationProvider,
+  WorkboardReconciliationApplyResult,
   PluginRuntime,
   RuntimeLogger,
 } from "../plugins/runtime/types.js";

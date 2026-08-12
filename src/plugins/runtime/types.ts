@@ -1,3 +1,11 @@
+import type {
+  WorkboardReconciliationObservation,
+  WorkboardReconciliationPage,
+  WorkboardReconciliationSourceObservation,
+  WorkboardReconciliationSourceObservationResult,
+  WorkboardCard,
+  WorkboardExternalExecutionLink,
+} from "@openclaw/workboard-contract";
 // Plugin runtime types describe activated plugin capabilities exposed to core execution.
 // Owner schema module import keeps the ProtocolSchemas registry out of the
 // public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
@@ -151,6 +159,31 @@ export type CodexReconciliationProvider = {
   ): Promise<void>;
 };
 
+export type WorkboardReconciliationApplyResult = {
+  outcome: "applied" | "duplicate" | "protected" | "stale" | "conflict";
+  observationId: string;
+  card: WorkboardCard;
+  link: Omit<WorkboardExternalExecutionLink, "idempotencyKey">;
+};
+
+/** Bounded in-process Workboard mutation seam; never a Gateway request or store handle. */
+export type WorkboardReconciliationProvider = {
+  list(params: {
+    cursor?: unknown;
+    limit?: unknown;
+    tenant?: unknown;
+    boardId?: unknown;
+    terminal?: unknown;
+    signal?: AbortSignal;
+  }): Promise<WorkboardReconciliationPage>;
+  apply(
+    params: WorkboardReconciliationObservation & { observationId: unknown; signal?: AbortSignal },
+  ): Promise<WorkboardReconciliationApplyResult>;
+  observeSource(
+    params: WorkboardReconciliationSourceObservation & { signal?: AbortSignal },
+  ): Promise<WorkboardReconciliationSourceObservationResult>;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   /** Trusted in-process Codex source for the personal reconciliation plugin; never a Gateway RPC. */
@@ -158,6 +191,12 @@ export type PluginRuntime = PluginRuntimeCore & {
     register: (provider: CodexReconciliationProvider) => void;
     /** Returns the provider only when this runtime is bound to the approved consumer plugin. */
     claim: () => CodexReconciliationProvider | undefined;
+  };
+  /** Trusted in-process Workboard source for the private Codex reconciler; never a Gateway RPC. */
+  workboardReconciliation: {
+    register: (provider: WorkboardReconciliationProvider) => void;
+    /** Returns the provider only when this runtime is bound to the approved consumer plugin. */
+    claim: () => WorkboardReconciliationProvider | undefined;
   };
   gateway: {
     /** Whether this process owns an active Gateway request context. */

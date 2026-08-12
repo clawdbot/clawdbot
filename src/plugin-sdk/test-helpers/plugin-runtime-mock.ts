@@ -492,6 +492,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       register: vi.fn(),
       claim: vi.fn(() => undefined),
     },
+    workboardReconciliation: {
+      register: vi.fn(),
+      claim: vi.fn(() => undefined),
+    },
     gateway: {
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),

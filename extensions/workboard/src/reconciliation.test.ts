@@ -6,6 +6,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import {
+  createWorkboardReconciliationProvider,
   WorkboardReconciler,
   projectReconciliationObservation,
   projectReconciliationSourceObservation,
@@ -32,6 +33,100 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("requires an observation id and a revision for every existing-card mutation", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const provider = createWorkboardReconciliationProvider(reconciler);
+    const created = await provider.apply({
+      sourceUrl: "https://example.test/runs/cas",
+      tenant: "acme",
+      idempotencyKey: "cas-create",
+      observationId: "cas-create",
+      sourceUpdatedAt: 1,
+      card: { title: "CAS card" },
+    });
+
+    await expect(
+      provider.apply({
+        cardId: created.card.id,
+        sourceUrl: "https://example.test/runs/cas-next",
+        tenant: "acme",
+        idempotencyKey: "cas-update",
+        observationId: "cas-update",
+        sourceUpdatedAt: 2,
+        card: { title: "Must have a revision" },
+      }),
+    ).resolves.toMatchObject({ outcome: "conflict", observationId: "cas-update" });
+
+    await expect(
+      provider.apply({
+        cardId: created.card.id,
+        sourceUrl: "https://example.test/runs/cas-next",
+        tenant: "acme",
+        idempotencyKey: "cas-update",
+        sourceUpdatedAt: 2,
+        expectedRevision: created.card.updatedAt,
+        card: { title: "Missing observation id" },
+      }),
+    ).rejects.toThrow("observationId is required.");
+  });
+
+  it("returns distinct durable acknowledgements for duplicate, protected, stale, and conflict", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const provider = createWorkboardReconciliationProvider(new WorkboardReconciler(store));
+    const created = await provider.apply({
+      sourceUrl: "https://example.test/runs/outcomes",
+      tenant: "acme",
+      idempotencyKey: "outcomes-create",
+      observationId: "outcomes-create",
+      sourceUpdatedAt: 100,
+      card: { title: "Outcome card", status: "running" },
+    });
+    const duplicate = await provider.apply({
+      sourceUrl: "https://attacker.test/not-used",
+      tenant: "acme",
+      idempotencyKey: "outcomes-create",
+      observationId: "outcomes-duplicate",
+      sourceUpdatedAt: 200,
+    });
+    const stale = await provider.apply({
+      cardId: created.card.id,
+      sourceUrl: "https://example.test/runs/outcomes-old",
+      tenant: "acme",
+      idempotencyKey: "outcomes-old",
+      observationId: "outcomes-stale",
+      sourceUpdatedAt: 99,
+      expectedRevision: created.card.updatedAt,
+    });
+    const protectedCard = await store.update(created.card.id, { status: "blocked" });
+    const protectedResult = await provider.apply({
+      cardId: created.card.id,
+      sourceUrl: "https://example.test/runs/outcomes-protected",
+      tenant: "acme",
+      idempotencyKey: "outcomes-protected",
+      observationId: "outcomes-protected",
+      sourceUpdatedAt: 300,
+      expectedRevision: protectedCard.updatedAt,
+    });
+    const conflict = await provider.apply({
+      cardId: created.card.id,
+      sourceUrl: "https://example.test/runs/outcomes-conflict",
+      tenant: "acme",
+      idempotencyKey: "outcomes-conflict",
+      observationId: "outcomes-conflict",
+      sourceUpdatedAt: 400,
+      expectedRevision: created.card.updatedAt,
+    });
+
+    expect([duplicate, protectedResult, stale, conflict].map((result) => result.outcome)).toEqual([
+      "duplicate",
+      "protected",
+      "stale",
+      "conflict",
+    ]);
+    expect(
+      [duplicate, protectedResult, stale, conflict].map((result) => result.observationId),
+    ).toEqual(["outcomes-duplicate", "outcomes-protected", "outcomes-stale", "outcomes-conflict"]);
+  });
   it("persists bounded reconciliation triage through unrelated updates and a SQLite reopen", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-triage-"));
     const dbPath = path.join(dir, "workboard.sqlite");

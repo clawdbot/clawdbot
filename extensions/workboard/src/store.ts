@@ -122,10 +122,17 @@ function objectiveKeyFor(card: WorkboardCard): string | undefined {
 
 function reconciliationResult(
   card: WorkboardCard,
-  applied: boolean,
+  outcome: "applied" | "duplicate" | "protected" | "stale" | "conflict",
   link: WorkboardExternalExecutionLink,
-): WorkboardReconciliationApplyResult {
-  return { card, applied, link };
+): WorkboardReconciliationApplyResult & {
+  outcome: "applied" | "duplicate" | "protected" | "stale" | "conflict";
+} {
+  return {
+    card,
+    applied: outcome === "applied" || outcome === "duplicate" || outcome === "stale",
+    outcome,
+    link,
+  };
 }
 
 function sourceObservationRequestJson(
@@ -254,7 +261,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (explicit && duplicate.id !== explicit.id) {
           throw new Error("idempotency association does not match card.");
         }
-        return reconciliationResult(duplicate, true, reconciliationLinkFor(duplicate, link));
+        return reconciliationResult(duplicate, "duplicate", reconciliationLinkFor(duplicate, link));
       }
 
       const existing = explicit
@@ -270,16 +277,16 @@ export class WorkboardStore extends WorkboardNotificationStore {
           existing.metadata?.automation?.tenant !== undefined &&
           existing.metadata.automation.tenant !== link.tenant
         ) {
-          return reconciliationResult(existing, false, link);
+          return reconciliationResult(existing, "conflict", link);
         }
         if (
           observation.expectedRevision !== undefined &&
           observation.expectedRevision !== existing.updatedAt
         ) {
-          return reconciliationResult(existing, false, link);
+          return reconciliationResult(existing, "conflict", link);
         }
         if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
-          return reconciliationResult(existing, false, link);
+          return reconciliationResult(existing, "protected", link);
         }
         const latestAssociationSourceUpdatedAt = latestExternalSourceUpdatedAt(existing);
         if (
@@ -299,7 +306,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             },
             { allowReconciliationTriage: true },
           );
-          return reconciliationResult(associated, true, reconciliationLinkFor(associated, link));
+          return reconciliationResult(associated, "stale", reconciliationLinkFor(associated, link));
         }
         const patch = observation.card ?? {};
         const updated = await this.updateCard(
@@ -321,7 +328,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           },
           { allowReconciliationTriage: true },
         );
-        return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
+        return reconciliationResult(updated, "applied", reconciliationLinkFor(updated, link));
       }
 
       const card = observation.card ?? {};
@@ -366,7 +373,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           ...(observation.triage === undefined ? {} : { reconciliationTriage: observation.triage }),
         },
       );
-      return reconciliationResult(created, true, reconciliationLinkFor(created, link));
+      return reconciliationResult(created, "applied", reconciliationLinkFor(created, link));
     });
   }
 

@@ -4,6 +4,10 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import {
+  createWorkboardReconciliationProvider,
+  WorkboardReconciler,
+} from "./src/reconciliation.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -17,6 +21,9 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    api.runtime.workboardReconciliation.register(
+      createWorkboardReconciliationProvider(new WorkboardReconciler(store)),
+    );
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "card",
