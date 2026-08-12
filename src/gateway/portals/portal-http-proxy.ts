@@ -22,7 +22,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-export type PortalProxyTarget = {
+type PortalProxyTarget = {
   targetPort: number;
   token: string;
 };

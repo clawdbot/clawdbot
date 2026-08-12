@@ -8,7 +8,7 @@ import type { PortalSummary } from "../../../packages/gateway-protocol/src/index
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
 
-export type PortalEntry = {
+type PortalEntry = {
   id: string;
   title: string;
   description?: string;
@@ -25,7 +25,7 @@ type PortalRuntimeEntry = {
   upgradedSockets: Set<Duplex>;
 };
 
-export type GatewayPortalOpenParams = {
+type GatewayPortalOpenParams = {
   targetPort: number;
   title?: string;
   description?: string;
