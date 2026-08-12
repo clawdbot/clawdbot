@@ -82,13 +82,19 @@ function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDeskto
       unavailableReason: "unsupported",
     };
   }
+  const startingCoordinates =
+    managedStatus.state === "starting"
+      ? {
+          port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
+          ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
+        }
+      : { port: DEFAULT_HOST_DESKTOP_PORT };
   return {
     status: {
       enabled: true,
       state: "managed",
       managedState: managedStatus.state,
-      port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-      ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
+      ...startingCoordinates,
     },
     detail: managedStatus.state === "starting" ? "managed (starting)" : "managed (not started)",
   };

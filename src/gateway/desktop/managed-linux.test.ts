@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import type {
   ManagedRun,
@@ -13,6 +13,7 @@ import { createManagedLinuxDesktop } from "./managed-linux.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
@@ -97,10 +98,9 @@ function createFakeSupervisor() {
 }
 
 async function createFixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-linux-test-"));
+  const root = tempDirs.make("openclaw-managed-linux-test-");
   const x11SocketDir = path.join(root, "x11");
   await fs.mkdir(x11SocketDir);
-  cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
   const fake = createFakeSupervisor();
   let now = 0;
   const runPasswordTool = vi.fn(async () => ({
