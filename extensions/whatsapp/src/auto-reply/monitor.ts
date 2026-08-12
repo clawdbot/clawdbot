@@ -9,7 +9,6 @@ import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runti
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -48,7 +47,6 @@ import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
-import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -174,7 +172,6 @@ export async function monitorWebChannel(
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
-  const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
     tuning.sleep ??
@@ -262,7 +259,6 @@ export async function monitorWebChannel(
               groupHistoryLimit,
               groupHistories,
               groupMemberNames,
-              echoTracker,
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
