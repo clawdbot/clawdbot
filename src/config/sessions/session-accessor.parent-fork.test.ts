@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const roots: string[] = [];
 
@@ -740,16 +741,15 @@ describe("forkSessionFromParentTranscript", () => {
       { sessionKey: parentKey, storePath },
       { sessionId: parentSessionId, updatedAt: 1 },
     );
-    await replaceSessionEntry(
-      { sessionKey: childKey, storePath },
-      {
-        sessionId: "old-child",
-        updatedAt: 1,
-        totalTokens: 88_876,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    );
+    const previousChild: InternalSessionEntry = {
+      sessionId: "old-child",
+      updatedAt: 1,
+      totalTokens: 88_876,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      restartRecoveryOwner: "external",
+    };
+    await replaceSessionEntry({ sessionKey: childKey, storePath }, previousChild);
     await seedParentTranscript({
       storePath,
       parentSessionId,
@@ -775,5 +775,6 @@ describe("forkSessionFromParentTranscript", () => {
     expect(childEntry?.totalTokens).toBeUndefined();
     expect(childEntry?.totalTokensFresh).toBe(false);
     expect(childEntry?.totalTokensVersion).toBeUndefined();
+    expect((childEntry as InternalSessionEntry | undefined)?.restartRecoveryOwner).toBeUndefined();
   });
 });

@@ -7,12 +7,13 @@ export function buildForkedGatewaySessionEntry(
   forkSource: NonNullable<SessionEntry["forkSource"]>,
   previousEntry?: SessionEntry,
 ): SessionEntry {
-  // Replacing the transcript identity also replaces the recovery episode owned by the old row.
+  // Replacing the transcript identity also replaces the recovery policy and episode of the old row.
   return {
     ...entry,
     ...buildMainSessionRecoveryClearPatch(entry),
     sessionId: fork.sessionId,
     lifecycleRunId: undefined,
+    restartRecoveryOwner: undefined,
     forkSource: previousEntry?.forkSource ?? forkSource,
     ...(previousEntry?.sessionId && previousEntry.sessionId !== fork.sessionId
       ? { previousSessionId: previousEntry.sessionId }
