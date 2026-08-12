@@ -50,7 +50,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
     };
   };
   return {
-    loadPluginManifestRegistry: () => ({
+    loadPluginManifestRegistryCore: () => ({
       diagnostics: [],
       plugins: [
         plugin("brave", "brave"),

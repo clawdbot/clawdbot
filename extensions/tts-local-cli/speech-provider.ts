@@ -14,7 +14,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -39,20 +39,6 @@ const MAX_CLI_STDERR_BYTES = 1024 * 1024;
 
 function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
-}
-
-function readStringRecord(value: unknown): Record<string, string> | undefined {
-  const obj = asOptionalRecord(value);
-  if (!obj) {
-    return undefined;
-  }
-  const result: Record<string, string> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (typeof v === "string") {
-      result[k] = v;
-    }
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function normalizeOutputFormat(value: unknown): OutputFormat {
@@ -82,7 +68,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
-    env: readStringRecord(cfg.env),
+    env: filterStringRecord(cfg.env),
   };
 }
 

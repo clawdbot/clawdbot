@@ -10,7 +10,10 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
@@ -72,7 +75,7 @@ export function prepareAgentRequestPreflight(params: {
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
       ? loadSessionEntry({
-          storePath: resolveStorePath(cfg.session?.store, {
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
             agentId: resolveAgentIdFromSessionKey(requestSessionKey, resolveDefaultAgentId(cfg)),
           }),
           sessionKey: requestSessionKey,

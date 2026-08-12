@@ -58,7 +58,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("surfaces credential-only model setup as the primary action", async () => {
+  it("surfaces rejected provider credentials as the primary setup action", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -84,15 +84,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             {
               match: { view: "all", includeProviderCapabilities: true },
               response: {
-                models: [
-                  {
-                    id: "gpt-5.6",
-                    name: "GPT-5.6",
-                    provider: "openai",
-                    available: false,
-                    apiKeySupported: true,
-                  },
-                ],
+                models: [],
+                providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
               },
             },
           ],
@@ -128,8 +121,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(async () => readiness.textContent())
         .toContain("Connect a verified AI model");
-      await expect.poll(async () => readiness.textContent()).toContain("No models available");
-      await expect.poll(async () => openaiCard.textContent()).toContain("Signed in");
+      await expect.poll(async () => readiness.textContent()).toContain("Model required");
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      await expect.poll(async () => openaiCard.textContent()).not.toContain("Signed in");
       expect(await page.locator(".model-providers__defaults").count()).toBe(0);
 
       if (recordVisuals) {
@@ -159,7 +153,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await page.setViewportSize({ height: 1000, width: 1440 });
       }
 
-      await readiness.getByRole("button", { name: "Choose another provider" }).click();
+      await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();

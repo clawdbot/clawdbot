@@ -8,7 +8,7 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
@@ -598,7 +598,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         const request = vi.fn();
         await expect(
           (async () => {
-            const auth = await resolveApiKeyForProvider({
+            const auth = await resolveApiKeyForProviderCore({
               provider: "openai",
               cfg: active.config,
               store,

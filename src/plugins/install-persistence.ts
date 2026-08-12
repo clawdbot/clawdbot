@@ -25,7 +25,7 @@ import {
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
 import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -437,7 +437,7 @@ function resolvePluginConfigEnablement(params: {
   pluginId: string;
   installRecords: Record<string, PluginInstallRecord>;
 }): PluginConfigEnablement {
-  const manifest = loadPluginManifestRegistry({
+  const manifest = loadPluginManifestRegistryCore({
     config: params.config,
     installRecords: params.installRecords,
   }).plugins.find((plugin) => plugin.id === params.pluginId);

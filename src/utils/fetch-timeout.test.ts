@@ -1,3 +1,4 @@
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 // Fetch timeout tests cover abort handling and streamed response timeouts.
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -445,17 +446,3 @@ describe("buildTimeoutAbortSignal", () => {
     }
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -10,7 +10,7 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
+  resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
 } from "../auto-reply/heartbeat.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
@@ -213,7 +213,7 @@ function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatCon
   return heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt;
 }
 
-export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+export function resolveConfiguredHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(resolveHeartbeatPromptRaw(cfg, heartbeat));
 }
 

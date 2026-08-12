@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { stageAgentModelFallbacks, stageAgentPrimaryModel } from "./model-config.ts";
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {

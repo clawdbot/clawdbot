@@ -20,7 +20,7 @@ import {
   type ModelRegistry,
 } from "../sessions/index.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
@@ -422,7 +422,7 @@ export async function resolveModelAsync(
     model = await resolveStaticCatalogFallbackModel();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    model = resolveConfiguredFallbackModel({
+    model = buildConfiguredFallbackModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       cfg,

@@ -5055,6 +5055,7 @@ class NodeRuntime private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -5066,6 +5067,7 @@ class NodeRuntime private constructor(
     chat.patchSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,

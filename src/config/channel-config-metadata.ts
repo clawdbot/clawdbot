@@ -5,6 +5,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
@@ -196,18 +197,22 @@ export function collectChannelSchemaMetadataWithOwnership(
         // advertises the same channel id.
         continue;
       }
+      const coreOwnedSchema =
+        record.origin === "bundled" || channelConfig.schema === undefined
+          ? channelConfig.schema
+          : normalizeCoreOwnedChannelSchema(channelConfig.schema);
+      const configSchema = widenOfficialExternalChannelSecretSchema({
+        channelId,
+        schema: coreOwnedSchema,
+      });
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
         description: channelConfig.description ?? rootDescription ?? current?.description,
-        // Installed plugin schemas can lag core; bundled schemas share its release and identity.
-        configSchema:
-          record.origin === "bundled" || channelConfig.schema === undefined
-            ? channelConfig.schema
-            : normalizeCoreOwnedChannelSchema(channelConfig.schema),
+        configSchema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
-        schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
-        schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
+        schemaPluginId: configSchema === undefined ? undefined : record.id,
+        schemaPluginOrigin: configSchema === undefined ? undefined : record.origin,
         originRank,
       });
     }

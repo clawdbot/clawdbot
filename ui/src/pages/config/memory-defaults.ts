@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
 type ConfigRemover = Pick<RuntimeConfigCapability, "removeFormValue">;
 

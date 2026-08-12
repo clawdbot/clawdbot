@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { type ArchiveLogger, extractArchive, resolvePackedRootDir } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
-import { withTempDir } from "./install-source-utils.js";
+import { withInstallWorkspace } from "./install-source-utils.js";
 
 // Install-flow helpers validate local install paths and unpack archives inside
 // temporary workspaces before handing the resolved package root to callers.
@@ -41,7 +41,7 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
   rootMarkers?: readonly string[];
   onExtracted: (rootDir: string) => Promise<TResult>;
 }): Promise<TResult | { ok: false; error: string }> {
-  return await withTempDir(params.tempDirPrefix, async (tmpDir) => {
+  return await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
     const extractDir = path.join(tmpDir, "extract");
     await fs.mkdir(extractDir, { recursive: true });
 

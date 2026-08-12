@@ -66,7 +66,7 @@ vi.mock("../../config/sessions/group.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
+  resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
@@ -74,9 +74,9 @@ const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: vi.fn().mockReturnValue([]),
+  listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
 }));
 
@@ -2937,35 +2937,51 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
-  it("keeps heartbeat prompts out of visible transcript prompt", async () => {
-    const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+  it.each(["heartbeat", "cron-event", "exec-event"] as const)(
+    "keeps %s heartbeat metadata out of the model prompt",
+    async (provider) => {
+      const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+      const syntheticConversationInfo =
+        'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
+      vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(syntheticConversationInfo);
 
-    await runPrepared({
-      opts: { isHeartbeat: true },
-      ctx: {
-        Body: heartbeatPrompt,
-        RawBody: heartbeatPrompt,
-        CommandBody: heartbeatPrompt,
-        ...createProviderSurface("heartbeat"),
-        ChatType: "direct",
-      },
-      sessionCtx: {
-        Body: heartbeatPrompt,
-        BodyStripped: heartbeatPrompt,
-        ...createProviderSurface("heartbeat"),
-        ChatType: "direct",
-      },
-    });
+      await runPrepared({
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: heartbeatPrompt,
+          RawBody: heartbeatPrompt,
+          CommandBody: heartbeatPrompt,
+          ...createProviderSurface(provider),
+          ChatType: "direct",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel-123",
+        },
+        sessionCtx: {
+          Body: heartbeatPrompt,
+          BodyStripped: heartbeatPrompt,
+          ...createProviderSurface(provider),
+          ChatType: "direct",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel-123",
+        },
+      });
 
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain(heartbeatPrompt);
-    expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
-    expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
-    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
-    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-      provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-    });
-  });
+      const call = requireLastRunReplyAgentCall();
+      expect(call?.commandBody).toContain(heartbeatPrompt);
+      expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+      expect(call?.followupRun.prompt).not.toContain(syntheticConversationInfo);
+      expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
+      expect(call?.sessionCtx).toMatchObject({
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel-123",
+      });
+      expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
+      expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+      expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      });
+    },
+  );
 
   it("keeps active goal context out of background heartbeat turns", async () => {
     const sessionEntry: SessionEntry = {
@@ -2990,11 +3006,7 @@ describe("runPreparedReply media-only handling", () => {
       sessionStore: { "session-key": sessionEntry },
     });
 
-    expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      undefined,
-    );
+    expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {

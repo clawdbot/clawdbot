@@ -49,7 +49,6 @@ import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-logi
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatSqliteSessionFileMarker,
@@ -65,12 +64,11 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import {
-  resolveTelegramMessageTurnSettings,
-  type TelegramMessageProcessorTurnContext,
-} from "./bot-message.js";
+import type {
+  TelegramNativeCommandCallbackDispatcher,
+  TelegramResolvedGroupConfig,
+} from "./bot-handlers.types.js";
+import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
 import {
   defaultTelegramNativeCommandDeps,
   type TelegramNativeCommandDeps,
@@ -81,7 +79,6 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
-import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -99,7 +96,7 @@ import {
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
-import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import type { TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import {
   normalizeTelegramCommandName,
@@ -111,7 +108,6 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import type { TelegramTransport } from "./fetch.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -148,10 +144,6 @@ type TelegramNativeReplyChannelData = {
   };
 };
 type FastModeState = ReturnType<typeof resolveFastModeState>;
-type TelegramResolvedGroupConfig = {
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-};
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -611,51 +603,6 @@ async function resolveTelegramNativeCommandThreadContext(params: {
     threadParams: buildTelegramThreadParams(threadSpec),
   };
 }
-
-export type RegisterTelegramHandlerParams = {
-  cfg: OpenClawConfig;
-  accountId: string;
-  bot: Bot;
-  mediaMaxBytes: number;
-  opts: TelegramBotOptions;
-  telegramTransport?: TelegramTransport;
-  runtime: RuntimeEnv;
-  telegramCfg: TelegramAccountConfig;
-  telegramDeps: TelegramBotDeps;
-  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveGroupActivation: (params: {
-    chatId: string | number;
-    agentId?: string;
-    messageThreadId?: number;
-    sessionKey?: string;
-    cfg: OpenClawConfig;
-  }) => boolean | undefined;
-  resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
-  shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
-  processMessage: (
-    ctx: TelegramContext,
-    allMedia: TelegramMediaRef[],
-    storeAllowFrom: string[],
-    turnContext: TelegramMessageProcessorTurnContext,
-    options?: TelegramMessageContextOptions,
-    replyMedia?: TelegramMediaRef[],
-    replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
-    promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
-  ) => Promise<TelegramMessageProcessingResult>;
-  logger: ReturnType<typeof getChildLogger>;
-  nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
-};
-
-type TelegramNativeCommandCallbackDispatcher = (params: {
-  botUser: Context["me"];
-  callbackQuery: NonNullable<Context["callbackQuery"]>;
-  commandText: string;
-}) => Promise<{ handled: boolean; clearButtons: boolean }>;
 
 function resolveTelegramNativeCommandDisableBlockStreaming(
   telegramCfg: TelegramAccountConfig,

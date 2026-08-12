@@ -262,6 +262,47 @@ function gatewayCliOperation(args) {
   return "gateway.cli";
 }
 
+function isLegacyGatewaySuspendPrepareParamsError(error) {
+  if (
+    !(error instanceof UpdateCommandError) ||
+    error.operation !== "gateway.suspend.prepare" ||
+    error.status !== 1
+  ) {
+    return false;
+  }
+  const cause = ownDataProperty(error, "cause");
+  const stdout = ownDataProperty(cause, "stdout");
+  if (typeof stdout !== "string" || !stdout.trim()) {
+    return false;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(stdout.trim());
+  } catch {
+    return false;
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload) ||
+    Object.keys(payload).length !== 2 ||
+    payload.ok !== false
+  ) {
+    return false;
+  }
+  const requestError = payload.error;
+  return (
+    typeof requestError === "object" &&
+    requestError !== null &&
+    !Array.isArray(requestError) &&
+    Object.keys(requestError).length === 4 &&
+    requestError.type === "gateway_request_error" &&
+    requestError.code === "INVALID_REQUEST" &&
+    requestError.message === "invalid gateway.suspend.prepare params" &&
+    requestError.retryable === false
+  );
+}
+
 async function runUpdateCommand(runCommand, operation, command, args, checkout, options) {
   try {
     return await runCommand(command, args, checkout, options);
@@ -1845,8 +1886,8 @@ export function runBuiltGatewayCall(checkout, method, params, deployment) {
 
 /**
  * @param {string} checkout
- * @param {(checkout: string, method: string, params: { requestId: string }, deployment: GatewayDeploymentRef | null) => string} [callGateway]
- * @param {GatewayDeploymentRef | null} [deployment]
+ * @param {(checkout: string, method: string, params: { requestId: string, terminalPolicy?: "terminate" }, deployment: GatewayCliDeployment | null) => string} [callGateway]
+ * @param {GatewayCliDeployment | null} [deployment]
  */
 export function prepareGatewaySuspension(
   checkout,
@@ -1854,11 +1895,20 @@ export function prepareGatewaySuspension(
   deployment = null,
 ) {
   const requestId = `openclaw-live-updater-${randomUUID()}`;
+  const callPrepare = (params) =>
+    JSON.parse(callGateway(checkout, "gateway.suspend.prepare", params, deployment));
   let result;
   try {
-    result = JSON.parse(
-      callGateway(checkout, "gateway.suspend.prepare", { requestId }, deployment),
-    );
+    try {
+      result = callPrepare({ requestId, terminalPolicy: "terminate" });
+    } catch (error) {
+      if (!isLegacyGatewaySuspendPrepareParamsError(error)) {
+        throw error;
+      }
+      // Older closed schemas reject the new field before acquiring a lease.
+      // Retry once with preserve semantics so mixed-version updates remain safe.
+      result = callPrepare({ requestId });
+    }
   } catch (error) {
     throw new UpdateInvariantError(
       "gateway_suspend_prepare_failed",
@@ -2329,19 +2379,14 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
         timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
       },
     );
-    await runUpdateCommand(
+    await bootstrapLaunchAgentAndWait(
       runCommand,
-      "launchd.bootstrap",
-      "/bin/launchctl",
-      ["bootstrap", domain, deployment.plistPath],
       checkout,
-      {
-        phase: "Gateway LaunchAgent bootstrap",
-        serviceState: "stopped",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
+      deployment,
+      domain,
+      waitForProcess,
+      options.sleep ?? defaultSleep,
     );
-    await waitForProcess(deployment, options.sleep ?? defaultSleep);
     return { processStartedAt: timestampAt(now) };
   }
 
@@ -2376,19 +2421,14 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
         timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
       },
     );
-    await runUpdateCommand(
+    await bootstrapLaunchAgentAndWait(
       runCommand,
-      "launchd.bootstrap",
-      "/bin/launchctl",
-      ["bootstrap", domain, deployment.plistPath],
       checkout,
-      {
-        phase: "Gateway LaunchAgent bootstrap",
-        serviceState: "stopped",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
+      deployment,
+      domain,
+      waitForProcess,
+      options.sleep ?? defaultSleep,
     );
-    await waitForProcess(deployment, options.sleep ?? defaultSleep);
     processStartedAt = timestampAt(now);
   } catch (error) {
     restartError = error;
@@ -2428,6 +2468,41 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
     throwPreservingValue(restartError);
   }
   return { processStartedAt };
+}
+
+async function bootstrapLaunchAgentAndWait(
+  runCommand,
+  checkout,
+  deployment,
+  domain,
+  waitForProcess,
+  sleep,
+) {
+  try {
+    await runUpdateCommand(
+      runCommand,
+      "launchd.bootstrap",
+      "/bin/launchctl",
+      ["bootstrap", domain, deployment.plistPath],
+      checkout,
+      {
+        phase: "Gateway LaunchAgent bootstrap",
+        serviceState: "stopped",
+        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
+      },
+    );
+  } catch (bootstrapError) {
+    if (findUnsafeCommandCleanupFailure(bootstrapError)) {
+      throwPreservingValue(bootstrapError);
+    }
+    try {
+      await waitForProcess(deployment, sleep);
+      return;
+    } catch {
+      throwPreservingValue(bootstrapError);
+    }
+  }
+  await waitForProcess(deployment, sleep);
 }
 
 function armLaunchdEnvironmentRestore(name, previousValue) {
@@ -2722,7 +2797,7 @@ function defaultSleep(ms) {
 }
 
 /**
- * @param {(command: string, args: string[], checkout: string, options?: Record<string, unknown>) => unknown | Promise<unknown>} runCommand
+ * @param {(command: string, args: string[], checkout: string, options?: Record<string, unknown>) => void | Promise<void>} runCommand
  * @param {string} checkout
  * @param {string} expectedSha
  * @param {(ms: number) => void | Promise<void>} [sleep]
@@ -2761,7 +2836,7 @@ export async function verifyGatewayReadiness(
   for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
     try {
       if (deployment) {
-        markGatewayMilestones(timing, await probeMilestones(deployment), timestampAt(now));
+        markGatewayMilestones(timing, probeMilestones(deployment), timestampAt(now));
       }
       const deepRpcReadyAt = await verifyGatewayDeepRpc(
         runCommand,
@@ -2774,7 +2849,7 @@ export async function verifyGatewayReadiness(
       if (deployment) {
         markGatewayMilestones(
           timing,
-          await probeMilestones(deployment),
+          probeMilestones(deployment),
           timestampAt(now),
           deepRpcReadyAt,
         );

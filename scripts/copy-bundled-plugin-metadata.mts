@@ -12,16 +12,12 @@ import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
 } from "./lib/plugin-npm-package-manifest.mts";
+import { isRecord } from "./lib/record-shared.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
-
-// The live-updater fixture copies this closure without workspace packages.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);

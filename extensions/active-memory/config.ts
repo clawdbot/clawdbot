@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -52,10 +55,7 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value as number)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 function normalizeTranscriptDir(value: unknown): string {

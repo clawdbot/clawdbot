@@ -101,7 +101,7 @@ export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceType = "subagent task" | "cron job";
+type SubagentAnnounceType = "subagent task" | "cron job";
 export type SubagentAnnounceFlowOutcome = NonNullable<
   SubagentAnnounceDeliveryResult["disposition"]
 >;

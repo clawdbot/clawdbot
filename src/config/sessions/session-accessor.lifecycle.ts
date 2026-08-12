@@ -12,13 +12,13 @@ import {
   resolveAccessStorePath,
   loadSessionEntry,
   loadExactSessionEntry,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
 import {
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -57,7 +57,7 @@ export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
@@ -361,7 +361,7 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  for (const { entry, sessionKey } of listSessionEntries({
+  for (const { entry, sessionKey } of listSessionEntriesCore({
     agentId: params.agentId,
     storePath: params.storePath,
   })) {
@@ -374,7 +374,7 @@ export async function cleanupPluginHostSessionStore(
     ) {
       continue;
     }
-    const updated = await patchSessionEntry(
+    const updated = await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       (currentEntry) => {
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {

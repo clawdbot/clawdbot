@@ -10,7 +10,7 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import { probeLocalCommand } from "./probes.js";
 import {
@@ -191,7 +191,7 @@ export async function detectSetupInference(
       discoveryConfig = enabled.config;
       enabledChoices.push(choice);
     }
-    const providers = (deps.resolvePluginProviders ?? resolvePluginProviders)({
+    const providers = (deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
       config: discoveryConfig,
       workspaceDir: workspace,
       mode: "setup",

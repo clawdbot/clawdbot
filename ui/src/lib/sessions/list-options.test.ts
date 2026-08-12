@@ -444,7 +444,11 @@ describe("session list replacement options", () => {
 
     await sessions.refresh({ agentId: "main", limit: 60, includeDerivedTitles: true, force: true });
     for (const key of keys) {
-      await sessions.patch(key, { archived: true }, { agentId: "main", deferListRefresh: true });
+      await sessions.patch(
+        key,
+        { archived: true },
+        { agentId: "main", expectedSessionId: `id:${key}`, deferListRefresh: true },
+      );
     }
     const listCallsBeforeTail = request.mock.calls.filter(
       ([method]) => method === "sessions.list",
@@ -456,6 +460,7 @@ describe("session list replacement options", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(3);
     for (const call of request.mock.calls.filter(([method]) => method === "sessions.patch")) {
+      expect(call[1]).toMatchObject({ expectedSessionId: expect.stringMatching(/^id:/) });
       expect(call[2]).toEqual({ timeoutMs: 10 * 60_000 });
     }
     sessions.dispose();

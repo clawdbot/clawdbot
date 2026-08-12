@@ -41,7 +41,7 @@ function normalizeIdList(values?: string[]): Set<string> {
 }
 
 function isMentionPatternsPolicyConfig(value: unknown): value is MentionPatternsPolicyConfig {
-  return value != null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function resolveProviderMentionPatternsPolicy(

@@ -33,7 +33,7 @@ export {
 } from "../../gateway/session-transcript-readers.js";
 export {
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   loadSessionEntryReadOnly as loadSessionEntry,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";

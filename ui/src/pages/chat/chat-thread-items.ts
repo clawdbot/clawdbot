@@ -58,11 +58,10 @@ export function appendCanvasBlockToAssistantMessage(
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  if (!normalizedQuery) {
-    return true;
-  }
-  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
-  return text.includes(normalizedQuery);
+  return (
+    !normalizedQuery ||
+    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
+  );
 }
 
 export function turnHasMatchingAssistant(
@@ -534,7 +533,6 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-
 export function hasRenderableNormalizedMessage(message: unknown): boolean {
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
@@ -564,6 +562,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.replyToId ? { replyToId: item.replyToId } : {}),
       ...(item.sender?.id ? { senderId: item.sender.id } : {}),
       ...(item.sender?.name ? { senderName: item.sender.name } : {}),
       ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),

@@ -410,6 +410,127 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("validates MCP OAuth credential identity", () => {
+    for (const identity of ["shared", "per-requester"] as const) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                auth: "oauth",
+                oauth: { identity },
+              },
+            },
+          },
+        }).success,
+      ).toBe(true);
+    }
+
+    const missingAuth = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            oauth: { identity: "per-requester" },
+          },
+        },
+      },
+    });
+    expect(missingAuth.success).toBe(false);
+    if (missingAuth.success) {
+      throw new Error("Expected per-requester OAuth without auth mode to fail validation");
+    }
+    expect(missingAuth.error.issues).toContainEqual(
+      expect.objectContaining({
+        message: 'oauth.identity "per-requester" requires auth: "oauth"',
+        path: ["mcp", "servers", "docs", "oauth", "identity"],
+      }),
+    );
+
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester", authProfileId: "docs:mcp" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    // URL plus command resolves stdio and would strand the server silently.
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "stdio",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a bare HTTPS Gateway public origin except on loopback", () => {
+    for (const publicOrigin of [
+      "https://gateway.example.com",
+      "https://gateway.example.com:443",
+      "http://localhost:80",
+      "http://localhost:18789/",
+      "http://127.0.0.1:18789",
+      "http://[::1]:18789",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(true);
+    }
+    // Built via URL so no credential-shaped literal lands in source (secret scanners).
+    const userinfoOrigin = new URL("https://gateway.example.com");
+    userinfoOrigin.username = "operator";
+    for (const publicOrigin of [
+      "https://gateway.example.com/path",
+      "https://gateway.example.com?query=1",
+      "https://gateway.example.com/#fragment",
+      "http://gateway.example.com",
+      userinfoOrigin.href,
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(false);
+    }
+  });
+
   it("accepts stdio transport for command-bearing MCP servers", () => {
     const result = OpenClawSchema.safeParse({
       mcp: {

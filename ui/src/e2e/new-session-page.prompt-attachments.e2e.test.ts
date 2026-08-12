@@ -33,12 +33,26 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
-  it("grows the first prompt through ten lines before using a narrow scrollbar", async () => {
+  it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
+
+      const identity = page.locator(
+        ".agent-chat__welcome-clawd, .agent-chat__welcome-avatar, .agent-chat__avatar--text",
+      );
+      const triggers = page.locator(".new-session-page__triggers");
+      const composer = page.locator(".new-session-page__composer");
+      const [identityBox, triggersBox, composerBox] = await Promise.all([
+        identity.boundingBox(),
+        triggers.boundingBox(),
+        composer.boundingBox(),
+      ]);
+      expect(identityBox).not.toBeNull();
+      expect(triggersBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
 
       const initial = await message.evaluate((element) => ({
         height: element.clientHeight,
@@ -73,8 +87,16 @@ suite.define(() => {
         overflowY: getComputedStyle(element).overflowY,
         scrollHeight: element.scrollHeight,
       }));
+      const [expandedIdentityBox, expandedTriggersBox, expandedComposerBox] = await Promise.all([
+        identity.boundingBox(),
+        triggers.boundingBox(),
+        composer.boundingBox(),
+      ]);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       expect(capped.overflowY).toBe("auto");
+      expect(expandedIdentityBox?.y).toBeCloseTo(identityBox?.y ?? 0, 0);
+      expect(expandedTriggersBox?.y).toBeCloseTo(triggersBox?.y ?? 0, 0);
+      expect(expandedComposerBox?.y).toBeCloseTo(composerBox?.y ?? 0, 0);
       await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
       const start = page.getByRole("button", { name: "Start session" });
       await expect(start.isVisible()).resolves.toBe(true);

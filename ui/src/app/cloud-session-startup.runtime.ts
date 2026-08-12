@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../api/types.ts";
 import {
   createGatewayConnectionLifecycle,
@@ -64,10 +65,10 @@ const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 const BASE64_CONTENT = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function readDurableAttachment(value: unknown): DurableAttachment | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
   const content = typeof record.content === "string" ? record.content : "";
   if (!MIME_TYPE.test(mimeType) || !BASE64_CONTENT.test(content)) {

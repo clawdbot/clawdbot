@@ -1,4 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
@@ -344,6 +345,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
   }
   counts.final += routedFinalCount;
+  const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
   const dispatchReason = queueCapRejected
@@ -358,35 +360,39 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
   state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
   state.completeDispatchReplyOperation();
+  const result = state.attachSourceReplyDeliveryMode({
+    queuedFinal,
+    counts,
+    ...(state.routeState.sessionMetadataChangesForResult
+      ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+      : {}),
+    ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
+    // Eligibility keys off settled visible delivery: a suppressed or cancelled
+    // final (including the core fallback itself) leaves channel-level recovery
+    // eligible, while any settled visible delivery clears it. An aborted or
+    // timed-out settle leaves delivery unresolved, and a fallback reported as
+    // delivered must not stay recoverable — either could double-send.
+    ...(noVisibleReplyFallbackDirected &&
+    queuedSettleResult === "settled" &&
+    !turnLedger.hasVisibleDelivery() &&
+    !noVisibleReplyFallbackDelivered &&
+    !getObservedReplyDelivery() &&
+    !replyAcceptedByActiveRun &&
+    !emptyFinalAllowedAsSilent &&
+    !deliberateSilentTerminalReply &&
+    !pendingContinuation &&
+    !channelTransformSuppressed
+      ? { noVisibleReplyFallbackEligible: true }
+      : {}),
+    ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
+    ...(deliberateSilentTerminalReply ? { deliberateSilentTerminalReply: true } : {}),
+    ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
+  });
+  if (agentRunTerminalOutcome) {
+    recordAgentRunTerminalOutcome(result, agentRunTerminalOutcome);
+  }
   return {
     status: "complete" as const,
-    result: state.attachSourceReplyDeliveryMode({
-      queuedFinal,
-      counts,
-      ...(state.routeState.sessionMetadataChangesForResult
-        ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
-        : {}),
-      ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
-      // Eligibility keys off settled visible delivery: a suppressed or cancelled
-      // final (including the core fallback itself) leaves channel-level recovery
-      // eligible, while any settled visible delivery clears it. An aborted or
-      // timed-out settle leaves delivery unresolved, and a fallback reported as
-      // delivered must not stay recoverable — either could double-send.
-      ...(noVisibleReplyFallbackDirected &&
-      queuedSettleResult === "settled" &&
-      !turnLedger.hasVisibleDelivery() &&
-      !noVisibleReplyFallbackDelivered &&
-      !getObservedReplyDelivery() &&
-      !replyAcceptedByActiveRun &&
-      !emptyFinalAllowedAsSilent &&
-      !deliberateSilentTerminalReply &&
-      !pendingContinuation &&
-      !channelTransformSuppressed
-        ? { noVisibleReplyFallbackEligible: true }
-        : {}),
-      ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
-      ...(deliberateSilentTerminalReply ? { deliberateSilentTerminalReply: true } : {}),
-      ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
-    }),
+    result,
   };
 }

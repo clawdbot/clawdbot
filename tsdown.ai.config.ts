@@ -20,6 +20,7 @@ const config = {
     diagnostics: "packages/ai/src/utils/diagnostics.ts",
     "event-stream": "packages/ai/src/utils/event-stream.ts",
     types: "packages/ai/src/types.ts",
+    "provider-types": "packages/ai/src/provider-types.ts",
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",

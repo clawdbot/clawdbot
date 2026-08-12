@@ -9,7 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   loadTranscriptEventsSync,
@@ -259,7 +259,7 @@ describe("runDoctorSessionSqlite", () => {
       const stateDir = path.join(tempDir, "state");
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", env, sessionKey: "agent:main:main", storePath },
         { sessionId: "sqlite-session", updatedAt: Date.now() },
       );
@@ -575,7 +575,7 @@ describe("runDoctorSessionSqlite", () => {
     const store = createLegacyStore({
       entryOverrides: { lifecycleRevision: "rev-1" },
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,
@@ -2735,7 +2735,7 @@ describe("runDoctorSessionSqlite", () => {
     fs.writeFileSync(store.transcriptPath, '{"type":"event","id":"heartbeat"}\n', {
       mode: 0o600,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,
@@ -3150,7 +3150,7 @@ describe("runDoctorSessionSqlite", () => {
 
   it("reports malformed selected legacy transcripts during validation", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,

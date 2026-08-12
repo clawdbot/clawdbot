@@ -66,9 +66,8 @@ export type SessionWorkspaceProps = {
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
   onToggleCustodian?: () => void;
-  /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
+  /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
-  diffNotGit?: boolean;
 };
 
 type SessionWorkspaceState = {
@@ -375,12 +374,25 @@ function loadWorkspace(
         const reload = current.pendingReload;
         current.pendingReload = false;
         if (reload) {
-          loadWorkspace(state, current, true);
+          loadWorkspace(state, current);
         }
       }
       requestUpdate(state);
     }
   })();
+}
+
+/** Refresh workspace facts after a run, which may have created a git checkout. */
+export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = state.sessionWorkspaceState;
+  if (!workspace || workspace.sessionKey !== state.sessionKey) {
+    return;
+  }
+  if (workspace.loading) {
+    workspace.pendingReload = true;
+  } else {
+    loadWorkspace(state, workspace);
+  }
 }
 
 function beginOpenRequest(
@@ -755,6 +767,11 @@ export function createSessionWorkspaceProps(
   ) {
     loadWorkspace(state, workspace);
   }
+  const canOpenDiff =
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    workspace.list?.sessionKey === state.sessionKey &&
+    workspace.list.gitCheckout !== false;
   return {
     collapsed: workspace.collapsed,
     sessionKey: state.sessionKey,
@@ -815,11 +832,9 @@ export function createSessionWorkspaceProps(
       state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
         ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
         : undefined,
-    diffNotGit: workspace.list?.gitCheckout === false,
-    onOpenDiff:
-      isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
-        ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
-        : undefined,
+    onOpenDiff: canOpenDiff
+      ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
+      : undefined,
   };
 }
 
@@ -913,8 +928,7 @@ export function renderSessionWorkspaceToggle(
   `;
 }
 
-/** Session diff button shown beside the workspace toggle; hidden when the
- * gateway does not advertise sessions.diff. */
+/** Session diff button shown beside the workspace toggle when available. */
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -922,14 +936,12 @@ export function renderSessionDiffToggle(
     return nothing;
   }
   const label = t("chat.sessionDiff.show");
-  const tooltip = sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : label;
   return html`
-    <openclaw-tooltip .content=${tooltip}>
+    <openclaw-tooltip .content=${label}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
-        ?disabled=${sessionWorkspace.diffNotGit === true}
         @click=${sessionWorkspace.onOpenDiff}
       >
         ${icons.fileDiff}
@@ -993,16 +1005,11 @@ export function renderSessionWorkspaceRail(
     : nothing;
   const diffButton = sessionWorkspace.onOpenDiff
     ? html`
-        <openclaw-tooltip
-          .content=${sessionWorkspace.diffNotGit
-            ? t("chat.sessionDiff.notGit")
-            : t("chat.sessionDiff.show")}
-        >
+        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
           <button
             type="button"
             class="chat-workspace-rail__terminal chat-session-diff-toggle"
             aria-label=${t("chat.sessionDiff.show")}
-            ?disabled=${sessionWorkspace.diffNotGit === true}
             @click=${sessionWorkspace.onOpenDiff}
           >
             ${icons.fileDiff}

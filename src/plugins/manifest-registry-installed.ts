@@ -16,7 +16,7 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -240,6 +240,7 @@ function normalizePackageChannelDoctorCapabilities(
     normalized.groupModel = groupModel;
   }
   for (const key of [
+    "openDmRequiresAllowFromWildcard",
     "groupAllowFromFallbackToAllowFrom",
     "warnOnEmptyGroupSenderAllowlist",
   ] as const) {
@@ -573,7 +574,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
-      return loadPluginManifestRegistry({
+      return loadPluginManifestRegistryCore({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

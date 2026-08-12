@@ -197,7 +197,7 @@ export type NpmIntegrityDrift = {
 };
 
 /** Runs a callback in a private temp directory and removes it afterward. */
-export async function withTempDir<T>(
+export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
   options?: { rootDir?: string },

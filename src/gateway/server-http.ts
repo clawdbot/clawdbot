@@ -91,6 +91,7 @@ type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -331,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -467,10 +469,6 @@ export function createGatewayHttpServer(opts: {
               getReadiness,
             ),
         },
-        {
-          name: "hooks",
-          run: () => handleHooksRequest(req, res),
-        },
       ];
       const addRequestStage = (
         name: string,
@@ -491,6 +489,17 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
+      // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
+      // this exact GET and 405 every provider redirect. The claim is exact-path
+      // and config-gated, so preceding hooks cannot shadow any hook route.
+      addAdmittedStage(
+        "mcp-oauth-callback",
+        req.method === "GET" &&
+          scopedRequestPath === "/oauth/mcp/callback" &&
+          Boolean(opts.handleMcpOAuthCallbackRequest),
+        () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
+      );
+      addRequestStage("hooks", true, () => handleHooksRequest(req, res));
       addAdmittedStage(
         "watch-node",
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),

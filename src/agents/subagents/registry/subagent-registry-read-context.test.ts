@@ -9,7 +9,6 @@ import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
-  countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
@@ -142,10 +141,6 @@ describe("subagent registry read index", () => {
       countPendingDescendantRunsFromRuns(runs, root),
     );
     expect(index.countPendingDescendantRuns(root)).toBe(2);
-    expect(index.countPendingDescendantRunsExcludingRun(root, "run-parent")).toBe(
-      countPendingDescendantRunsExcludingRunFromRuns(runs, root, "run-parent"),
-    );
-    expect(index.countPendingDescendantRunsExcludingRun(root, "run-parent")).toBe(1);
     expect(index.hasDescendantRunAwaitingSettle(root)).toBe(
       hasDescendantRunAwaitingSettleFromRuns(runs, root),
     );
@@ -285,7 +280,6 @@ describe("subagent registry read index", () => {
     expect(index.latestRunsByChildSessionKey.size).toBe(100);
     expect(index.countActiveDescendantRuns(root)).toBe(100);
     expect(index.countPendingDescendantRuns(root)).toBe(100);
-    expect(index.countPendingDescendantRunsExcludingRun(root, "run-50")).toBe(99);
     expect(index.hasDescendantRunAwaitingSettle(root)).toBe(true);
     expect(index.listDescendantRunsForRequester(root)).toHaveLength(100);
 

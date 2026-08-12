@@ -13,7 +13,7 @@ import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
   resetSessionEntryLifecycle,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
@@ -93,11 +93,11 @@ function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
 
 async function upsertTestSessionEntries(
   storePath: string,
-  entries: Record<string, Parameters<typeof upsertSessionEntry>[1]>,
+  entries: Record<string, Parameters<typeof upsertSessionEntryCore>[1]>,
 ): Promise<void> {
   fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await upsertSessionEntry({ sessionKey, storePath }, entry);
+    await upsertSessionEntryCore({ sessionKey, storePath }, entry);
   }
 }
 
@@ -153,7 +153,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const sessionKey = "agent:main:main";
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "retained-old", updatedAt: 10 },
     );
@@ -268,7 +268,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt },
+    );
     await persistSessionTranscriptTurn(
       { agentId: "main", sessionId, sessionKey, storePath },
       {
@@ -364,7 +367,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
     );
     fsSync.mkdirSync(sessionsDir, { recursive: true });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );

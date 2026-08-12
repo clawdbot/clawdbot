@@ -5,9 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
+  resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
+import { resolveMemorySlotDecision } from "../plugins/config-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
@@ -51,7 +51,7 @@ export function resolvePluginHookDirs(params: {
     if (!record.hooks || record.hooks.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,

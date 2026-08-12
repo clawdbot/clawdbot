@@ -5,6 +5,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -13,7 +17,6 @@ const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -93,6 +96,11 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:extensions:no-src-outside-plugin-sdk"],
     ],
     [
+      "extension-normalization-core-bypass-boundary",
+      "pnpm",
+      ["run", "lint:extensions:no-normalization-core-bypass"],
+    ],
+    [
       "extension-plugin-sdk-internal-boundary",
       "pnpm",
       ["run", "lint:extensions:no-plugin-sdk-internal"],
@@ -148,14 +156,6 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
     throw new Error(`${label} must be a positive integer; got: ${displayValue(value)}`);
   }
   return parsed;
-}
-
-function resolveTimerTimeoutMs(valueMs: number) {
-  const value = valueMs;
-  if (!Number.isFinite(value)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 /**
@@ -443,7 +443,7 @@ export function runSingleCheck(
   }: RunSingleCheckOptions,
 ) {
   return new Promise<BoundaryCheckResult>((resolve) => {
-    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs);
+    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs, MAX_TIMER_TIMEOUT_MS);
     const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,

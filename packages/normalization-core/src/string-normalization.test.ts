@@ -1,6 +1,7 @@
 // Normalization Core tests cover string normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
+  filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
@@ -18,6 +19,18 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
+  it.each([
+    { value: undefined, expected: [] },
+    { value: "value", expected: [] },
+    { value: { 0: "value" }, expected: [] },
+    {
+      value: ["", "  ", 1, "first", null, "first", Object("boxed"), "last\n"],
+      expected: ["", "  ", "first", "first", "last\n"],
+    },
+  ])("filters runtime strings from $value", ({ value, expected }) => {
+    expect(filterStringEntries(value)).toEqual(expected);
+  });
+
   it("normalizes mixed allow-list entries", () => {
     expect(normalizeStringEntries([" a ", 42, "", "  ", "z"])).toEqual(["a", "42", "z"]);
     expect(normalizeStringEntries([" ok ", null, { toString: () => " obj " }])).toEqual([

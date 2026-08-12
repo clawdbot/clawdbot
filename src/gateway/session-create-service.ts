@@ -34,7 +34,7 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   listSessionEntriesReadOnly,
@@ -235,6 +235,8 @@ export async function createGatewaySession(params: {
   generatedDisplayName?: string;
   model?: string;
   thinkingLevel?: string;
+  /** Registry identity recorded only when this request creates a logical session node. */
+  projectId?: string;
   incognito?: boolean;
   visibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
@@ -293,6 +295,7 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
+  const projectId = normalizeOptionalString(params.projectId);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -376,7 +379,7 @@ export async function createGatewaySession(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
       };
     }
-    const durableStorePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const durableEntryExists = listSessionEntriesReadOnly({
       agentId,
       storePath: durableStorePath,
@@ -1005,6 +1008,7 @@ export async function createGatewaySession(params: {
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
+          ...(projectId && createdNewEntry ? { projectId } : {}),
           ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {

@@ -1,7 +1,6 @@
 /** Shared helpers for gateway status target selection, auth, summaries, and probe rendering. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -67,11 +66,6 @@ function parseIntOrNull(value: unknown): number | null {
     return null;
   }
   return parseStrictInteger(s) ?? null;
-}
-
-/** Parses CLI timeout input with the gateway-status fallback rules. */
-export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
 function normalizeWsUrl(value: string): string | null {

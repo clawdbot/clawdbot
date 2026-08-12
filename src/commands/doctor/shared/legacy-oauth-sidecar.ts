@@ -5,12 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { authProfilesLog } from "../../../agents/auth-profiles/constants.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
-import { loadJsonFile } from "../../../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
 import { isPathInside } from "../../../infra/path-safety.js";
 
 export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
@@ -39,10 +40,6 @@ type LegacyOAuthEncryptedPayload = {
   tag: string;
   ciphertext: string;
 };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 /** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 export function resolveLegacyOAuthSidecarPath(
@@ -318,7 +315,7 @@ export function loadLegacyOAuthSidecarMaterial(params: {
   env?: NodeJS.ProcessEnv;
 }): LegacyOAuthSecretMaterial | null {
   const env = params.env ?? process.env;
-  const raw = loadJsonFile(resolveLegacyOAuthSidecarPath(params.ref, env));
+  const raw = loadJsonFileThroughSymlink(resolveLegacyOAuthSidecarPath(params.ref, env));
   if (!isRecord(raw)) {
     return null;
   }

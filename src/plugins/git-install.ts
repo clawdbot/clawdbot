@@ -6,9 +6,9 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { withTempDir } from "../infra/install-source-utils.js";
+import { withInstallWorkspace } from "../infra/install-source-utils.js";
 import { replaceDirectoryAtomic } from "../infra/replace-file.js";
 import {
   createSafeNpmInstallArgs,
@@ -242,7 +242,7 @@ function resolveGitInstallRepoDir(params: {
 }): string {
   const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
   const redactedSpec = redactSensitiveUrlLikeString(params.source.normalizedSpec);
-  return path.join(gitRoot, `git-${sha256HexPrefix(redactedSpec, 16)}`, "repo");
+  return path.join(gitRoot, `git-${sha256HexPrefixCore(redactedSpec, 16)}`, "repo");
 }
 
 async function withGitStagingDir<T>(
@@ -250,18 +250,18 @@ async function withGitStagingDir<T>(
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
   if (!persistentRepoDir) {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
     await fs.mkdir(targetParent, { recursive: true });
   } catch {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
 
   let callbackStarted = false;
   try {
-    return await withTempDir(
+    return await withInstallWorkspace(
       "openclaw-git-plugin-",
       async (tmpDir) => {
         callbackStarted = true;
@@ -275,7 +275,7 @@ async function withGitStagingDir<T>(
     if (callbackStarted) {
       throw err;
     }
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
 }
 

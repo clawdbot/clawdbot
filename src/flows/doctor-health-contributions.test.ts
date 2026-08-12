@@ -1731,6 +1731,26 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("hints how to enable authenticated GitHub project search", async () => {
+    const contribution = requireDoctorContribution("doctor:github-projects");
+    const ctx = {
+      cfg: {},
+      configResult: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as unknown as DoctorContributionRunContext;
+
+    await contribution.run(ctx);
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "GitHub projects");
+
+    mocks.note.mockClear();
+    await contribution.run({ ...ctx, env: { GH_TOKEN: "configured" } });
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
   it("passes the active config into legacy state migration", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
     const legacyStateCheck = CORE_HEALTH_CHECKS.find(

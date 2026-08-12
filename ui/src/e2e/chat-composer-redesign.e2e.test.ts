@@ -160,7 +160,9 @@ suite.define(() => {
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      const modelRequests = await gateway.getRequests("models.list");
+      expect(modelRequests).toHaveLength(1);
+      expect(modelRequests[0]?.params).toEqual({ view: "configured" });
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
@@ -703,6 +705,14 @@ suite.define(() => {
               },
             ],
           },
+          "models.list": {
+            cases: [
+              {
+                match: { agentId: "other", view: "configured" },
+                response: { models: [otherModel] },
+              },
+            ],
+          },
           "sessions.list": {
             count: 2,
             defaults: {
@@ -746,6 +756,9 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(1);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({ params: { view: "configured" } }),
+      ]);
 
       await navigateToControlUiSession(page, "agent:other:main");
       const startupRequests = await gateway.getRequests("chat.startup");
@@ -767,6 +780,10 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({ params: { view: "configured" } }),
+        expect.objectContaining({ params: { agentId: "other", view: "configured" } }),
+      ]);
     });
   });
 
@@ -811,6 +828,14 @@ suite.define(() => {
             sessionId: "control-ui-e2e-session",
             thinkingLevel: null,
           },
+          "models.list": {
+            cases: [
+              {
+                match: { agentId: "work", view: "configured" },
+                response: { models: [] },
+              },
+            ],
+          },
         },
       });
 
@@ -830,7 +855,9 @@ suite.define(() => {
         )
         .not.toContain("GPT Default");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({ params: { agentId: "work", view: "configured" } }),
+      ]);
     });
   });
 });

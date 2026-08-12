@@ -1,10 +1,11 @@
 // Applies media-understanding outputs to inbound message context, including
 // attachment normalization, provider execution, file text extraction, and echoing.
-import path from "node:path";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+  attachmentClassFromMime,
+  type AttachmentClassification,
+} from "@openclaw/media-core/attachment-classify";
+import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
@@ -16,31 +17,27 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import { extractFileContentFromSource } from "../media/input-files.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { runMediaCapability } from "./apply-capability.js";
-import {
-  decodeTextSample,
-  guessDelimitedMime,
-  hasSuspiciousBinarySignal,
-  looksLikeUtf8Text,
-  resolveUtf16Charset,
-} from "./attachment-text-sniff.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
   type FileAttachmentOutcome,
   isSkippedFileOutcome,
-  MAX_SKIPPED_FILE_MARKERS,
   renderFileAttachmentOutcome,
-  renderSkippedFileOverflowSummary,
   sanitizeMimeType,
 } from "./file-attachment-outcomes.js";
 import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
+import {
+  MAX_SKIPPED_FILE_MARKERS,
+  renderMediaAttachmentDisposition,
+  renderSkippedFileOverflowSummary,
+} from "./media-attachment-outcomes.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -70,31 +67,6 @@ const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "vid
 const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
-const EXTRA_TEXT_MIMES = [
-  "application/xml",
-  "text/xml",
-  "application/x-yaml",
-  "text/yaml",
-  "application/yaml",
-  "application/javascript",
-  "text/javascript",
-  "text/tab-separated-values",
-];
-const TEXT_EXT_MIME = new Map<string, string>([
-  [".csv", "text/csv"],
-  [".tsv", "text/tab-separated-values"],
-  [".txt", "text/plain"],
-  [".md", "text/markdown"],
-  [".log", "text/plain"],
-  [".ini", "text/plain"],
-  [".cfg", "text/plain"],
-  [".conf", "text/plain"],
-  [".env", "text/plain"],
-  [".json", "application/json"],
-  [".yaml", "text/yaml"],
-  [".yml", "text/yaml"],
-  [".xml", "application/xml"],
-]);
 
 function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   if (!blocks || blocks.length === 0) {
@@ -106,14 +78,6 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
-}
-
-function resolveTextMimeFromName(name?: string): string | undefined {
-  if (!name) {
-    return undefined;
-  }
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(name));
-  return TEXT_EXT_MIME.get(ext);
 }
 
 function buildSyntheticSkippedAudioOutputs(
@@ -142,47 +106,13 @@ function buildSyntheticSkippedAudioOutputs(
   });
 }
 
-function isBinaryMediaMime(mime?: string): boolean {
-  if (!mime) {
-    return false;
-  }
-  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
-    return true;
-  }
-  if (mime === "application/octet-stream") {
-    return true;
-  }
-  if (
-    mime === "application/zip" ||
-    mime === "application/x-zip-compressed" ||
-    mime === "application/gzip" ||
-    mime === "application/x-gzip" ||
-    mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed" ||
-    mime === "application/msword" ||
-    mime === "application/x-cfb"
-  ) {
-    return true;
-  }
-  if (mime.endsWith("+zip")) {
-    return true;
-  }
-  if (mime.startsWith("application/vnd.")) {
-    // Keep vendor +json/+xml payloads eligible for text extraction while
-    // treating the common binary vendor family (Office, archives, etc.) as binary.
-    if (mime.endsWith("+json") || mime.endsWith("+xml")) {
-      return false;
-    }
-    return true;
-  }
-  return false;
-}
-
 type ClassifiedFileAttachment = {
   outcome: FileAttachmentOutcome;
   filename?: string;
   mimeType?: string;
 };
+
+type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
 
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
@@ -208,7 +138,9 @@ async function classifyFileAttachment(params: {
   if (skipAttachmentIndexes?.has(attachment.index)) {
     return { outcome: { kind: "claimed-elsewhere" } };
   }
-  const forcedTextMime = resolveTextMimeFromName(attachmentFilename ?? "");
+  const extensionMime = mimeTypeFromFilePath(attachmentFilename);
+  const forcedTextMime =
+    attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
   const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
   if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
     return { outcome: { kind: "claimed-elsewhere" } };
@@ -238,45 +170,31 @@ async function classifyFileAttachment(params: {
     return { outcome: { kind: "read-failure" }, filename: attachmentFilename };
   }
   const filename = bufferResult?.fileName;
-  const nameHint = filename ?? attachmentFilename;
-  const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
-  const rawMime = bufferResult?.mime ?? attachment.mime;
-  const normalizedRawMime = normalizeMimeType(rawMime);
+  const classification: AttachmentClassification = bufferResult.classification;
   // Marker mime prefers the sender-declared type; never the name-forced text mime,
   // which would mislabel binary bytes inside a text-named file as a text format.
   // Both candidates pass strict token validation so raw header text never
   // reaches model context; undefined drops the mime from block and marker.
   const binaryMime =
-    sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? sanitizeMimeType(normalizedRawMime);
-  if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
+    sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? sanitizeMimeType(classification.mime);
+  if (
+    classification.class !== "text" &&
+    !(classification.class === "document" && classification.mime === "application/pdf")
+  ) {
     return {
       outcome: { kind: "unsupported-format", mime: binaryMime },
       filename,
       mimeType: binaryMime,
     };
   }
-  if (hasSuspiciousBinarySignal(bufferResult?.buffer)) {
-    return {
-      outcome: { kind: "unsupported-format", mime: binaryMime },
-      filename,
-      mimeType: binaryMime,
-    };
-  }
-  const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
-  const textSample = decodeTextSample(bufferResult?.buffer);
-  // Do not coerce real PDFs into text/plain via printable-byte heuristics.
-  // PDFs have a dedicated extraction path in extractFileContentFromSource.
-  const allowTextHeuristic = normalizedRawMime !== "application/pdf";
-  const textLike =
-    allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
-  const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
-  const textHint =
-    forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-  const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
-  // Log when MIME type is overridden from non-text to text for auditability
-  if (textHint && rawMime && !rawMime.startsWith("text/")) {
+  const mimeType = sanitizeMimeType(classification.mime);
+  if (
+    classification.class === "text" &&
+    attachment.mime &&
+    normalizeMimeType(attachment.mime) !== classification.mime
+  ) {
     logVerbose(
-      `media: MIME override from "${rawMime}" to "${textHint}" for index=${attachment.index}`,
+      `media: MIME override from "${attachment.mime}" to "${classification.mime}" for index=${attachment.index}`,
     );
   }
   if (!mimeType) {
@@ -286,13 +204,8 @@ async function classifyFileAttachment(params: {
     return { outcome: { kind: "unsupported-format" }, filename };
   }
   const allowedMimes = new Set(limits.allowedMimes);
-  if (!limits.allowedMimesConfigured) {
-    for (const extra of EXTRA_TEXT_MIMES) {
-      allowedMimes.add(extra);
-    }
-    if (mimeType.startsWith("text/")) {
-      allowedMimes.add(mimeType);
-    }
+  if (!limits.allowedMimesConfigured && classification.class === "text") {
+    allowedMimes.add(mimeType);
   }
   if (!allowedMimes.has(mimeType)) {
     if (shouldLogVerbose()) {
@@ -310,17 +223,17 @@ async function classifyFileAttachment(params: {
   }
   let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
   try {
-    const mediaType = utf16Charset ? `${mimeType}; charset=${utf16Charset}` : mimeType;
     const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
     extracted = await extractFileContentFromSource({
       source: {
         type: "base64",
         data: bufferResult.buffer.toString("base64"),
-        mediaType,
+        mediaType: mimeType,
         filename: bufferResult.fileName,
       },
       limits: { ...baseLimits, allowedMimes },
       config: cfg,
+      classification,
     });
   } catch (err) {
     if (shouldLogVerbose()) {
@@ -350,10 +263,8 @@ async function extractFileContext(params: {
   if (!attachments || attachments.length === 0) {
     return { blocks: [], images: [] };
   }
-  const blocks: string[] = [];
+  const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
-  let skippedMarkers = 0;
-  let skippedOverflow = 0;
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
@@ -377,26 +288,72 @@ async function extractFileContext(params: {
     if (blockText === null) {
       continue;
     }
-    if (isSkippedFileOutcome(outcome)) {
-      if (skippedMarkers >= MAX_SKIPPED_FILE_MARKERS) {
-        skippedOverflow += 1;
-        continue;
-      }
-      skippedMarkers += 1;
-    }
-    blocks.push(
-      renderFileContextBlock({
+    blocks.push({
+      text: renderFileContextBlock({
         filename,
         fallbackName: `file-${attachment.index + 1}`,
         mimeType,
         content: blockText,
       }),
-    );
-  }
-  if (skippedOverflow > 0) {
-    blocks.push(renderSkippedFileOverflowSummary(skippedOverflow));
+      consumesMarkerBudget: isSkippedFileOutcome(outcome),
+    });
   }
   return { blocks, images };
+}
+
+function renderMediaAttachmentMarkers(params: {
+  attachments: MediaAttachment[];
+  decisions: MediaUnderstandingDecision[];
+  outputs: MediaUnderstandingOutput[];
+  deliveredImageIndexes?: ReadonlySet<number>;
+}): AttachmentContextBlock[] {
+  const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
+  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
+  return params.attachments.flatMap((attachment) => {
+    const capability = resolveAttachmentKind(attachment);
+    if (capability !== "image" && capability !== "audio" && capability !== "video") {
+      return [];
+    }
+    // The ACP caller resolved these exact indexes into native turn attachments;
+    // a marker would falsely claim non-delivery. Unresolved images keep theirs.
+    if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
+      return [];
+    }
+    const decision = decisions.get(capability);
+    if (!decision || handledIndexes.has(attachment.index)) {
+      return [];
+    }
+    const disposition = decision.attachmentDispositions?.[attachment.index];
+    // Vision-capable model → the reply runtime hydrates images natively; an
+    // absence-of-processing marker would contradict what the model sees.
+    // Recorded per-attachment failures stay visible — they are authoritative
+    // regardless of native delivery. Partial/failed native hydration remains
+    // unexplainable at this frozen-prompt stage (#122101).
+    if (
+      capability === "image" &&
+      decision.nativeVisionActive !== false &&
+      disposition?.kind !== "failed"
+    ) {
+      return [];
+    }
+    const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
+    return text ? [{ text, consumesMarkerBudget: true }] : [];
+  });
+}
+
+function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
+  const rendered: string[] = [];
+  let markers = 0;
+  let overflow = 0;
+  for (const block of blocks) {
+    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
+      overflow += 1;
+      continue;
+    }
+    markers += Number(block.consumesMarkerBudget);
+    rendered.push(block.text);
+  }
+  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -409,6 +366,8 @@ export async function applyMediaUnderstanding(params: {
   activeModel?: ActiveMediaModel;
   /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
   processingMode?: "audio-only";
+  /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
+  deliveredImageIndexes?: ReadonlySet<number>;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
@@ -451,9 +410,6 @@ export async function applyMediaUnderstanding(params: {
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     for (const entry of results) {
-      if (!entry) {
-        continue;
-      }
       for (const output of entry.outputs) {
         outputs.push(output);
       }
@@ -567,13 +523,23 @@ export async function applyMediaUnderstanding(params: {
             skipAttachmentIndexes:
               audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
           });
-    if (fileContext.blocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, fileContext.blocks);
+    const mediaMarkers =
+      params.processingMode === "audio-only"
+        ? []
+        : renderMediaAttachmentMarkers({
+            attachments,
+            decisions,
+            outputs,
+            deliveredImageIndexes: params.deliveredImageIndexes,
+          });
+    const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
+    if (contextBlocks.length > 0) {
+      ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);
     }
-    if (outputs.length > 0 || fileContext.blocks.length > 0) {
+    if (outputs.length > 0 || contextBlocks.length > 0) {
       finalizeInboundContext(ctx, {
         forceBodyForAgent: true,
-        forceBodyForCommands: outputs.length > 0 || fileContext.blocks.length > 0,
+        forceBodyForCommands: true,
       });
     }
 

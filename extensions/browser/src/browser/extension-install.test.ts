@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +23,10 @@ import {
 } from "./extension-install.js";
 
 const ID_A = "abcdefghijklmnopabcdefghijklmnop";
+// Changed-file CI runs source tests without dist; full-build lanes exercise the real native host.
+const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
 const tempRoots: string[] = [];
+const fileModesToRestore: Array<{ target: string; mode: number }> = [];
 
 async function predictedId(candidate: string, platform: NodeJS.Platform = process.platform) {
   return generateChromeExtensionIdForPath(await fs.realpath(candidate), platform);
@@ -75,11 +79,24 @@ async function writeSecurePreferences(params: {
 }
 
 afterEach(async () => {
-  vi.restoreAllMocks();
+  await Promise.all(
+    fileModesToRestore
+      .splice(0)
+      .map(({ target, mode }) => fs.chmod(target, mode).catch(() => undefined)),
+  );
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
+
+async function makeTestFilePrivate(target: string): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const mode = (await fs.stat(target)).mode & 0o777;
+  fileModesToRestore.push({ target, mode });
+  await fs.chmod(target, mode & ~0o022);
+}
 
 function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, uid: number): T {
   return new Proxy(info, {
@@ -96,20 +113,25 @@ function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, u
 describe.runIf(process.platform !== "win32")("extension install ownership policy", () => {
   it("allows only explicit read-only root-owned inputs", async () => {
     const target = "/opt/openclaw/native-host-entry.js";
-    vi.spyOn(process, "getuid").mockReturnValue(1000);
-    vi.spyOn(fs, "lstat").mockResolvedValue({
+    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
       isDirectory: () => false,
       isFile: () => true,
       isSymbolicLink: () => false,
       mode: 0o100644,
       uid: 0,
     } as Awaited<ReturnType<typeof fs.lstat>>);
-    vi.spyOn(fs, "realpath").mockResolvedValue(target);
-
-    await expect(
-      assertOwnedPath(target, "file", { allowRootOwner: true }),
-    ).resolves.toBeUndefined();
-    await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
+    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
+    try {
+      await expect(
+        assertOwnedPath(target, "file", { allowRootOwner: true }),
+      ).resolves.toBeUndefined();
+      await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
+    } finally {
+      realpathSpy.mockRestore();
+      lstatSpy.mockRestore();
+      getuidSpy.mockRestore();
+    }
   });
 
   it.each([
@@ -119,19 +141,24 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
   ])("rejects $label", async ({ uid, mode, allowRootOwner }) => {
     const target = "/opt/openclaw/unsafe";
-    vi.spyOn(process, "getuid").mockReturnValue(1000);
-    vi.spyOn(fs, "lstat").mockResolvedValue({
+    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
       isDirectory: () => false,
       isFile: () => true,
       isSymbolicLink: () => false,
       mode,
       uid,
     } as Awaited<ReturnType<typeof fs.lstat>>);
-    vi.spyOn(fs, "realpath").mockResolvedValue(target);
-
-    await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
-      uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
-    );
+    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
+    try {
+      await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
+        uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
+      );
+    } finally {
+      realpathSpy.mockRestore();
+      lstatSpy.mockRestore();
+      getuidSpy.mockRestore();
+    }
   });
 
   it("installs from a package-shaped root-owned tree into user-owned state", async () => {
@@ -145,31 +172,37 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     const packageRoot = path.join(value.root, "package");
     const canonicalNodePath = await fs.realpath(value.deps.nodePath);
     const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(process, "getuid").mockReturnValue(userUid);
-    vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(userUid);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
       const info = await realLstat(target);
       const resolved = path.resolve(String(target));
       const rootOwned =
         resolved.startsWith(`${packageRoot}${path.sep}`) || resolved === canonicalNodePath;
       return statsWithUid(info, rootOwned ? 0 : userUid);
     });
-    let now = 0;
-
-    const status = await installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
+    try {
+      let now = 0;
+      const status = await installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        waitMs: 1_000,
+        deps: {
+          ...value.deps,
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
         },
-      },
-    });
+      });
 
-    expect(status.installedCopy).toMatchObject({ present: true, owned: true });
-    expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe("owned");
+      expect(status.installedCopy).toMatchObject({ present: true, owned: true });
+      expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe(
+        "owned",
+      );
+    } finally {
+      lstatSpy.mockRestore();
+      getuidSpy.mockRestore();
+    }
   });
 });
 
@@ -198,7 +231,7 @@ describe("stable extension copy", () => {
   it("refuses a foreign target and symlinked source content", async () => {
     const value = await fixture();
     const target = stableChromeExtensionDir(value.deps);
-    await fs.mkdir(target, { recursive: true });
+    await fs.mkdir(target, { recursive: true, mode: 0o700 });
     await expect(installStableChromeExtension(value.bundledDir, value.deps)).rejects.toThrow(
       "foreign Chrome extension directory",
     );
@@ -379,81 +412,87 @@ describe("Secure Preferences discovery", () => {
 });
 
 describe("native host registration", () => {
-  it("launches with the exact custom installation context when Chrome has no selectors", async () => {
-    const value = await fixture();
-    const stateDir = path.join(value.root, "custom state's dir");
-    const configPath = path.join(value.root, "custom config's dir", "openclaw.json");
-    const relayPort = 19_031;
-    const token = relayTestKey(4);
-    const deps = {
-      ...value.deps,
-      stateDir,
-      nativeHostPath: path.resolve("dist/extensions/browser/native-host-entry.js"),
-      env: {
-        ...value.deps.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-      },
-    };
-    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
-    await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(stateDir, "credentials", "browser-extension-relay.secret"),
-      `${token}\n`,
-      { mode: 0o600 },
-    );
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } } })}\n`,
-      { mode: 0o600 },
-    );
-    const installed = await installStableChromeExtension(value.bundledDir, deps);
-    const chromium = chromeProductRoots(deps).find((root) => root.product === "chromium");
-    if (!chromium) {
-      throw new Error("missing Chromium fixture root");
-    }
-    const extensionId = await predictedId(installed, deps.platform);
-    await writeSecurePreferences({
-      userDataDir: chromium.userDataDir,
-      profile: "Default",
-      entries: { [extensionId]: { location: 4, path: installed } },
-    });
-    const status = await installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps,
-    });
-    const registration = status.registrations.find((entry) => entry.product === "chromium");
-    const manifest = JSON.parse(await fs.readFile(registration?.manifestPath ?? "", "utf8")) as {
-      path: string;
-    };
+  it.runIf(existsSync(BUILT_NATIVE_HOST_PATH))(
+    "launches with the exact custom installation context when Chrome has no selectors",
+    async () => {
+      const value = await fixture();
+      const stateDir = path.join(value.root, "custom state's dir");
+      const configPath = path.join(value.root, "custom config's dir", "openclaw.json");
+      const nativeHostPath = BUILT_NATIVE_HOST_PATH;
+      await makeTestFilePrivate(nativeHostPath);
+      const relayPort = 19_031;
+      const token = relayTestKey(4);
+      const deps = {
+        ...value.deps,
+        stateDir,
+        nativeHostPath,
+        env: {
+          ...value.deps.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+        },
+      };
+      await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        path.join(stateDir, "credentials", "browser-extension-relay.secret"),
+        `${token}\n`,
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } } })}\n`,
+        { mode: 0o600 },
+      );
+      const installed = await installStableChromeExtension(value.bundledDir, deps);
+      const chromium = chromeProductRoots(deps).find((root) => root.product === "chromium");
+      if (!chromium) {
+        throw new Error("missing Chromium fixture root");
+      }
+      const extensionId = await predictedId(installed, deps.platform);
+      await writeSecurePreferences({
+        userDataDir: chromium.userDataDir,
+        profile: "Default",
+        entries: { [extensionId]: { location: 4, path: installed } },
+      });
+      const status = await installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        waitMs: 1_000,
+        deps,
+      });
+      const registration = status.registrations.find((entry) => entry.product === "chromium");
+      expect(registration, status.issues.join("\n")).toMatchObject({ state: "owned" });
+      const manifest = JSON.parse(await fs.readFile(registration?.manifestPath ?? "", "utf8")) as {
+        path: string;
+      };
 
-    const nonce = Buffer.alloc(16, 7).toString("base64url");
-    const requestBody = Buffer.from(JSON.stringify({ v: 1, op: "bootstrap", nonce }));
-    const requestFrame = Buffer.alloc(requestBody.length + 4);
-    if (os.endianness() === "LE") {
-      requestFrame.writeUInt32LE(requestBody.length);
-    } else {
-      requestFrame.writeUInt32BE(requestBody.length);
-    }
-    requestBody.copy(requestFrame, 4);
-    const host = spawnSync(manifest.path, [`chrome-extension://${extensionId}/`], {
-      input: requestFrame,
-      env: { HOME: value.homeDir },
-      timeout: 10_000,
-    });
-    expect(host.status, host.stderr.toString("utf8")).toBe(0);
-    const frameLength =
-      os.endianness() === "LE" ? host.stdout.readUInt32LE() : host.stdout.readUInt32BE();
-    expect(host.stdout).toHaveLength(frameLength + 4);
-    expect(JSON.parse(host.stdout.subarray(4).toString("utf8"))).toEqual({
-      v: 1,
-      ok: true,
-      nonce,
-      pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${token}`,
-    });
-  });
+      const nonce = Buffer.alloc(16, 7).toString("base64url");
+      const requestBody = Buffer.from(JSON.stringify({ v: 1, op: "bootstrap", nonce }));
+      const requestFrame = Buffer.alloc(requestBody.length + 4);
+      if (os.endianness() === "LE") {
+        requestFrame.writeUInt32LE(requestBody.length);
+      } else {
+        requestFrame.writeUInt32BE(requestBody.length);
+      }
+      requestBody.copy(requestFrame, 4);
+      const host = spawnSync(manifest.path, [`chrome-extension://${extensionId}/`], {
+        input: requestFrame,
+        env: { HOME: value.homeDir },
+        timeout: 10_000,
+      });
+      expect(host.status, host.stderr.toString("utf8")).toBe(0);
+      const frameLength =
+        os.endianness() === "LE" ? host.stdout.readUInt32LE() : host.stdout.readUInt32BE();
+      expect(host.stdout).toHaveLength(frameLength + 4);
+      expect(JSON.parse(host.stdout.subarray(4).toString("utf8"))).toEqual({
+        v: 1,
+        ok: true,
+        nonce,
+        pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${token}`,
+      });
+    },
+  );
 
   it("pre-registers predicted IDs before waiting, then verifies Chrome's recorded ID", async () => {
     const value = await fixture();

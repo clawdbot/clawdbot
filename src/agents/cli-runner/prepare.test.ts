@@ -4104,10 +4104,11 @@ describe("prepareCliRunContext", () => {
   });
 
   it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
+    const recoveredAt = "2020-01-02T03:04:05.000Z";
     fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
-      timestamp: new Date(1).toISOString(),
+      timestamp: recoveredAt,
       message: {
         role: "user",
         content: "prior claude-cli ask",
@@ -4138,8 +4139,16 @@ describe("prepareCliRunContext", () => {
       mode: "invalidate",
       invalidatedReason: "missing-transcript",
     });
-    expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
-    expect(context.openClawHistoryPrompt).toContain("latest ask");
+    expect(context.openClawHistoryPrompt).toContain(`[${recoveredAt}] User: prior claude-cli ask`);
+    expect(context.openClawHistoryPrompt).not.toContain(
+      "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
+    );
+    expect(context.openClawHistoryPrompt).toContain(
+      "Recovered history may be stale; verify current and time-sensitive facts before acting.",
+    );
+    expect(context.openClawHistoryPrompt).toContain(
+      "<next_user_message>\nlatest ask\n</next_user_message>",
+    );
   });
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {

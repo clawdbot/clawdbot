@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (
+  state TEXT NOT NULL PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  create_time INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
@@ -1859,6 +1865,14 @@ CREATE TABLE IF NOT EXISTS projects (
   source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
   created_at_ms INT NOT NULL,
   updated_at_ms INT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+  profile_id TEXT NOT NULL,
+  pref_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at_ms INT NOT NULL,
+  PRIMARY KEY (profile_id, pref_key)
 ) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).

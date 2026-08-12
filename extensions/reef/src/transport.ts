@@ -1,3 +1,4 @@
+import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import WebSocket from "ws";
@@ -588,10 +589,6 @@ export class ReefInboxConnection {
       }
     });
   }
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function reefInboxCloseError(event: { code?: number; reason?: string }): Error {

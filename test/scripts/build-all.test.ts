@@ -275,6 +275,22 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it("routes no-pnpm UI builds through the canonical validation wrapper", () => {
+    expect(
+      resolveBuildAllStep(getBuildAllStep("ui:build"), {
+        nodeExecPath: "/custom/node",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      }),
+    ).toEqual({
+      command: "/custom/node",
+      args: ["scripts/ui.js", "build"],
+      options: {
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      },
+    });
+  });
+
   it("restores startup metadata as a validator seed and refreshes it after validation", () => {
     const step = getBuildAllStep("write-cli-startup-metadata");
 

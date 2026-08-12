@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
-  activateMenuItem,
+  activateSelfRemovingControl,
   captureUiProof,
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -180,13 +180,14 @@ suite.define(() => {
       const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
       expect(await archiveItem.isDisabled()).toBe(false);
       expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
-      await activateMenuItem(archiveItem);
+      await activateSelfRemovingControl(archiveItem);
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
       );
       expect(requireRecord(patch.params)).toMatchObject({
         archived: true,
+        expectedSessionId: "session:agent:main:research",
         key: "agent:main:research",
       });
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
@@ -256,9 +257,13 @@ suite.define(() => {
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       const patchManyParams = requireRecord(patchMany.params);
       expect(patchManyParams.patch).toEqual({ archived: true });
-      expect(
-        (patchManyParams.targets as Array<{ key: string }>).map((target) => target.key),
-      ).toEqual([...batchKeys]);
+      expect(patchManyParams.targets).toEqual(
+        batchKeys.map((key) => ({
+          key,
+          agentId: "main",
+          expectedSessionId: `session:${key}`,
+        })),
+      );
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
       expect(await gateway.getRequests("agent.wait")).toEqual([]);
@@ -336,15 +341,14 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
       const sidebar = page.locator("openclaw-app-sidebar");
       const rowFor = (key: string) =>
         sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
-      await page
-        .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea')
-        .waitFor({ state: "visible" });
+      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await page.evaluate((sessionKey) => {
         const titleHistory: string[] = [];
         const paneTitleHistory: string[] = [];
@@ -431,7 +435,7 @@ suite.define(() => {
       }
       await rowFor(batchRows[0]!.key).click({ button: "right" });
       const batchMenu = page.locator("openclaw-session-menu");
-      await activateMenuItem(
+      await activateSelfRemovingControl(
         batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
       );
       await gateway.waitForRequest("sessions.patchMany");
@@ -451,7 +455,7 @@ suite.define(() => {
       });
       await selectedRow.hover();
       await selectedRow.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(
+      await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",
         }),
@@ -460,6 +464,8 @@ suite.define(() => {
         gateway,
         (params) => params.key === selected.key && params.archived === true,
       );
+      const archiveToast = page.locator("openclaw-toast-host .app-toast");
+      await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
         archived: true,
@@ -514,17 +520,14 @@ suite.define(() => {
             ).archiveDocumentTitleHistory ?? [],
         ),
       ).not.toContain("New session — OpenClaw");
-      const archivedNotice = page.locator(".agent-chat__disabled-banner");
+      const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await expect
-        .poll(() => page.locator(".chat-pane-cache__pane--visible .agent-chat__input").count())
-        .toBe(0);
+      await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
 
-      const archiveToast = page.locator("openclaw-toast-host .app-toast");
-      await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
-      await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
+      await archiveToast.waitFor({ state: "detached" });
+      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
         (params) => params.key === selected.key && params.archived === false,
@@ -538,9 +541,14 @@ suite.define(() => {
 
       await assertSelectedRoute();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await page
-        .locator(".chat-pane-cache__pane--visible .agent-chat__input textarea")
-        .waitFor({ state: "visible" });
+      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(selected.key);
     } finally {
       await context.close();
     }
@@ -573,6 +581,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(archived.key)}`);
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
 
       const selectedRow = page.locator(
         `.sidebar-recent-session[data-session-key="${archived.key}"]`,
@@ -584,15 +593,15 @@ suite.define(() => {
       await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
       await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
 
-      const archivedNotice = page.locator(".agent-chat__disabled-banner");
+      const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+      await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.describe", {
         session: { ...archived, archived: false },
       });
-      await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
+      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
         (params) => params.key === archived.key && params.archived === false,
@@ -605,7 +614,14 @@ suite.define(() => {
       });
 
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(archived.key);
     } finally {
       await context.close();
     }
@@ -640,8 +656,9 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, deletedKey));
-      await page
-        .locator(".chat-pane-cache__pane--visible .agent-chat__input textarea")
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await activePane
+        .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
 
       const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
@@ -655,8 +672,15 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname, { timeout: 15_000 })
         .toBe(controlUiSessionPath(mainKey));
-      await page
-        .locator(".chat-pane-cache__pane--visible .agent-chat__input textarea")
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(mainKey);
+      await activePane
+        .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
@@ -709,7 +733,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       await row.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(
+      await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );
       await confirmDelete(page);

@@ -146,7 +146,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
   );
   const resolveApiKeyForProvider = createLazyRuntimeMethod(
     loadModelAuthRuntime,
-    (runtime) => runtime.resolveApiKeyForProvider,
+    (runtime) => runtime.resolveProviderRuntimeApiKey,
   );
   return {
     getApiKeyForModel: (params) =>

@@ -11,7 +11,7 @@ import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
@@ -550,7 +550,7 @@ export async function getStatusSummary(
 
   const storeSources = agentList.agents.map((agent) => ({
     agentId: agent.id,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
   }));
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
@@ -561,7 +561,7 @@ export async function getStatusSummary(
 
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),

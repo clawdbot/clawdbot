@@ -4,7 +4,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import {
   getModelProviderRequestTransport,
@@ -310,7 +310,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   preferredProfile?: string;
 }): Promise<{ runtimeValue: string; modelBaseUrl?: string }> {
   const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: authProvider,
     cfg: params.cfg,
     secretSentinels: true,

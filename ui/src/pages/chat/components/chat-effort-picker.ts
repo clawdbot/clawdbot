@@ -5,21 +5,17 @@ import { t } from "../../../i18n/index.ts";
 import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
-  ChatModelSelectOption,
 } from "../../../lib/chat/model-select-state.ts";
-import { formatThinkingOverrideLabel } from "../../../lib/chat/thinking.ts";
+import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 
 type ChatEffortPickerParams = {
   disabled: boolean;
   disabledReason?: string;
   fastMode: ChatFastModeSelectState;
-  selectedThinkingValue: string;
   sessionKey: string;
   showFastMode: boolean;
-  thinkingDefaultValue: string;
   thinkingDisabled: boolean;
-  thinkingOptions: ChatModelSelectOption[];
-  triggerThinkingLabel: string;
+  thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
   onRequestUpdate?: () => void;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
@@ -30,37 +26,24 @@ function formatEffortLabel(label: string): string {
 }
 
 export function renderChatEffortPicker(params: ChatEffortPickerParams) {
-  const sliderStops = params.thinkingOptions.filter((option) => option.value !== "");
+  const sliderStops = params.thinking.options;
   const showReasoning = sliderStops.length > 0;
   if (!showReasoning && (!params.showFastMode || !params.fastMode.supported)) {
     return nothing;
   }
-  const defaultStopIndex = sliderStops.findIndex(
-    (option) => option.value === params.thinkingDefaultValue,
-  );
-  const hasThinkingOverride = params.selectedThinkingValue !== "";
-  const overrideStopIndex = sliderStops.findIndex(
-    (option) => option.value === params.selectedThinkingValue,
-  );
-  const sliderIndex = Math.max(hasThinkingOverride ? overrideStopIndex : defaultStopIndex, 0);
-  const sliderUnanchored = !hasThinkingOverride && defaultStopIndex < 0;
+  const selection = params.thinking.selection;
+  const hasThinkingOverride = selection.source === "override";
+  const selectedThinkingValue = hasThinkingOverride ? selection.value : "";
+  const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
+  const sliderUnanchored = selection.kind === "unanchored";
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
-  const defaultLevelLabel = formatThinkingOverrideLabel(params.thinkingDefaultValue);
-  const selectedThinkingOption = params.thinkingOptions.find(
-    (option) => option.value === params.selectedThinkingValue,
-  );
-  const reasoningValueText = hasThinkingOverride
-    ? formatEffortLabel(
-        selectedThinkingOption?.label ?? formatThinkingOverrideLabel(params.selectedThinkingValue),
-      )
-    : defaultLevelLabel;
+  const defaultLevelLabel = formatEffortLabel(params.thinking.inherited.displayLabel);
+  const reasoningValueText = formatEffortLabel(selection.displayLabel);
   const reasoningValueLabel = hasThinkingOverride
     ? reasoningValueText
     : t("chat.modelControls.defaultWithLevel", { level: defaultLevelLabel });
-  const triggerLabel = showReasoning
-    ? formatEffortLabel(params.triggerThinkingLabel)
-    : t("chat.modelControls.fastMode");
+  const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.fastMode");
   const triggerTitle = params.fastMode.active
     ? `${triggerLabel} · ${t("chat.modelControls.fastMode")}`
     : triggerLabel;
@@ -116,7 +99,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     const input = event.currentTarget as HTMLInputElement;
     const stop = sliderStops[Number(input.value)];
     resetSliderPreview(input);
-    if (params.thinkingDisabled || !stop || stop.value === params.selectedThinkingValue) {
+    if (params.thinkingDisabled || !stop || stop.value === selectedThinkingValue) {
       return;
     }
     commitThinking(stop.value);
@@ -133,8 +116,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     }
   };
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
-  const effectiveThinkingValue = params.selectedThinkingValue || params.thinkingDefaultValue;
-  const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
+  const onlyStopSelected = selection.kind === "anchored" && selection.index === 0;
   const speedTooltip = params.fastMode.supported
     ? t("chat.modelControls.fastHelp")
     : t("chat.modelControls.speedUnsupported");
@@ -146,7 +128,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
           ? "chat-controls__effort-trigger--fast"
           : ""} ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-thinking-select="true"
-        data-chat-thinking-value=${params.selectedThinkingValue}
+        data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${params.thinkingDisabled ? "true" : "false"}
         data-chat-fast-mode=${params.fastMode.active ? "true" : "false"}
         aria-label=${`${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}

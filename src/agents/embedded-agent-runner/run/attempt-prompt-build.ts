@@ -34,7 +34,7 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { log } from "../logger.js";
 import {
   beginPromptCacheObservation,
@@ -170,7 +170,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
         });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
-  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolName));
+  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
@@ -182,7 +182,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       ? promptBeforeResolvedToolFinalization
       : attempt.transcriptPrompt;
   const promptCacheTools = input.cache.tools.filter((tool) =>
-    promptCacheToolNameSet.has(normalizeToolName(tool.name)),
+    promptCacheToolNameSet.has(normalizeToolPolicyName(tool.name)),
   );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const promptBuildPrependContext = hookResult?.prependContext;

@@ -988,7 +988,7 @@ function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandid
   );
 }
 
-export function loadPluginManifestRegistry(
+export function loadPluginManifestRegistryCore(
   params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
@@ -1281,7 +1281,7 @@ export function loadBundledPluginManifestRegistry(
 ): PluginManifestRegistry {
   const env = params.env ?? process.env;
   const installRecords: Record<string, PluginInstallRecord> = {};
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     env,
     installRecords,
     discovery: discoverOpenClawPlugins({

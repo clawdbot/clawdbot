@@ -11,6 +11,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
@@ -34,7 +35,6 @@ import {
   normalizeSandboxMediaParams,
   parseInteractiveParam,
   parseJsonMessageParam,
-  readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";

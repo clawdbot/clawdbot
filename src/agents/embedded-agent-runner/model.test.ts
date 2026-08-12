@@ -97,7 +97,7 @@ vi.mock("../model-suppression.js", () => {
   }
 
   return {
-    shouldSuppressBuiltInModel: ({
+    shouldSuppressBuiltInModelCore: ({
       provider,
       id,
       baseUrl,
