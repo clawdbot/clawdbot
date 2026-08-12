@@ -18,6 +18,28 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
 }
 
 describe("preserveRosterPresentationMetadata", () => {
+  it("does not preserve presentation metadata without a known matching session identity", () => {
+    const key = "agent:main:dashboard:replacement";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "replacement-session", updatedAt: 20 },
+        {
+          key,
+          kind: "direct",
+          updatedAt: 10,
+          derivedTitle: "Previous session title",
+          lastMessagePreview: "Previous session preview",
+        },
+      ),
+    ).toEqual({
+      key,
+      kind: "direct",
+      sessionId: "replacement-session",
+      updatedAt: 20,
+    });
+  });
+
   it("does not infer archive state from row timestamps", () => {
     const key = "agent:main:dashboard:archived";
 

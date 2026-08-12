@@ -151,30 +151,20 @@ export function preserveRosterPresentationMetadata(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
 ): GatewaySessionRow {
-  if (!existing) {
-    return incoming;
-  }
-  const sameSessionWindow =
-    incoming.sessionId && existing.sessionId
-      ? incoming.sessionId === existing.sessionId
-      : incoming.key === existing.key;
-  const preservePresentation =
-    sameSessionWindow &&
-    Boolean(incoming.sessionId) &&
-    (incoming.derivedTitle === undefined || incoming.lastMessagePreview === undefined);
-  if (!preservePresentation) {
+  if (
+    !existing ||
+    !incoming.sessionId ||
+    incoming.sessionId !== existing.sessionId ||
+    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+  ) {
     return incoming;
   }
   return {
     ...incoming,
-    ...(preservePresentation &&
-    incoming.derivedTitle === undefined &&
-    existing.derivedTitle !== undefined
+    ...(incoming.derivedTitle === undefined && existing.derivedTitle !== undefined
       ? { derivedTitle: existing.derivedTitle }
       : {}),
-    ...(preservePresentation &&
-    incoming.lastMessagePreview === undefined &&
-    existing.lastMessagePreview !== undefined
+    ...(incoming.lastMessagePreview === undefined && existing.lastMessagePreview !== undefined
       ? { lastMessagePreview: existing.lastMessagePreview }
       : {}),
   };
