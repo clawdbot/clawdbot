@@ -17,6 +17,7 @@ import {
   type GatewayProtocolTiming,
   type ConnectParams,
   type ErrorShape,
+  type EventFrame,
   type HelloOk,
   shouldPauseGatewayReconnect,
   resolveGatewayConnectScopes,
@@ -146,7 +147,6 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-type GatewayConnectDevice = NonNullable<ConnectParams["device"]>;
 type GatewayConnectClientInfo = ConnectParams["client"];
 
 type ConnectPlan = {
@@ -169,7 +169,7 @@ export type GatewayBrowserClientOptions = {
   mode?: GatewayClientMode;
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
-  onEvent?: (evt: GatewayEventFrame) => void;
+  onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
     code: number;
     reason: string;
@@ -182,7 +182,7 @@ export type GatewayBrowserClientOptions = {
   onRecoveryScopeChange?: () => void;
 };
 
-export type GatewayEventListener = (evt: GatewayEventFrame) => void;
+export type GatewayEventListener = (evt: EventFrame) => void;
 
 type GatewayConnectTiming = Omit<GatewayProtocolTiming<ConnectPlan>, "plan" | "detail"> & {
   secureContext?: boolean;
@@ -276,7 +276,7 @@ async function buildGatewayConnectDevice(params: {
   authToken?: string;
   connectNonce: string | null;
   connectChallengeTs: number | null | undefined;
-}): Promise<GatewayConnectDevice | undefined> {
+}): Promise<NonNullable<ConnectParams["device"]> | undefined> {
   const { deviceIdentity } = params;
   if (!deviceIdentity) {
     return undefined;
