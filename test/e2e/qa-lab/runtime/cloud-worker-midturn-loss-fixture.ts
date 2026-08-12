@@ -352,7 +352,7 @@ async function resolveSshdPath(): Promise<string> {
   throw new Error("sshd is required for the static-SSH mid-turn proof");
 }
 
-export type SshdProcess = {
+type SshdProcess = {
   child: ChildProcess;
   daemonPid: number;
   exit: Promise<void>;
