@@ -60,6 +60,7 @@ export function registerCronEditCommand(cron: Command) {
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
       .option("--display-name <name>", "Set human-readable display name")
+      .option("--clear-display-name", "Restore the stable name in list and detail views", false)
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
@@ -248,8 +249,14 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.displayName === "string" && !displayName) {
             throw new Error("--display-name must not be blank");
           }
+          if (displayName && opts.clearDisplayName) {
+            throw new Error("Use --display-name or --clear-display-name, not both");
+          }
           if (displayName) {
             patch.displayName = displayName;
+          }
+          if (opts.clearDisplayName) {
+            patch.displayName = null;
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;

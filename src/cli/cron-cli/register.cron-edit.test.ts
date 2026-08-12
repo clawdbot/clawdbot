@@ -54,6 +54,7 @@ describe("cron edit command", () => {
 
     expect(help).toContain("--best-effort-deliver");
     expect(help).toContain("--display-name <name>");
+    expect(help).toContain("--clear-display-name");
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
@@ -70,6 +71,24 @@ describe("cron edit command", () => {
 
   it.each(["", "   "])("rejects a blank --display-name value", async (value) => {
     await expectCronEditRejection(["--display-name", value], "--display-name must not be blank");
+  });
+
+  it("clears the display name and restores the stable name fallback", async () => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--clear-display-name"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { displayName: null },
+    });
+  });
+
+  it("rejects combining display-name set and clear flags", async () => {
+    await expectCronEditRejection(
+      ["--display-name", "Daily summary", "--clear-display-name"],
+      "Use --display-name or --clear-display-name, not both",
+    );
   });
 
   it("updates one pacing bound while preserving the other", async () => {

@@ -54,7 +54,10 @@ openclaw automations create "*/15 * * * *" \
 
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update
-that label with `automations add|edit --display-name`.
+that label with `automations add|edit --display-name`. Use
+`automations edit <job-id> --clear-display-name` to remove the label and restore
+the stable name in list and detail views. The set and clear options cannot be
+combined.
 
 ## Sessions
 
