@@ -26,8 +26,15 @@ describe("localization locale registry", () => {
     ["zh_CN.UTF-8", "zh-CN"],
     ["zh", "zh-CN"],
     ["zh-Hans", "zh-CN"],
+    ["zh-Hans-CN", "zh-CN"],
+    ["zh-Hans-SG", "zh-CN"],
+    ["zh-Hans-HK", "zh-CN"],
+    ["zh-Hans-TW", "zh-CN"],
     ["zh_TW.UTF-8", "zh-TW"],
     ["zh-Hant", "zh-TW"],
+    ["zh-Hant-TW", "zh-TW"],
+    ["zh-Hant-HK", "zh-TW"],
+    ["zh-Hant-MO", "zh-TW"],
     ["zh-HK", "zh-TW"],
     ["zh-SG", "zh-CN"],
     ["en_US.UTF-8", "en"],
@@ -35,7 +42,7 @@ describe("localization locale registry", () => {
     expect(matchExactOpenClawLocale(value)).toBe(expected);
   });
 
-  it.each(["zh-Hant-HK", "zh-Hans-SG"])(
+  it.each(["zh-Hans-US", "zh-Hant-US"])(
     "rejects unregistered explicit wildcard locale %s",
     (value) => {
       expect(matchExactOpenClawLocale(value)).toBeNull();

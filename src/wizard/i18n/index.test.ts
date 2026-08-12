@@ -36,14 +36,19 @@ describe("wizard i18n", () => {
     expect(t("wizard.gateway.port")).toBe(expected);
   });
 
-  it.each(["zh-Hans-SG", "zh-Hant-HK"])(
-    "falls directly to English for unregistered explicit locale %s",
-    (locale) => {
-      vi.stubEnv("OPENCLAW_LOCALE", locale);
-      vi.stubEnv("LANG", "zh-CN");
-      expect(t("wizard.gateway.port")).toBe("Gateway port");
-    },
-  );
+  it.each([
+    ["zh-Hans-SG", "Gateway 端口"],
+    ["zh-Hant-HK", "Gateway 連接埠"],
+  ])("preserves the registered explicit locale %s", (locale, expected) => {
+    vi.stubEnv("OPENCLAW_LOCALE", locale);
+    expect(t("wizard.gateway.port")).toBe(expected);
+  });
+
+  it("falls directly to English for an unregistered explicit locale", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-Hans-US");
+    vi.stubEnv("LANG", "zh-CN");
+    expect(t("wizard.gateway.port")).toBe("Gateway port");
+  });
 
   it("uses OPENCLAW_LOCALE before process locale variables", () => {
     vi.stubEnv("OPENCLAW_LOCALE", "en");
