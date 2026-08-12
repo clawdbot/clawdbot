@@ -1,6 +1,7 @@
 // Verifies channels documented as exposing health-monitor overrides accept the key.
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
+import { validateJsonSchemaValue } from "../schema-validator.js";
 
 /**
  * The channels docs/gateway/health.md lists as exposing the per-channel
@@ -115,6 +116,27 @@ function rejectsNestedKey(
   return rejectsKey(parent, childKey);
 }
 
+/**
+ * Validates the documented `{ healthMonitor: { enabled: false } }` override
+ * against the generated schema. Presence checks alone would pass on a leaf typed
+ * as something other than boolean, which real config loading would refuse.
+ */
+function acceptsDocumentedOverride(schema: JsonSchemaLike | undefined, cacheKey: string): boolean {
+  // Validate the healthMonitor sub-schema rather than the channel object: a
+  // channel schema has its own required credentials, so a partial object would
+  // fail for reasons unrelated to this leaf.
+  const healthMonitor = propertySchema(schema, "healthMonitor");
+  if (!healthMonitor) {
+    return false;
+  }
+  return validateJsonSchemaValue({
+    cacheKey: `health-monitor-contract.${cacheKey}`,
+    schema: healthMonitor as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+    value: { enabled: false },
+    cache: false,
+  }).ok;
+}
+
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
   return asSchema(
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === channelId)
@@ -196,6 +218,9 @@ describe("channel healthMonitor contract", () => {
       const healthMonitor = propertySchema(schemaFor(channelId), "healthMonitor");
       expect(healthMonitor, `${channelId} exposes no healthMonitor schema`).toBeDefined();
       expect(rejectsNestedKey(schemaFor(channelId), "healthMonitor", "enabled")).toBe(false);
+      // Structural presence is not the contract: a leaf typed as string would
+      // satisfy the checks above while refusing the documented boolean.
+      expect(acceptsDocumentedOverride(schemaFor(channelId), `${channelId}.root`)).toBe(true);
     },
   );
 
@@ -212,6 +237,7 @@ describe("channel healthMonitor contract", () => {
       const healthMonitor = propertySchema(accountEntry, "healthMonitor");
       expect(healthMonitor, `${channelId} account entry exposes no healthMonitor`).toBeDefined();
       expect(rejectsNestedKey(accountEntry, "healthMonitor", "enabled")).toBe(false);
+      expect(acceptsDocumentedOverride(accountEntry, `${channelId}.account`)).toBe(true);
     },
   );
 });
