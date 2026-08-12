@@ -2,7 +2,17 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
-import type { PluginConfigUninstallActions } from "./uninstall-config.js";
+
+export type PluginConfigUninstallActions = {
+  entry: boolean;
+  install: boolean;
+  allowlist: boolean;
+  denylist: boolean;
+  loadPath: boolean;
+  memorySlot: boolean;
+  contextEngineSlot: boolean;
+  channelConfig: boolean;
+};
 
 const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 

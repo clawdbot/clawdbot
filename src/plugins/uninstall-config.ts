@@ -7,17 +7,9 @@ import {
   resolveComparableUninstallPathInternal,
   resolveUninstallChannelConfigKeysInternal,
 } from "./uninstall-package-config.js";
+import type { PluginConfigUninstallActions } from "./uninstall-package-config.js";
 
-export type PluginConfigUninstallActions = {
-  entry: boolean;
-  install: boolean;
-  allowlist: boolean;
-  denylist: boolean;
-  loadPath: boolean;
-  memorySlot: boolean;
-  contextEngineSlot: boolean;
-  channelConfig: boolean;
-};
+export type { PluginConfigUninstallActions } from "./uninstall-package-config.js";
 
 /** Resolve a path through existing ancestors while preserving missing targets. */
 export function resolveComparableUninstallPath(value: string): string {
