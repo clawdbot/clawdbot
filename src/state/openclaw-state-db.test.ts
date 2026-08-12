@@ -1496,6 +1496,34 @@ describe("openclaw state database", () => {
     },
   );
 
+  it("preserves an extra index on the final v6 commitments layout", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const customized = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(customized);
+    customized.exec("CREATE INDEX foreign_commitments_status ON commitments(status);");
+    customized.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/unsupported additional indexes/u);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+      expect(
+        preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toEqual({ name: "commitments" });
+      expect(
+        preserved
+          .prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'foreign_commitments_status'")
+          .get(),
+      ).toEqual({ tbl_name: "commitments" });
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("keeps the additive worker SSH fallback table compatible with older v6 containment", () => {
     const database = openMaterializedCurrentStateDatabase();
     try {

@@ -141,6 +141,9 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
     "retired OpenClaw commitments schema",
     RETIRED_COMMITMENTS_SCHEMA_SQL,
   );
+  throw new Error(
+    "Retired OpenClaw commitments schema has unsupported additional indexes; refusing destructive migration.",
+  );
 }
 
 export function migrateRetiredCommitmentsSchema(
