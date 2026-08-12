@@ -24,12 +24,21 @@ describe("probePortalReachable", () => {
 
   it("returns false when the reachability deadline aborts the request", async () => {
     const controller = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const timeoutMock = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     vi.stubGlobal(
       "fetch",
       vi.fn((_url: string, init: RequestInit) => {
         return new Promise((_resolve, reject) => {
-          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          init.signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                init.signal?.reason instanceof Error
+                  ? init.signal.reason
+                  : new Error("Request aborted"),
+              ),
+            { once: true },
+          );
         });
       }),
     );
@@ -38,6 +47,6 @@ describe("probePortalReachable", () => {
     controller.abort(new DOMException("Timed out", "TimeoutError"));
 
     await expect(result).resolves.toBe(false);
-    expect(AbortSignal.timeout).toHaveBeenCalledWith(4_000);
+    expect(timeoutMock).toHaveBeenCalledWith(4_000);
   });
 });
