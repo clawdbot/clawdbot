@@ -51,7 +51,7 @@ async function markRecoveryStore(params: {
           continue;
         }
         if (isExternalRestartRecoveryOwner(entry)) {
-          log.info("skipping main-session restart recovery", {
+          mainSessionRecoveryLog.info("skipping main-session restart recovery", {
             phase: "mark",
             reason: "external_owner",
             sessionKey,

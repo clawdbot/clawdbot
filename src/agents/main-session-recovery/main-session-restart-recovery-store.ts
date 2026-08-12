@@ -293,7 +293,7 @@ export async function recoverStore(params: {
       continue;
     }
     if (isExternalRestartRecoveryOwner(entry)) {
-      log.info("skipping main-session restart recovery", {
+      mainSessionRecoveryLog.info("skipping main-session restart recovery", {
         phase: "dispatch",
         reason: "external_owner",
         sessionKey,

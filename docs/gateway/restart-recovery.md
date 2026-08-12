@@ -115,9 +115,12 @@ opt a Gateway session out of OpenClaw's automatic main-session recovery. Send
 }
 ```
 
-The setting is stored with the session and survives Gateway restarts. Omitting
-the field preserves the session's current owner; sessions that have never set
-it remain OpenClaw-owned for backward compatibility. Send
+The setting is scoped to the current session generation and survives Gateway
+restarts. A session-ID rotation clears it, so the first `agent` request for a
+replacement generation must send `"restartRecoveryOwner": "external"` again
+when the orchestrator still owns recovery. Omitting the field preserves the
+current generation's owner; new or rotated generations remain OpenClaw-owned
+for backward compatibility. Send
 `"restartRecoveryOwner": "openclaw"` to transfer automatic restart recovery
 back to OpenClaw. Changing the owner requires `operator.admin` and is rejected
 while another turn owns the session; retry after that turn settles. A successful

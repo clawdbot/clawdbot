@@ -476,7 +476,7 @@ describe("gateway server agent", () => {
   test("agent rejects restart recovery ownership changes during active work", async () => {
     await writeMainSessionEntry({ sessionId: "sess-active-recovery-owner" });
     const runCompletion = createDeferred();
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       await runCompletion.promise;
     });
 

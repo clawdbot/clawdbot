@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
-import { resolveStorePath } from "../../../../src/config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 function sessionStorePath(gateway: GatewayHandle): string {
-  return resolveStorePath(undefined, {
+  return resolveSessionStorePathCore(undefined, {
     agentId: AGENT_ID,
     env: gateway.runtimeEnv,
   });

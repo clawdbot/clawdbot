@@ -632,9 +632,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryOwner: "external",
       abortedLastRun: false,
     });
-    const infoSpy = vi
-      .spyOn(mainSessionRecoveryLog, "info")
-      .mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation(() => undefined);
 
     try {
       await expect(
