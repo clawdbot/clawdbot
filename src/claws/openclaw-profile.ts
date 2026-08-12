@@ -112,7 +112,7 @@ function migrateLegacyDynamicToolProfile(value: unknown): {
   ) {
     return { value };
   }
-  if (!resolveClawToolProfileSnapshot({ profile: toolProfile })?.allow.includes("bundle-mcp")) {
+  if (toolProfile === "full") {
     return { value };
   }
   const validationProbe = parseClawOpenClawProfile({

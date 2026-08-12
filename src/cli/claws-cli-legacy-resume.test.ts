@@ -71,69 +71,72 @@ afterEach(() => {
 });
 
 describe("claws add legacy v1 resume", () => {
-  it("retries an exact committed dynamic-profile add through the bounded migration", async () => {
-    const root = tempDirs.make("openclaw-claws-v1-profile-resume-");
-    const workspace = join(root, "workspace");
-    vi.stubEnv("OPENCLAW_STATE_DIR", join(tempDirs.make("openclaw-state-"), "state"));
-    await mkdir(join(root, "profiles"));
-    const manifestPath = join(root, "openclaw.claw.json");
-    await writeFile(
-      manifestPath,
-      JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } }),
-      "utf8",
-    );
-    await writeFile(
-      join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
-      "utf8",
-    );
-    const read = await readClawManifestFile(manifestPath, {
-      allowLegacyDynamicToolProfile: true,
-    });
-    if (!read.ok || !read.legacyOpenClawProfile) {
-      throw new Error("expected legacy dynamic profile evidence");
-    }
-    const legacyPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      openClawProfile: read.legacyOpenClawProfile,
-      reconstructLegacyDynamicToolProfilePlan: true,
-      source: read.source,
-      context: { workspace, packagePreflight: mocks.preflightClawPackage },
-    });
-    persistClawInstallRecord(legacyPlan, { status: "workspace_ready", nowMs: 1 });
-    openOpenClawStateDatabase()
-      .db /* sqlite-allow-raw: test-only downgrade simulates a pre-v2 interrupted add. */
-      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
-      .run("openclaw.clawInstallRecord.v1", "demo-agent");
-    await mkdir(workspace);
-    mocks.loadConfig.mockReturnValue({ agents: { list: [legacyPlan.agent.config] } });
+  it.each(["coding", "minimal"] as const)(
+    "retries an exact committed dynamic %s-profile add through the bounded migration",
+    async (toolProfile) => {
+      const root = tempDirs.make("openclaw-claws-v1-profile-resume-");
+      const workspace = join(root, "workspace");
+      vi.stubEnv("OPENCLAW_STATE_DIR", join(tempDirs.make("openclaw-state-"), "state"));
+      await mkdir(join(root, "profiles"));
+      const manifestPath = join(root, "openclaw.claw.json");
+      await writeFile(
+        manifestPath,
+        JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "profiles", "openclaw.yml"),
+        `schemaVersion: 1\nagent:\n  tools:\n    profile: ${toolProfile}\n`,
+        "utf8",
+      );
+      const read = await readClawManifestFile(manifestPath, {
+        allowLegacyDynamicToolProfile: true,
+      });
+      if (!read.ok || !read.legacyOpenClawProfile) {
+        throw new Error("expected legacy dynamic profile evidence");
+      }
+      const legacyPlan = await buildClawAddPlan({
+        manifest: read.manifest,
+        openClawProfile: read.legacyOpenClawProfile,
+        reconstructLegacyDynamicToolProfilePlan: true,
+        source: read.source,
+        context: { workspace, packagePreflight: mocks.preflightClawPackage },
+      });
+      persistClawInstallRecord(legacyPlan, { status: "workspace_ready", nowMs: 1 });
+      openOpenClawStateDatabase()
+        .db /* sqlite-allow-raw: test-only downgrade simulates a pre-v2 interrupted add. */
+        .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+        .run("openclaw.clawInstallRecord.v1", "demo-agent");
+      await mkdir(workspace);
+      mocks.loadConfig.mockReturnValue({ agents: { list: [legacyPlan.agent.config] } });
 
-    await runClawsAddCommand(manifestPath, {
-      yes: true,
-      planIntegrity: legacyPlan.planIntegrity,
-      workspace,
-      json: true,
-    });
+      await runClawsAddCommand(manifestPath, {
+        yes: true,
+        planIntegrity: legacyPlan.planIntegrity,
+        workspace,
+        json: true,
+      });
 
-    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        planIntegrity: expect.not.stringMatching(legacyPlan.planIntegrity),
-        agent: expect.objectContaining({
-          config: expect.objectContaining({
-            tools: expect.objectContaining({
-              profile: "full",
-              allow: expect.not.arrayContaining(["bundle-mcp"]),
+      expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planIntegrity: expect.not.stringMatching(legacyPlan.planIntegrity),
+          agent: expect.objectContaining({
+            config: expect.objectContaining({
+              tools: expect.objectContaining({
+                profile: "full",
+                allow: expect.not.arrayContaining(["bundle-mcp"]),
+              }),
             }),
           }),
         }),
-      }),
-      expect.objectContaining({
-        consentPlanIntegrity: legacyPlan.planIntegrity,
-        resumePlan: expect.objectContaining({ planIntegrity: legacyPlan.planIntegrity }),
-        resumeRecord: expect.objectContaining({
-          schemaVersion: "openclaw.clawInstallRecord.v1",
+        expect.objectContaining({
+          consentPlanIntegrity: legacyPlan.planIntegrity,
+          resumePlan: expect.objectContaining({ planIntegrity: legacyPlan.planIntegrity }),
+          resumeRecord: expect.objectContaining({
+            schemaVersion: "openclaw.clawInstallRecord.v1",
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 });
