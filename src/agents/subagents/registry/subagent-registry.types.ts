@@ -216,6 +216,8 @@ type SubagentKillIntent = {
 
 export type SubagentRunRecord = {
   runId: string;
+  /** External runtime that owns terminal delivery and every child-session side effect. */
+  lifecycleOwner?: "acp";
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
   /** Requester attempt that must settle before this completion row can retire. */

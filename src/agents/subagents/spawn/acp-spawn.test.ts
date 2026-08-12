@@ -1432,6 +1432,21 @@ describe("spawnAcpDirect", () => {
     });
   });
 
+  it("registers ACP children as topology-only lifecycle observers", async () => {
+    const result = await spawnAcpDirect(createSpawnRequest(), createRequesterContext());
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lifecycleOwner: "acp",
+        expectsCompletionMessage: false,
+      }),
+    );
+    expect(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "requesterTurnRunId",
+    );
+  });
+
   it("rejects ACP spawns that exceed subagent max depth", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

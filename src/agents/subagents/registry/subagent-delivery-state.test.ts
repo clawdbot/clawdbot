@@ -41,6 +41,32 @@ describe("normalizeSubagentRunState", () => {
     expect(nonString.taskRunId).toBeUndefined();
   });
 
+  it("upgrades legacy ACP mirrors into topology-only observers", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        childSessionKey: "agent:codex:acp:legacy-child",
+        taskRunId: "legacy-subagent-task",
+        requesterTurnRunId: "requester-turn",
+        requesterTurnYielded: true,
+        retireAfterRequesterTurn: true,
+        requesterSettleWake: { status: "pending", attemptCount: 0 },
+      }),
+    );
+
+    expect(entry).toMatchObject({
+      lifecycleOwner: "acp",
+      expectsCompletionMessage: false,
+      execution: { suppressSessionEffects: true },
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    expect(entry.taskRunId).toBeUndefined();
+    expect(entry.requesterTurnRunId).toBeUndefined();
+    expect(entry.requesterTurnYielded).toBeUndefined();
+    expect(entry.retireAfterRequesterTurn).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
   it("normalizes the durable delete-dispatch boundary", () => {
     const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
     const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));

@@ -455,6 +455,9 @@ function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupCo
       return formatSubagentRecoveryWedgedReason(entry);
     }
   }
+  if (task.runtime === "acp") {
+    return "ACP runtime owner missing after liveness grace";
+  }
   return "backing session missing";
 }
 
@@ -553,6 +556,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   const sessionKey = getNormalizedTaskChildSessionKey(task);
   if (
     !sessionKey ||
+    taskRegistryMaintenanceRuntime.hasActiveAcpTurn(sessionKey) ||
     taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({
       sessionKey,
       excludeTaskId: task.taskId,
@@ -576,13 +580,18 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   return !hasActiveSessionBinding(sessionKey);
 }
 
-function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry): boolean {
+function shouldCloseOrphanedParentOwnedAcpSession(
+  acpEntry: AcpSessionStoreEntry,
+  preserveSessionKeys: ReadonlySet<string>,
+): boolean {
   if (!acpEntry.entry || !acpEntry.acp || !isParentOwnedAcpSessionEntry(acpEntry)) {
     return false;
   }
   const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
   if (
     !sessionKey ||
+    preserveSessionKeys.has(sessionKey) ||
+    taskRegistryMaintenanceRuntime.hasActiveAcpTurn(sessionKey) ||
     taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({ sessionKey })
   ) {
     return false;
@@ -637,7 +646,9 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   }
 }
 
-async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
+async function cleanupOrphanedParentOwnedAcpSessions(
+  preserveSessionKeys: ReadonlySet<string>,
+): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
     acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
@@ -652,7 +663,7 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
       continue;
     }
     seenSessionKeys.add(sessionKey);
-    if (!shouldCloseOrphanedParentOwnedAcpSession(acpEntry)) {
+    if (!shouldCloseOrphanedParentOwnedAcpSession(acpEntry, preserveSessionKeys)) {
       continue;
     }
     const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
@@ -1015,6 +1026,9 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
+  // A newly lost ACP task must not erase its backing state in the same pass;
+  // the next pass rechecks both the turn marker and durable task state.
+  const newlyLostAcpSessionKeys = new Set<string>();
   let processed = 0;
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
@@ -1072,6 +1086,12 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       const next = markTaskLost(freshAfterHook, now, lostContext);
       if (next.status === "lost") {
         reconciled += 1;
+        if (next.runtime === "acp") {
+          const childSessionKey = getNormalizedTaskChildSessionKey(next);
+          if (childSessionKey) {
+            newlyLostAcpSessionKeys.add(childSessionKey);
+          }
+        }
       }
       processed += 1;
       if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
@@ -1108,7 +1128,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       await yieldToEventLoop();
     }
   }
-  await cleanupOrphanedParentOwnedAcpSessions();
+  await cleanupOrphanedParentOwnedAcpSessions(newlyLostAcpSessionKeys);
   if (isPluginStateDatabaseOpen()) {
     try {
       sweepExpiredPluginStateEntries();

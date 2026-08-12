@@ -1,3 +1,4 @@
+import { isAcpSessionKey } from "../../../sessions/session-key-utils.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
@@ -6,8 +7,10 @@ import type {
 } from "./subagent-registry.types.js";
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
+  const isAcpObserver = entry.lifecycleOwner === "acp" || isAcpSessionKey(entry.childSessionKey);
+  entry.lifecycleOwner = isAcpObserver ? "acp" : undefined;
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
-  entry.taskRunId = taskRunId || undefined;
+  entry.taskRunId = !isAcpObserver && taskRunId ? taskRunId : undefined;
   const requesterTurnRunId =
     typeof entry.requesterTurnRunId === "string" ? entry.requesterTurnRunId.trim() : "";
   entry.requesterTurnRunId = requesterTurnRunId || undefined;
@@ -15,6 +18,18 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
   entry.retireAfterRequesterTurn =
     requesterTurnRunId && entry.retireAfterRequesterTurn === true ? true : undefined;
+  if (isAcpObserver) {
+    // Upgrade legacy ACP mirrors into topology-only observers. The canonical
+    // ACP task owns delivery, restart reconciliation, and every session effect.
+    entry.requesterTurnRunId = undefined;
+    entry.requesterTurnYielded = undefined;
+    entry.retireAfterRequesterTurn = undefined;
+    entry.expectsCompletionMessage = false;
+    entry.execution = { ...entry.execution, suppressSessionEffects: true };
+    entry.completion = { ...entry.completion, required: false };
+    entry.delivery = { status: "not_required" };
+    entry.requesterSettleWake = undefined;
+  }
   entry.generation =
     typeof entry.generation === "number" &&
     Number.isSafeInteger(entry.generation) &&

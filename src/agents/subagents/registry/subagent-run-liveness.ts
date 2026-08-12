@@ -3,6 +3,10 @@
  *
  * Ages out stale unended runs while keeping recent/composed child links visible.
  */
+import { isAcpTurnActive } from "../../../acp/control-plane/active-turns.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { isActiveTaskStatus } from "../../../tasks/task-registry-common.js";
+import { listTasksForSessionKeyForStatus } from "../../../tasks/task-status-access.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDurationMs } from "./subagent-run-timeout.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
@@ -18,6 +22,23 @@ const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 export const RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS = 30 * 60 * 1_000;
 const EXPLICIT_TIMEOUT_STALE_GRACE_MS = 60_000;
 const MIN_REALISTIC_RUN_TIMESTAMP_MS = Date.UTC(2020, 0, 1);
+
+export function hasLiveRunOwner(runId: string, entry: SubagentRunRecord): boolean {
+  if (getAgentRunContext(runId)) {
+    return true;
+  }
+  if (entry.lifecycleOwner !== "acp") {
+    return false;
+  }
+  if (isAcpTurnActive(entry.childSessionKey)) {
+    return true;
+  }
+  // The task row is durable, so it remains the ACP observer's liveness
+  // authority while a restarted gateway reconciles its process-local turn map.
+  return listTasksForSessionKeyForStatus(entry.childSessionKey).some(
+    (task) => task.runtime === "acp" && task.runId === runId && isActiveTaskStatus(task.status),
+  );
+}
 
 /** Return whether a subagent run has a finite execution end timestamp. */
 export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } }>(

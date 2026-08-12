@@ -10,6 +10,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const recoverRow = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn<(_runId: string) => unknown>(() => undefined));
+const isAcpTurnActive = vi.hoisted(() => vi.fn<(_sessionKey: string) => boolean>(() => false));
+const listTasksForSessionKeyForStatus = vi.hoisted(() =>
+  vi.fn<(_sessionKey: string) => Array<{ runtime: "acp"; runId: string; status: "running" }>>(
+    () => [],
+  ),
+);
 const removeInternalSessionEffectsSession = vi.hoisted(() => vi.fn(async () => {}));
 const detachedTaskRuntime = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn(() => [] as unknown[]),
@@ -37,6 +43,12 @@ vi.mock("../../../infra/agent-events.js", () => ({
 }));
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext,
+}));
+vi.mock("../../../acp/control-plane/active-turns.js", () => ({
+  isAcpTurnActive,
+}));
+vi.mock("../../../tasks/task-status-access.js", () => ({
+  listTasksForSessionKeyForStatus,
 }));
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession,
@@ -156,6 +168,8 @@ describe("subagent registry recovery scheduling", () => {
     resetGatewayWorkAdmission();
     recoverRow.mockReset();
     getAgentRunContext.mockReset().mockReturnValue(undefined);
+    isAcpTurnActive.mockReset().mockReturnValue(false);
+    listTasksForSessionKeyForStatus.mockReset().mockReturnValue([]);
     killRuntime.abortEmbeddedAgentRun.mockReset().mockReturnValue(false);
     killRuntime.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
     killRuntime.clearSessionQueues.mockReset().mockReturnValue({
@@ -262,6 +276,40 @@ describe("subagent registry recovery scheduling", () => {
 
     expect(recoverRow.mock.calls.length).toBeGreaterThan(4);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+    sweeper.reset();
+  });
+
+  it("uses the canonical ACP task as durable liveness after restart", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness(runtime);
+    entry.lifecycleOwner = "acp";
+    entry.execution.suppressSessionEffects = true;
+    listTasksForSessionKeyForStatus.mockReturnValue([
+      {
+        runtime: "acp",
+        runId: entry.runId,
+        status: "running",
+      },
+    ]);
+
+    await sweeper.sweepOnce();
+
+    expect(recoverRow).not.toHaveBeenCalled();
+    expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    sweeper.reset();
+  });
+
+  it("uses the active ACP turn instead of native run context", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness(runtime);
+    entry.lifecycleOwner = "acp";
+    entry.execution.suppressSessionEffects = true;
+    isAcpTurnActive.mockReturnValue(true);
+
+    await sweeper.sweepOnce();
+
+    expect(recoverRow).not.toHaveBeenCalled();
+    expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
     sweeper.reset();
   });
 

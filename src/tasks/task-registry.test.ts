@@ -2954,7 +2954,7 @@ describe("task-registry", () => {
       expectRecordFields(tasks[0], {
         runId: "run-lost",
         status: "lost",
-        error: "backing session missing",
+        error: "ACP runtime owner missing after liveness grace",
       });
       expectRecordFields(requireTaskById(task.taskId), {
         status: "running",
@@ -3012,7 +3012,7 @@ describe("task-registry", () => {
       });
       expectRecordFields(requireTaskById(task.taskId), {
         status: "lost",
-        error: "backing session missing",
+        error: "ACP runtime owner missing after liveness grace",
       });
       const lostTask = getTaskById(task.taskId);
       expect(lostTask?.cleanupAfter).toBeGreaterThan(now);
@@ -3023,6 +3023,52 @@ describe("task-registry", () => {
         warnings: 1,
       });
       expect(summary.byCode.lost).toBe(1);
+    });
+  });
+
+  it("preserves a newly lost ACP session until a later corroborating sweep", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const parentSessionKey = "agent:main:slack:direct:owner";
+      const childSessionKey = "agent:codex:acp:lost-grace";
+      const task = createTaskFixture("acp", {
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        childSessionKey,
+        runId: "run-acp-lost-grace",
+        task: "Long ACP review",
+        lastEventAt: Date.now() - 10 * 60_000,
+      });
+      const currentTasks = new Map([[task.taskId, task]]);
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const acpEntry = createAcpSessionStoreEntry({
+        sessionKey: childSessionKey,
+        parentSessionKey,
+        mode: "oneshot",
+      });
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [task],
+        acpEntry,
+        acpEntries: [acpEntry],
+        closeAcpSession,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expectRecordFields(currentTasks.get(task.taskId), {
+        status: "lost",
+        error: "ACP runtime owner missing after liveness grace",
+      });
+      expect(closeAcpSession).not.toHaveBeenCalled();
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
     });
   });
 
