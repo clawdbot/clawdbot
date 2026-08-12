@@ -1,4 +1,7 @@
-/** Doctor repair for legacy pre-7.1 boot session entries that block BOOT.md startup. */
+/** Doctor repair for legacy pre-7.1 boot session entries that block BOOT.md startup.
+ * Legacy entries are identified by missing BOTH lifecycleRevision and createdAt —
+ * both provenance fields were introduced in 7.1. An entry with createdAt (even
+ * without lifecycleRevision) is preserved as a valid current mapping. */
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.lifecycle.js";
 import { listSqliteSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite.js";
 import {
@@ -25,13 +28,16 @@ type LegacyBootSessionEntry = {
 };
 
 /**
- * Detects legacy boot entries persisted before the 7.1 lifecycleRevision field.
- * Evidence: sessionKey ends in `:boot`, entry has no lifecycleRevision, and the
- * owning agentId derived from the sessionKey matches.
+ * Detects legacy boot entries persisted before the 7.1 lifecycleRevision and
+ * createdAt provenance fields. Evidence: sessionKey ends in `:boot`, entry has
+ * no lifecycleRevision and no createdAt, and the owning agentId derived from the
+ * sessionKey matches. Entries with createdAt (even absent lifecycleRevision) are
+ * preserved — `createdAt` was introduced alongside `lifecycleRevision`, so an
+ * entry missing both is definitively pre-provenance legacy.
  */
 function isLegacyBootSessionEntry(
   sessionKey: string,
-  entry: { lifecycleRevision?: string },
+  entry: { lifecycleRevision?: string; createdAt?: number },
 ): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -39,7 +45,7 @@ function isLegacyBootSessionEntry(
   }
   const keyParts = sessionKey.split(":");
   const suffix = keyParts.slice(2).join(":");
-  return suffix === "boot" && !entry.lifecycleRevision;
+  return suffix === "boot" && !entry.lifecycleRevision && !entry.createdAt;
 }
 
 /**

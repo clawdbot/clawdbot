@@ -26,7 +26,7 @@ vi.mock("../utils.js", () => ({
 const { detectLegacyBootSessionEntries, repairLegacyBootSessionEntries } =
   await import("./doctor-session-legacy-boot.js");
 
-function makeEntry(overrides?: { lifecycleRevision?: string }) {
+function makeEntry(overrides?: { lifecycleRevision?: string; createdAt?: number }) {
   return {
     sessionId: "session-id",
     updatedAt: 1700000000000,
@@ -67,7 +67,7 @@ describe("detectLegacyBootSessionEntries", () => {
     });
   });
 
-  it("detects boot entries missing lifecycleRevision", () => {
+  it("detects boot entries missing lifecycleRevision and createdAt", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
@@ -85,6 +85,21 @@ describe("detectLegacyBootSessionEntries", () => {
       target: "agent:main:boot",
       path: "/state/agents/main/sessions",
     });
+  });
+
+  it("preserves revision-less boot entries that have createdAt provenance", () => {
+    // A current post-7.1 entry may lack lifecycleRevision but still have
+    // createdAt — the dual-field check prevents deleting valid state.
+    resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
+      { agentId: "main", storePath: "/state/agents/main/sessions" },
+    ]);
+    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+      { sessionKey: "agent:main:boot", entry: makeEntry({ createdAt: 1720000000000 }) },
+    ]);
+
+    const findings = detectLegacyBootSessionEntries({ cfg });
+
+    expect(findings).toEqual([]);
   });
 
   it("propagates lock errors instead of masking them as clean stores", () => {
@@ -132,7 +147,7 @@ describe("detectLegacyBootSessionEntries", () => {
     const findings = detectLegacyBootSessionEntries({ cfg });
 
     expect(findings).toHaveLength(2);
-    expect(findings.map((f) => f.target).sort()).toEqual(["agent:main:boot", "agent:ops:boot"]);
+    expect(findings.map((f) => f.target).toSorted()).toEqual(["agent:main:boot", "agent:ops:boot"]);
   });
 });
 

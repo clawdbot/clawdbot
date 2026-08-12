@@ -1038,7 +1038,6 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   };
 }
 
-
 const legacyBootSessionStateCheck: SplitHealthCheckInput = {
   id: "core/doctor/legacy-boot-session-state",
   kind: "core",
