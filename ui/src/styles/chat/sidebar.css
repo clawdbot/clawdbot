@@ -1639,8 +1639,8 @@ openclaw-session-discussion {
 }
 
 .file-view .tok-deleted {
-  color: #ffa198;
-  background: rgba(248, 81, 73, 0.12);
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
 }
 
 .file-view .tok-inserted {

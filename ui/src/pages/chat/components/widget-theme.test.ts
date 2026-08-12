@@ -110,7 +110,7 @@ describe("widget theme bridge", () => {
     }
 
     vi.stubGlobal("MutationObserver", FakeMutationObserver);
-    stubComputedStyles({ "--accent": "#c41e30" });
+    stubComputedStyles({ "--accent": "#2fbf71" });
     const connectedPost = vi.fn();
     const detachedPost = vi.fn();
     const connected = {

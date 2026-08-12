@@ -123,7 +123,7 @@
 
 .chat-tool-msg-summary--error .chat-tool-msg-summary__icon,
 .chat-tool-msg-summary--error .chat-tool-msg-summary__label {
-  color: var(--destructive, var(--danger, #c0392b));
+  color: var(--destructive, var(--danger, #16a34a));
 }
 
 /* ── Kind-aware tool rows ── */
@@ -1035,7 +1035,7 @@
 }
 
 .chat-activity-group__summary--error {
-  color: var(--destructive, var(--danger, #c0392b));
+  color: var(--destructive, var(--danger, #16a34a));
 }
 
 .chat-activity-group__icon {
