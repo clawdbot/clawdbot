@@ -111,7 +111,9 @@ function createFullModelCatalogAccess(params: {
   isCurrent: () => boolean;
   eagerCatalog?: ModelCatalogSnapshot;
 }): PreparedModelRuntimeCatalogAccess {
-  let fullCatalog = params.eagerCatalog;
+  const eagerCatalog = params.eagerCatalog;
+  // Concurrent readers share discovery, but completed results are discarded so
+  // refreshable providers can publish changed inventory on the next explicit read.
   let pending: Promise<ModelCatalogSnapshot> | undefined;
   const assertCurrent = () => {
     if (!params.isCurrent()) {
@@ -122,8 +124,8 @@ function createFullModelCatalogAccess(params: {
   };
   return {
     loadFullModelCatalog: () => {
-      if (fullCatalog) {
-        return Promise.resolve(fullCatalog);
+      if (eagerCatalog) {
+        return Promise.resolve(eagerCatalog);
       }
       if (!pending) {
         pending = runSerializedPreparedModelRuntimeTask({
@@ -143,8 +145,7 @@ function createFullModelCatalogAccess(params: {
                 isCurrent: params.isCurrent,
               });
               assertCurrent();
-              fullCatalog = catalog;
-              return fullCatalog;
+              return catalog;
             }),
         }).finally(() => {
           pending = undefined;

@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => {
     metadataSnapshot,
     resolvePluginMetadataSnapshot: vi.fn(() => metadataSnapshot),
     resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
-    discoverAuthStorage: vi.fn(() => authStorage),
+    discoverAuthStorage: vi.fn((_agentDir?: string, _options?: unknown) => authStorage),
     discoverModels: vi.fn(() => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
       async (_config: unknown, _agentDir: unknown, _options?: unknown) => ({
@@ -120,8 +120,8 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
-  discoverAuthStorageFacts: (...args: unknown[]) => {
-    const authStorage = mocks.discoverAuthStorage(...args);
+  discoverAuthStorageFacts: (agentDir: string, options?: unknown) => {
+    const authStorage = mocks.discoverAuthStorage(agentDir, options);
     const credentials = authStorage.getAll();
     return {
       authStorage,
@@ -406,20 +406,26 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
     expect(snapshot?.mediaCapabilityProviders).toBeDefined();
-    const fullCatalog = await snapshot?.loadFullModelCatalog?.();
+    await snapshot?.loadFullModelCatalog?.();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+
+    await expect(snapshot?.loadFullModelCatalog?.()).resolves.toEqual({
+      entries: [],
+      routeVariants: [],
+    });
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.discoverModels).toHaveBeenCalledOnce();
 
     mocks.mutationListener?.({
       agentDir: "/tmp/prepared-static-agent",
       affectsInheritedStores: false,
     });
-    await expect(snapshot?.loadFullModelCatalog?.()).resolves.toBe(fullCatalog);
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
-    expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
+    await expect(snapshot?.loadFullModelCatalog?.()).rejects.toThrow("superseded");
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
   });
 
   it("publishes exact dynamic configured models without building a live catalog", async () => {

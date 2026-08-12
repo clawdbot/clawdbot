@@ -35,7 +35,7 @@ describe("prepared model catalog worker input", () => {
         input: { agentDir: "/tmp/agent", config: {}, workspaceDir: "/tmp/workspace" },
         env: {},
         authStore,
-        credentials: { shared: { type: "oauth", ...authStore.profiles["shared:named"] } },
+        credentials: { shared: { ...authStore.profiles["shared:named"] } },
         providerIds: ["configured"],
         configuredModelRefs: [],
         configuredRuntimeModels: [],

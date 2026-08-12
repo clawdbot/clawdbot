@@ -44,6 +44,10 @@ module.exports = {
       label: "Worker catalog fixture",
       auth: [],
       augmentModelCatalog(context) {
+        const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
+        const invocation = fs.existsSync(marker)
+          ? fs.readFileSync(marker, "utf8").split("start\\n").length
+          : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
         const until = Date.now() + ${params.spinMs};
         while (Date.now() < until) {}
@@ -54,7 +58,7 @@ module.exports = {
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "done\\n");
         return [{
           provider: ${JSON.stringify(PROVIDER_ID)},
-          id: \`proof-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`,
+          id: \`proof-refresh-\${invocation}-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`,
           name: "Worker boundary proof",
         }];
       },
@@ -155,7 +159,7 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
-  it("keeps the event loop responsive and preserves complete prepared auth and SQLite facts", async () => {
+  it("shares in-flight discovery but reruns completed refreshes with prepared auth and SQLite facts", async () => {
     const fixture = await createStaticSnapshot(750);
     let settled = false;
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
@@ -170,11 +174,20 @@ describe("prepared model catalog worker boundary", () => {
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({
         provider: PROVIDER_ID,
-        id: "proof-sqlite-true-shared-true-unrelated-true",
+        id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
       }),
     );
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
-    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toEqual(
+      expect.objectContaining({
+        entries: expect.arrayContaining([
+          expect.objectContaining({
+            provider: PROVIDER_ID,
+            id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
+          }),
+        ]),
+      }),
+    );
+    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
   });
 
   it("terminates discovery when its owning generation is superseded", async () => {
