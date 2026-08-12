@@ -46,6 +46,14 @@ function branchList(name = "main") {
   };
 }
 
+function deviceEnvironment(nodeId: string) {
+  return {
+    id: `node:${nodeId}`,
+    type: "node",
+    status: "available",
+  };
+}
+
 async function withNewSessionPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
@@ -295,12 +303,17 @@ suite.define(() => {
               },
             ],
           },
+          "environments.list": {
+            environments: [deviceEnvironment("old-device")],
+            profiles: [],
+          },
           "worktrees.branches": branchList(),
           "sessions.create": { key: "agent:main:validated-device" },
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
+      await gateway.waitForRequest("environments.list");
       const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
       await page.locator("#new-session-place-trigger").click();
       await placeSelect.getByRole("button", { name: "Old device" }).click();
@@ -343,12 +356,17 @@ suite.define(() => {
               },
             ],
           },
+          "environments.list": {
+            environments: [deviceEnvironment("old-device")],
+            profiles: [],
+          },
           "worktrees.branches": branchList("alpha"),
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.getByRole("heading", { name: "Original agent" }).waitFor();
       await gateway.waitForRequest("node.list");
+      await gateway.waitForRequest("environments.list");
       await gateway.waitForRequest("worktrees.branches");
 
       const message = page.locator(".new-session-page__message");
@@ -379,9 +397,14 @@ suite.define(() => {
           },
         ],
       });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [deviceEnvironment("new-device")],
+        profiles: [],
+      });
       await gateway.setMethodResponse("worktrees.branches", branchList("beta"));
       const socketsBefore = await gateway.getSocketCount();
       const nodesBefore = (await gateway.getRequests("node.list")).length;
+      const environmentsBefore = (await gateway.getRequests("environments.list")).length;
       const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await replaceGatewayClient(page);
@@ -390,6 +413,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBe(nodesBefore + 1);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(environmentsBefore + 1);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchesBefore + 1);

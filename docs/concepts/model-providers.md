@@ -108,8 +108,8 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Example models: `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`; the bare direct-API `openai/gpt-5.6` alias remains supported.
 - Verify account/model availability with `openclaw models list --provider openai` if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
-- Default transport is `auto`; OpenClaw passes the transport choice to the shared model runtime.
-- Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- Direct OpenAI API-key Responses requests default to `"sse"`.
+- Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, `"websocket-cached"`, or `"auto"`). Cached WebSockets reuse the session connection and send only new input with `previous_response_id` when history still matches.
 - Set an explicit OpenAI API service tier with `params.serviceTier` or `params.service_tier`; Fast mode (formerly Priority processing) uses `service_tier=priority`.
 - On native public OpenAI and ChatGPT/Codex Responses requests, precedence is payload/transport `service_tier`, then a valid explicit model param, then the fast-mode default.
 - `/fast` and valid `params.fastMode` / `params.fast_mode` values are shared agent-runtime controls; on direct embedded `openai/*` Responses requests they supply `service_tier=priority` only when no higher-precedence tier exists.

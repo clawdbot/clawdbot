@@ -35,7 +35,7 @@ import {
 } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionRow,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -84,7 +84,7 @@ function readTranscriptUpdateLifecycleOwner(
   const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
   const entry = storePath
     ? loadAccessorSessionEntryReadOnly({ agentId, sessionKey, storePath })
-    : loadSessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
+    : loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
   if (!entry || (sessionId && entry.sessionId !== sessionId)) {
     return undefined;
   }
@@ -300,7 +300,7 @@ async function handleTranscriptUpdateBroadcast(
           }),
           storePath: updateStorePath,
         }
-      : loadSessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
+      : loadGatewaySessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
     const entry = fallbackTarget?.entry;
     const messageSessionId =
       compatibleLegacyMarker?.sessionId ??

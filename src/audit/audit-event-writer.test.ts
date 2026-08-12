@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -7,6 +8,7 @@ import {
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -18,6 +20,11 @@ import {
   inspectExecutionIdentityRun,
   processExecutionIdentityAdmissionWork,
 } from "./execution-identity-context.js";
+
+function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
+  Object.defineProperties(Object.prototype, descriptors);
+}
 
 function captureExecutionIdentityAdmissionEnvelope(
   facts: ExecutionIdentityAdmissionFacts,
@@ -68,6 +75,32 @@ function input(): AuditEventInput {
   };
 }
 
+function decisionReceipt(): DecisionReceiptV1 {
+  return {
+    schemaVersion: 1,
+    receiptId: "worker-decision",
+    contextId: "worker-context",
+    executionId: "worker-execution",
+    runId: "worker-run",
+    occurredAt: Date.now(),
+    action: { family: "tool", operation: "policy" },
+    decision: { outcome: "denied", reasonCode: "tool_policy_denied" },
+    enforcement: {
+      coverageState: "enforced",
+      policyRefs: ["tool-policy:deny"],
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "tool-policy",
+      recordRef: "worker-record",
+      decisionBoundary: "agent-tool.before-call",
+    },
+    missingEvidence: [],
+    remediation: [{ code: "choose_allowed_tool", text: "Choose an allowed tool and retry." }],
+  };
+}
+
 function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
   return { kind: "capture" as const, envelope };
 }
@@ -111,6 +144,48 @@ describe("audit event worker", () => {
         .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_decision_facts"),
+    ).toBeUndefined();
+  });
+
+  it("persists a generic decision through the bounded worker queue", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    await writer.ready;
+    const receipt = decisionReceipt();
+    const envelope = captureExecutionIdentityAdmissionEnvelope(
+      {
+        runId: receipt.runId,
+        agentId: "main",
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+        runtime: { kind: "embedded" },
+      },
+      {
+        contextId: receipt.contextId,
+        executionId: receipt.executionId,
+        runtimeInstanceId: "worker-runtime",
+        now: receipt.occurredAt,
+      },
+    );
+    expect(writer.recordExecutionIdentity(captureWork(envelope))).toBe(true);
+    expect(writer.recordExecutionDecision(receipt)).toBe(true);
+    await writer.stop();
+
+    expect(errors).toEqual([]);
+    expect(
+      pageExecutionDecisionFactsForContext({
+        context: receipt,
+        limit: 10,
+        now: receipt.occurredAt,
+        database,
+      }).receipts,
+    ).toEqual([receipt]);
   });
 
   it("keeps the shared queue nonblocking under a held write lock and flushes before stop", async () => {
@@ -151,7 +226,11 @@ describe("audit event worker", () => {
               rawSourceRef: "raw-ingress-secret",
             },
             runtime: { kind: "embedded" },
-            invoker: { kind: "local-account", rawPrincipalRef: "raw-principal-secret" },
+            invoker: {
+              state: "present",
+              kind: "local-account",
+              rawPrincipalRef: "raw-principal-secret",
+            },
           },
           {
             enabled: true,
@@ -225,6 +304,181 @@ describe("audit event worker", () => {
     }
   });
 
+  it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
+    const admittedAt = Date.now();
+    const inheritedRefs = {
+      invoker: "raw-inherited-principal",
+      applicableGrants: "raw-inherited-grant",
+      assurance: "raw-inherited-assurance",
+      rawSourceRef: "raw-inherited-source",
+    } as const;
+    const prior = new Map(
+      Object.keys(inheritedRefs).map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(Object.prototype, key),
+      ]),
+    );
+    let inheritedInvokerReads = 0;
+
+    try {
+      try {
+        defineObjectPrototypeProperties({
+          invoker: {
+            configurable: true,
+            enumerable: false,
+            get: () => {
+              inheritedInvokerReads += 1;
+              return {
+                state: "present",
+                kind: "local-account",
+                rawPrincipalRef: inheritedRefs.invoker,
+              };
+            },
+          },
+          applicableGrants: {
+            configurable: true,
+            enumerable: false,
+            value: [{ rawGrantRef: inheritedRefs.applicableGrants, state: "present" }],
+          },
+          assurance: {
+            configurable: true,
+            enumerable: false,
+            value: [
+              {
+                kind: "other",
+                rawEvidenceRef: inheritedRefs.assurance,
+                strength: "self-asserted",
+              },
+            ],
+          },
+          rawSourceRef: {
+            configurable: true,
+            enumerable: false,
+            value: inheritedRefs.rawSourceRef,
+          },
+        });
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(
+            {
+              runId: "absent-invoker-run",
+              agentId: "main",
+              ingress: {
+                kind: "local-cli",
+                boundary: "agent-command.local",
+                state: "present",
+              },
+              runtime: { kind: "embedded" },
+            },
+            {
+              enabled: true,
+              contextId: "absent-invoker-context",
+              executionId: "absent-invoker-execution",
+              now: admittedAt,
+              runtimeInstanceId: "private-absent-runtime-reference",
+            },
+          ),
+        ).toEqual({
+          candidateContextId: "absent-invoker-context",
+          candidateExecutionId: "absent-invoker-execution",
+          accepted: true,
+        });
+      } finally {
+        for (const [key, descriptor] of prior) {
+          if (descriptor) {
+            defineObjectPrototypeProperties({ [key]: descriptor });
+          } else {
+            delete (Object.prototype as Record<string, unknown>)[key];
+          }
+        }
+      }
+
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(
+          {
+            runId: "unknown-invoker-run",
+            agentId: "main",
+            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+            runtime: { kind: "embedded" },
+            invoker: { state: "unknown" },
+          },
+          {
+            enabled: true,
+            contextId: "unknown-invoker-context",
+            executionId: "unknown-invoker-execution",
+            now: admittedAt + 1,
+            runtimeInstanceId: "private-unknown-runtime-reference",
+          },
+        ),
+      ).toEqual({
+        candidateContextId: "unknown-invoker-context",
+        candidateExecutionId: "unknown-invoker-execution",
+        accepted: true,
+      });
+    } finally {
+      clearSink();
+      await writer.stop();
+    }
+
+    const absentInspection = inspectExecutionIdentityRun(
+      { executionId: "absent-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    const unknownInspection = inspectExecutionIdentityRun(
+      { executionId: "unknown-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    expect(inheritedInvokerReads).toBe(0);
+    expect(errors).toEqual([]);
+    expect(absentInspection).toMatchObject({
+      identity: {
+        state: "present",
+        context: {
+          invoker: { state: "absent" },
+          ingress: { state: "present" },
+          applicableGrants: [],
+          assurance: [{ kind: "runtime-binding", strength: "boundary-verified" }],
+          coverageState: "unattributed",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
+    });
+    expect(unknownInspection).toMatchObject({
+      identity: {
+        state: "present",
+        context: {
+          invoker: { state: "unknown" },
+          coverageState: "unknown",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      coverage: { state: "unknown", missingEvidence: ["invoker.principal"] },
+    });
+    const persisted = openOpenClawStateDatabase(database)
+      .db.prepare(
+        "SELECT context_json FROM execution_identity_contexts WHERE execution_id IN (?, ?) ORDER BY execution_id",
+      )
+      .all("absent-invoker-execution", "unknown-invoker-execution") as Array<{
+      context_json: string;
+    }>;
+    const publicAndStored = JSON.stringify({
+      errors,
+      absentInspection,
+      unknownInspection,
+      persisted,
+    });
+    for (const rawRef of Object.values(inheritedRefs)) {
+      expect(publicAndStored).not.toContain(rawRef);
+    }
+    expect(publicAndStored).not.toContain("private-absent-runtime-reference");
+    expect(publicAndStored).not.toContain("private-unknown-runtime-reference");
+  });
+
   it("prunes expired identity contexts before preserving exact-envelope conflicts", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -276,7 +530,11 @@ describe("audit event worker", () => {
           rawSourceRef: "raw-conflict-source",
         },
         runtime: { kind: "embedded" },
-        invoker: { kind: "local-account", rawPrincipalRef: "raw-conflict-principal" },
+        invoker: {
+          state: "present",
+          kind: "local-account",
+          rawPrincipalRef: "raw-conflict-principal",
+        },
       },
       {
         contextId: "ordered-context",
@@ -456,6 +714,19 @@ describe("audit event worker", () => {
     };
     expect(writer.recordExecutionIdentity(captureWork(unserializable as never))).toBe(false);
     expect(writer.recordExecutionIdentity({ rawSecret } as never)).toBe(true);
+    const invalidUnknown = {
+      ...captureExecutionIdentityAdmissionEnvelope(
+        {
+          runId: "invalid-unknown-run",
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local" },
+          runtime: { kind: "embedded" },
+        },
+        { runtimeInstanceId: "runtime-1" },
+      ),
+      invoker: { state: "unknown", rawPrincipalRef: rawSecret },
+    };
+    expect(writer.recordExecutionIdentity(captureWork(invalidUnknown as never))).toBe(true);
     expect(
       writer.recordExecutionIdentity(
         captureWork(

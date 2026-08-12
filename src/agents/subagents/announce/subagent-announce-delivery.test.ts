@@ -1313,6 +1313,45 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
+  it.each([
+    {
+      name: "intentional suppression",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      disposition: "intentional_non_delivery",
+    },
+    {
+      name: "adapter ambiguity",
+      suppressionReason: "adapter_returned_no_identity",
+      disposition: "ambiguous",
+    },
+  ] as const)("reports $name from direct text completion fallback", async (testCase) => {
+    const callGateway = createPayloadGatewayMock();
+    const onDeliveryResult = vi.fn();
+    const sendMessage = vi.fn(async () => ({
+      channel: "discord",
+      to: "dm:U123",
+      via: "direct" as const,
+      mediaUrl: null,
+      deliveryStatus: "suppressed" as const,
+      suppressionReason: testCase.suppressionReason,
+    })) as unknown as typeof runtimeSendMessage;
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      onDeliveryResult,
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      disposition: testCase.disposition,
+    });
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("sanitizes and bounds text before direct completion fallback delivery", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();

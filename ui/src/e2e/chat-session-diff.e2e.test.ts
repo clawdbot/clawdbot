@@ -84,40 +84,99 @@ describeControlUiE2e("session diff panel", () => {
   it("opens the diff sidebar with per-file patches and gap markers", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const metadata = {
+      aheadCount: 2,
+      commits: [
+        { sha: "def5678", subject: "Second feature change" },
+        { sha: "abc1234", subject: "First feature change" },
+      ],
+      mergeBase: { sha: "0011223", subject: "Initial commit" },
+    };
+    const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
       methodResponses: {
         "sessions.diff": {
-          sessionKey: "main",
-          root: "/tmp/checkout",
-          branch: "feature/panel",
-          baseRef: "main",
-          files: [
+          cases: [
             {
-              path: "src/app.ts",
-              status: "modified",
-              additions: 2,
-              deletions: 1,
-              patch: APP_PATCH,
+              match: { scope: "uncommitted" },
+              response: {
+                sessionKey: "main",
+                root: "/tmp/checkout",
+                branch: "feature/panel",
+                baseRef: "main",
+                ...metadata,
+                files: [
+                  {
+                    path: "notes.md",
+                    status: "added",
+                    additions: 2,
+                    deletions: 0,
+                    untracked: true,
+                    patch: NOTES_PATCH,
+                  },
+                ],
+                additions: 2,
+                deletions: 0,
+              },
             },
             {
-              path: "notes.md",
-              status: "added",
-              additions: 2,
-              deletions: 0,
-              untracked: true,
-              patch: NOTES_PATCH,
+              match: { scope: "commit", commit: "abc1234" },
+              response: {
+                sessionKey: "main",
+                root: "/tmp/checkout",
+                branch: "feature/panel",
+                baseRef: "main",
+                ...metadata,
+                files: [
+                  {
+                    path: "src/app.ts",
+                    status: "modified",
+                    additions: 2,
+                    deletions: 1,
+                    patch: APP_PATCH,
+                  },
+                ],
+                additions: 2,
+                deletions: 1,
+              },
             },
             {
-              path: "logo.png",
-              status: "modified",
-              additions: 0,
-              deletions: 0,
-              binary: true,
+              match: { scope: "all" },
+              response: {
+                sessionKey: "main",
+                root: "/tmp/checkout",
+                branch: "feature/panel",
+                baseRef: "main",
+                ...metadata,
+                files: [
+                  {
+                    path: "src/app.ts",
+                    status: "modified",
+                    additions: 2,
+                    deletions: 1,
+                    patch: APP_PATCH,
+                  },
+                  {
+                    path: "notes.md",
+                    status: "added",
+                    additions: 2,
+                    deletions: 0,
+                    untracked: true,
+                    patch: NOTES_PATCH,
+                  },
+                  {
+                    path: "logo.png",
+                    status: "modified",
+                    additions: 0,
+                    deletions: 0,
+                    binary: true,
+                  },
+                ],
+                additions: 4,
+                deletions: 1,
+              },
             },
           ],
-          additions: 4,
-          deletions: 1,
         },
       },
     });
@@ -130,14 +189,23 @@ describeControlUiE2e("session diff panel", () => {
     await expect
       .poll(() => panel.locator(".session-diff__branch-label").textContent())
       .toBe("main → feature/panel");
+    await expect
+      .poll(async () =>
+        (await panel.locator(".session-diff__summary .chat-diffstat").textContent())?.replace(
+          /\s/g,
+          "",
+        ),
+      )
+      .toBe("+3~1");
 
     const files = panel.locator(".session-diff__file");
     await expect.poll(() => files.count()).toBe(3);
 
     const modified = files.first();
     await expect
-      .poll(() => modified.locator(".session-diff__path").textContent())
-      .toContain("src/app.ts");
+      .poll(() => modified.locator(".session-diff__filename").textContent())
+      .toBe("app.ts");
+    await expect.poll(() => modified.locator(".session-diff__directory").textContent()).toBe("src");
     // Hunk starting at old line 10 renders a leading gap marker.
     await expect
       .poll(() => modified.locator(".chat-diff__row--skip").first().textContent())
@@ -156,11 +224,47 @@ describeControlUiE2e("session diff panel", () => {
       .poll(() => binary.locator(".session-diff__note").textContent())
       .toContain("Binary file");
 
-    // Collapsing a file hides its diff body.
-    await modified.locator(".session-diff__file-header").click();
-    await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
-    await modified.locator(".session-diff__file-header").click();
+    await panel.getByRole("button", { name: "Change view options" }).click();
+    await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
+    await expect.poll(() => modified.locator(".session-diff-split").count()).toBe(1);
+    await panel.getByRole("button", { name: "Change view options" }).click();
+    await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
+    // View-only toggles reuse parsed patches and do not refetch the RPC.
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
+
+    // Collapsing a file hides its diff body.
+    await modified.locator(".session-diff__file-toggle").click();
+    await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
+    await panel.getByRole("button", { name: "Refresh changes" }).click();
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
+    // Refresh keeps the current collapse state instead of expanding every file.
+    await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
+    await modified.locator(".session-diff__file-toggle").click();
+    await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
+
+    await panel.getByRole("button", { name: "Choose change scope" }).click();
+    await page
+      .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:uncommitted"]')
+      .click();
+    await expect
+      .poll(() => panel.locator(".session-diff__section-title").textContent())
+      .toBe("Uncommitted");
+    await expect.poll(() => panel.locator(".session-diff__file").count()).toBe(1);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
+      .toMatchObject({ scope: "uncommitted" });
+
+    await panel.getByRole("button", { name: "Choose change scope" }).click();
+    await page
+      .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:commit:abc1234"]')
+      .click();
+    await expect
+      .poll(() => panel.locator(".session-diff__section-title").textContent())
+      .toBe("abc1234 First feature change");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
+      .toMatchObject({ scope: "commit", commit: "abc1234" });
   });
 
   it("hides the diff toggle until the workspace becomes a git checkout", async () => {

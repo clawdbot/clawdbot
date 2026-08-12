@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
@@ -236,11 +237,7 @@ async function extractManifest(params: {
       manifestContentPromise =
         entry.size > MAX_MANIFEST_BYTES
           ? Promise.resolve(limitError)
-          : entry
-              .concat()
-              .catch((error: unknown) =>
-                error instanceof Error ? error : new Error(String(error)),
-              );
+          : entry.concat().catch((error: unknown) => toStringifiedError(error));
     },
   });
 

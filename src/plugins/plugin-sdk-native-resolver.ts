@@ -92,22 +92,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     ],
   },
   {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["base64", "base64.ts"],
-      ["constants", "constants.ts"],
-      ["content-length", "content-length.ts"],
-      ["file-name", "file-name.ts"],
-      ["inbound-path-policy", "inbound-path-policy.ts"],
-      ["inline-image-data-url", "inline-image-data-url.ts"],
-      ["media-source-url", "media-source-url.ts"],
-      ["mime", "mime.ts"],
-      ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
-    ],
-  },
-  {
     packageName: "@openclaw/llm-core",
     packageDir: "llm-core",
     subpaths: [
@@ -341,7 +325,7 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    ...["normalization-core", "acp-core"].map((packageDir) => ({
+    ...["media-core", "normalization-core", "acp-core"].map((packageDir) => ({
       packageName: `@openclaw/${packageDir}`,
       packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({

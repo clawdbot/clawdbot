@@ -656,6 +656,23 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface ExecutionDecisionFacts {
+  action_family: string;
+  action_id: string | null;
+  context_id: string;
+  coverage_state: string;
+  decision_outcome: string;
+  execution_id: string;
+  occurred_at: number;
+  owner: string;
+  reason_code: string;
+  receipt_bytes: number;
+  receipt_id: string;
+  receipt_json: string;
+  run_id: string;
+  source_ref: string;
+}
+
 export interface ExecutionIdentityContexts {
   context_bytes: number;
   context_id: string;
@@ -1702,6 +1719,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_decision_facts: ExecutionDecisionFacts;
   execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;

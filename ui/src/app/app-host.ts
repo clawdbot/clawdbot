@@ -65,6 +65,7 @@ import {
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
+  DEVICE_PAIR_SETUP_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -135,6 +136,7 @@ class OpenClawShell
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
+  readonly devicePairSetupElement = DEVICE_PAIR_SETUP_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
@@ -544,6 +546,9 @@ class OpenClawShell
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       preloadOptionalElement(this, this.execApprovalElement);
+    }
+    if (context.overlays?.snapshot.devicePairSetupOpen) {
+      preloadOptionalElement(this, this.devicePairSetupElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),

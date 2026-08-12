@@ -104,7 +104,6 @@ export async function summarizeText(
     cfg,
     provider: ref.provider,
     modelId: ref.model,
-    useAsyncModelResolution: true,
   });
   if ("error" in prepared) {
     throw new Error(prepared.error);

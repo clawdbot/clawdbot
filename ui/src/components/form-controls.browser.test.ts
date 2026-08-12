@@ -485,6 +485,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
               <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
+              <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
                 <span class="session-row-trail">3m</span>
@@ -509,6 +510,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
             agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
+            settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
           };
         });
@@ -520,6 +522,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         coarsePointer: true,
         agentFilter: 16,
         fileSearch: 16,
+        settingsSearch: 16,
         navItem: 12,
       });
 
@@ -531,6 +534,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
       expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
     } finally {
       await page.close().catch(() => {});

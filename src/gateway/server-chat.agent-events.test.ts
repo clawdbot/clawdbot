@@ -75,7 +75,7 @@ vi.mock("./session-utils.js", () => {
   }));
   return {
     loadSessionEntry,
-    loadSessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadSessionEntry,
   };
 });
 

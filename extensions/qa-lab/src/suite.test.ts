@@ -608,6 +608,15 @@ describe("qa suite", () => {
         evidence?: unknown;
       };
       expect(summary.evidence).toBeUndefined();
+      if (process.platform !== "win32") {
+        for (const artifactPath of [
+          artifacts.reportPath,
+          artifacts.evidencePath,
+          artifacts.summaryPath,
+        ]) {
+          expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+        }
+      }
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }

@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
 
-function parseBoolean(value: string | undefined) {
+function isTruthyNpmTelegramEnvValue(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
@@ -147,7 +147,7 @@ async function shouldFailPackageTelegramRun(
   result: { summaryPath: string },
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  if (parseBoolean(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
+  if (isTruthyNpmTelegramEnvValue(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
     return false;
   }
   const { readQaSuiteFailedOrSkippedScenarioCountFromFile } =
@@ -224,7 +224,7 @@ async function main() {
     providerMode,
     primaryModel,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
-    fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
+    fastMode: isTruthyNpmTelegramEnvValue(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
     resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
     roundTripProbe: createRoundTripProbe(rttOptions),

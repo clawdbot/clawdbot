@@ -25,6 +25,7 @@ import {
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
+import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
@@ -38,6 +39,7 @@ import type {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
@@ -185,6 +187,18 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           detail: { open: true },
         }),
       );
+    const browserPanelAction = sessionWorkspace.onToggleBrowser
+      ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-browser-panel-toggle"
+            type="button"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>`
+      : nothing;
     const desktopPanelAction = desktopPanelAvailable
       ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
           <button
@@ -209,6 +223,14 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         onActivate: sessionWorkspace.onToggleTerminal,
       });
     }
+    if (sessionWorkspace.onToggleBrowser) {
+      panelMenuActions.push({
+        id: "browser",
+        label: t("browser.toggle"),
+        icon: icons.globe,
+        onActivate: sessionWorkspace.onToggleBrowser,
+      });
+    }
     if (desktopPanelAvailable) {
       panelMenuActions.push({
         id: "desktop",
@@ -230,7 +252,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelMenuActions.push({
         id: "changes",
         label: t("chat.sessionDiff.show"),
-        icon: icons.fileDiff,
+        icon: icons.diff,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }
@@ -290,6 +312,11 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         onActivate: () => this.onSplitRight?.(this.paneId),
       });
     }
+    const placement = resolveChatPanePlacement({
+      gatewaySnapshot: this.context.gateway.snapshot,
+      reclaimingKey: this.headerPlacementReclaimingKey,
+      row,
+    });
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -308,6 +335,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
+      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches:
         this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
@@ -322,7 +350,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         this.state,
         this.catalogSession,
         sessionWorkspace.onToggleTerminal,
-      )}${desktopPanelAction}`,
+      )}${browserPanelAction}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(discussion),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
@@ -430,6 +458,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`
           : nothing,
+      placementReclaimDisabledReason: placement.reclaimDisabledReason,
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
@@ -449,6 +478,10 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
+      onOpenParentSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+      onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,

@@ -130,6 +130,7 @@ struct MacNodeRuntimeTests {
         var actError: Error?
         var performCallCount = 0
         var releaseCallCount = 0
+        var locationStatus: CLAuthorizationStatus
         var receivedLifecycleGenerations: [UInt64] = []
         var receivedReleaseGenerations: [UInt64] = []
         private let snapshotInspection: SnapshotInspection?
@@ -147,6 +148,7 @@ struct MacNodeRuntimeTests {
             snapshotError: Error? = nil,
             snapshotInspection: SnapshotInspection? = nil,
             actError: Error? = nil,
+            locationAuthorizationStatus: CLAuthorizationStatus = .authorizedAlways,
             performEnteredGate: AsyncTestGate? = nil,
             allowPerformGate: AsyncTestGate? = nil)
         {
@@ -154,6 +156,7 @@ struct MacNodeRuntimeTests {
             self.snapshotError = snapshotError
             self.snapshotInspection = snapshotInspection
             self.actError = actError
+            self.locationStatus = locationAuthorizationStatus
             self.performEnteredGate = performEnteredGate
             self.allowPerformGate = allowPerformGate
         }
@@ -192,7 +195,7 @@ struct MacNodeRuntimeTests {
         }
 
         func locationAuthorizationStatus() -> CLAuthorizationStatus {
-            .authorizedAlways
+            self.locationStatus
         }
 
         func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
@@ -450,6 +453,30 @@ struct MacNodeRuntimeTests {
             let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
             #expect(response.error?.message.contains("CAMERA_DISABLED") == true)
+        }
+    }
+
+    @Test func `handle location invoke applies authorization required by mode`() async throws {
+        let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
+        let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
+            (.whileUsing, authorizedWhenInUse, true),
+            (.always, authorizedWhenInUse, false),
+            (.whileUsing, .authorizedAlways, true),
+            (.always, .authorizedAlways, true),
+        ]
+
+        for testCase in cases {
+            await TestIsolation.withUserDefaultsValues([locationModeKey: testCase.mode.rawValue]) {
+                let services = await MainActor.run {
+                    MainActorServicesProbe(locationAuthorizationStatus: testCase.status)
+                }
+                let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+                let response = await self.invoke(
+                    runtime, "req-location", OpenClawLocationCommand.get.rawValue)
+
+                #expect(response.ok == testCase.accepted)
+            }
         }
     }
 

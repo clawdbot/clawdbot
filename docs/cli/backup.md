@@ -4,6 +4,7 @@ read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You need a compact, verified snapshot of one OpenClaw SQLite database
   - You want to preview which paths would be included before reset or uninstall
+  - You want to restore from a `.tar.gz` archive previously created by `openclaw backup`
 title: "Backup"
 ---
 
@@ -29,6 +30,8 @@ openclaw backup sqlite restore ~/Backups/openclaw-sqlite/<snapshot-id> --target 
 
 Archive `create` and `verify`, plus SQLite `create`, `list`, `verify`, and
 `restore`, accept `--json` for one machine-readable result on stdout.
+
+OpenClaw does not currently provide an `openclaw backup restore` command. Follow [Restore a full archive](/install/backups#restore-a-full-archive) for the manual, manifest-driven copy-back flow.
 
 ## Notes
 
@@ -138,3 +141,5 @@ Large workspaces are usually the main driver of archive size. Use `--no-include-
 ## Related
 
 - [CLI reference](/cli)
+- [Migrating an OpenClaw install](/install/migrating)
+- [Restore a full archive](/install/backups#restore-a-full-archive)

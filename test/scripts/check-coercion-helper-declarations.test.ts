@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  auditCanonicalCoercionExports,
   auditCoercionHelperDeclarations,
   findBannedCoercionHelperDeclarations,
+  findExportedCallableNames,
   isGovernedCoercionHelperPath,
   runCoercionHelperDeclarationGuard,
   type CoercionHelperCarveOut,
@@ -238,6 +240,68 @@ describe("coercion helper declaration AST guard", () => {
     ).toBe(true);
     expect(isGovernedCoercionHelperPath("root.config.ts")).toBe(true);
     expect(isGovernedCoercionHelperPath(".github/actions/example/index.ts")).toBe(true);
+  });
+
+  it("finds directly exported callable declarations and export aliases", () => {
+    const source = [
+      "export function canonical() {}",
+      "function local() {}",
+      "export { local as alias };",
+      "export const VALUE = 1;",
+    ].join("\n");
+
+    expect(findExportedCallableNames(source, "src/owner.ts")).toEqual(["alias", "canonical"]);
+  });
+
+  it.each([
+    ["classified", ["kept"], [{ file: "src/owner.ts", name: "kept", status: "enforced" }]],
+    [
+      "deferred",
+      ["format"],
+      [
+        {
+          file: "src/owner.ts",
+          name: "format",
+          status: "deferred",
+          reason: "Meaningful public collision.",
+        },
+      ],
+    ],
+  ] as const)("accepts a %s canonical export", (_label, names, classifications) => {
+    expect(
+      auditCanonicalCoercionExports(new Map([["src/owner.ts", names]]), classifications),
+    ).toEqual({
+      invalidClassifications: [],
+      staleClassifications: [],
+      unclassifiedExports: [],
+    });
+  });
+
+  it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {
+    const kept = { file: "src/owner.ts", name: "kept", status: "enforced" } as const;
+    const removed = {
+      file: "src/owner.ts",
+      name: "removed",
+      status: "deferred",
+      reason: "Removed owner.",
+    } as const;
+    const blank = {
+      file: "src/other.ts",
+      name: "unknown",
+      status: "deferred",
+      reason: "",
+    } as const;
+    const audit = auditCanonicalCoercionExports(
+      new Map([["src/owner.ts", ["kept", "newHelper"]]]),
+      [kept, kept, removed, blank],
+    );
+
+    expect(audit.invalidClassifications).toEqual([
+      "src/owner.ts [kept] is classified more than once",
+      "src/other.ts [unknown] needs a non-empty deferred reason",
+    ]);
+    expect(audit.unclassifiedExports).toEqual([{ file: "src/owner.ts", name: "newHelper" }]);
+    expect(audit.staleClassifications).toEqual([removed, blank]);
   });
 
   it("scans a temporary repository and reports sorted, owner-specific diagnostics", () => {

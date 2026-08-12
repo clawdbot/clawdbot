@@ -21,7 +21,12 @@ import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js
 import type { TelegramTransport } from "./fetch.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
-const downstreamTurns = vi.hoisted(() => vi.fn());
+const downstreamTurns = vi.hoisted(() =>
+  vi.fn(async (_ctx: MsgContext) => ({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  })),
+);
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramApiBase: (apiRoot?: string) => apiRoot ?? "https://api.telegram.org",
@@ -39,8 +44,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
       await runTelegramChannelInboundEventWithHarness(actual, params, async (dispatchParams) => {
-        downstreamTurns(dispatchParams.ctx);
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        return await downstreamTurns(dispatchParams.ctx);
       }),
   };
 });
@@ -255,7 +259,9 @@ describe("Telegram durable ingress coalescing", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
     activeResources = [];
-    downstreamTurns.mockClear();
+    downstreamTurns
+      .mockReset()
+      .mockResolvedValue({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
     resetInboundDedupe();
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramAccountThrottlersForTest();
@@ -527,6 +533,42 @@ describe("Telegram durable ingress coalescing", () => {
     expect(turn.Body).toContain("First note");
     expect(turn.Body).toContain("Second note");
     await assertSpoolTombstoned({ spoolDir, updateIds: [401, 402] });
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
+  it("releases a stale forwarded claim once when custom debounce dispatch fails", async () => {
+    const update = forwardedTextUpdate({
+      updateId: 701,
+      messageId: 1,
+      text: "recovered forward",
+    });
+    const eventId = telegramQueueEventId(update.update_id);
+    const sessionError = new Error("Session changed while starting work. Retry.");
+    await writeTelegramSpooledUpdate({ spoolDir, update });
+    const queue = openTelegramIngressQueue(spoolDir);
+    expect(await queue.claim(eventId, { ownerId: "999:1:dead-owner" })).not.toBeNull();
+    downstreamTurns.mockRejectedValueOnce(sessionError);
+    const runtimeError = vi.fn();
+    const { monitor, telegramTransport } = await createMonitor({
+      adoptionStallTimeoutMs: 5_000,
+      onRuntimeError: runtimeError,
+    });
+
+    monitor.start();
+    await vi.waitFor(
+      async () => {
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: eventId, attempts: 2, lastError: sessionError.message },
+        ]);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(downstreamTurns).toHaveBeenCalledOnce();
+    expect(runtimeError).toHaveBeenCalledOnce();
 
     await monitor.stop();
     await telegramTransport.close();

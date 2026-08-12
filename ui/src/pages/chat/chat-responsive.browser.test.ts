@@ -1115,6 +1115,85 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
+    const page = await openBrowserPage(720, 180);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 640px;">
+            <div class="chat-pane__header">
+              <div class="chat-pane__crumbs">
+                <wa-dropdown class="chat-pane__workspace-menu">
+                  <button class="chat-pane__workspace-chip" type="button">
+                    ${iconSvg()}<span>openclaw</span>
+                  </button>
+                </wa-dropdown>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__parent-session" type="button">
+                  <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
+                </button>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                </button>
+              </div>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const readState = () =>
+        page.locator(".chat-pane__header").evaluate((header) => {
+          const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
+          const parentText = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+          const childText = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+          const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const child = header.querySelector<HTMLElement>(".chat-pane__session-title")!;
+          const headerRect = header.getBoundingClientRect();
+          const parentRect = parent.getBoundingClientRect();
+          const childRect = child.getBoundingClientRect();
+          return {
+            firstSeparator: getComputedStyle(separators[0]!).display,
+            secondSeparator: getComputedStyle(separators[1]!).display,
+            parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+            childEllipses: childText.scrollWidth > childText.clientWidth,
+            headerWidth: headerRect.width,
+            nestedTrailWidth: childRect.right - parentRect.left,
+            overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
+          };
+        });
+
+      const normal = await readState();
+      expect(normal).toMatchObject({
+        firstSeparator: "block",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(normal.nestedTrailWidth).toBeLessThanOrEqual(normal.headerWidth / 2 + 1);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "320px";
+      });
+      const narrow = await readState();
+      expect(narrow).toMatchObject({
+        firstSeparator: "none",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(narrow.nestedTrailWidth).toBeLessThanOrEqual(narrow.headerWidth / 2 + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps a Done status disjoint from a long compact session headline", async () => {
     const page = await openBrowserPage(320, 240);
     try {

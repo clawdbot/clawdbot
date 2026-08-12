@@ -182,6 +182,12 @@ public enum SessionDiffFileStatus: String, Codable, Sendable {
     case renamed = "renamed"
 }
 
+public enum SessionDiffScope: String, Codable, Sendable {
+    case all = "all"
+    case uncommitted = "uncommitted"
+    case commit = "commit"
+}
+
 public enum TaskSuggestionResolution: String, Codable, Sendable {
     case dismissed = "dismissed"
     case accepted = "accepted"
@@ -2183,6 +2189,50 @@ public struct WorkerDesktopLaunchResult: Codable, Sendable {
     }
 }
 
+public struct ProjectCheckout: Codable, Sendable {
+    public let runnerid: String
+    public let path: String
+
+    public init(
+        runnerid: String,
+        path: String)
+    {
+        self.runnerid = runnerid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runnerid = "runnerId"
+        case path
+    }
+}
+
+public struct ProjectSummary: Codable, Sendable {
+    public let name: String
+    public let originurl: String?
+    public let checkouts: [ProjectCheckout]
+    public let lastusedat: Double
+
+    public init(
+        name: String,
+        originurl: String? = nil,
+        checkouts: [ProjectCheckout],
+        lastusedat: Double)
+    {
+        self.name = name
+        self.originurl = originurl
+        self.checkouts = checkouts
+        self.lastusedat = lastusedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case originurl = "originUrl"
+        case checkouts
+        case lastusedat = "lastUsedAt"
+    }
+}
+
 public struct SystemInfoParams: Codable, Sendable {}
 
 public struct SystemInfoResult: Codable, Sendable {
@@ -3165,23 +3215,39 @@ public struct ProjectRecentProject: Codable, Sendable {
     }
 }
 
-public struct ProjectsListParams: Codable, Sendable {}
+public struct ProjectsListParams: Codable, Sendable {
+    public let includeobserved: Bool?
+
+    public init(
+        includeobserved: Bool? = nil)
+    {
+        self.includeobserved = includeobserved
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case includeobserved = "includeObserved"
+    }
+}
 
 public struct ProjectsListResult: Codable, Sendable {
     public let projects: [ProjectsAddResult]
     public let recents: [ProjectRecent]?
+    public let observedprojects: [ProjectSummary]?
 
     public init(
         projects: [ProjectsAddResult],
-        recents: [ProjectRecent]? = nil)
+        recents: [ProjectRecent]? = nil,
+        observedprojects: [ProjectSummary]? = nil)
     {
         self.projects = projects
         self.recents = recents
+        self.observedprojects = observedprojects
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects
         case recents
+        case observedprojects = "observedProjects"
     }
 }
 
@@ -7945,21 +8011,47 @@ public struct SessionDiffFile: Codable, Sendable {
     }
 }
 
+public struct SessionDiffCommit: Codable, Sendable {
+    public let sha: String
+    public let subject: String
+
+    public init(
+        sha: String,
+        subject: String)
+    {
+        self.sha = sha
+        self.subject = subject
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sha
+        case subject
+    }
+}
+
 public struct SessionsDiffParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let scope: SessionDiffScope?
+    public let commit: String?
 
     public init(
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        scope: SessionDiffScope? = nil,
+        commit: String? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.scope = scope
+        self.commit = commit
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case scope
+        case commit
     }
 }
 
@@ -7968,6 +8060,9 @@ public struct SessionsDiffResult: Codable, Sendable {
     public let root: String?
     public let branch: String?
     public let baseref: String?
+    public let aheadcount: Int?
+    public let commits: [SessionDiffCommit]?
+    public let mergebase: SessionDiffCommit?
     public let files: [SessionDiffFile]
     public let additions: Int
     public let deletions: Int
@@ -7979,6 +8074,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         root: String? = nil,
         branch: String? = nil,
         baseref: String? = nil,
+        aheadcount: Int? = nil,
+        commits: [SessionDiffCommit]? = nil,
+        mergebase: SessionDiffCommit? = nil,
         files: [SessionDiffFile],
         additions: Int,
         deletions: Int,
@@ -7989,6 +8087,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         self.root = root
         self.branch = branch
         self.baseref = baseref
+        self.aheadcount = aheadcount
+        self.commits = commits
+        self.mergebase = mergebase
         self.files = files
         self.additions = additions
         self.deletions = deletions
@@ -8001,6 +8102,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         case root
         case branch
         case baseref = "baseRef"
+        case aheadcount = "aheadCount"
+        case commits
+        case mergebase = "mergeBase"
         case files
         case additions
         case deletions
@@ -17786,6 +17890,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let urlsource: String
     public let access: AnyCodable?
     public let accessdowngraded: Bool?
+    public let expiresatms: Int?
 
     public init(
         setupcode: String,
@@ -17795,7 +17900,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         auth: AnyCodable,
         urlsource: String,
         access: AnyCodable? = nil,
-        accessdowngraded: Bool? = nil)
+        accessdowngraded: Bool? = nil,
+        expiresatms: Int? = nil)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
@@ -17805,6 +17911,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         self.urlsource = urlsource
         self.access = access
         self.accessdowngraded = accessdowngraded
+        self.expiresatms = expiresatms
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17816,6 +17923,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case urlsource = "urlSource"
         case access
         case accessdowngraded = "accessDowngraded"
+        case expiresatms = "expiresAtMs"
     }
 }
 

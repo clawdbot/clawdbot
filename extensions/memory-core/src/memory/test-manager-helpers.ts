@@ -1,7 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core helper module supports test manager helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./manager.js";
 
 const ensureEmbeddingMocksLoaded = createLazyRuntimeModule(() =>
   import("./embedding.test-mocks.js").then(() => undefined),

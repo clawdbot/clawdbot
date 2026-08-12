@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
@@ -606,10 +607,7 @@ export async function exportClawAgent(
     if (error instanceof ClawExportError) {
       throw error;
     }
-    throw new ClawExportError(
-      "export_write_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawExportError("export_write_failed", coerceErrorMessage(error));
   }
   return {
     schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,

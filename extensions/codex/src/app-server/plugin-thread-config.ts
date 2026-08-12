@@ -715,15 +715,9 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
   for (const [key, value] of Object.entries(right)) {
     const existing = merged[key];
     merged[key] =
-      isPlainJsonObject(existing) && isPlainJsonObject(value)
-        ? mergeJsonObjects(existing, value)
-        : value;
+      isJsonObject(existing) && isJsonObject(value) ? mergeJsonObjects(existing, value) : value;
   }
   return merged;
-}
-
-function isPlainJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function fingerprintJson(value: JsonValue): string {

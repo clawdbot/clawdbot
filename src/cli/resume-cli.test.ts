@@ -1,4 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeviceAuthTokenRecord } from "../../packages/gateway-client/src/client.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
@@ -217,5 +222,51 @@ describe("real Gateway session boundary", () => {
         }),
       }),
     );
+  });
+
+  it("retires the one-use bootstrap credential before a real-wire reconnect", async () => {
+    const { GatewayClient } =
+      await vi.importActual<typeof import("../gateway/client.js")>("../gateway/client.js");
+    const authState: { value: DeviceAuthTokenRecord | null } = { value: null };
+    const storeDeviceAuthToken = vi.fn(({ token, scopes }: { token: string; scopes: string[] }) => {
+      authState.value = { token, scopes };
+    });
+    let helloCount = 0;
+    const client = new GatewayClient({
+      url: harness.url,
+      bootstrapToken: await harness.issueNodeBootstrapToken(),
+      preferBootstrapToken: true,
+      role: "node",
+      scopes: [],
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientVersion: "test",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      deviceIdentity: harness.createDeviceIdentity("reconnect"),
+      hostDeps: {
+        loadDeviceAuthToken: () => authState.value,
+        storeDeviceAuthToken,
+      },
+      onHelloOk: () => {
+        helloCount += 1;
+      },
+    });
+    client.start();
+    try {
+      await vi.waitFor(() => expect(helloCount).toBe(1), { timeout: 5_000 });
+      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
+      expect(storeDeviceAuthToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token: expect.stringMatching(/\S/),
+          scopes: expect.any(Array),
+        }),
+      );
+      expect(authState.value?.token).toBeTruthy();
+
+      await harness.restart();
+      await vi.waitFor(() => expect(helloCount).toBe(2), { timeout: 5_000 });
+    } finally {
+      await client.stopAndWait();
+    }
   });
 });

@@ -23,7 +23,7 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadSessionEntryReadOnly: vi.fn(actual.loadSessionEntryReadOnly),
+    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
   };
 });
@@ -106,7 +106,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
 import { testApi, usageHandlers } from "./usage.js";
 
@@ -188,17 +188,25 @@ function expectSuccessfulSessionsUsage(
   return result.sessions;
 }
 
-function mockStoredSession(key: string, sessionId: string) {
+function mockStoredSession(
+  key: string,
+  sessionId: string,
+  options: { resolution?: "valid" | "missing" } = {},
+) {
   const entry = { sessionId, updatedAt: 1_000 };
-  vi.mocked(loadSessionEntryReadOnly).mockReturnValueOnce({
+  const storePath = "/tmp/agents/opus/agent/openclaw-agent.sqlite";
+  vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
     cfg: TEST_RUNTIME_CONFIG,
     canonicalKey: key,
     entry,
     legacyKey: undefined,
     store: { [key]: entry },
     storeKeys: [key],
-    storePath: "/tmp/agents/opus/sessions/sessions.json",
+    storePath,
   });
+  vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(
+    options.resolution === "missing" ? undefined : `sqlite:opus:${sessionId}:${storePath}`,
+  );
   return entry;
 }
 
@@ -852,8 +860,7 @@ describe("sessions.usage", () => {
 
   it("fails closed when a canonical stored target no longer matches", async () => {
     const key = "agent:opus:stale";
-    mockStoredSession(key, "stale");
-    vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(undefined);
+    mockStoredSession(key, "stale", { resolution: "missing" });
     const respond = await runSessionsUsageTimeseries({ key });
     expect(mockArg(respond, 0, 0)).toBe(false);
     expect(vi.mocked(loadSessionUsageTimeSeries)).not.toHaveBeenCalled();

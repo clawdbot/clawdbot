@@ -89,8 +89,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
+        specifier: 0.5.5
+        version: 0.5.5
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -1487,8 +1487,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
+        specifier: 0.5.5
+        version: 0.5.5
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -2167,9 +2167,6 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.5.0
         version: 2.5.0(@opentelemetry/api@1.9.1)
-      '@openclaw/normalization-core':
-        specifier: workspace:*
-        version: link:../normalization-core
       openai:
         specifier: 6.49.0
         version: 6.49.0(@aws-sdk/credential-provider-node@3.972.72)(@smithy/hash-node@4.4.14)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
@@ -2179,6 +2176,10 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-client:
     dependencies:
@@ -4107,8 +4108,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.4':
-    resolution: {integrity: sha512-lttlWKRBQU7eYDYykU2BPoF1S6AESGrT77mVCXsuWBxnRBTAI/PuGB89DB3D1lBCDaqTykIjymPJz4pFesGnkg==}
+  '@openclaw/fs-safe@0.5.5':
+    resolution: {integrity: sha512-x8wYigrOwmnsE8v4LfAh2eTvvkuDMspBrQeBp/GyB9/c7eFf8aL7gK4keewDbhscKX1pACD8Yd+ehZq6o29xHw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -11395,7 +11396,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.4':
+  '@openclaw/fs-safe@0.5.5':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22

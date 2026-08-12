@@ -36,11 +36,12 @@ import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
+import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
@@ -202,7 +203,7 @@ async function handleChatHistoryRequest({
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
-      loadSessionEntryReadOnly(sessionKey, {
+      loadGatewaySessionEntryReadOnly(sessionKey, {
         ...sessionLoadOptions,
         includeStoreChildEntries: true,
       }),
@@ -246,6 +247,16 @@ async function handleChatHistoryRequest({
       return;
     }
   }
+  const workspaceIconPreparation =
+    method === "chat.startup"
+      ? prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
+          (error: unknown) => {
+            context.logGateway.debug(
+              `chat.startup continuing without a workspace icon: ${formatErrorMessage(error)}`,
+            );
+          },
+        )
+      : Promise.resolve();
   const modelCatalogPromise =
     method === "chat.history"
       ? (() => {
@@ -512,6 +523,7 @@ async function handleChatHistoryRequest({
     ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
+  await workspaceIconPreparation;
   respond(true, payload);
 }
 

@@ -7,7 +7,7 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
-type WebSocketEvent = "open" | "message" | "close" | "error";
+type WebSocketEvent = "open" | "message" | "close" | "error" | "unexpected-response";
 
 const webSockets = vi.hoisted((): ProbeWebSocket[] => []);
 
@@ -25,6 +25,7 @@ class ProbeWebSocket {
     message: [],
     close: [],
     error: [],
+    "unexpected-response": [],
   };
 
   constructor(_url: string, _options?: unknown) {

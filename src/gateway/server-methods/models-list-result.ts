@@ -453,10 +453,7 @@ async function buildPublicModelsListEntries(params: {
       return {
         ...buildPublicModelProjection(entry),
         ...(agentRuntime ? { agentRuntime } : {}),
-        ...(thinkingProfile && {
-          thinkingLevels: thinkingProfile.levels,
-          thinkingDefault: thinkingProfile.defaultLevel,
-        }),
+        ...thinkingProfile,
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,

@@ -98,9 +98,7 @@ describe("qa compaction scenario catalog", () => {
     const terminalEvidenceAssertExpr = readAssertExpression(
       "terminalContinuations[0].providerVariant === 'openai'",
     );
-    const compactionSummaryAssertExpr = readAssertExpression(
-      "compactionSummaryRequests.length > 0",
-    );
+    const compactionSummaryAssertExpr = readAssertExpression("compactionSummaryRequests.some");
     const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
@@ -280,13 +278,12 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`---");
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`+++");
     expect(compactionSummaryRequestsExpr).toContain("request.requestKind === 'compaction-summary'");
-    expect(compactionSummaryAssertExpr).toContain("compactionSummaryRequests.length > 0");
     expect(compactionSummaryAssertExpr).toContain(
-      "request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor",
+      "compactionSummaryRequests.some((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor)",
     );
-    expect(compactionSummaryAssertExpr).toContain("request.outcome === 'success'");
-    expect(compactionSummaryAssertExpr).toContain("request.plannedToolName === undefined");
-    expect(compactionSummaryAssertExpr).toContain("request.toolOutputStructuredError !== true");
+    expect(compactionSummaryAssertExpr).toContain(
+      "compactionSummaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)",
+    );
     expect(noQualityRetryAssertExpr).toContain("compactionSummaryRequests.every");
     expect(noQualityRetryAssertExpr).toContain(
       "!String(request.allInputText ?? '').includes('Previous summary failed quality checks')",

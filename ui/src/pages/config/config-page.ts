@@ -4,7 +4,10 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsCatalogListResult,
+  SystemInfoResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -114,6 +117,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
 };
 
 const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
+const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -335,6 +339,42 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
         this.systemInfoPolling.stop();
+      }
+    },
+  });
+  private readonly hiddenSessionCatalogLabelsTask = new Task(this, {
+    args: () => {
+      const gateway = this.context?.gateway.snapshot;
+      const hiddenCatalogIds = [...this.hiddenSessionCatalogIds].toSorted();
+      const client =
+        this.pageId === "appearance" &&
+        hiddenCatalogIds.length > 0 &&
+        canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
+          ? gateway?.client
+          : null;
+      return [
+        client,
+        this.context?.agentSelection.state.selectedId ?? null,
+        hiddenCatalogIds.join("\0"),
+      ] as const;
+    },
+    task: async ([client, agentId], { signal }) => {
+      if (!client) {
+        return EMPTY_SESSION_CATALOG_LABELS;
+      }
+      try {
+        const result = await client.request<SessionsCatalogListResult>(
+          "sessions.catalog.list",
+          {
+            ...(agentId ? { agentId } : {}),
+            limitPerHost: 1,
+          },
+          { signal },
+        );
+        return new Map(result.catalogs.map((catalog) => [catalog.id, catalog.label]));
+      } catch {
+        // Recovery must remain available when catalog discovery is unsupported or offline.
+        return EMPTY_SESSION_CATALOG_LABELS;
       }
     },
   });
@@ -1170,6 +1210,10 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
+      hiddenSessionCatalogLabels:
+        this.hiddenSessionCatalogLabelsTask.status === TaskStatus.COMPLETE
+          ? (this.hiddenSessionCatalogLabelsTask.value ?? EMPTY_SESSION_CATALOG_LABELS)
+          : EMPTY_SESSION_CATALOG_LABELS,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
