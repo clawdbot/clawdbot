@@ -572,6 +572,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (statusReactionsEnabled) {
     if (dispatchError || agentRunFailed) {
       await statusReactions.setError();
+      void statusReactions.restoreInitial();
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
       void statusReactions.restoreInitial();
