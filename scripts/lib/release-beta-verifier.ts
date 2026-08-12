@@ -4,8 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord as isJsonRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString as normalizeOptionalText } from "@openclaw/normalization-core/string-coerce";
+import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -93,6 +92,10 @@ const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
