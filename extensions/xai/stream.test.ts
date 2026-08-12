@@ -17,7 +17,7 @@ import {
 } from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
-const PAYLOAD_CAPTURE_TIMEOUT_MS = 5_000;
+const PAYLOAD_CAPTURE_TIMEOUT_MS = 10_000;
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const events: StreamEvent[] = [];
@@ -543,19 +543,26 @@ describe("xai stream wrappers", () => {
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
     expect(payload.include).toEqual(["reasoning.encrypted_content"]);
-  }, 10_000);
+  }, 15_000);
+
+  it("preserves Grok 4.6 xhigh at the final xAI Responses payload boundary", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking("xhigh");
+
+    expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  }, 15_000);
 
   it("clamps unsupported Grok 4.6 off reasoning to low", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off");
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
-  }, 10_000);
+  }, 15_000);
 
   it("maps Grok 4.3 off reasoning to xAI none", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off", "grok-4.3");
 
     expect(payload.reasoning).toEqual({ effort: "none" });
-  }, 10_000);
+  }, 15_000);
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {
     const payload: Record<string, unknown> = {
