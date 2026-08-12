@@ -481,8 +481,14 @@ function splitTopLevel(
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-function hasShellCompoundCommand(command: string): boolean {
-  return /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(command);
+/** Returns whether unquoted shell syntax contains a compound-command introducer. */
+export function hasShellCompoundCommand(command: string): boolean {
+  const unquoted = Array.from(command, () => " ");
+  scanTopLevelChars(command, (char, index) => {
+    unquoted[index] = char;
+    return true;
+  });
+  return /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(unquoted.join(""));
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */

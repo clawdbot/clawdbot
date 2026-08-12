@@ -266,6 +266,7 @@ describe("tool display details", () => {
   it("keeps shell compound commands intact instead of inventing command stages", () => {
     const loop = 'for d in $(find . -type d); do echo "$d"; ls "$d"; done';
     const conditional = "echo start && if test -f package.json; then pnpm test; fi";
+    const quoted = "printf '%s' '; if ' && pnpm test";
 
     for (const command of [loop, conditional]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
@@ -280,7 +281,13 @@ describe("tool display details", () => {
       formatToolDetail(
         resolveToolDisplay({ name: "exec", args: { command: conditional }, detailMode: "explain" }),
       ),
-    ).toBe("print text");
+    ).toBe(conditional);
+    expect(splitTopLevelStages(quoted)).toEqual(["printf '%s' '; if '", "pnpm test"]);
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
+      ),
+    ).toBe("print text → run tests");
   });
 
   it("keeps normal search patterns concise", () => {
