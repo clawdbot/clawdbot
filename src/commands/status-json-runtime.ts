@@ -9,6 +9,7 @@ import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts
 import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 
 type StatusJsonScanLike = {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   summary: Record<string, unknown>;
@@ -54,7 +55,6 @@ type StatusJsonScanLike = {
 
 /** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
-  env: NodeJS.ProcessEnv;
   scan: StatusJsonScanLike;
   opts: {
     deep?: boolean;
@@ -97,7 +97,7 @@ export async function resolveStatusJsonOutput(params: {
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
-  const backups = readBackupFreshness(params.env);
+  const backups = readBackupFreshness(scan.env ?? {});
   if (backups.latest || backups.latestOk) {
     Object.assign(payload, { backups });
   }

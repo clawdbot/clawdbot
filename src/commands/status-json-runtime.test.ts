@@ -30,6 +30,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
 
 function createScan() {
   return {
+    env: { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" },
     cfg: { update: { channel: "stable" }, gateway: {} },
     sourceConfig: { gateway: {} },
     summary: { ok: true },
@@ -85,10 +86,9 @@ describe("status-json-runtime", () => {
   });
 
   it("builds the full json output for status --json", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" };
+    const scan = createScan();
     const result = await resolveStatusJsonOutput({
-      env,
-      scan: createScan(),
+      scan,
       opts: { deep: true, usage: true, timeoutMs: 1234 },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
@@ -105,7 +105,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
-    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(env);
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(scan.env);
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayConnection).toStrictEqual({
       url: "ws://127.0.0.1:18789",
@@ -143,9 +143,9 @@ describe("status-json-runtime", () => {
       nodeService: { label: "node" },
     });
 
+    const { env: _env, ...scanWithoutEnv } = createScan();
     await resolveStatusJsonOutput({
-      env: {},
-      scan: createScan(),
+      scan: scanWithoutEnv,
       opts: { deep: false, usage: false, timeoutMs: 500 },
       includeSecurityAudit: false,
       includePluginCompatibility: false,
@@ -162,6 +162,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith({});
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
     expect(payloadInput.securityAudit).toBeUndefined();
@@ -182,7 +183,6 @@ describe("status-json-runtime", () => {
     });
 
     await resolveStatusJsonOutput({
-      env: {},
       scan: createScan(),
       opts: { deep: true, timeoutMs: 500 },
       includeSecurityAudit: false,

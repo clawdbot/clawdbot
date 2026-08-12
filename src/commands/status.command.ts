@@ -119,7 +119,6 @@ export async function statusCommand(
 
   if (opts.json) {
     await runStatusJsonCommand({
-      env: process.env,
       opts,
       runtime,
       includeSecurityAudit: opts.all === true || opts.deep === true,
@@ -166,6 +165,7 @@ export async function statusCommand(
     memory,
     memoryPlugin,
     pluginCompatibility,
+    env,
   } = scan;
 
   const {
@@ -326,7 +326,7 @@ export async function statusCommand(
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
-      env: process.env,
+      env: env ?? {},
       opts,
       surface: overviewSurface,
       osSummary,
