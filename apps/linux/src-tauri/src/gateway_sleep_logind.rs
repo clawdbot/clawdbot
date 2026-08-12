@@ -101,7 +101,15 @@ async fn run_listener(controller: Arc<GatewaySleepCycleController>) -> Result<()
             tauri::async_runtime::spawn(async move {
                 controller.did_wake().await;
             });
-            inhibitor = Some(next_inhibitor?);
+            // A failed re-acquire only loses the pre-sleep delay window; keep the
+            // listener alive so later sleep/wake cycles are still handled.
+            inhibitor = match next_inhibitor {
+                Ok(fd) => Some(fd),
+                Err(error) => {
+                    eprintln!("Gateway sleep: {error}");
+                    None
+                }
+            };
         }
     }
     Err("PrepareForSleep signal stream ended".into())
