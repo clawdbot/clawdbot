@@ -65,7 +65,7 @@ describe("scripts/check-deprecated-api-usage", () => {
     }
   });
 
-  it("bans internal imports of every deprecated reply facade", () => {
+  it("bans internal imports of every deprecated facade", () => {
     const modulePaths = new Set(
       BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => ban.modulePath),
     );
@@ -74,6 +74,7 @@ describe("scripts/check-deprecated-api-usage", () => {
       "src/plugin-sdk/channel-message",
       "src/plugin-sdk/channel-reply-pipeline",
       "src/plugin-sdk/inbound-reply-dispatch",
+      "src/plugin-sdk/text-runtime",
     ]) {
       expect(modulePaths.has(facade), facade).toBe(true);
     }
@@ -95,6 +96,7 @@ describe("scripts/check-deprecated-api-usage", () => {
         'import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
         'export { runChannelInboundEvent } from "../plugin-sdk/inbound-reply-dispatch.js";',
         'const facade = await import ("../plugin-sdk/channel-message.js", { with: {} });',
+        'const text = require("@openclaw/plugin-sdk/text-runtime");',
       ].join("\n"),
     });
 
@@ -106,6 +108,7 @@ describe("scripts/check-deprecated-api-usage", () => {
       "src/channels/probe.ts:2: ../plugin-sdk/inbound-reply-dispatch.js",
     );
     expect(result.stderr).toContain("src/channels/probe.ts:3: ../plugin-sdk/channel-message.js");
+    expect(result.stderr).toContain("src/channels/probe.ts:4: @openclaw/plugin-sdk/text-runtime");
   });
 
   it("allows canonical compat re-exports and test files", () => {

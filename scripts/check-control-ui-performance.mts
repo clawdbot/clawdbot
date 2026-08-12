@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-
-function isMetricsRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
@@ -266,7 +263,7 @@ function isIsoDate(value: string): boolean {
 function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStartupBudgetBaseline {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-    const record: Record<string, unknown> = isMetricsRecord(parsed) ? parsed : {};
+    const record: Record<string, unknown> = isRecord(parsed) ? parsed : {};
     const { startupJsGzipBytes, reason, updatedAt } = record;
     if (
       typeof startupJsGzipBytes !== "number" ||

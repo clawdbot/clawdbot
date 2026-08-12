@@ -1,11 +1,2 @@
-/**
- * Small normalization helpers shared by gateway request handlers.
- */
-/** Returns a non-empty trimmed string, or `undefined` for non-string input. */
-export function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+/** Non-empty trimmed-string normalization shared by gateway request handlers. */
+export { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";

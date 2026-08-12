@@ -11,6 +11,7 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -187,13 +188,6 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
   }
   const max = 120;
   return joined.length <= max ? joined : truncateSlackText(joined, max);
-}
-
-function readInteractionAction(raw: unknown) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw as Record<string, unknown>;
 }
 
 export function summarizeAction(action: Record<string, unknown>): SlackActionSummary {
@@ -431,7 +425,7 @@ function parseSlackBlockAction(params: {
   log?: (message: string) => void;
 }): ParsedSlackBlockAction | null {
   const typedBody = params.body as SlackBlockActionBody;
-  const typedAction = readInteractionAction(params.action);
+  const typedAction = asOptionalRecord(params.action);
   if (!typedAction) {
     params.log?.(
       `slack:interaction malformed action payload channel=${typedBody.channel?.id ?? typedBody.container?.channel_id ?? "unknown"} user=${

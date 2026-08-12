@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { classifyBoundedUnsignedDecimal } from "./lib/arg-utils.mts";
 
 const DEFAULT_SIZES = [24, 64, 128];
 const WORKER_TIMEOUT_MS = 300_000;
@@ -127,17 +128,17 @@ Options:
 }
 
 function parseInteger(raw: string, flag: string, min: number, max: number): number {
-  if (!/^\d+$/u.test(raw)) {
+  const result = classifyBoundedUnsignedDecimal(raw, min, max);
+  if (result.kind === "syntax") {
     throw new Error(`${flag} must be an integer`);
   }
-  const value = Number(raw);
-  if (value < min) {
+  if (result.kind === "below") {
     throw new Error(`${flag} must be at least ${min}`);
   }
-  if (value > max) {
+  if (result.kind === "above") {
     throw new Error(`${flag} must be at most ${max}`);
   }
-  return value;
+  return result.value;
 }
 
 function parseList(raw: string, flag: string): number[] {

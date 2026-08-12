@@ -33,17 +33,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (value: string) => value,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
-  const normalizeMockOptionalString = (value: string | null | undefined) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const normalized = value.trim();
-    return normalized.length > 0 ? normalized : undefined;
-  };
-  return { normalizeOptionalString: normalizeMockOptionalString };
-});
-
 vi.mock("../proxy-request-client.js", () => ({
   DISCORD_REST_TIMEOUT_MS: 15_000,
   createDiscordRequestClient: vi.fn(() => ({

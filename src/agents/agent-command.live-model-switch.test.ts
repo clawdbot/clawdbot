@@ -1,6 +1,6 @@
 /** Tests live model switching behavior in active agent command sessions. */
 
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, toStringifiedError } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
@@ -274,8 +274,7 @@ vi.mock("../acp/policy.js", () => ({
 }));
 
 vi.mock("../acp/runtime/errors.js", () => ({
-  toAcpRuntimeError: ({ error }: { error: unknown }) =>
-    error instanceof Error ? error : new Error(String(error)),
+  toAcpRuntimeError: ({ error }: { error: unknown }) => toStringifiedError(error),
 }));
 
 vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({

@@ -5,6 +5,7 @@ import type {
   SessionAcpIdentity,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -807,11 +808,7 @@ export function mergeSessionEntryPreserveActivity(
 }
 
 export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
-  const total = entry?.totalTokens;
-  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
-    return undefined;
-  }
-  return total;
+  return asNonNegativeFiniteNumber(entry?.totalTokens);
 }
 
 export function resolveFreshSessionTotalTokens(

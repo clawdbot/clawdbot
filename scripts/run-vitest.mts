@@ -10,6 +10,7 @@ import { embeddedAgentVitestProjectOwners } from "../test/vitest/vitest.agents-p
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -35,7 +36,6 @@ type WatchdogStream = {
   off(event: string, listener: (...args: unknown[]) => void): unknown;
 };
 
-const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
@@ -154,10 +154,6 @@ const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
-}
-
 function parsePositiveInt(value: string | undefined): number | null {
   const text = value?.trim();
   if (!text || !/^\d+$/u.test(text)) {
@@ -171,7 +167,7 @@ function parsePositiveInt(value: string | undefined): number | null {
  * Resolves default Node flags for Vitest, including the local Maglev opt-in.
  */
 export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (isTruthyEnvValue(env.OPENCLAW_VITEST_ENABLE_MAGLEV)) {
+  if (parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true) {
     return [];
   }
 
@@ -484,7 +480,7 @@ export function resolveRunVitestSpawnEnv(
   if (explicitMode === "watch") {
     return baseEnv;
   }
-  if (explicitMode !== "run" && !isTruthyEnvValue(baseEnv.CI)) {
+  if (explicitMode !== "run" && parsePermissiveBooleanToken(baseEnv.CI) !== true) {
     return baseEnv;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
@@ -587,7 +583,7 @@ export function resolveBoundedVitestInvocations(
   if (
     !matchesVitestConfigPath(normalizedConfig, GATEWAY_SERVER_VITEST_CONFIG) ||
     mode === "watch" ||
-    (mode !== "run" && !isTruthyEnvValue(env.CI)) ||
+    (mode !== "run" && parsePermissiveBooleanToken(env.CI) !== true) ||
     hasNonRunVitestSubcommand(argv) ||
     hasAlternateVitestRootArg(argv) ||
     collectExplicitProjectRouterTargetArgs(argv, cwd).length > 0 ||

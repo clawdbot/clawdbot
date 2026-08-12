@@ -1,4 +1,5 @@
 import { initialState, Task } from "@lit/task";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ReactiveElement } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
@@ -49,11 +50,6 @@ function readOptionalGitHubString(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
@@ -97,13 +93,13 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
   }
   return {
     ...target,
-    additions: optionalNumber(value, "additions"),
+    additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
-    changedFiles: optionalNumber(value, "changedFiles"),
+    changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readOptionalGitHubString(value, "closedAt"),
-    comments: optionalNumber(value, "comments"),
+    comments: asFiniteNumber(value.comments),
     createdAt: requiredString(value, "createdAt"),
-    deletions: optionalNumber(value, "deletions"),
+    deletions: asFiniteNumber(value.deletions),
     draft: typeof value.draft === "boolean" ? value.draft : undefined,
     kind: target.kind,
     login: readOptionalGitHubString(value, "login") ?? "ghost",
