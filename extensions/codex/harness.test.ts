@@ -31,6 +31,12 @@ describe("Codex agent harness supports()", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
   });
 
+  it("keeps computer-control denies out of the native-surface exemption", () => {
+    expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
+      expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
+    );
+  });
+
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
