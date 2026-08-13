@@ -11,16 +11,13 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveActiveRuntimeChannelOwners } from "../plugins/runtime-channel-owners.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
-import { resolveChannelConfigKey } from "./channel-configured-shared.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -51,6 +48,7 @@ import {
   resolveExplicitPluginReferencePath,
   validateExplicitPluginConfig,
 } from "./validation-plugin-config.js";
+import { validateAuthoredChannelSections } from "./validation.channel-sections.js";
 
 export { validateConfigObject, validateConfigObjectRaw } from "./validation-core.js";
 export { collectUnsupportedSecretRefPolicyIssues } from "./validation-issues.js";
@@ -675,90 +673,19 @@ function validateConfigObjectWithPluginsBase(
     mutatedConfig.plugins!.entries![pluginId] = { ...currentEntry, config: nextValue };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
-  // First record-shaped section per canonical channel identity, by authored key. Admission folds
-  // variant spellings onto one channel while `resolveChannelConfigKey` serves exactly one section
-  // per identity, so a second record folding onto a seen identity must reject: validating it
-  // would accept credentials or `enabled: false` that activation silently ignores.
-  const channelSectionKeyByCanonicalId = new Map<string, string>();
-  if (config.channels && isRecord(config.channels)) {
-    for (const key of Object.keys(config.channels)) {
-      const trimmed = key.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!allowedChannels.has(trimmed)) {
-        for (const record of ensureRegistry().registry.plugins) {
-          for (const channelId of record.channels) {
-            allowedChannels.add(channelId);
-            // A variant manifest spelling (built-in alias, case variant) admits the canonical
-            // key too — the runtime normalizes both onto one channel identity.
-            allowedChannels.add(normalizeManifestChannelId(channelId));
-          }
-        }
-      }
-      if (!allowedChannels.has(trimmed)) {
-        const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
-          warnings.push({
-            ...issue,
-            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
-          });
-        } else {
-          issues.push(issue);
-        }
-        continue;
-      }
-      // Only record-shaped sections can shadow each other: the resolver never serves a
-      // non-record entry as a channel's config record.
-      if (isRecord(config.channels[trimmed])) {
-        const canonicalChannelId = normalizeManifestChannelId(trimmed);
-        const firstSectionKey = channelSectionKeyByCanonicalId.get(canonicalChannelId);
-        if (firstSectionKey !== undefined) {
-          // The winning key comes from the activation resolver itself, so the message states
-          // exactly which section the runtime reads (exact canonical key first, else the first
-          // authored record that folds). The named repair is the doctor merge migration
-          // (channels.duplicate-alias-sections-merge), which keeps that same winner.
-          const servedKey = resolveChannelConfigKey(config, canonicalChannelId);
-          issues.push({
-            path: `channels.${trimmed}`,
-            message: `duplicate channel config: "${firstSectionKey}" and "${trimmed}" both configure channel "${canonicalChannelId}" and activation reads only channels.${servedKey}; run openclaw doctor --fix to merge these sections`,
-          });
-          continue;
-        }
-        channelSectionKeyByCanonicalId.set(canonicalChannelId, trimmed);
-      }
-      // Schema metadata is keyed by canonical channel identity; the authored key may be a
-      // declared variant spelling. Issue paths and the cache key keep the authored spelling.
-      const channelSchema = ensureChannelSchemas().get(normalizeManifestChannelId(trimmed));
-      if (!channelSchema?.schema) {
-        continue;
-      }
-      const result = validateJsonSchemaValue({
-        schema: channelSchema.schema,
-        cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
-        // Apply defaults for AJV schema validation (writeConfigFile persists persistCandidate,
-        // not validated.config — #61841) UNLESS ownership settlement did not converge: the
-        // settled schemas are the authored record's, and hydrating the returned config would
-        // hand the gateway the contradicting record the settlement rejected.
-        applyDefaults: channelDefaultsConverged,
-      });
-      if (!result.ok) {
-        for (const error of result.errors) {
-          issues.push({
-            path:
-              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: formatChannelConfigIssueMessage(error.message, channelSchema.pluginId),
-            allowedValues: error.allowedValues,
-            allowedValuesHiddenCount: error.allowedValuesHiddenCount,
-          });
-        }
-      } else if (channelDefaultsConverged) {
-        replaceChannelConfig(trimmed, result.value);
-      }
-    }
-  }
+  validateAuthoredChannelSections({
+    config,
+    bundledChannelIds,
+    issues,
+    warnings,
+    ensureClaimedChannelIds: () =>
+      ensureRegistry().registry.plugins.flatMap((record) => record.channels),
+    hasStalePluginEvidenceForUnknownChannel,
+    ensureChannelSchemas,
+    channelDefaultsConverged: () => channelDefaultsConverged,
+    replaceChannelConfig,
+    formatChannelConfigIssueMessage,
+  });
 
   const heartbeatChannelIds = new Set(
     bundledChannelIds.map((channelId) => normalizeLowercaseStringOrEmpty(channelId)),
