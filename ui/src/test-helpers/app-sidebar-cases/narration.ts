@@ -182,7 +182,7 @@ describe("AppSidebar live narration", () => {
     ).toBeNull();
   });
 
-  it("skips the open chat subscription and resubscribes background runs after reconnect", async () => {
+  it("leases open and background running sessions again after reconnect", async () => {
     const openKey = "agent:main:open";
     const backgroundKey = "agent:main:background";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -197,21 +197,27 @@ describe("AppSidebar live narration", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
-    expect(sessions.subscribeMessages).toHaveBeenLastCalledWith(backgroundKey, {
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(openKey, {
+      agentId: undefined,
+    });
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(backgroundKey, {
       agentId: undefined,
     });
 
     gateway.publish({ phase: "stopped" });
     sidebar.connected = false;
     await sidebar.updateComplete;
-    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(2));
 
     gateway.publish({ phase: "connected" });
     sidebar.connected = true;
     await sidebar.updateComplete;
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
-    expect(sessions.subscribeMessages).toHaveBeenLastCalledWith(backgroundKey, {
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(4));
+    expect(sessions.subscribeMessages).toHaveBeenNthCalledWith(3, backgroundKey, {
+      agentId: undefined,
+    });
+    expect(sessions.subscribeMessages).toHaveBeenNthCalledWith(4, openKey, {
       agentId: undefined,
     });
   });
