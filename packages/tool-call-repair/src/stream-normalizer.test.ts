@@ -139,6 +139,9 @@ async function normalize(
       const scrubbed = scrubMessage(message, { preserveEmptyTextBlocks });
       return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
     },
+    // resolveTestFenceRanges protects exactly fenced regions, the shape the carried fence
+    // scan models, so these fence-suite tests opt the fast path in.
+    protectedRangesFenceCompatible: options.protectFences === true,
     resolveProtectedRanges: options.protectFences ? resolveTestFenceRanges : undefined,
   });
 }
@@ -752,6 +755,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         matcher,
         createPromotedToolCallEvents: () => [],
         normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
         resolveProtectedRanges: (text) => {
           resolvedLengths.push(text.length);
           return [];
@@ -802,6 +806,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         matcher,
         createPromotedToolCallEvents: () => [],
         normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
         resolveProtectedRanges: (text) => {
           resolverCalls += 1;
           return resolveTestFenceRanges(text);
@@ -813,6 +818,56 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     // response once per bracket delta (hundreds of full parses over a growing buffer).
     expect(resolverCalls).toBeLessThanOrEqual(3);
     expect(textDeltas(events).join("")).toBe(fenced);
+  });
+
+  it("still protects an unfenced caller-defined range when the fast path is not opted in", async () => {
+    // The carried fence scan only ever proves fence state. A resolver whose protected
+    // ranges are not fences at all (unlike resolveTestFenceRanges/findCodeRegions) would be
+    // silently bypassed if the stream trusted the fast path's "not protected" verdict for
+    // it, so this must go through the full resolver instead — this caller never opts in.
+    const OPEN_MARK = "<<PROTECT>>";
+    const CLOSE_MARK = "<<END>>";
+    const resolveMarkedRanges = (text: string) => {
+      const ranges: Array<{ end: number; start: number }> = [];
+      let cursor = 0;
+      for (;;) {
+        const start = text.indexOf(OPEN_MARK, cursor);
+        if (start === -1) {
+          break;
+        }
+        const close = text.indexOf(CLOSE_MARK, start + OPEN_MARK.length);
+        const end = close === -1 ? text.length : close + CLOSE_MARK.length;
+        ranges.push({ start, end });
+        cursor = end;
+      }
+      return ranges;
+    };
+    const call = ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n");
+    // A trailing newline keeps every line complete; an unfinished final line is a shape the
+    // fast path already declines on its own, which would mask the bug this test targets.
+    const text = `${OPEN_MARK}\n${call}\n${CLOSE_MARK}\n`;
+    const events = await collectNormalizedEvents(
+      [streamTextDelta(text), doneAssistantEvent("stop", textContent(text), "stop")],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: ({ message }) => {
+          const scrubbed = projectScrubbedPlainTextToolCallMessage({
+            matcher,
+            message,
+            resolveProtectedRanges: resolveMarkedRanges,
+          });
+          return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
+        },
+        resolveProtectedRanges: resolveMarkedRanges,
+      },
+    );
+
+    expect(textDeltas(events).join("")).toBe(text);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: textContent(text), stopReason: "stop" },
+    });
   });
 
   it("still scrubs an unfenced call from live deltas and the terminal message", async () => {

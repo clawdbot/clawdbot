@@ -42,6 +42,14 @@ export type PlainTextToolCallStreamNormalizerOptions = {
   matcher: PlainTextToolCallNameMatcher;
   /** Resolves source ranges that must remain literal user-visible text. */
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
+  /**
+   * Opts a fence-based `resolveProtectedRanges` into the incremental fast path so a
+   * candidate-shaped delta can skip a full re-parse (see protection-fast-path.ts's safety
+   * contract). Leave unset for any resolver whose protected ranges are not exactly CommonMark
+   * fenced/indented/inline code spans — the fast path only tracks fence state, so trusting it
+   * for a differently defined resolver would silently drop that resolver's protection.
+   */
+  protectedRangesFenceCompatible?: boolean;
   /** Promotes an eligible terminal snapshot or scrubs every recognized candidate. */
   normalizeTerminalMessage(params: {
     allowPromotion: boolean;
@@ -1369,11 +1377,14 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // Candidate-shaped text is rare in prose but constant in bracket-dense
                 // answers, so materializing and re-parsing the whole response here is
                 // quadratic. Ask the carried fence state first; it answers only what it
-                // can prove and yields to the full parse for everything else.
+                // can prove and yields to the full parse for everything else. Only a caller
+                // that opted in has promised its resolver's protection is exactly fence
+                // state, so an un-opted-in resolver always takes the full-parse path below
+                // and stays authoritative — the fast path must never silently stand in for it.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
                 let isProtectedAt =
                   partialProtection ??
-                  (protectionContextOverflow
+                  (protectionContextOverflow || !options.protectedRangesFenceCompatible
                     ? undefined
                     : resolveProtectionFastPath(carriedScan, incoming));
                 if (!isProtectedAt) {

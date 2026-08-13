@@ -168,6 +168,10 @@ function wrapPlainTextToolCallStream(
             matcher,
             preserveEmptyTextBlocks,
           ),
+        // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+        // the carried fence scan models (and yields to the full parse for the rest), so its
+        // protection is safe to trust from the fast path.
+        protectedRangesFenceCompatible: true,
         resolveProtectedRanges: findCodeRegions,
         stopAfterDone: true,
       });
