@@ -106,6 +106,12 @@ function normalizeFreeformValue(block: string, keyName: string): string {
   if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
     return block;
   }
+  // Only recover values whose inline colon+space triggers
+  // BLOCK_AS_IMPLICIT_KEY. Valid YAML scalars (e.g. `text # note`) are
+  // left untouched so their comment and quote semantics are preserved.
+  if (!/: /.test(rawValue)) {
+    return block;
+  }
   const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
 }

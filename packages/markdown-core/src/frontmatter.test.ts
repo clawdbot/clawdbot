@@ -128,6 +128,19 @@ metadata: [broken
     expect(result.issues[0]).toMatchObject({ code: "BAD_INDENT" });
   });
 
+  it("does not rewrite valid sibling values when recovering a malformed field", () => {
+    const content = `---
+name: sample-skill
+description: text # note
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("text");
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
   it("leaves valid YAML description semantics untouched", () => {
     expect(
       parseFrontmatterBlock(`---
