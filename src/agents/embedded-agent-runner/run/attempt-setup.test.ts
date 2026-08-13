@@ -5,8 +5,10 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
-const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
-const resolveSandboxContextWithPublishedSkills = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContext = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+const resolveSandboxContextWithPublishedSkills = vi.hoisted(() =>
+  vi.fn(async (): Promise<unknown> => null),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
