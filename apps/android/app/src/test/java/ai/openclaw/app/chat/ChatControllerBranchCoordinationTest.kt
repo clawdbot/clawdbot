@@ -112,6 +112,173 @@ class ChatControllerBranchCoordinationTest {
     }
 
   @Test
+  fun legacyGatewayWithoutBranchApiDrainsAnOrdinaryQueuedMessage() =
+    runTest {
+      enqueue("legacy queued")
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{}}""")
+      gateway.respondWith("chat.history", historyResponse("session-main", emptyList()))
+      gateway.respond("sessions.branches.list") {
+        error("stable Gateway 2026.7.1-2 does not advertise this method")
+      }
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.onGatewayConnected(
+        MainSessionBinding("main", "OpenClaw Android"),
+        emptySet(),
+        "2026.7.1",
+      )
+      runCurrent()
+      controller.handleGatewayEvent("health", null)
+
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(2_000) {
+          while (gateway.callCount("chat.send") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
+        }
+      }
+
+      assertEquals(0, gateway.callCount("sessions.branches.list"))
+      assertEquals(1, gateway.callCount("chat.send"))
+    }
+
+  @Test
+  fun firstLegacyGatewayCorrectionWithoutBranchApiDrainsAnOrdinaryQueuedMessage() =
+    runTest {
+      enqueue("first correction queued")
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{}}""")
+      gateway.respondWith("chat.history", historyResponse("session-main", emptyList()))
+      gateway.respond("sessions.branches.list") {
+        error("Gateway 2026.7.1-1 does not implement this method")
+      }
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.onGatewayConnected(
+        MainSessionBinding("main", "OpenClaw Android"),
+        emptySet(),
+        "2026.7.1-1",
+      )
+      runCurrent()
+      controller.handleGatewayEvent("health", null)
+
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(2_000) {
+          while (gateway.callCount("chat.send") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
+        }
+      }
+
+      assertEquals(0, gateway.callCount("sessions.branches.list"))
+      assertEquals(1, gateway.callCount("chat.send"))
+    }
+
+  @Test
+  fun legacyGatewayWithoutBranchApiKeepsAmbiguousBranchStateParked() =
+    runTest {
+      val branchScope = ChatOutboxScope("main", "main")
+      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", branchScope))
+      enqueue("ambiguous queued")
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{}}""")
+      gateway.respondWith("chat.history", historyResponse("session-main", emptyList()))
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.onGatewayConnected(
+        MainSessionBinding("main", "OpenClaw Android"),
+        emptySet(),
+        "2026.7.1-2",
+      )
+      runCurrent()
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        kotlinx.coroutines.delay(200)
+      }
+
+      assertTrue(outbox.branchState("gateway-a", branchScope)?.needsReconciliation == true)
+      assertEquals(0, gateway.callCount("sessions.branches.list"))
+      assertEquals(0, gateway.callCount("chat.send"))
+    }
+
+  @Test
+  fun advertisedBranchApiStillReconcilesBeforeQueuedDelivery() =
+    runTest {
+      enqueue("branch-aware queued")
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{}}""")
+      gateway.respondWith("chat.history", historyResponse("session-main", emptyList()))
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.onGatewayConnected(
+        MainSessionBinding("main", "OpenClaw Android"),
+        setOf("sessions.branches.list"),
+        "2026.7.4",
+      )
+      runCurrent()
+      controller.handleGatewayEvent("health", null)
+
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(2_000) {
+          while (gateway.callCount("chat.send") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
+        }
+      }
+
+      assertTrue(gateway.callCount("sessions.branches.list") >= 1)
+      assertEquals(1, gateway.callCount("chat.send"))
+    }
+
+  @Test
+  fun omittedBranchAdvertisementOnUnknownGatewayStillProbesBeforeQueuedDelivery() =
+    runTest {
+      enqueue("unadvertised branch-aware queued")
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.describe", """{"session":{}}""")
+      gateway.respondWith("chat.history", historyResponse("session-main", emptyList()))
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.onGatewayConnected(
+        MainSessionBinding("main", "OpenClaw Android"),
+        emptySet(),
+        "2026.7.4",
+      )
+      runCurrent()
+      controller.handleGatewayEvent("health", null)
+
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(2_000) {
+          while (gateway.callCount("chat.send") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
+        }
+      }
+
+      assertTrue(gateway.callCount("sessions.branches.list") >= 1)
+      assertEquals(1, gateway.callCount("chat.send"))
+    }
+
+  @Test
   fun rewindParksAnEnqueueThatRacesInsideTheMutationLease() =
     runTest {
       val gateway = ScriptedGateway(json)

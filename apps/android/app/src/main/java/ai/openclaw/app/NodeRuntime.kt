@@ -1404,7 +1404,11 @@ class NodeRuntime private constructor(
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         // Create/adopt before history refresh; this keeps the first connected read on the
         // device-owned session without changing the shipped key or its existing transcript.
-        chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
+        chat.onGatewayConnected(
+          mainSessionBinding(mainSessionKey),
+          hello.methods,
+          hello.serverVersion,
+        )
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null

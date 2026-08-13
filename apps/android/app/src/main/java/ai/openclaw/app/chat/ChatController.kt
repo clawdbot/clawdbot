@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
 import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -60,6 +61,14 @@ private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
+
+// The correction tag source reports 2026.7.1; its published npm artifact reports 2026.7.1-2.
+private val LEGACY_GATEWAY_VERSIONS_WITHOUT_SESSION_BRANCHES =
+  setOf(
+    "2026.7.1",
+    "2026.7.1-1",
+    "2026.7.1-2",
+  )
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
@@ -394,6 +403,8 @@ class ChatController internal constructor(
   private val _sessionBranchSwitching = MutableStateFlow(false)
   val sessionBranchSwitching: StateFlow<Boolean> = _sessionBranchSwitching.asStateFlow()
 
+  @Volatile private var sessionBranchListingSupport = SessionBranchListingSupport.Unknown
+
   private val sessionBranchesRefreshGeneration = AtomicLong(0)
   private val sessionBranchSwitchGeneration = AtomicLong(0)
   private val sessionBranchSwitchClaimed = AtomicBoolean(false)
@@ -562,6 +573,7 @@ class ChatController internal constructor(
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     retireMainSessionReadiness()
+    sessionBranchListingSupport = SessionBranchListingSupport.Unknown
     reconciledOutboxBranchScopes.clear()
     ambiguousMutationReconciliationStates.clear()
     synchronized(outboxSessionMutationEventLock) {
@@ -677,6 +689,31 @@ class ChatController internal constructor(
     adoptionJob.start()
   }
 
+  /** Records branch capability evidence from the same hello that owns this connection. */
+  internal fun onGatewayConnected(
+    mainSession: MainSessionBinding,
+    gatewayMethods: Set<String>,
+    gatewayVersion: String?,
+  ) {
+    val nextSupport =
+      when {
+        GatewayMethod.SessionsBranchesList.rawValue in gatewayMethods ->
+          SessionBranchListingSupport.Available
+        gatewayVersion?.trim() in LEGACY_GATEWAY_VERSIONS_WITHOUT_SESSION_BRANCHES ->
+          SessionBranchListingSupport.Unavailable
+        else -> SessionBranchListingSupport.Unknown
+      }
+    if (sessionBranchListingSupport != nextSupport) {
+      sessionBranchesRefreshGeneration.incrementAndGet()
+      _sessionBranchesLoading.value = false
+      if (nextSupport == SessionBranchListingSupport.Unavailable) {
+        _sessionBranches.value = emptyList()
+      }
+    }
+    sessionBranchListingSupport = nextSupport
+    onGatewayConnected(mainSession)
+  }
+
   private fun refreshConnectedGateway() {
     refreshQuestions()
     if (!restoreRunStateOnReconnect) {
@@ -722,6 +759,7 @@ class ChatController internal constructor(
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
       _outboxItems.value = emptyList()
       _outboxPresentationRestored.value = commandOutbox == null
+      sessionBranchListingSupport = SessionBranchListingSupport.Unknown
       reconciledOutboxBranchScopes.clear()
       ambiguousMutationReconciliationStates.clear()
       synchronized(outboxSessionMutationEventLock) {
@@ -1168,6 +1206,12 @@ class ChatController internal constructor(
     ReadOnly,
     Reconcile,
     FinalizeMutation,
+  }
+
+  private enum class SessionBranchListingSupport {
+    Unknown,
+    Available,
+    Unavailable,
   }
 
   /** Rewinds the current transcript at one canonical history entry. */
@@ -1643,7 +1687,7 @@ class ChatController internal constructor(
     return outbox.branchState(gatewayId, snapshot.outboxScope())
   }
 
-  private suspend fun requestSessionBranches(snapshot: SessionActionSnapshot): List<SessionBranch> =
+  private suspend fun requestSessionBranches(snapshot: SessionActionSnapshot): List<SessionBranch>? =
     requestSessionBranches(
       gatewayId = snapshot.gatewayScope?.gatewayId,
       sessionKey = snapshot.sessionKey,
@@ -1654,7 +1698,8 @@ class ChatController internal constructor(
     gatewayId: String?,
     sessionKey: String,
     ownerAgentId: String,
-  ): List<SessionBranch> {
+  ): List<SessionBranch>? {
+    if (sessionBranchListingSupport == SessionBranchListingSupport.Unavailable) return null
     val params =
       buildJsonObject {
         put("sessionKey", JsonPrimitive(sessionKey))
@@ -1726,7 +1771,15 @@ class ChatController internal constructor(
     val generation = sessionBranchesRefreshGeneration.incrementAndGet()
     if (isCurrentSessionAction(snapshot)) _sessionBranchesLoading.value = true
     return try {
-      val branches = requestSessionBranches(snapshot)
+      val branches =
+        requestSessionBranches(snapshot)
+          ?: return when {
+            purpose == BranchRefreshPurpose.FinalizeMutation -> false
+            previousState?.needsReconciliation == true -> false
+            previousState?.switchPendingSinceMs != null -> false
+            commandOutbox?.supportsBranchCoordination != true -> true
+            else -> markOutboxBranchReconciled(snapshot.gatewayScope, snapshot.outboxScope())
+          }
       if (!isCurrentSessionAction(snapshot) || generation != sessionBranchesRefreshGeneration.get()) return false
       val activeLeaf = if (branches.isEmpty()) null else activeBranchLeafEntryId(branches) ?: return false
       val outbox = commandOutbox
@@ -4820,6 +4873,12 @@ class ChatController internal constructor(
             sessionKey = sessionKey,
             ownerAgentId = branchScope.ownerAgentId,
           )
+        if (branches == null) {
+          if (!state.needsReconciliation && state.switchPendingSinceMs == null) {
+            markOutboxBranchReconciled(flushScope, branchScope)
+          }
+          continue
+        }
         val activeLeaf = if (branches.isEmpty()) null else activeBranchLeafEntryId(branches) ?: continue
         if (
           outbox.reconcileBranchScope(
