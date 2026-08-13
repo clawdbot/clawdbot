@@ -7,33 +7,22 @@ import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
-  codeModeReplayIdForToolCall,
-  runBridgeRequest,
-  setCodeModeSwarmDepsForTest,
-} from "./code-mode-bridge.js";
-import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
-import { createHeadlessAbortScope, runCodeModeScriptHeadless } from "./code-mode-headless.js";
+import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import {
-  codeModeRuntimeTesting,
   isCodeModeEngagedForModel,
   readCode,
   readRunId,
   resolveCodeModeConfig,
-  resolveCodeModeHeadlessConfig,
 } from "./code-mode-runtime.js";
-import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
 import {
   normalizeCodeModeTimeoutResult,
-  normalizeCodeModeWorkerResult,
-  resolveCodeModeWorkerUrl,
-  runCodeModeWorker,
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
 } from "./code-mode-worker.js";
@@ -350,25 +339,4 @@ export function addClientToolsToCodeModeCatalog(params: {
     // Callers gate on run engagement; "auto" counts as enabled here.
     enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
   });
-}
-
-/** Test-only hooks and state accessors for Code Mode worker orchestration. */
-const testing = {
-  activeRuns,
-  resumingRunIds,
-  codeModeReplayIdForToolCall,
-  removeExpiredRuns,
-  runBridgeRequest,
-  createHeadlessAbortScope,
-  normalizeCodeModeWorkerResult,
-  runCodeModeWorker,
-  resolveCodeModeHeadlessConfig,
-  resolveCodeModeWorkerUrl,
-  getTypescriptRuntimePromise: codeModeRuntimeTesting.getTypescriptRuntimePromise,
-  setTypescriptRuntimeForTest: codeModeRuntimeTesting.setTypescriptRuntimeForTest,
-  setSwarmDepsForTest: setCodeModeSwarmDepsForTest,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeTestApi")] = testing;
 }

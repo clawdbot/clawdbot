@@ -44,7 +44,7 @@ import {
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
 
-export function createHeadlessAbortScope(
+function createHeadlessAbortScope(
   signal: AbortSignal | undefined,
   wallClockMs: number,
 ): { signal: AbortSignal; cleanup: () => void } {
