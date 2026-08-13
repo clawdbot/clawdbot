@@ -14,6 +14,20 @@ export type GatewayApprovalEventSubscriber = {
   onResolved: (resolved: GatewayApprovalResolved) => void;
 };
 
+export type GatewayNativeApprovalDeliveryReceiptKey = {
+  approvalId: string;
+  channel: string;
+  accountId: string;
+  targetKey: string;
+};
+
+/** Gateway-owned durable delivery state; intentionally not part of the public protocol. */
+export type GatewayNativeApprovalDeliveryReceipts = {
+  read: (key: GatewayNativeApprovalDeliveryReceiptKey) => unknown | null;
+  write: (key: GatewayNativeApprovalDeliveryReceiptKey, entry: unknown) => void;
+  remove: (key: GatewayNativeApprovalDeliveryReceiptKey) => void;
+};
+
 /** Gateway-owned authority and event transport for channel-native approval runtimes. */
 export type GatewayNativeApprovalRuntime = {
   request: <T = unknown>(
@@ -22,6 +36,7 @@ export type GatewayNativeApprovalRuntime = {
     options?: { clientDisplayName?: string },
   ) => Promise<T>;
   requestRoute: <T = unknown>(method: "send", params: Record<string, unknown>) => Promise<T>;
+  deliveryReceipts?: GatewayNativeApprovalDeliveryReceipts;
   routeCoordinator: ApprovalNativeRouteCoordinator;
   subscribe: (subscriber: GatewayApprovalEventSubscriber) => () => void;
 };

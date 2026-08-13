@@ -1,5 +1,12 @@
 // Covers approval handler runtime adapter creation and lazy wiring.
 import { describe, expect, it, vi } from "vitest";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type {
+  GatewayNativeApprovalDeliveryReceiptKey,
+  GatewayNativeApprovalDeliveryReceipts,
+  GatewayNativeApprovalRuntime,
+} from "./approval-gateway-runtime.types.js";
+import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability,
@@ -84,6 +91,16 @@ function createTestApprovalHandler(capability: ApprovalCapability) {
     capability,
     ...TEST_HANDLER_PARAMS,
   });
+}
+
+function createTestDeliveryReceipts(): GatewayNativeApprovalDeliveryReceipts {
+  const entries = new Map<string, unknown>();
+  const keyOf = (key: GatewayNativeApprovalDeliveryReceiptKey) => JSON.stringify(key);
+  return {
+    read: (key) => entries.get(keyOf(key)) ?? null,
+    write: (key, entry) => entries.set(keyOf(key), entry),
+    remove: (key) => entries.delete(keyOf(key)),
+  };
 }
 
 type ApprovalHandlerRuntime = NonNullable<Awaited<ReturnType<typeof createTestApprovalHandler>>>;
@@ -234,6 +251,50 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
     expect(unbind?.request).toBe(request);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("adopts a delivered entry when a handler replacement replays the pending approval", async () => {
+    const deliveryReceipts = createTestDeliveryReceipts();
+    const deliverPending = makeSequentialPendingDeliveryMock();
+    const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
+    const gatewayRuntime = {
+      deliveryReceipts,
+      routeCoordinator: createApprovalNativeRouteCoordinator(),
+    } as GatewayNativeApprovalRuntime;
+    const createHandler = async () =>
+      await withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+        createChannelApprovalHandlerFromCapability({
+          capability: makeNativeApprovalCapability({ deliverPending, buildResolvedResult }),
+          ...TEST_HANDLER_PARAMS,
+          accountId: "main",
+        }),
+      );
+    const request = makeExecApprovalRequest("exec:replacement-replay");
+
+    const first = expectApprovalRuntime(await createHandler());
+    await first.handleRequested(request);
+    await first.stop();
+
+    const replacement = expectApprovalRuntime(await createHandler());
+    await replacement.handleRequested(request);
+    await replacement.handleResolved({
+      id: request.id,
+      decision: "approved",
+      resolvedBy: "operator",
+    } as never);
+
+    expect(deliverPending).toHaveBeenCalledTimes(1);
+    expect(buildResolvedResult).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: { messageId: "1" } }),
+    );
+    expect(
+      deliveryReceipts.read({
+        approvalId: request.id,
+        channel: "test",
+        accountId: "main",
+        targetKey: "origin-chat",
+      }),
+    ).toBeNull();
   });
 
   it("continues finalization cleanup after one resolved entry unbind failure", async () => {

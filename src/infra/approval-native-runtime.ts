@@ -59,6 +59,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   deliverTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     preparedTarget: TPreparedTarget;
+    targetKey: string;
     request: TRequest;
   }) => TPendingEntry | null | Promise<TPendingEntry | null>;
   onDeliveryError?: (params: {
@@ -111,6 +112,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
       const entry = await params.deliverTarget({
         plannedTarget,
         preparedTarget: preparedTarget.target,
+        targetKey: preparedTarget.dedupeKey,
         request: params.request,
       });
       if (!entry) {

@@ -1,5 +1,9 @@
 // Runtime contracts for approval handlers used by execution requests.
 import type {
+  GatewayNativeApprovalDeliveryReceiptKey,
+} from "./approval-gateway-runtime.types.js";
+import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type {
   ChannelApprovalCapability,
   ChannelApprovalNativeAdapter,
 } from "../channels/plugins/types.adapters.js";
@@ -75,6 +79,7 @@ export type ChannelApprovalHandler<
 type WrappedPendingEntry = {
   entry: unknown;
   binding?: unknown;
+  receiptKey?: GatewayNativeApprovalDeliveryReceiptKey;
 };
 
 type ActiveApprovalEntries = {
@@ -456,6 +461,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     return null;
   }
   const log = createSubsystemLogger(params.label);
+  const deliveryReceipts = getGatewayNativeApprovalRuntime()?.deliveryReceipts;
   const activeEntries = new Map<string, ActiveApprovalEntries>();
   let stopped = false;
   const resolveApprovalKind = nativeRuntime.resolveApprovalKind ?? resolveApprovalRequestKind;
@@ -519,21 +525,37 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       deliverTarget: async ({
         plannedTarget,
         preparedTarget,
+        targetKey,
         request,
         approvalKind,
         pendingContent,
       }) => {
-        const entry = await nativeRuntime.transport.deliverPending({
-          ...baseContext,
-          plannedTarget,
-          preparedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
+        const receiptKey =
+          deliveryReceipts && params.accountId
+            ? {
+                approvalId: request.id,
+                channel: params.channel,
+                accountId: params.accountId,
+                targetKey,
+              }
+            : undefined;
+        const adoptedEntry = receiptKey ? deliveryReceipts?.read(receiptKey) : null;
+        const entry =
+          adoptedEntry ??
+          (await nativeRuntime.transport.deliverPending({
+            ...baseContext,
+            plannedTarget,
+            preparedTarget,
+            request,
+            approvalKind,
+            view: pendingContent.view,
+            pendingPayload: pendingContent.payload,
+          }));
         if (!entry) {
           return null;
+        }
+        if (receiptKey && adoptedEntry === null) {
+          deliveryReceipts.write(receiptKey, entry);
         }
         if (stopped) {
           // onStopped fired between deliverPending and bindPending. The wrapped
@@ -584,6 +606,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         const wrapped: WrappedPendingEntry = {
           entry,
           ...(binding === undefined || binding === null ? {} : { binding }),
+          ...(receiptKey ? { receiptKey } : {}),
         };
         const activeRequest = activeEntries.get(request.id) ?? {
           request,
@@ -676,6 +699,9 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               result,
               phase: "resolved",
             });
+            if (wrapped.receiptKey) {
+              deliveryReceipts?.remove(wrapped.receiptKey);
+            }
           },
         });
       },
@@ -711,6 +737,9 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               result,
               phase: "expired",
             });
+            if (wrapped.receiptKey) {
+              deliveryReceipts?.remove(wrapped.receiptKey);
+            }
           },
         });
       },

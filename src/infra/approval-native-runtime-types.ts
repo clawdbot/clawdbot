@@ -27,6 +27,7 @@ export type ChannelNativeApprovalTransportSpec<
   deliverTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     preparedTarget: TPreparedTarget;
+    targetKey: string;
     request: TRequest;
     approvalKind: ChannelApprovalKind;
     pendingContent: TPendingContent;
