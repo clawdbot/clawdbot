@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Transform } from "node:stream";
 import zlib from "node:zlib";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 
@@ -13,6 +14,13 @@ type ZstdCodec = {
   compress: (data: Buffer) => Buffer;
   decompress: (data: Buffer) => Buffer;
 };
+
+type ZstdStreamCodec = {
+  createCompress: () => Transform;
+  createDecompress: () => Transform;
+};
+
+type ZstdTransformConstructor = new () => Transform;
 
 // node:zlib ships zstd since Node 22.15/23.8; Bun may not implement it yet.
 // Feature-detect so the Bun path writes plain JSONL archives instead of
@@ -36,6 +44,35 @@ function resolveZstdCodec(): ZstdCodec | null {
 
 const zstdCodec = resolveZstdCodec();
 
+function resolveZstdStreamCodec(): ZstdStreamCodec | null {
+  const candidate = zlib as Partial<{
+    createZstdCompress: () => Transform;
+    createZstdDecompress: () => Transform;
+    ZstdCompress: ZstdTransformConstructor;
+    ZstdDecompress: ZstdTransformConstructor;
+  }>;
+  const ZstdCompress = candidate.ZstdCompress;
+  const ZstdDecompress = candidate.ZstdDecompress;
+  const createCompress =
+    typeof candidate.createZstdCompress === "function"
+      ? candidate.createZstdCompress.bind(zlib)
+      : typeof ZstdCompress === "function"
+        ? () => new ZstdCompress()
+        : null;
+  const createDecompress =
+    typeof candidate.createZstdDecompress === "function"
+      ? candidate.createZstdDecompress.bind(zlib)
+      : typeof ZstdDecompress === "function"
+        ? () => new ZstdDecompress()
+        : null;
+  if (!createCompress || !createDecompress) {
+    return null;
+  }
+  return { createCompress, createDecompress };
+}
+
+const zstdStreamCodec = resolveZstdStreamCodec();
+
 /** Strips the optional zstd suffix so archive name parsers see one shape. */
 export function stripSessionArchiveCompressionSuffix(fileName: string): string {
   return fileName.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
@@ -55,6 +92,31 @@ export function encodeSessionArchiveContent(content: string): {
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
   // rollouts; archives are write-once so speed matters less than footprint.
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
+}
+
+/** Creates a bounded-memory archive encoder when streaming zstd is available. */
+export function createSessionArchiveCompressionStream(): {
+  stream: Transform | null;
+  suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
+} {
+  if (!zstdStreamCodec) {
+    // Supported Node releases expose zstd transforms alongside sync helpers.
+    // A truly sync-only compatibility runtime stays on plain JSONL because a
+    // sync fallback would materialize the transcript and defeat this contract.
+    return { stream: null, suffix: "" };
+  }
+  return {
+    stream: zstdStreamCodec.createCompress(),
+    suffix: SESSION_ARCHIVE_ZSTD_SUFFIX,
+  };
+}
+
+/** Creates the decoder required to compare a compressed archive as a byte stream. */
+export function createSessionArchiveDecompressionStream(): Transform {
+  if (!zstdStreamCodec) {
+    throw new Error("Cannot stream compressed transcript archive: this runtime lacks zstd support");
+  }
+  return zstdStreamCodec.createDecompress();
 }
 
 /** Reads an archived transcript, transparently decompressing zstd artifacts. */

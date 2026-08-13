@@ -206,7 +206,7 @@ export async function trimTranscriptForManualCompact(
       );
     }
     const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
-    const archivedPath = writeTranscriptArchive({
+    const archivedPath = await writeTranscriptArchive({
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       content: serializeJsonlLines(lines),
       reason: "bak",

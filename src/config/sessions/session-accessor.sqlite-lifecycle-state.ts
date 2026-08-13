@@ -244,6 +244,9 @@ export function deleteMaterializedSessionStatePlans(
     if (!sqliteSessionStateDeleteSnapshotsEqual(currentSnapshot, plan.snapshot)) {
       throw new Error(`SQLite session state changed before deletion for ${plan.sessionId}`);
     }
+    if (plan.archiveTranscript && plan.snapshot.lastSeq !== null && !plan.archivedTranscript) {
+      throw new Error(`SQLite transcript archive missing before deletion for ${plan.sessionId}`);
+    }
     deleteSqliteSessionStateRows(database, plan.sessionId);
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);

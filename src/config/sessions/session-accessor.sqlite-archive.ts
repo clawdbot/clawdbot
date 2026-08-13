@@ -1,14 +1,22 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  publishFileNoClobber,
+  syncDirectory,
+} from "../../infra/directory-durability.js";
+import { sameFileIdentity, type FileIdentityStat } from "../../infra/fs-safe-advanced.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
+  createSessionArchiveCompressionStream,
+  createSessionArchiveDecompressionStream,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
 import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
@@ -83,12 +91,64 @@ function resolveSqliteTranscriptArchivePath(params: {
   return archivePath;
 }
 
-function findMatchingSqliteTranscriptArchive(params: {
+type TranscriptArchiveDigest = {
+  byteLength: number;
+  sha256: string;
+};
+
+type SqliteTranscriptArchiveContent =
+  | { content: string; contentChunks?: never }
+  | { content?: never; contentChunks: Iterable<Buffer> };
+
+function transcriptArchiveDigestsEqual(
+  left: TranscriptArchiveDigest | null,
+  right: TranscriptArchiveDigest,
+): boolean {
+  return left?.byteLength === right.byteLength && left.sha256 === right.sha256;
+}
+
+async function readTranscriptArchiveDigest(params: {
+  archivePath: string;
+  compressed?: boolean;
+}): Promise<TranscriptArchiveDigest | null> {
+  const hash = createHash("sha256");
+  let byteLength = 0;
+  let decoder: ReturnType<typeof createSessionArchiveDecompressionStream> | null = null;
+  let fileHandle: fs.promises.FileHandle | undefined;
+  let file: fs.ReadStream | undefined;
+  try {
+    decoder =
+      (params.compressed ?? params.archivePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX))
+        ? createSessionArchiveDecompressionStream()
+        : null;
+    fileHandle = await fs.promises.open(params.archivePath, "r");
+    file = fileHandle.createReadStream({ autoClose: false });
+    const decoded = decoder ?? file;
+    if (decoder) {
+      file.once("error", (error) => decoder?.destroy(error));
+      file.pipe(decoder);
+    }
+    for await (const value of decoded) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      byteLength += chunk.length;
+      hash.update(chunk);
+    }
+    return { byteLength, sha256: hash.digest("hex") };
+  } catch {
+    return null;
+  } finally {
+    file?.destroy();
+    decoder?.destroy();
+    await fileHandle?.close().catch(() => undefined);
+  }
+}
+
+async function findMatchingSqliteTranscriptArchiveStream(params: {
   archiveDirectory: string;
-  content: string;
+  expected: TranscriptArchiveDigest;
   reason: SessionArchiveReason;
   sessionId: string;
-}): string | null {
+}): Promise<string | null> {
   let entries: string[];
   try {
     entries = fs.readdirSync(params.archiveDirectory);
@@ -101,16 +161,16 @@ function findMatchingSqliteTranscriptArchive(params: {
       continue;
     }
     const archivePath = path.join(params.archiveDirectory, entry);
-    const compressed = entry.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
     try {
-      const stat = fs.statSync(archivePath);
-      if (!stat.isFile()) {
+      if (!fs.statSync(archivePath).isFile()) {
         continue;
       }
-      if (!compressed && stat.size !== Buffer.byteLength(params.content, "utf8")) {
-        continue;
-      }
-      if (readSessionArchiveContentSync(archivePath) === params.content) {
+      if (
+        transcriptArchiveDigestsEqual(
+          await readTranscriptArchiveDigest({ archivePath }),
+          params.expected,
+        )
+      ) {
         return archivePath;
       }
     } catch {
@@ -120,64 +180,221 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-/** Writes or reuses a transcript archive and returns its durable path. */
-export function writeTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string {
-  fs.mkdirSync(params.archiveDirectory, { recursive: true });
-  const existing = findMatchingSqliteTranscriptArchive(params);
-  if (existing) {
-    return existing;
-  }
-  // Archives are the long-lived cold tier; compress when the runtime can so
-  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
-  const encoded = encodeSessionArchiveContent(params.content);
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const archivePath = `${resolveSqliteTranscriptArchivePath({
-      archiveDirectory: params.archiveDirectory,
-      reason: params.reason,
-      sessionId: params.sessionId,
-      nowMs: Date.now() + attempt,
-    })}${encoded.suffix}`;
-    if (fs.existsSync(archivePath)) {
-      continue;
+async function writeDurableArchiveStreamExclusive(params: {
+  compressor: NodeJS.ReadWriteStream | null;
+  contentChunks: Iterable<Buffer>;
+  filePath: string;
+}): Promise<TranscriptArchiveDigest> {
+  const fd = fs.openSync(params.filePath, "wx", 0o600);
+  const output = fs.createWriteStream(params.filePath, {
+    autoClose: false,
+    emitClose: false,
+    fd,
+  });
+  const hash = createHash("sha256");
+  let byteLength = 0;
+  const measure = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += bytes.length;
+      hash.update(bytes);
+      callback(null, bytes);
+    },
+  });
+  let result: TranscriptArchiveDigest | undefined;
+  let operationError: Error | undefined;
+  try {
+    const input = Readable.from(params.contentChunks, {
+      highWaterMark: 1,
+      objectMode: false,
+    });
+    if (params.compressor) {
+      await pipeline(input, measure, params.compressor, output);
+    } else {
+      await pipeline(input, measure, output);
     }
-    const tempPath = `${archivePath}.${randomUUID()}.tmp`;
-    try {
-      writeDurableFileExclusive(tempPath, encoded.bytes);
-      fs.renameSync(tempPath, archivePath);
-      syncDirectoryBestEffortSync(params.archiveDirectory);
-      // Full readback is bounded by the same single-generation content held by
-      // this Worker (Node string limits cap both); a partial
-      // or corrupt archive must fail here, before any rows are reclaimed.
-      if (readSessionArchiveContentSync(archivePath) !== params.content) {
-        fs.rmSync(archivePath, { force: true });
-        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
-      }
-      return archivePath;
-    } catch (error) {
-      fs.rmSync(tempPath, { force: true });
-      if ((error as { code?: unknown })?.code === "EEXIST") {
-        continue;
-      }
-      throw error;
+    fs.fsyncSync(fd);
+    result = { byteLength, sha256: hash.digest("hex") };
+  } catch (error) {
+    operationError =
+      error instanceof Error
+        ? error
+        : new Error("SQLite transcript archive write failed", { cause: error });
+  }
+  let closeError: Error | undefined;
+  try {
+    fs.closeSync(fd);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EBADF") {
+      closeError =
+        error instanceof Error
+          ? error
+          : new Error("SQLite transcript archive close failed", { cause: error });
     }
   }
-  throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
+  if (operationError !== undefined) {
+    throw operationError;
+  }
+  if (closeError !== undefined) {
+    throw closeError;
+  }
+  if (!result) {
+    throw new Error(`SQLite transcript archive write produced no result for ${params.filePath}`);
+  }
+  return result;
 }
 
-// Windows rejects fsync on read-only handles, so keep the exclusive writable
-// descriptor open through both the write and durability boundary.
-function writeDurableFileExclusive(filePath: string, content: Buffer): void {
-  const fd = fs.openSync(filePath, "wx", 0o600);
+function removeArchiveTempBestEffort(tempPath: string): void {
   try {
-    fs.writeFileSync(fd, content);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+    fs.rmSync(tempPath, { force: true });
+  } catch {
+    // Preserve the archive or snapshot failure; abandoned temps are never retained archives.
+  }
+}
+
+function removePublishedArchiveIfOwnedBestEffort(
+  archivePath: string,
+  expectedIdentity: FileIdentityStat,
+): boolean {
+  let currentIdentity: fs.Stats;
+  try {
+    currentIdentity = fs.lstatSync(archivePath);
+  } catch {
+    return false;
+  }
+  if (
+    currentIdentity.isSymbolicLink() ||
+    !currentIdentity.isFile() ||
+    !sameFileIdentity(currentIdentity, expectedIdentity)
+  ) {
+    return false;
+  }
+  // Node has no cross-platform unlink-by-identity primitive. Keep the owner
+  // check and unlink synchronous so no in-process task can replace the path.
+  try {
+    fs.unlinkSync(archivePath);
+    return true;
+  } catch {
+    // Preserve the verification failure; a later retention sweep can retry cleanup.
+    return false;
+  }
+}
+
+function isArchivePublicationCollision(error: unknown): boolean {
+  return (
+    (error instanceof FsSafeError && error.code === "already-exists") ||
+    (error as NodeJS.ErrnoException)?.code === "EEXIST"
+  );
+}
+
+/** Writes or reuses a transcript archive through one bounded-memory publication path. */
+export async function writeTranscriptArchive(
+  params: {
+    archiveDirectory: string;
+    reason: SessionArchiveReason;
+    sessionId: string;
+    validateSource?: () => Promise<void> | void;
+  } & SqliteTranscriptArchiveContent,
+): Promise<string> {
+  if ((params.content === undefined) === (params.contentChunks === undefined)) {
+    throw new Error("SQLite transcript archive requires exactly one content source");
+  }
+  fs.mkdirSync(params.archiveDirectory, { recursive: true });
+  const encoding = createSessionArchiveCompressionStream();
+  const nowMs = Date.now();
+  const tempPath = `${resolveSqliteTranscriptArchivePath({
+    archiveDirectory: params.archiveDirectory,
+    reason: params.reason,
+    sessionId: params.sessionId,
+    nowMs,
+  })}${encoding.suffix}.${randomUUID()}.tmp`;
+  try {
+    const expected = await writeDurableArchiveStreamExclusive({
+      compressor: encoding.stream,
+      contentChunks: params.contentChunks ?? [Buffer.from(params.content ?? "", "utf8")],
+      filePath: tempPath,
+    });
+    await params.validateSource?.();
+    const existing = await findMatchingSqliteTranscriptArchiveStream({
+      archiveDirectory: params.archiveDirectory,
+      expected,
+      reason: params.reason,
+      sessionId: params.sessionId,
+    });
+    if (existing) {
+      removeArchiveTempBestEffort(tempPath);
+      return existing;
+    }
+    if (
+      !transcriptArchiveDigestsEqual(
+        await readTranscriptArchiveDigest({
+          archivePath: tempPath,
+          compressed: encoding.suffix === SESSION_ARCHIVE_ZSTD_SUFFIX,
+        }),
+        expected,
+      )
+    ) {
+      throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
+    }
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const archivePath = `${resolveSqliteTranscriptArchivePath({
+        archiveDirectory: params.archiveDirectory,
+        reason: params.reason,
+        sessionId: params.sessionId,
+        nowMs: nowMs + attempt,
+      })}${encoding.suffix}`;
+      let publishedIdentity: FileIdentityStat | undefined;
+      try {
+        const publication = await publishFileNoClobber(tempPath, archivePath, {
+          durability: "degrade",
+          moveSource: true,
+          strategy: "link-or-copy",
+        });
+        publishedIdentity = publication.identity;
+        // Publication fences the bytes, but archive pruning can still unlink the
+        // pathname after the helper's identity check. Preserve the lifecycle's
+        // post-publication existence and content fence before rows may be deleted.
+        if (
+          !transcriptArchiveDigestsEqual(
+            await readTranscriptArchiveDigest({ archivePath }),
+            expected,
+          )
+        ) {
+          throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
+        }
+        return archivePath;
+      } catch (error) {
+        const publicationFailure = getPublishFileExclusiveFailureDetails(error);
+        const cleanupIdentity =
+          publishedIdentity ??
+          (publicationFailure?.targetCreated && publicationFailure.cleanup !== "removed"
+            ? publicationFailure.targetIdentity
+            : undefined);
+        if (cleanupIdentity) {
+          const removed = removePublishedArchiveIfOwnedBestEffort(archivePath, cleanupIdentity);
+          if (removed) {
+            await syncDirectory(path.dirname(archivePath)).catch(() => undefined);
+          }
+        }
+        if (isArchivePublicationCollision(error)) {
+          if (
+            transcriptArchiveDigestsEqual(
+              await readTranscriptArchiveDigest({ archivePath }),
+              expected,
+            )
+          ) {
+            removeArchiveTempBestEffort(tempPath);
+            return archivePath;
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
+  } catch (error) {
+    removeArchiveTempBestEffort(tempPath);
+    throw error;
   }
 }
 

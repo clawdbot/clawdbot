@@ -17,7 +17,6 @@ export {
   publishFileExclusive,
   sha256File,
   syncDirectory,
-  syncDirectoryBestEffortSync,
   type DirectorySyncOutcome,
   type DirectoryReceipt,
   type DurableDirectoryReceipt,

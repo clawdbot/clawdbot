@@ -559,7 +559,7 @@ async function repairCanonicalSessionGroup(
         env: params.env,
         path: destination.sqlitePath,
       });
-      writeTranscriptArchive({
+      await writeTranscriptArchive({
         archiveDirectory,
         content: destinationContent,
         reason: "deleted",

@@ -114,3 +114,47 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     db.close();
   }
 }
+
+/**
+ * Run an asynchronous read against a connection that remains open until the
+ * operation settles. File-backed reads use a private handle so suspension can
+ * never retain or borrow the process writer handle.
+ */
+export async function withOpenClawAgentDatabaseReadOnlyAsync<T>(
+  operation: (database: OpenClawAgentReadOnlyDatabase) => Promise<T>,
+  options: OpenClawAgentDatabaseOptions,
+): Promise<OpenClawAgentDatabaseReadOnlyResult<T>> {
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
+    throw new Error("Asynchronous read-only operations are not supported for incognito databases");
+  }
+  if (!fs.existsSync(pathname)) {
+    return { found: false, reason: "database-missing" };
+  }
+  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedAgentSchemaVersion(db, pathname);
+    assertCanonicalAgentMediaPersistenceVersion(db, pathname);
+    const schemaMeta = readExistingAgentSchemaMeta(db);
+    if (!schemaMeta) {
+      return { found: false, reason: "schema-missing" };
+    }
+    assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
+    try {
+      return {
+        found: true,
+        value: await operation({ agentId, db, path: pathname }),
+      };
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        return { found: false, reason: "table-missing" };
+      }
+      throw error;
+    }
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+  }
+}

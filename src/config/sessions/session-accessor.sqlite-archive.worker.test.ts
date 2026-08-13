@@ -1,9 +1,10 @@
-// SQLite transcript archive worker tests cover off-main execution and snapshot fencing.
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+// SQLite transcript archive worker tests cover off-main execution and snapshot fencing.
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -47,6 +48,7 @@ describe("SQLite transcript archive worker", () => {
   });
 
   afterEach(() => {
+    __setFsSafeTestHooksForTest();
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -119,36 +121,26 @@ describe("SQLite transcript archive worker", () => {
       createTranscriptEvent(sessionId, "durable archive first"),
     ]);
 
-    const originalLinkSync = fs.linkSync;
-    const originalRenameSync = fs.renameSync;
-    const entryObservedDuringArchivePublish: boolean[] = [];
-    const observeArchivePublish = (archivePath: unknown) => {
-      if (String(archivePath).includes(`${sessionId}.jsonl.deleted.`)) {
-        entryObservedDuringArchivePublish.push(
-          loadSessionEntry({ sessionKey, storePath })?.sessionId === sessionId,
-        );
-      }
-    };
     const openSpy = vi.spyOn(fs, "openSync");
     const fsyncSpy = vi.spyOn(fs, "fsyncSync");
-    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((...args) => {
-      observeArchivePublish(args[1]);
-      return originalLinkSync(...args);
-    });
-    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((...args) => {
-      observeArchivePublish(args[1]);
-      return originalRenameSync(...args);
+    const publishedWhileEntryPresent: string[] = [];
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (_method, targetPath) => {
+        publishedWhileEntryPresent.push(targetPath);
+        expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
+      },
     });
 
     let archivedPath: string | null = null;
     try {
       const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeTranscriptArchiveInWorker(
+      const workerResult = await materializeTranscriptArchiveInWorker(
         planArchiveWorker(database, path.dirname(storePath), sessionId),
       );
       archivedPath = workerResult.archivedPath;
       expect(archivedPath).not.toBeNull();
-      expect(entryObservedDuringArchivePublish).toEqual([true]);
+      expect(publishedWhileEntryPresent).toEqual([archivedPath]);
+      expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
       const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
         String(args[0]).includes(`${sessionId}.jsonl.deleted.`) && args[1] === "wx" ? [index] : [],
       );
@@ -156,8 +148,7 @@ describe("SQLite transcript archive worker", () => {
       const archiveTempOpenIndex = archiveTempOpenIndexes[0] ?? -1;
       expect(fsyncSpy).toHaveBeenCalledWith(openSpy.mock.results[archiveTempOpenIndex]?.value);
     } finally {
-      renameSpy.mockRestore();
-      linkSpy.mockRestore();
+      __setFsSafeTestHooksForTest();
       fsyncSpy.mockRestore();
       openSpy.mockRestore();
     }
@@ -449,6 +440,21 @@ describe("SQLite transcript archive worker", () => {
     });
   });
 
+  it("keeps transcript rows when an archive result is missing", async () => {
+    const sessionId = "missing-archive-result-session";
+    const sessionKey = "agent:main:missing-archive-result";
+    const scope = { sessionKey, sessionId, storePath };
+    const event = createTranscriptEvent(sessionId, "must survive a missing archive result");
+    await replaceTranscriptEvents(scope, [event]);
+    const database = openLifecycleTestDatabase(storePath);
+    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
+
+    expect(() =>
+      deleteMaterializedPlans(database, [{ ...plan, archivedTranscript: null }], sessionKey),
+    ).toThrow(`SQLite transcript archive missing before deletion for ${sessionId}`);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
+  });
+
   it("keeps rows when a transcript changes after its archive snapshot", async () => {
     const sessionId = "stale-archive-snapshot-session";
     const sessionKey = "agent:main:stale-archive-snapshot";
@@ -647,13 +653,34 @@ describe("SQLite transcript archive worker", () => {
     fs.writeFileSync(tempPath, `${line}\n`, "utf8");
 
     const database = openLifecycleTestDatabase(storePath);
-    const result = materializeTranscriptArchiveInWorker(
+    const result = await materializeTranscriptArchiveInWorker(
       planArchiveWorker(database, archiveDirectory, sessionId),
     );
 
     expect(result.archivedPath).not.toBe(tempPath);
     expect(fs.existsSync(tempPath)).toBe(true);
     expect(readArchiveLines(result.archivedPath ?? undefined)).toEqual([line]);
+  });
+
+  it("does not create an archive for an empty transcript snapshot", async () => {
+    const sessionId = "empty-transcript-archive-session";
+    const sessionKey = "agent:main:empty-transcript-archive";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    const archiveDirectory = path.dirname(storePath);
+    const database = openLifecycleTestDatabase(storePath);
+
+    const result = await materializeTranscriptArchiveInWorker(
+      planArchiveWorker(database, archiveDirectory, sessionId),
+    );
+
+    expect(result).toEqual({ archivedPath: null, sessionId });
+    expect(
+      fs.existsSync(archiveDirectory)
+        ? fs
+            .readdirSync(archiveDirectory)
+            .filter((entry) => entry.startsWith(`${sessionId}.jsonl.deleted.`))
+        : [],
+    ).toEqual([]);
   });
 
   it("reuses a matching archive before deleting entry rows", async () => {
@@ -687,7 +714,7 @@ describe("SQLite transcript archive worker", () => {
 
     try {
       const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeTranscriptArchiveInWorker(
+      const workerResult = await materializeTranscriptArchiveInWorker(
         planArchiveWorker(database, path.dirname(storePath), sessionId),
       );
       expect(workerResult.archivedPath).toBe(archivePath);
@@ -708,6 +735,50 @@ describe("SQLite transcript archive worker", () => {
         sourcePath: path.join(path.dirname(storePath), `${sessionId}.jsonl`),
       },
     ]);
+  });
+
+  it("keeps rows changed while a published archive is being verified", async () => {
+    const sessionId = "changed-during-archive-verification";
+    const sessionKey = "agent:main:changed-during-archive-verification";
+    const scope = { sessionKey, sessionId, storePath };
+    const original = createTranscriptEvent(sessionId, "stable read snapshot");
+    await replaceTranscriptEvents(scope, [original]);
+    const database = openLifecycleTestDatabase(storePath);
+    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
+    let mutationCount = 0;
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: () => {
+        mutationCount += 1;
+        appendTranscriptEvent(database, sessionId);
+      },
+    });
+
+    let workerResult: Awaited<ReturnType<typeof materializeTranscriptArchiveInWorker>>;
+    try {
+      workerResult = await materializeTranscriptArchiveInWorker(plan);
+    } finally {
+      __setFsSafeTestHooksForTest();
+    }
+    expect(mutationCount).toBe(1);
+    expect(readArchiveLines(workerResult.archivedPath ?? undefined)).toEqual([
+      JSON.stringify(original),
+    ]);
+    const materialized = [
+      {
+        ...plan,
+        archivedTranscript: workerResult.archivedPath
+          ? {
+              archivedPath: workerResult.archivedPath,
+              sourcePath: path.join(path.dirname(storePath), `${sessionId}.jsonl`),
+            }
+          : null,
+      },
+    ];
+
+    expect(() => deleteMaterializedPlans(database, materialized, sessionKey)).toThrow(
+      `SQLite session state changed before deletion for ${sessionId}`,
+    );
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 });
 
