@@ -35,6 +35,7 @@ const INSTALL_INPUT_FILES = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   ".npmrc",
+  ".pnpmfile.mjs",
   ".pnpmfile.cjs",
   "pnpmfile.cjs",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
