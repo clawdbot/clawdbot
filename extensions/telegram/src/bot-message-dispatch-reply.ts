@@ -439,7 +439,10 @@ export async function deliverReply(
     if (finalization && turn.bufferedFinalSettlement) {
       turn.bufferedFinalSettlement.visibleReplySent ||= blockDelivered;
     }
-    trackBlockMedia(turn, blockDelivered, info.kind, effectivePayload);
+    // Streaming block segments deliver text only (finalizePreview strips media in
+    // lane-delivery-text-deliverer). Media is tracked after a real sendPayload in
+    // the non-segmented branches below; recording it here lets the final dedup
+    // drop attachments that were never actually sent.
     return toTelegramReplyDeliveryResult(blockDelivered, finalization);
   }
 
