@@ -375,10 +375,15 @@ export function createSlackProgressRuntime(runtimeParams: {
     progressDraft.markFinalReplyStarted();
     const streamReady = await nativeTransport.waitForStart();
     const finalThreadTs = delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;
+    // A short narration leaves the session buffered locally (`delivered` false)
+    // because `stop` can be its first network call. Requiring delivery here
+    // sent the final normally and then finalized the stream anyway, which is
+    // the two-message outcome this path exists to avoid; stop-time rejection
+    // already falls back through SlackStreamNotDeliveredError.
     const canFinishInStream =
       payload.isError !== true &&
       streamReady &&
-      delivery.streamSession?.delivered === true &&
+      Boolean(delivery.streamSession) &&
       delivery.isStreamingEligible(payload, { maxTextBytes: SLACK_EDIT_TEXT_MAX_BYTES });
     if (canFinishInStream) {
       // Flush the terminal task row before buffering the answer so Slack

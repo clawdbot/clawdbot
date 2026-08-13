@@ -2650,6 +2650,27 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 
+  it("keeps the final inside a native stream that is still buffered locally", async () => {
+    // A short narration leaves the SDK session un-flushed (`delivered` false);
+    // `stop` is then its first network call. Delivering the final normally here
+    // would post one message and finalize the stream into a second one.
+    startSlackStreamMock.mockResolvedValue({
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "",
+    });
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
+  });
+
   it("emits message_sent only once for native progress final replies (no double emit)", async () => {
     stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.888" });
     await dispatchNativeProgressScenario({
