@@ -26,9 +26,16 @@ function readPackageJson(): RootPackageJson {
   return JSON.parse(fs.readFileSync("package.json", "utf8")) as RootPackageJson;
 }
 
-function readWindowsCiCoverageScript(): string {
+function readWindowsCiPartScripts(): [string, string] {
   const scripts = readPackageJson().scripts;
-  return [scripts["test:windows:ci:1"], scripts["test:windows:ci:2"]].join(" ");
+  return [
+    expectDefined(scripts["test:windows:ci:1"], "Windows CI part 1 script"),
+    expectDefined(scripts["test:windows:ci:2"], "Windows CI part 2 script"),
+  ];
+}
+
+function readWindowsCiCoverageScript(): string {
+  return readWindowsCiPartScripts().join(" ");
 }
 
 function readWindowsCiTargets(script: string): string[] {
@@ -198,7 +205,7 @@ describe("package scripts", () => {
 
   it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
-    const partScripts = [scripts["test:windows:ci:1"], scripts["test:windows:ci:2"]];
+    const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
     const allTargets = partTargets.flat();
 

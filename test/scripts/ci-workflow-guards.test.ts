@@ -2646,7 +2646,11 @@ NODE
 
     expect(blacksmith.status, blacksmith.output).toBe(0);
     expect(github.status, github.output).toBe(0);
-    expect(JSON.parse(expectDefined(blacksmith.outputs.checks_windows_matrix)).include).toEqual([
+    expect(
+      JSON.parse(
+        expectDefined(blacksmith.outputs.checks_windows_matrix, "Blacksmith Windows matrix"),
+      ).include,
+    ).toEqual([
       {
         check_name: "checks-windows-node-test",
         runtime: "node",
@@ -2654,7 +2658,10 @@ NODE
         runner: "blacksmith-8vcpu-windows-2025",
       },
     ]);
-    expect(JSON.parse(expectDefined(github.outputs.checks_windows_matrix)).include).toEqual([
+    expect(
+      JSON.parse(expectDefined(github.outputs.checks_windows_matrix, "GitHub Windows matrix"))
+        .include,
+    ).toEqual([
       { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
       { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
     ]);
@@ -7722,7 +7729,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(manifest.status, manifest.output).toBe(0);
         return [
           runnerBackend,
-          JSON.parse(expectDefined(manifest.outputs.qa_smoke_ci_matrix)).include,
+          JSON.parse(
+            expectDefined(manifest.outputs.qa_smoke_ci_matrix, `${runnerBackend} QA smoke matrix`),
+          ).include,
         ];
       }),
     ) as Record<"blacksmith" | "github", Array<{ docker_cache?: boolean; slug: string }>>;
