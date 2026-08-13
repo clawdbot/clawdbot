@@ -25,23 +25,32 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
 
   let error: string | null = null;
   let agentsList: SkillsRouteData["agentsList"] = null;
+  let selectedAgentId: string | null = null;
   let report: SkillsRouteData["report"] = null;
   try {
-    agentsList = await agents.ensureList();
+    const loadedAgentsList = await agents.ensureList();
+    agentsList = loadedAgentsList;
+    selectedAgentId = loadedAgentsList?.agents.some(
+      (agent) => agent.id === loadedAgentsList.defaultId,
+    )
+      ? loadedAgentsList.defaultId
+      : null;
   } catch (err) {
     error = formatUiError(err);
   }
-  try {
-    report = (await loadSkillStatusReport(client, null)) ?? null;
-  } catch (err) {
-    error ??= formatUiError(err);
+  if (selectedAgentId) {
+    try {
+      report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
+    } catch (err) {
+      error ??= formatUiError(err);
+    }
   }
   return {
     gateway,
     gatewaySnapshot,
     agents,
     agentsList,
-    selectedAgentId: null,
+    selectedAgentId,
     report,
     error,
   };

@@ -441,6 +441,44 @@ describe("handleCompactCommand", () => {
     );
   });
 
+  it("keeps the selected agent when compacting an ambiguous global session", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("marie-clawndo");
+    const cfg = {
+      agents: {
+        entries: {
+          main: {},
+          "marie-clawndo": {},
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", cfg),
+        agentId: "marie-clawndo",
+        sessionKey: "global",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: cfg,
+      agentId: "marie-clawndo",
+    });
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
+      agentId: "marie-clawndo",
+    });
+  });
+
   it("uses the resolved command store for compaction", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,

@@ -824,11 +824,15 @@ describe("parseSystemAgentOperation", () => {
     expect(runConfigSet).not.toHaveBeenCalled();
   });
 
-  it("still blocks per-agent routing writes that hit the default agent", async () => {
+  it("still blocks per-agent routing writes that hit the system agent owner", async () => {
     const tempDir = opTempDirs.make("openclaw-default-agent-route-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     mockConfig.setConfig({
-      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        list: [{ id: "main" }, { id: "helper" }],
+      },
     });
     const { runtime } = createSystemAgentTestRuntime();
     const runConfigSet = vi.fn(async () => {});
