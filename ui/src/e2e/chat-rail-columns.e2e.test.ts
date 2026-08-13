@@ -480,11 +480,18 @@ suite.define(() => {
           await expectSingleRailSeparator(page, ".chat-tasks-rail-resizer");
           await expect
             .poll(() =>
+              page
+                .locator(".chat-main")
+                .evaluate((element) => element.classList.contains("chat-main--rail-docked")),
+            )
+            .toBe(false);
+          await expect
+            .poll(() =>
               companion
                 .locator(".chat-session-rail--expanded")
                 .evaluate((element) => getComputedStyle(element).borderLeftWidth),
             )
-            .toBe("0px");
+            .toBe("1px");
           await expectSharedRailActions([
             workspace.getByRole("button", { name: "Collapse session workspace" }),
             tasks.getByRole("button", { name: "Collapse background tasks" }),
@@ -524,6 +531,13 @@ suite.define(() => {
         await workspace.getByRole("button", { name: "Collapse session workspace" }).click();
         await tasks.getByRole("button", { name: "Collapse background tasks" }).click();
         if (proofPhase === "after") {
+          await expect
+            .poll(() =>
+              page
+                .locator(".chat-main")
+                .evaluate((element) => element.classList.contains("chat-main--rail-docked")),
+            )
+            .toBe(true);
           await expectSingleRailSeparator(page, ".chat-companion-rail-resizer");
           await expect
             .poll(() =>
