@@ -95,6 +95,8 @@ export type FollowupRun = {
   disableCollectBatching?: boolean;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
+  /** Internal marker for the one-shot empty-reply auto-recovery retry. */
+  emptyReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
   protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
