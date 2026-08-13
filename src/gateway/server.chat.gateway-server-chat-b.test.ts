@@ -6488,10 +6488,13 @@ describe("gateway server chat", () => {
         { sessionKey: "main", limit: 10 },
       );
       expect(ordinary.ok).toBe(true);
-      expect(ordinary.payload?.messages?.map((message) => message.content)).toEqual([
-        "kept question",
-        "kept answer",
-        "current tail",
+      expect(ordinary.payload?.messages).toEqual([
+        expect.objectContaining({ content: "kept question" }),
+        expect.objectContaining({ content: "kept answer" }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({ id: "reset-boundary", kind: "reset" }),
+        }),
+        expect.objectContaining({ content: "current tail" }),
       ]);
 
       const anchored = await rpcReq<{ messages?: Array<{ content?: string }> }>(
@@ -6522,10 +6525,12 @@ describe("gateway server chat", () => {
         },
       );
       expect(visibleAnchor.ok).toBe(true);
-      expect(visibleAnchor.payload?.messages?.map((message) => message.content)).toEqual([
-        "kept question",
-        "kept answer",
-        "current tail",
+      expect(visibleAnchor.payload?.messages).toEqual([
+        expect.objectContaining({ content: "kept question" }),
+        expect.objectContaining({ content: "kept answer" }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({ id: "reset-boundary", kind: "reset" }),
+        }),
       ]);
     });
   });

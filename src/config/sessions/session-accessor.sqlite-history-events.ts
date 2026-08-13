@@ -17,6 +17,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  readActiveMessageRange,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
@@ -127,10 +128,10 @@ function readVisibleHistoryRange(
   return events;
 }
 
-function readVisibleMessageById(
+function readActiveMessageById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-): SessionTranscriptMessageEvent | undefined {
+): { event: TranscriptEvent; messagePosition: number } | undefined {
   const db = getActiveTranscriptKysely(projection.database);
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
@@ -154,14 +155,26 @@ function readVisibleMessageById(
   if (!row || row.message_position === null) {
     return undefined;
   }
+  return {
+    event: JSON.parse(row.event_json) as TranscriptEvent,
+    messagePosition: row.message_position,
+  };
+}
+
+function readVisibleMessageById(
+  projection: CurrentTranscriptProjection,
+  eventId: string,
+): SessionTranscriptMessageEvent | undefined {
+  const anchor = readActiveMessageById(projection, eventId);
+  if (!anchor) {
+    return undefined;
+  }
   const visible = resolveVisibleMessagePositions(projection);
   const logicalPosition =
-    row.message_position >= visible.postStart
-      ? visible.kept.length + row.message_position - visible.postStart
-      : visible.kept.indexOf(row.message_position);
-  return logicalPosition < 0
-    ? undefined
-    : { event: JSON.parse(row.event_json) as TranscriptEvent, seq: logicalPosition + 1 };
+    anchor.messagePosition >= visible.postStart
+      ? visible.kept.length + anchor.messagePosition - visible.postStart
+      : visible.kept.indexOf(anchor.messagePosition);
+  return logicalPosition < 0 ? undefined : { event: anchor.event, seq: logicalPosition + 1 };
 }
 
 function resolveHistoryEventById(
@@ -296,8 +309,11 @@ export function readSessionTranscriptHistoryAnchorPage(
 ): SessionTranscriptMessageAnchorPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
-    const anchor = resolveHistoryEventById(projection, options.messageId, history);
-    if (!anchor) {
+    const visibleAnchor = resolveHistoryEventById(projection, options.messageId, history);
+    const hiddenMessageAnchor = visibleAnchor
+      ? undefined
+      : readActiveMessageById(projection, options.messageId);
+    if (!visibleAnchor && !hiddenMessageAnchor) {
       return {
         events: [],
         found: false,
@@ -310,19 +326,24 @@ export function readSessionTranscriptHistoryAnchorPage(
       1,
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 1),
     );
-    const anchorPosition = anchor.seq - 1;
+    const anchorPosition = visibleAnchor
+      ? visibleAnchor.seq - 1
+      : hiddenMessageAnchor!.messagePosition;
+    const totalMessages = visibleAnchor ? history.total : projection.state.activeMessageCount;
     const newerMessages = Math.floor(pageSize / 2);
     const olderMessages = pageSize - newerMessages - 1;
-    const latestStart = Math.max(0, history.total - pageSize);
+    const latestStart = Math.max(0, totalMessages - pageSize);
     const start = Math.min(Math.max(0, anchorPosition - olderMessages), latestStart);
-    const endExclusive = Math.min(history.total, start + pageSize);
+    const endExclusive = Math.min(totalMessages, start + pageSize);
     const readStart = Math.max(0, start - 1);
     return {
-      events: readVisibleHistoryRange(projection, readStart, endExclusive, history),
+      events: visibleAnchor
+        ? readVisibleHistoryRange(projection, readStart, endExclusive, history)
+        : readActiveMessageRange(projection, readStart, endExclusive),
       found: true,
       hasOverreadContext: readStart < start,
-      offset: history.total - endExclusive,
-      totalMessages: history.total,
+      offset: totalMessages - endExclusive,
+      totalMessages,
     };
   });
 }
