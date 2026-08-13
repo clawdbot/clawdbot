@@ -206,6 +206,16 @@ function repairInDatabase(params: {
     changed = true;
   }
   if (!changed) {
+    if (proposal.receipt && currentReceipt && params.proposedReceiptIsStale) {
+      finishCronRunReceiptInDatabase({
+        database: database.db,
+        handle: proposal.receipt,
+        status: "interrupted",
+        finishedAtMs: state.deps.nowMs(),
+        error: "cron: owner exited after run marker retirement",
+      });
+      return { kind: "repaired", notifications };
+    }
     return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
   upsertCronJobRow(database.db, storeKey, job, row.sort_order);
@@ -237,8 +247,8 @@ export function proposeCronRunRecovery(
   };
 }
 
-/** Reconciles only persisted queued markers so a live sibling can adopt dead reservations. */
-export function recoverQueuedCronRunReservations(state: CronServiceState): {
+/** Reconciles the bounded durable marker set so live siblings can adopt dead owners. */
+export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
   repaired: boolean;
   receipts: CronRunReceiptRecoveryCandidate[];
   notifications: DeferredCronNotifications;
@@ -248,10 +258,11 @@ export function recoverQueuedCronRunReservations(state: CronServiceState): {
   const notifications: DeferredCronNotifications = [];
   for (const job of state.store?.jobs ?? []) {
     const queuedAtMs = job.state.queuedAtMs;
-    if (queuedAtMs === undefined) {
+    const runningAtMs = job.state.runningAtMs;
+    if (queuedAtMs === undefined && runningAtMs === undefined) {
       continue;
     }
-    const proposal = proposeCronRunRecovery(state, job.id, queuedAtMs, undefined);
+    const proposal = proposeCronRunRecovery(state, job.id, queuedAtMs, runningAtMs);
     const result = recoverCronRunProposal(state, proposal);
     if (result.kind === "live") {
       if (result.receipt.ownerPid !== process.pid) {

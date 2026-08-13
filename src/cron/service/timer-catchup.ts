@@ -1,5 +1,9 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { findActiveCronRunReceiptInDatabase } from "../store/run-receipt-store.js";
+import {
+  findActiveCronRunReceiptInDatabase,
+  finishCronRunReceiptInDatabase,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
@@ -103,6 +107,13 @@ function commitStartupCatchupRows(params: {
         const reservation = reservationByJobId.get(jobId);
         const ownership = params.state.queuedRunReservationsByJobId.get(jobId);
         if (reservation && ownership?.identity === reservation.reservationIdentity) {
+          finishCronRunReceiptInDatabase({
+            database,
+            handle: ownership.runReceipt,
+            status: "skipped",
+            finishedAtMs: params.state.deps.nowMs(),
+            error: "cron startup reservation abandoned before completion",
+          });
           if (ownership.activationPreviousLastError) {
             job.state.lastError = ownership.activationPreviousLastError.value;
           }
@@ -159,6 +170,10 @@ function commitStartupCatchupRows(params: {
   runPostPersistCronNotifications(params.state, postPersistNotifications);
   applyCronRuntimeRowsToState(params.state, committedJobs);
   for (const reservation of params.reservations) {
+    const ownership = params.state.queuedRunReservationsByJobId.get(reservation.jobId);
+    if (ownership?.identity === reservation.reservationIdentity) {
+      releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
+    }
     releaseQueuedCronRun(params.state, reservation.jobId, reservation.reservationIdentity);
   }
 }

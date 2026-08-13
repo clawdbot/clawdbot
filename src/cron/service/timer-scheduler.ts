@@ -6,6 +6,10 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import {
+  finishCronRunReceiptInDatabase,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { hasScheduledNextRunAtMs, nextWakeAtMs } from "./jobs-scheduling.js";
@@ -18,7 +22,10 @@ import {
   reserveQueuedCronRun,
   resolveRunConcurrency,
 } from "./run-admission.js";
-import { recomputeUnownedCronSchedules, recoverQueuedCronRunReservations } from "./run-recovery.js";
+import {
+  recomputeUnownedCronSchedules,
+  recoverNonTerminalCronRunReceipts,
+} from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
@@ -190,13 +197,13 @@ async function onAdmittedTimer(state: CronServiceState) {
         );
         return [];
       }
-      // Timer-owned liveness reconciliation is bounded to durable queued leases.
-      const queuedRecovery = recoverQueuedCronRunReservations(state);
-      runPostPersistCronNotifications(state, queuedRecovery.notifications);
-      for (const receipt of queuedRecovery.receipts) {
+      // Timer-owned liveness reconciliation is bounded to durable non-terminal markers.
+      const leaseRecovery = recoverNonTerminalCronRunReceipts(state);
+      runPostPersistCronNotifications(state, leaseRecovery.notifications);
+      for (const receipt of leaseRecovery.receipts) {
         enrollForeignReceipt(state, receipt);
       }
-      if (queuedRecovery.repaired) {
+      if (leaseRecovery.repaired) {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       }
       const dueCheckNow = state.deps.nowMs();
@@ -282,7 +289,7 @@ async function onAdmittedTimer(state: CronServiceState) {
                   state,
                   jobIds: [due.id],
                   operationLabel: "cron.skipped-reservation-cleanup",
-                  mutate: ({ jobs }) => {
+                  mutate: ({ database, jobs }) => {
                     const current = jobs.get(due.id);
                     const ownership = state.queuedRunReservationsByJobId.get(due.id);
                     if (
@@ -292,12 +299,23 @@ async function onAdmittedTimer(state: CronServiceState) {
                     ) {
                       return { value: undefined };
                     }
+                    finishCronRunReceiptInDatabase({
+                      database,
+                      handle: ownership.runReceipt,
+                      status: "skipped",
+                      finishedAtMs: state.deps.nowMs(),
+                      error: "cron scheduled reservation became ineligible",
+                    });
                     delete current.state.queuedAtMs;
                     return { upsertJobIds: [current.id], value: current };
                   },
                 });
                 if (committedJob) {
                   applyCronRuntimeRowsToState(state, [committedJob]);
+                }
+                const ownership = state.queuedRunReservationsByJobId.get(due.id);
+                if (ownership?.identity === due.reservationIdentity) {
+                  releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
                 }
                 releaseQueuedCronRun(state, due.id, due.reservationIdentity);
               },

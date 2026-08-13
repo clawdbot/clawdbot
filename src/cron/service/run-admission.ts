@@ -159,6 +159,15 @@ export async function cleanupQueuedCronRunReservations(params: {
             }
             const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
             const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
+            if (!params.transactionHooks) {
+              finishCronRunReceiptInDatabase({
+                database,
+                handle: ownership.runReceipt,
+                status: "skipped",
+                finishedAtMs: state.deps.nowMs(),
+                error: "cron reservation released before completion",
+              });
+            }
             if (!queuedMatches && !runningMatches) {
               continue;
             }
@@ -170,15 +179,6 @@ export async function cleanupQueuedCronRunReservations(params: {
             }
             if (runningMatches) {
               delete job.state.runningAtMs;
-            }
-            if (!params.transactionHooks) {
-              finishCronRunReceiptInDatabase({
-                database,
-                handle: ownership.runReceipt,
-                status: "skipped",
-                finishedAtMs: state.deps.nowMs(),
-                error: "cron reservation released before completion",
-              });
             }
             if (params.recompute && job.enabled && job.state.nextRunAtMs === undefined) {
               recomputeJobNextRunAtMs({
@@ -630,9 +630,13 @@ export async function executeQueuedCronRun(params: {
       };
     }
     return { outcome, handled: (await params.onCompleted?.(outcome)) === true };
-  }).catch((error: unknown) => {
+  }).catch(async (error: unknown) => {
     if (activated) {
-      releaseQueuedCronRun(state, params.jobId, params.reservationIdentity);
+      await cleanupQueuedCronRunReservations({
+        state,
+        reservations: [{ jobId: params.jobId, reservationIdentity: params.reservationIdentity }],
+        recompute: "maintenance",
+      });
     }
     throw error;
   });

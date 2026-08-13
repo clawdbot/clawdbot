@@ -18,6 +18,22 @@ import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 
+/**
+ * Receipt/lease lifecycle (the SQLite status is `running` for the first three rows):
+ *
+ * State            | Transition owner       | Atomic durable change                         | Dead-owner recovery
+ * reserved-queued  | reservation admission  | insert receipt + set job.queuedAtMs            | sibling interrupts receipt + clears exact queued marker
+ * active-running   | execution admission    | advance receipt.startedAtMs + queued→running   | sibling interrupts receipt + repairs exact running marker
+ * settling         | execution/finalizer    | outcome may be recorded; lease stays running   | sibling interrupts markerless receipt or restores finalized task fact
+ * terminal{ok,error,skipped,interrupted,superseded}
+ *                  | finalizer/recovery      | terminalize receipt with exact marker outcome  | no recovery; retained history is bounded
+ *
+ * I1: Every non-terminal receipt has a live owner or is recoverable by any live sibling.
+ * I2: Receipt transitions and job markers commit together, or use the recovery rule above.
+ * I3: Every abandon/cleanup path terminalizes and releases its exact receipt.
+ * I4: Finalization applies outcomes to the authoritative row, never an admitted snapshot.
+ */
+
 type CronRunReceiptDatabase = Pick<OpenClawStateDatabase, "cron_run_receipts">;
 type CronRunReceiptRow = Selectable<CronRunReceiptDatabase["cron_run_receipts"]>;
 

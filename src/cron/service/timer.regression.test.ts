@@ -1978,6 +1978,12 @@ describe("cron service timer regressions", () => {
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === catchupJob.id)?.state
         .runningAtMs,
     ).toBeUndefined();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), catchupJob.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("skipped");
   });
 
   it("does not start an admitted due job after stop wins its service-lock wait", async () => {

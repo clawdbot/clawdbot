@@ -4,7 +4,9 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
@@ -19,6 +21,22 @@ import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-admission-conflict-" });
+
+function claimReceipt(storePath: string, job: ReturnType<typeof createDueIsolatedJob>, at: number) {
+  const prepared = prepareCronRunReceiptClaim({
+    storePath,
+    job,
+    agentId: job.agentId ?? "main",
+    startedAtMs: at,
+  });
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    claimCronRunReceiptInDatabase({
+      database: db,
+      prepared,
+      resolveAgentId: (current) => current.agentId ?? "main",
+    }),
+  );
+}
 
 it("recovers an ownerless queued lease on a live sibling without restart", async () => {
   const store = fixtures.makeStorePath();
@@ -64,6 +82,43 @@ it("recovers an ownerless queued lease on a live sibling without restart", async
   });
   expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
   stop(owner);
+  stop(sibling);
+});
+
+it("recovers a dead running owner on timer refresh without an admission conflict", async () => {
+  const store = fixtures.makeStorePath();
+  const now = Date.parse("2026-08-13T15:45:00.000Z");
+  const job = createDueIsolatedJob({ id: "running-owner-exit", nowMs: now, nextRunAtMs: now });
+  job.state.runningAtMs = now;
+  await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+  const receipt = claimReceipt(store.storePath, job, now);
+  releaseLocalCronRunReceiptOwnership(receipt);
+  const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+  const sibling = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now + 1,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob,
+  });
+
+  await onTimer(sibling);
+
+  expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+  expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+    lastRunStatus: "error",
+  });
+  expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+  const receiptRows = runOpenClawStateWriteTransaction(({ db }) =>
+    db
+      .prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms",
+      )
+      .all(cronStoreKey(store.storePath), job.id),
+  ) as Array<{ status: string }>;
+  expect(receiptRows.map((row) => row.status)).toEqual(["interrupted"]);
   stop(sibling);
 });
 

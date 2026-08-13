@@ -1,4 +1,5 @@
 // Queued cron reservation cleanup regressions across every trigger.
+import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import {
   createDueIsolatedJob,
@@ -211,6 +212,91 @@ describe("cron service run admission cleanup", () => {
       expect(persistedJob?.state.forcePreservedNextRunAtMs).toBeUndefined();
     },
   );
+
+  it("preserves a concurrent non-owner state edit during manual finalization", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:02.500Z");
+    const job = createDueIsolatedJob({
+      id: "manual-authoritative-row-edit",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const runnerStarted = createDeferred();
+    const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runnerStarted.resolve();
+        return await releaseRun.promise;
+      }),
+    });
+    const activeRun = run(state, job.id, "force");
+    await runnerStarted.promise;
+    const databasePath = openOpenClawStateDatabase().path;
+    const worker = new Worker(
+      `
+        const { parentPort, workerData } = require("node:worker_threads");
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(workerData.databasePath);
+        db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
+        db.prepare(
+          "UPDATE cron_jobs SET state_json = json_set(state_json, '$.streamDroppedBatches', 7), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
+        ).run(workerData.storeKey, workerData.jobId);
+        parentPort.postMessage("locked");
+        setTimeout(() => {
+          db.exec("COMMIT");
+          parentPort.postMessage("committed");
+          db.close();
+        }, 500);
+      `,
+      {
+        eval: true,
+        workerData: {
+          databasePath,
+          storeKey: cronStoreKey(store.storePath),
+          jobId: job.id,
+        },
+      },
+    );
+    const waitForMessage = (expected: string) =>
+      new Promise<void>((resolve, reject) => {
+        const onMessage = (message: unknown) => {
+          if (message === expected) {
+            cleanup();
+            resolve();
+          }
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const cleanup = () => {
+          worker.off("message", onMessage);
+          worker.off("error", onError);
+        };
+        worker.on("message", onMessage);
+        worker.on("error", onError);
+      });
+
+    try {
+      await waitForMessage("locked");
+      const committed = waitForMessage("committed");
+      releaseRun.resolve({ status: "ok", summary: "done" });
+      await activeRun;
+      await committed;
+
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.streamDroppedBatches).toBe(7);
+    } finally {
+      releaseRun.resolve({ status: "ok", summary: "done" });
+      await worker.terminate();
+    }
+  });
 
   it("releases immediate and queued admission slots in FIFO order after failures", async () => {
     const store = opsRegressionFixtures.makeStorePath();

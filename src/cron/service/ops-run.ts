@@ -7,6 +7,7 @@ import {
   finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { locked } from "./locked.js";
@@ -27,7 +28,7 @@ import {
   runWithCronAdmission,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
-import { assertServiceCronRunReceiptCurrent, cronRunReceiptPersistHooks } from "./run-receipts.js";
+import { cronRunReceiptPersistHooks } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
@@ -170,142 +171,14 @@ async function finishPreparedManualRun(
       if (!job) {
         return;
       }
-      try {
-        assertServiceCronRunReceiptCurrent(state, prepared.runReceipt);
-      } catch (error) {
-        if (error instanceof CronRunReceiptRevisionError) {
-          supersedeReason = error.message;
-          notifySetupTimeout = false;
-          return;
-        }
-        throw error;
-      }
-
-      const scheduleOwnership = resolveCronRunScheduleOwnership({
-        admittedJob: prepared.admittedJob,
-        currentJob: job,
-        activeJobMarker: prepared.activeJobMarker,
-      });
-      const triggerOwnership = resolveCronRunTriggerOwnership({
-        admittedJob: prepared.admittedJob,
-        currentJob: job,
-        activeJobMarker: prepared.activeJobMarker,
-      });
-      const scheduleMode =
-        scheduleOwnership === "stale"
-          ? "stale-preserve"
-          : mode === "force"
-            ? "force-preserve"
-            : "advance";
       const postPersistNotifications: DeferredCronNotifications = [];
-
-      let shouldDelete = false;
-      if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
-        // Manual due checks share scheduled quiet-tick semantics: persist the
-        // evaluation but create no finished event or run-history entry.
-        applyTriggerNoFireResult(
-          state,
-          job,
-          {
-            startedAt,
-            endedAt,
-            triggerEval: coreResult.triggerEval,
-          },
-          {
-            scheduleMode,
-            triggerOwnership,
-            deferredNotifications: postPersistNotifications,
-          },
-        );
-      } else {
-        shouldDelete = applyJobResult(
-          state,
-          job,
-          {
-            ...coreResult,
-            startedAt,
-            endedAt,
-          },
-          {
-            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
-            // only a real forced run may request a force-preserved cadence marker.
-            scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
-            scheduleOwnership,
-            scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
-            deferredNotifications: postPersistNotifications,
-          },
-        );
-        applyTriggerRunResult(
-          job,
-          {
-            status: coreResult.status,
-            endedAt,
-            triggerEval: coreResult.triggerEval,
-          },
-          { scheduleOwnership, triggerOwnership },
-        );
-        applyScriptRunResult(job, coreResult, { triggerOwnership });
-
-        // Stream payloads are event-owned by their batch. Generic recurring
-        // error backoff must not synthesize a later run without that batch.
-        if (job.schedule.kind === "stream") {
-          job.state.nextRunAtMs = undefined;
-        }
-
-        emitCronRunFinished(
-          state,
-          {
-            jobId: job.id,
-            action: "finished",
-            job,
-            status: coreResult.status,
-            error: coreResult.error,
-            summary: coreResult.summary,
-            diagnostics: coreResult.diagnostics,
-            delivered: job.state.lastDelivered,
-            deliveryStatus: job.state.lastDeliveryStatus,
-            deliveryError: job.state.lastDeliveryError,
-            failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-            delivery: coreResult.delivery,
-            sessionId: coreResult.sessionId,
-            sessionKey: coreResult.sessionKey,
-            runId,
-            runAtMs: startedAt,
-            durationMs: job.state.lastDurationMs,
-            nextRunAtMs: job.state.nextRunAtMs,
-            ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
-            model: coreResult.model,
-            provider: coreResult.provider,
-            usage: coreResult.usage,
-          },
-          prepared.terminalTracker,
-          taskRunId,
-          {
-            triggerEval: coreResult.triggerEval,
-            scriptResult: coreResult,
-            errorClassification: coreResult.errorClassification,
-          },
-        );
-      }
-
-      // Manual runs should not advance other due jobs without executing them.
-      // Use maintenance-only recompute to repair missing values while
-      // preserving existing past-due nextRunAtMs entries for future timer ticks.
-      const postRunSnapshot = shouldDelete
-        ? null
-        : {
-            enabled: job.enabled,
-            updatedAtMs: job.updatedAtMs,
-            state: structuredClone(job.state),
-          };
-      const postRunRemoved = shouldDelete;
-      const removedJob = shouldDelete ? structuredClone(job) : undefined;
       if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
         notifySetupTimeout = false;
         return;
       }
+      let removedJob: CronJob | undefined;
       try {
-        const committedJob = commitCronRuntimeRows({
+        const committed = commitCronRuntimeRows({
           state,
           jobIds: [jobId],
           operationLabel: "cron.manual-run-finalization",
@@ -323,24 +196,104 @@ async function finishPreparedManualRun(
             if (!current) {
               return { value: undefined };
             }
-            if (postRunRemoved) {
-              return { deleteJobIds: [jobId], value: undefined };
+            const scheduleOwnership = resolveCronRunScheduleOwnership({
+              admittedJob: prepared.admittedJob,
+              currentJob: current,
+              activeJobMarker: prepared.activeJobMarker,
+            });
+            const triggerOwnership = resolveCronRunTriggerOwnership({
+              admittedJob: prepared.admittedJob,
+              currentJob: current,
+              activeJobMarker: prepared.activeJobMarker,
+            });
+            const scheduleMode =
+              scheduleOwnership === "stale"
+                ? "stale-preserve"
+                : mode === "force"
+                  ? "force-preserve"
+                  : "advance";
+            let removed = false;
+            if (triggerSkipped) {
+              applyTriggerNoFireResult(
+                state,
+                current,
+                { startedAt, endedAt, triggerEval: coreResult.triggerEval! },
+                { scheduleMode, triggerOwnership, deferredNotifications: postPersistNotifications },
+              );
+            } else {
+              removed = applyJobResult(
+                state,
+                current,
+                { ...coreResult, startedAt, endedAt },
+                {
+                  scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
+                  scheduleOwnership,
+                  scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+                  deferredNotifications: postPersistNotifications,
+                },
+              );
+              applyTriggerRunResult(
+                current,
+                { status: coreResult.status, endedAt, triggerEval: coreResult.triggerEval },
+                { scheduleOwnership, triggerOwnership },
+              );
+              applyScriptRunResult(current, coreResult, { triggerOwnership });
+              if (current.schedule.kind === "stream") {
+                current.state.nextRunAtMs = undefined;
+              }
             }
-            if (!postRunSnapshot) {
-              return { value: undefined };
-            }
-            current.enabled = postRunSnapshot.enabled;
-            current.updatedAtMs = postRunSnapshot.updatedAtMs;
-            current.state = postRunSnapshot.state;
-            return { upsertJobIds: [jobId], value: current };
+            return {
+              ...(removed ? { deleteJobIds: [jobId] } : { upsertJobIds: [jobId] }),
+              value: { job: structuredClone(current), removed },
+            };
           },
         });
+        if (!committed) {
+          return;
+        }
+        removedJob = committed.removed ? committed.job : undefined;
         runPostPersistCronNotifications(state, postPersistNotifications);
         applyCronRuntimeRowsToState(
           state,
-          committedJob ? [committedJob] : [],
-          postRunRemoved ? [jobId] : [],
+          committed.removed ? [] : [committed.job],
+          committed.removed ? [jobId] : [],
         );
+        if (!triggerSkipped) {
+          emitCronRunFinished(
+            state,
+            {
+              jobId,
+              action: "finished",
+              job: committed.job,
+              status: coreResult.status,
+              error: coreResult.error,
+              summary: coreResult.summary,
+              diagnostics: coreResult.diagnostics,
+              delivered: committed.job.state.lastDelivered,
+              deliveryStatus: committed.job.state.lastDeliveryStatus,
+              deliveryError: committed.job.state.lastDeliveryError,
+              failureNotificationDelivery: failureNotificationDeliveryFromJobState(committed.job),
+              delivery: coreResult.delivery,
+              sessionId: coreResult.sessionId,
+              sessionKey: coreResult.sessionKey,
+              runId,
+              runAtMs: startedAt,
+              durationMs: committed.job.state.lastDurationMs,
+              nextRunAtMs: committed.job.state.nextRunAtMs,
+              ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
+              model: coreResult.model,
+              provider: coreResult.provider,
+              usage: coreResult.usage,
+            },
+            prepared.terminalTracker,
+            taskRunId,
+            {
+              triggerEval: coreResult.triggerEval,
+              scriptResult: coreResult,
+              errorClassification: coreResult.errorClassification,
+            },
+          );
+        }
         const maintenance = recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: jobId } : {}),

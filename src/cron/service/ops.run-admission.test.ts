@@ -17,6 +17,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -286,6 +287,12 @@ describe("cron service run admission", () => {
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.lastRunStatus).toBe(
       undefined,
     );
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), waitingJob.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("skipped");
   });
 
   it("cancels a queued stream batch after an A-to-B-to-A source replacement", async () => {
@@ -944,5 +951,11 @@ describe("cron service run admission", () => {
     expect(
       state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs,
     ).toBeUndefined();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), scheduledJob.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("skipped");
   });
 });

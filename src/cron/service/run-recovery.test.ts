@@ -87,6 +87,27 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  it("retires a stale settling receipt after its marker is already gone", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T10:15:00.000Z");
+    const job = makeJob("markerless-settling-owner-death", startedAtMs);
+    delete job.state.runningAtMs;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = makeState(storePath, startedAtMs + 30_000);
+    const receipt = claimReceipt(storePath, job, startedAtMs);
+    releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, { jobId: job.id, receipt })).toMatchObject({
+      kind: "repaired",
+    });
+    const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+      db
+        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ) as { status: string };
+    expect(receiptRow.status).toBe("interrupted");
+  });
+
   it("repairs a matching marker after its observed receipt terminalizes", async () => {
     const { storePath } = await makeStorePath();
     const startedAtMs = Date.parse("2026-08-13T10:30:00.000Z");

@@ -2,7 +2,11 @@ import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import {
+  finishCronRunReceiptInDatabase,
+  releaseLocalCronRunReceiptOwnership,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt-store.js";
 import type { CronJob, CronPayload, CronRunErrorClassification } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -526,12 +530,19 @@ async function releasePreparedManualReservation(
     state,
     jobIds: [prepared.jobId],
     operationLabel: "cron.manual-reservation-cleanup",
-    mutate: ({ jobs }) => {
+    mutate: ({ database, jobs }) => {
       const job = jobs.get(prepared.jobId);
       const ownership = state.queuedRunReservationsByJobId.get(prepared.jobId);
       if (!job || ownership?.identity !== prepared.reservationIdentity) {
         return { value: undefined };
       }
+      finishCronRunReceiptInDatabase({
+        database,
+        handle: ownership.runReceipt,
+        status: "skipped",
+        finishedAtMs: state.deps.nowMs(),
+        error: "cron manual reservation abandoned before completion",
+      });
       const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
       const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
       if (!queuedMatches && !runningMatches) {
@@ -552,6 +563,10 @@ async function releasePreparedManualReservation(
   if (committedJob) {
     applyCronRuntimeRowsToState(state, [committedJob]);
   }
+  const ownership = state.queuedRunReservationsByJobId.get(prepared.jobId);
+  if (ownership?.identity === prepared.reservationIdentity) {
+    releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
+  }
   releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
 }
 
@@ -567,6 +582,10 @@ export async function releasePreparedManualReservationWithRetry(
     } catch (error) {
       // No caller owns another retry. Let stale-marker recovery see the
       // durable marker instead of retaining a process-only queued claim.
+      const ownership = state.queuedRunReservationsByJobId.get(prepared.jobId);
+      if (ownership?.identity === prepared.reservationIdentity) {
+        releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
+      }
       releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
       throw error;
     }
