@@ -34,6 +34,11 @@ import {
   getTaskById,
   listFreshTasksForOwnerKey,
   listTaskRecordPage,
+  listTaskRecordsUnsorted,
+  listTasksForAgentId,
+  listTasksForFlowId,
+  listTasksForOwnerKey as listTasksForOwnerKeyFromRegistry,
+  listTasksForRelatedSessionKey,
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
@@ -599,6 +604,8 @@ describe("task-registry store runtime", () => {
           runId: "run-settled-large",
           status: "succeeded",
           deliveryStatus: "delivered",
+          parentFlowId: "flow-settled-large",
+          agentId: "history-agent",
           endedAt: 200,
           terminalSummary,
           detail,
@@ -648,12 +655,37 @@ describe("task-registry store runtime", () => {
         ).toEqual(before);
 
         reloadTaskRegistryFromStore();
+        expect(
+          updateTaskNotifyPolicyById({
+            taskId: settled.taskId,
+            notifyPolicy: "silent",
+          })?.notifyPolicy,
+        ).toBe("silent");
+        expect(
+          database.db
+            .prepare("SELECT terminal_summary, detail_json FROM task_runs WHERE task_id = ?")
+            .get(settled.taskId),
+        ).toEqual(before);
         expect(getTaskById(settled.taskId)).toMatchObject({ terminalSummary, detail });
+        expect(
+          listTaskRecordsUnsorted().find((task) => task.taskId === settled.taskId),
+        ).toMatchObject({ terminalSummary, detail });
         expect(
           listTaskRecordPage({ offset: 0, limit: 10 }).tasks.find(
             (task) => task.taskId === settled.taskId,
           ),
         ).toMatchObject({ terminalSummary, detail });
+        for (const indexed of [
+          listTasksForOwnerKeyFromRegistry(settled.ownerKey),
+          listTasksForRelatedSessionKey(settled.childSessionKey ?? ""),
+          listTasksForFlowId(settled.parentFlowId ?? ""),
+          listTasksForAgentId(settled.agentId ?? ""),
+        ]) {
+          expect(indexed.find((task) => task.taskId === settled.taskId)).toMatchObject({
+            terminalSummary,
+            detail,
+          });
+        }
       },
     );
   });

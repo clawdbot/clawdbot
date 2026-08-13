@@ -14,6 +14,8 @@ import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-que
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  isWarmProjectedTaskRecord,
+  markWarmProjectedTaskRecord,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
@@ -155,11 +157,14 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({
+  let next = normalizeTaskTimestamps({
     ...current,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
   });
+  if (isWarmProjectedTaskRecord(current)) {
+    next = markWarmProjectedTaskRecord(next);
+  }
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }

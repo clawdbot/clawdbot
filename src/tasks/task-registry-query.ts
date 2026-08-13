@@ -231,18 +231,11 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
   if (!ids || ids.size === 0) {
     return [];
   }
-  return [...ids]
-    .map((taskId, insertionIndex) => {
-      const task = tasks.get(taskId);
-      return task ? Object.assign({}, cloneTaskRecord(task), { insertionIndex }) : null;
-    })
-    .filter(
-      (
-        task,
-      ): task is TaskRecord & {
-        insertionIndex: number;
-      } => Boolean(task),
-    )
+  const selected = [...ids]
+    .map((taskId) => tasks.get(taskId))
+    .filter((task): task is TaskRecord => Boolean(task));
+  return hydrateTaskRecords(selected)
+    .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
 }
@@ -262,9 +255,8 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
   if (!lookup) {
     return [];
   }
-  return snapshotTaskRecords(tasks)
-    .filter((task) => task.agentId?.trim() === lookup)
-    .toSorted(compareTasksNewestFirst);
+  const selected = [...tasks.values()].filter((task) => task.agentId?.trim() === lookup);
+  return hydrateTaskRecords(selected).toSorted(compareTasksNewestFirst);
 }
 
 export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {

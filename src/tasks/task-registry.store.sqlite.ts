@@ -342,6 +342,15 @@ function upsertWarmTaskRunRowInDatabase(
   );
 }
 
+function upsertTaskRecordInDatabase(database: OpenClawStateDatabase, task: TaskRecord): void {
+  const row = bindTaskRecord(task);
+  if (isWarmProjectedTaskRecord(task)) {
+    upsertWarmTaskRunRowInDatabase(database, row);
+  } else {
+    upsertTaskRunRowInDatabase(database, row);
+  }
+}
+
 function replaceTaskDeliveryStateRow(
   db: DatabaseSync,
   row: Insertable<TaskDeliveryStateTable>,
@@ -487,12 +496,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
       });
     }
     for (const task of snapshot.tasks.values()) {
-      const row = bindTaskRecord(task);
-      if (isWarmProjectedTaskRecord(task)) {
-        upsertWarmTaskRunRowInDatabase(database, row);
-      } else {
-        upsertTaskRunRowInDatabase(database, row);
-      }
+      upsertTaskRecordInDatabase(database, task);
     }
     for (const state of snapshot.deliveryStates.values()) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
@@ -502,7 +506,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   withWriteTransaction((database) => {
-    upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
+    upsertTaskRecordInDatabase(database, task);
   });
 }
 
@@ -512,7 +516,7 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
 }) {
   withWriteTransaction((database) => {
     const { db } = database;
-    upsertTaskRunRowInDatabase(database, bindTaskRecord(params.task));
+    upsertTaskRecordInDatabase(database, params.task);
     if (params.deliveryState) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(params.deliveryState));
     } else {

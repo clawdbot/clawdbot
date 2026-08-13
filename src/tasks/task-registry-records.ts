@@ -21,10 +21,11 @@ export function isWarmProjectedTaskRecord(record: TaskRecord): record is WarmPro
 }
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
-  return {
+  const clone: TaskRecord = {
     ...record,
     ...(record.detail !== undefined ? { detail: structuredClone(record.detail) } : {}),
   };
+  return isWarmProjectedTaskRecord(record) ? markWarmProjectedTaskRecord(clone) : clone;
 }
 
 export function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
