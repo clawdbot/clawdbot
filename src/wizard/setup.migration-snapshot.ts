@@ -27,7 +27,8 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "MEMORY.md",
   "skills",
 ] as const;
-const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents", "state"] as const;
+const IMPORT_BLOCKING_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+const MIGRATION_TARGET_STATE_ENTRIES = [...IMPORT_BLOCKING_STATE_ENTRIES, "state"] as const;
 
 async function exists(candidate: string): Promise<boolean> {
   try {
@@ -107,7 +108,7 @@ export async function inspectSetupMigrationFreshness(params: {
   ) {
     reasons.push("workspace directory is not empty");
   }
-  for (const entry of MEANINGFUL_STATE_ENTRIES) {
+  for (const entry of IMPORT_BLOCKING_STATE_ENTRIES) {
     if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
       reasons.push(`state ${entry}/ exists`);
     }
@@ -234,7 +235,7 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeSetupMigrationValue(targetConfig))}\0`);
   await hashTargetPath(hash, params.workspaceDir, "workspace");
-  for (const entry of MEANINGFUL_STATE_ENTRIES) {
+  for (const entry of MIGRATION_TARGET_STATE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
   }
   return hash.digest("hex");
@@ -338,7 +339,7 @@ export function assertFreshSetupMigrationTarget(freshness: {
   if (freshness.fresh) {
     return;
   }
-  throw new Error(
+  throw new SetupMigrationFreshnessError(
     [
       "Migration import during onboarding requires a fresh OpenClaw setup.",
       "Create a fresh setup or reset config, credentials, sessions, and workspace before importing.",
@@ -348,3 +349,5 @@ export function assertFreshSetupMigrationTarget(freshness: {
     ].join("\n"),
   );
 }
+
+export class SetupMigrationFreshnessError extends Error {}
