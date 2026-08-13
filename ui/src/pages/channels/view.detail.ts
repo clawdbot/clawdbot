@@ -3,12 +3,13 @@
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { NostrProfile } from "../../api/types.ts";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { channelDocsUrl, renderChannelArt } from "./hub-meta.ts";
+import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import { renderNostrCard } from "./view.nostr.ts";
 import { renderChannelPairingDetail } from "./view.pairing.ts";
@@ -221,7 +222,7 @@ export function renderChannelDetail(params: {
     <openclaw-modal-dialog label=${params.label} @modal-cancel=${() => params.onClose()}>
       <div class="channels-detail">
         <div class="channels-detail__header">
-          ${renderChannelArt(params.channelId, params.label, "cover")}
+          ${renderChannelIcon(params.channelId, params.label, "cover")}
           <div class="channels-detail__header-actions">
             <a
               class="btn btn--sm"

@@ -18,9 +18,11 @@ import type {
   CronJobsSortBy,
   CronSortDir,
 } from "../../api/types.ts";
+import { renderChannelPicker, type ChannelPickerOption } from "../../components/channel-picker.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { icon, icons } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
+import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
@@ -135,16 +137,17 @@ type CronProps = {
 
 // ── Shared option helpers ──
 
-function buildChannelOptions(props: CronProps): string[] {
-  const current = props.form.deliveryChannel?.trim();
-  return uniqueStrings(["last", ...props.channels.filter(Boolean), ...(current ? [current] : [])]);
-}
-
-function resolveChannelLabel(props: CronProps, channel: string): string {
-  return channel === "last"
-    ? channel
-    : props.channelMeta?.find((entry) => entry.id === channel)?.label ||
-        (props.channelLabels?.[channel] ?? channel);
+function buildChannelOptions(props: CronProps): ChannelPickerOption[] {
+  return [
+    { value: "last", label: "last", kind: "neutral" },
+    ...uniqueStrings(props.channels.filter(Boolean)).map((value) => ({
+      value,
+      label:
+        props.channelMeta?.find((entry) => entry.id === value)?.label ||
+        props.channelLabels?.[value] ||
+        value,
+    })),
+  ];
 }
 
 function renderSuggestionList(id: string, options: string[]) {
@@ -347,7 +350,7 @@ function renderCronInputField(
   });
 }
 
-type CronSelectOption = { value: string; label: string };
+type CronSelectOption = PickerOption;
 
 type CronSelectOptions = {
   label: string;
@@ -356,6 +359,7 @@ type CronSelectOptions = {
   value?: string;
   disabled?: boolean;
   standalone?: boolean;
+  channel?: boolean;
 };
 
 function renderCronSelect(
@@ -364,24 +368,15 @@ function renderCronSelect(
   options: CronSelectOptions,
 ) {
   const selected = options.value ?? props.form[field];
-  return html`
-    <select
-      id=${ifDefined(options.standalone ? undefined : inputIdForField(field))}
-      class="settings-select"
-      .value=${selected}
-      aria-label=${ifDefined(options.standalone ? options.label : undefined)}
-      ?disabled=${options.disabled ?? false}
-      @change=${(event: Event) =>
-        props.onFormChange({ [field]: (event.currentTarget as HTMLSelectElement).value })}
-    >
-      ${options.options.map(
-        // The .value property commits before these mapped options exist, so the
-        // browser falls back to the first option; ?selected marks the real one.
-        ({ value, label }) =>
-          html`<option value=${value} ?selected=${value === selected}>${label}</option>`,
-      )}
-    </select>
-  `;
+  const picker = options.channel ? renderChannelPicker : renderPicker;
+  return picker({
+    id: options.standalone ? undefined : inputIdForField(field),
+    label: options.label,
+    value: options.channel ? selected || "last" : selected,
+    options: options.options,
+    disabled: options.disabled,
+    onChange: (value) => props.onFormChange({ [field]: value }),
+  });
 }
 
 function renderCronSelectField(
@@ -1475,10 +1470,8 @@ function renderDeliverySection(
               label: t("cron.form.channel"),
               help: t("cron.form.channelHelp"),
               value: props.form.deliveryChannel || "last",
-              options: channelOptions.map((channel) => ({
-                value: channel,
-                label: resolveChannelLabel(props, channel),
-              })),
+              options: channelOptions,
+              channel: true,
             })}
             ${renderCronInputField(props, "deliveryTo", {
               label: t("cron.form.to"),
@@ -1645,7 +1638,7 @@ function renderAdvanced(
   `;
 }
 
-function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
+function renderFailureAlertRows(props: CronProps, channelOptions: readonly ChannelPickerOption[]) {
   return html`
     ${renderCronSelectField(props, "failureAlertMode", {
       label: t("cron.form.failureAlerts"),
@@ -1673,10 +1666,8 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           ${renderCronSelectField(props, "failureAlertChannel", {
             label: t("cron.form.failureAlertChannel"),
             value: props.form.failureAlertChannel || "last",
-            options: channelOptions.map((channel) => ({
-              value: channel,
-              label: resolveChannelLabel(props, channel),
-            })),
+            options: channelOptions,
+            channel: true,
           })}
           ${renderCronInputField(props, "failureAlertTo", {
             label: t("cron.form.failureAlertTo"),
