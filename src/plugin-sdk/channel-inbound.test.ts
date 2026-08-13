@@ -78,8 +78,9 @@ describe("channel-inbound public helpers", () => {
     expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
   });
 
-  it("does not expose public participant evidence minting", () => {
+  it("does not expose public participant evidence authority", () => {
     expect(channelIngressRuntime).not.toHaveProperty("createChannelParticipantAdmissionEvidence");
+    expect(channelIngressRuntime).not.toHaveProperty("copyChannelParticipantAdmissionEvidence");
   });
 
   it("keeps public resolver and builder paths non-authoritative", async () => {

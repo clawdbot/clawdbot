@@ -1,7 +1,6 @@
 // Public channel ingress/message-access barrel. Keep this as the narrow import
 // point for callers that need access decisions without plugin internals.
 export { defineStableChannelIngressIdentity } from "./runtime-identity.js";
-export { copyChannelParticipantAdmissionEvidence } from "./admission-evidence.js";
 export {
   channelIngressRoutes,
   createChannelIngressResolver,

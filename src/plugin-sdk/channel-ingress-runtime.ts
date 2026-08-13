@@ -8,7 +8,6 @@
  */
 export {
   channelIngressRoutes,
-  copyChannelParticipantAdmissionEvidence,
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   readChannelIngressStoreAllowFromForDmPolicy,

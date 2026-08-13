@@ -1,4 +1,3 @@
-import { copyChannelParticipantAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Telegram plugin module recovers dispatch routing and group-history context.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
@@ -75,16 +74,13 @@ function normalizeDispatchTelegramThreadPayload(params: {
   if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
     return params.context;
   }
-  const normalized = {
-    ...params.context,
-    ctxPayload: {
-      ...params.context.ctxPayload,
-      MessageThreadId: params.threadSpec.id,
-      TransportThreadId: params.threadSpec.id,
-    },
-  };
-  copyChannelParticipantAdmissionEvidence(params.context.ctxPayload, normalized.ctxPayload);
-  return normalized;
+  // This payload owns private host admission state outside its enumerable fields.
+  // Normalize routing in place so a plugin-visible copier is never needed.
+  Object.assign(params.context.ctxPayload, {
+    MessageThreadId: params.threadSpec.id,
+    TransportThreadId: params.threadSpec.id,
+  });
+  return params.context;
 }
 
 function buildRecoveredTelegramChatActionSender(params: {
@@ -246,6 +242,19 @@ export function resolveDispatchTelegramContext(params: {
     action: "record_voice",
   });
   migrateRecoveredTelegramGroupHistory({ context: params.context, recoveredHistoryKey });
+  if (threadSpec.id != null) {
+    // Keep the admitted payload object intact; replacing it would discard the
+    // host-only participant carrier before canonical run admission.
+    Object.assign(params.context.ctxPayload, {
+      From: recoveredFrom,
+      InboundHistory: recoveredInboundHistory,
+      MessageThreadId: threadSpec.id,
+      OriginatingTo: recoveredRoutingTarget,
+      To: recoveredRoutingTarget,
+      TransportThreadId: threadSpec.id,
+      ChannelStructuredContext: recoveredPromptContext,
+    });
+  }
   const recovered = {
     ...params.context,
     historyKey: recoveredHistoryKey,
@@ -261,20 +270,7 @@ export function resolveDispatchTelegramContext(params: {
         updateLastRoute: recoveredUpdateLastRoute,
       },
     },
-    ctxPayload:
-      threadSpec.id == null
-        ? params.context.ctxPayload
-        : {
-            ...params.context.ctxPayload,
-            From: recoveredFrom,
-            InboundHistory: recoveredInboundHistory,
-            MessageThreadId: threadSpec.id,
-            OriginatingTo: recoveredRoutingTarget,
-            To: recoveredRoutingTarget,
-            TransportThreadId: threadSpec.id,
-            ChannelStructuredContext: recoveredPromptContext,
-          },
+    ctxPayload: params.context.ctxPayload,
   };
-  copyChannelParticipantAdmissionEvidence(params.context.ctxPayload, recovered.ctxPayload);
   return recovered;
 }

@@ -9,7 +9,7 @@ import type { MediaUnderstandingSkipError } from "../../../packages/media-unders
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import { buildHostChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
 import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -561,7 +561,7 @@ describe("tryDispatchAcpReplyCore", () => {
         groupPolicy: "open",
       });
       const ctx = finalizeInboundContext(
-        buildChannelInboundEventContext({
+        buildHostChannelInboundEventContext({
           channel: "discord",
           accountId: "default",
           messageId: "msg-acp",
