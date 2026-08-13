@@ -1,14 +1,13 @@
-// Tests hook-source heartbeat wake dispatch for agents without a recurring
-// heartbeat schedule. Split out of heartbeat-runner.scheduler.test.ts so that
-// file stays inside the oxlint max-lines budget; these tests cover the
-// `isTargetedImmediateHookWake` path that lets a scoped hook wake run once for
-// a known but unscheduled agent (and rejects unconfigured targets).
+// Tests targeted unscheduled heartbeat wake dispatch for configured agents
+// without a recurring heartbeat schedule. Split out of
+// heartbeat-runner.scheduler.test.ts so that file stays inside the oxlint
+// max-lines budget.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
-describe("startHeartbeatRunner hook wake targeting", () => {
+describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
   const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
@@ -98,6 +97,38 @@ describe("startHeartbeatRunner hook wake targeting", () => {
     });
     runner.stop();
   });
+
+  it.each([
+    { source: "background-task", reason: "background-task" },
+    { source: "background-task-blocked", reason: "background-task-blocked" },
+  ] as const)(
+    "runs one targeted unscheduled $source wake for a configured agent",
+    async ({ source, reason }) => {
+      useFakeHeartbeatTime();
+      const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = await expectWakeDispatch({
+        cfg: {
+          agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+        } as OpenClawConfig,
+        runSpy,
+        wake: {
+          source,
+          intent: "immediate",
+          reason,
+          sessionKey: "agent:ops:main",
+          coalesceMs: 0,
+        },
+        expectedCall: {
+          agentId: "ops",
+          source,
+          intent: "immediate",
+          reason,
+          sessionKey: "agent:ops:main",
+        },
+      });
+      runner.stop();
+    },
+  );
 
   it("rejects targeted hook wakes for unconfigured agents", async () => {
     useFakeHeartbeatTime();
