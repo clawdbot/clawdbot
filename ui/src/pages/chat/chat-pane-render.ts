@@ -140,9 +140,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
-    const approvalSnapshot = overlays?.snapshot;
     const inlineApproval = findInlineApproval(
-      approvalSnapshot?.approvalQueue ?? [],
+      overlays?.snapshot?.approvalQueue ?? [],
       state.sessionKey,
     );
     // Tool rows consult the global title store while rendering. Requests capture
@@ -385,9 +384,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       diskSpace,
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
-      approvalBusy: approvalSnapshot?.approvalBusy,
-      approvalErrors: approvalSnapshot?.approvalErrors,
-      approvalNowMs: approvalSnapshot?.approvalNowMs,
+      approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalErrors: overlays?.snapshot?.approvalErrors,
+      approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
         overlays && !sessionParticipationBlocked
           ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
@@ -692,9 +691,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       focusVersion: state.sidebarFocusVersion,
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      panelMutationEnabled: {
-        chat: Boolean(board.activeTabId) && board.provider.canMutate,
-      },
+      panelMutationEnabled: { chat: Boolean(board.activeTabId) && board.provider.canMutate },
       panelTemplates,
       primary,
       sessionKey: state.sessionKey,
