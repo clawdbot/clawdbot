@@ -674,9 +674,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               restartPending: true,
               lastError: `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
             });
-            throw new Error(
-              `stopAccount timed out before restarting ${channelId} account ${id}`,
-            );
+            throw new Error(`stopAccount timed out before restarting ${channelId} account ${id}`);
           }
           if (store.stopAccountFences.get(id) === stopAccountFence) {
             store.stopAccountFences.delete(id);
@@ -1447,8 +1445,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               );
               if (!stopAccountSettled) {
                 stopAttemptAbandoned = true;
-                let stopAccountFence: Promise<void>;
-                stopAccountFence = stopAccountAttempt.finally(() => {
+                const stopAccountFence = stopAccountAttempt.finally(() => {
                   if (store.stopAccountFences.get(id) === stopAccountFence) {
                     store.stopAccountFences.delete(id);
                   }
