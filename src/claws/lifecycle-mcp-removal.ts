@@ -8,7 +8,12 @@ import { ClawRemoveError } from "./lifecycle-delete-support.js";
 import type { RemovedMcpServer } from "./lifecycle-remove-contract.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
 import { withClawMcpLifecycleLease } from "./mcp-lifecycle-lease.js";
-import { deleteClawMcpServerRef, digestClawMcpServer, planClawMcpServerRemoval } from "./mcp.js";
+import {
+  deleteClawMcpServerRef,
+  digestClawMcpServer,
+  planClawMcpServerRemoval,
+  readClawMcpServerRefsByName,
+} from "./mcp.js";
 import type { ClawReferencedCleanup } from "./package-remove.js";
 
 type RemoveMcpServerOptions = OpenClawStateDatabaseOptions & {
@@ -46,7 +51,16 @@ export async function removeClawMcpServers(params: {
   for (const server of params.servers) {
     let removalError: string | undefined;
     await withMcpLifecycleLease(server.name, params.options, async () => {
-      const ownerAction = planClawMcpServerRemoval(server, params.options).action;
+      const currentRef = readClawMcpServerRefsByName(server.name, params.options).find(
+        (candidate) => candidate.agentId === params.agentId,
+      );
+      if (!currentRef) {
+        throw new ClawRemoveError(
+          "mcp_cleanup_changed",
+          `MCP ownership for ${JSON.stringify(server.name)} changed during removal.`,
+        );
+      }
+      const ownerAction = planClawMcpServerRemoval(currentRef, params.options).action;
       if (ownerAction === "release") {
         deleteClawMcpServerRef(params.agentId, server.name, params.options);
         mcpServers.push({
@@ -67,7 +81,7 @@ export async function removeClawMcpServers(params: {
         mcpServers.push({ name: server.name, action: "missing" });
         return;
       }
-      if (digestClawMcpServer(expectedServer) !== server.configDigest) {
+      if (digestClawMcpServer(expectedServer) !== currentRef.configDigest) {
         throw new ClawRemoveError(
           "mcp_cleanup_changed",
           `MCP server ${JSON.stringify(server.name)} changed during removal.`,

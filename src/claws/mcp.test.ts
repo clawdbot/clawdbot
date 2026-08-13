@@ -441,4 +441,72 @@ describe("installClawMcpServers", () => {
       expect.objectContaining({ name: "linear", status: "complete" }),
     ]);
   });
+
+  it("does not recreate a removed pre-existing server on retry", async () => {
+    const current = await fixture();
+    const configured = {
+      docs: {
+        command: "uvx",
+        args: ["docs-mcp"],
+        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+      },
+      linear: {
+        url: "https://mcp.linear.app/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      },
+    };
+    await installClawMcpServers(current.plan, {
+      env: current.env,
+      setMcpServer: vi.fn(),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configured)),
+    });
+    const setMcpServer = vi.fn();
+
+    await expect(
+      installClawMcpServers(current.plan, {
+        env: current.env,
+        setMcpServer,
+        listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+      }),
+    ).rejects.toMatchObject({ code: "mcp_reconcile_conflict" });
+    expect(setMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a removed server after another Claw shares it", async () => {
+    const first = await fixture("worker");
+    await installClawMcpServers(first.plan, {
+      env: first.env,
+      setMcpServer: vi.fn().mockResolvedValue(listedMcpServers()),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+    });
+    const second = await fixture("analyst", first.root);
+    const configured = {
+      docs: {
+        command: "uvx",
+        args: ["docs-mcp"],
+        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+      },
+      linear: {
+        url: "https://mcp.linear.app/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      },
+    };
+    await installClawMcpServers(second.plan, {
+      env: second.env,
+      setMcpServer: vi.fn(),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configured)),
+    });
+    const setMcpServer = vi.fn();
+
+    await expect(
+      installClawMcpServers(first.plan, {
+        env: first.env,
+        setMcpServer,
+        listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+      }),
+    ).rejects.toMatchObject({ code: "mcp_reconcile_conflict" });
+    expect(setMcpServer).not.toHaveBeenCalled();
+  });
 });

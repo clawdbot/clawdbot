@@ -236,6 +236,21 @@ export async function installClawMcpServers(
         if (configured) {
           return;
         }
+        const hasSiblingOwner = readClawMcpServerRefsByName(action.id, options).some(
+          (candidate) => candidate.agentId !== plan.agent.finalId,
+        );
+        if (
+          pending.relationship !== "managed" ||
+          pending.origin !== "claw-introduced" ||
+          pending.independentOwner ||
+          hasSiblingOwner
+        ) {
+          throw new ClawMcpInstallError(
+            "mcp_reconcile_conflict",
+            `MCP server ${JSON.stringify(action.id)} was removed while shared or independently owned and will not be recreated.`,
+            refs,
+          );
+        }
         pending = updateRef(pending, { status: "pending" }, options);
         refs[refs.length - 1] = pending;
       }

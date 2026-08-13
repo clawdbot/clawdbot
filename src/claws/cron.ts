@@ -189,7 +189,7 @@ export function clawCronSchedulerJobFromResult(value: unknown): { id: string } |
 function schedulerJobByDeclarationKey(
   value: unknown,
   declarationKey: string,
-): { id: string } | undefined {
+): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -205,7 +205,7 @@ function schedulerJobByDeclarationKey(
       typeof (job as Record<string, unknown>).id === "string",
   );
   const match = matches.length === 1 ? matches[0] : undefined;
-  return match ? { id: match.id as string } : undefined;
+  return match;
 }
 
 export function clawCronGatewayInput(
@@ -329,12 +329,20 @@ export async function installClawCronJobs(
         await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
         agentAvailable = true;
       }
-      result = schedulerJobByDeclarationKey(
+      const listedJob = schedulerJobByDeclarationKey(
         await options.gateway.list(plan.agent.finalId),
         pending.declarationKey,
       );
       listed = true;
-      if (result) {
+      if (listedJob) {
+        if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
+          throw new ClawCronInstallError(
+            "cron_reconcile_conflict",
+            `Cron declaration ${JSON.stringify(pending.manifestId)} changed after installation.`,
+            refs,
+          );
+        }
+        result = { id: listedJob.id as string };
         if (result.id !== pending.schedulerJobId) {
           refs[refs.length - 1] = updateRef(
             pending,
@@ -353,10 +361,18 @@ export async function installClawCronJobs(
         agentAvailable = true;
       }
       if (options.gateway.list && !listed) {
-        result = schedulerJobByDeclarationKey(
+        const listedJob = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,
         );
+        if (listedJob) {
+          if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
+            throw new Error(
+              `Cron declaration ${JSON.stringify(pending.manifestId)} changed after an ambiguous write.`,
+            );
+          }
+          result = { id: listedJob.id as string };
+        }
       }
       result ??= clawCronSchedulerJobFromResult(
         await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),

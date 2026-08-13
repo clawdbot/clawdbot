@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -14,6 +15,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("Claw runtime provenance cache", () => {
+  it("treats an absent first-run state database as empty ownership", () => {
+    const root = tempDirs.make("openclaw-claw-runtime-provenance-first-run-");
+    const options = { env: { OPENCLAW_STATE_DIR: root } };
+
+    initializeCachedClawInstallSchemaVersions(options);
+
+    expect(readCachedClawInstallSchemaVersions(options)).toMatchObject({
+      kind: "ready",
+      schemaVersions: new Map(),
+    });
+  });
+
   it("refreshes install ownership written by another process", () => {
     const root = tempDirs.make("openclaw-claw-runtime-provenance-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
@@ -71,6 +84,15 @@ describe("Claw runtime provenance cache", () => {
       kind: "ok",
       schemaVersion: "openclaw.clawInstallRecord.v2",
       agentConfigDigest: "sha256:agent-config",
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    rmSync(database.path);
+    initializeCachedClawInstallSchemaVersions(options);
+    expect(readCachedClawInstallSchemaVersions(options)).toMatchObject({
+      kind: "state-error",
+      knownAgentIds: new Set(["worker"]),
+      ownershipUnknown: true,
     });
   });
 });

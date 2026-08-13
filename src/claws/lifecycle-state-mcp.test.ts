@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
@@ -174,6 +175,31 @@ describe("Claw MCP removal", () => {
     });
 
     expect(result.mcpServers).toEqual([{ name: "docs", action: "missing" }]);
+  });
+
+  it("retains a managed MCP server adopted after remove planning", async () => {
+    const current = await addMcpFixture();
+    await recordManagedMcp(current);
+    const config = current.getConfig();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config,
+      sourceMcpServers: { docs: sourceServer },
+    });
+    markClawMcpServerIndependentlyOwned("docs", { env: current.env });
+    const unsetMcpServer = vi.fn();
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        sourceMcpServers: { docs: sourceServer },
+        unsetMcpServer,
+        commitConfig: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "remove_changed" });
+    expect(unsetMcpServer).not.toHaveBeenCalled();
   });
 
   it("removes a managed MCP server restored while removal is applying", async () => {

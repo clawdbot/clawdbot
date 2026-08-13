@@ -395,6 +395,110 @@ describe("applyClawMcpUpdate", () => {
     expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
   });
 
+  it("reports partial failure when rejected-write provenance cannot be restored", async () => {
+    const previous = ref("docs", oldDocs);
+    const upsertRef = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("state unavailable");
+      });
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "docs",
+            action: "change",
+            target: "mcp.servers.docs",
+            blocked: false,
+            reason: "changed",
+          },
+        ]),
+        manifest(),
+        {
+          config: { mcp: { servers: { docs: oldDocs } } },
+          sourceMcpServers: { docs: oldDocs },
+          readRefs: () => [previous],
+          setServer: vi.fn().mockResolvedValue({ ok: false, path: "config", error: "changed" }),
+          upsertRef,
+          withMcpLifecycleLease: runWithoutMcpLease,
+        },
+      ),
+    ).rejects.toMatchObject({ partial: true });
+  });
+
+  it("retains current config when another owner appears before rollback", async () => {
+    const unsetServer = vi.fn();
+    const execution = await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "remote",
+          action: "add",
+          target: "mcp.servers.remote",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      manifest(),
+      {
+        config: {},
+        sourceMcpServers: {},
+        readRefs: () => [],
+        readRefsByName: () => [{ ...ref("remote", remote), agentId: "analyst" }],
+        setServer: vi.fn().mockResolvedValue({
+          ok: true,
+          path: "config",
+          config: {},
+          mcpServers: { remote },
+        }),
+        unsetServer,
+        upsertRef: vi.fn(),
+        withMcpLifecycleLease: runWithoutMcpLease,
+      },
+    );
+
+    await expect(execution.rollback()).rejects.toThrow("gained another owner");
+    expect(unsetServer).not.toHaveBeenCalled();
+  });
+
+  it("retains current config when the updated server is independently adopted", async () => {
+    const unsetServer = vi.fn();
+    const execution = await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "remote",
+          action: "add",
+          target: "mcp.servers.remote",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      manifest(),
+      {
+        config: {},
+        sourceMcpServers: {},
+        readRefs: () => [],
+        readRefsByName: () => [{ ...ref("remote", remote), independentOwner: true }],
+        setServer: vi.fn().mockResolvedValue({
+          ok: true,
+          path: "config",
+          config: {},
+          mcpServers: { remote },
+        }),
+        unsetServer,
+        upsertRef: vi.fn(),
+        withMcpLifecycleLease: runWithoutMcpLease,
+      },
+    );
+
+    await expect(execution.rollback()).rejects.toThrow("gained another owner");
+    expect(unsetServer).not.toHaveBeenCalled();
+  });
+
   it("does not overwrite an unowned server that appears before apply", async () => {
     const setServer = vi.fn();
     await expect(

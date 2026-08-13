@@ -10,6 +10,7 @@ import {
   digestClawMcpServer,
   planClawMcpServerRemoval,
   readClawMcpServerRefs,
+  readClawMcpServerRefsByName,
   upsertClawMcpServerRef,
   type PersistedClawMcpServerRef,
 } from "./mcp.js";
@@ -41,6 +42,7 @@ export async function applyClawMcpUpdate(
     setServer?: typeof setConfiguredMcpServer;
     unsetServer?: typeof unsetConfiguredMcpServer;
     readRefs?: typeof readClawMcpServerRefs;
+    readRefsByName?: typeof readClawMcpServerRefsByName;
     planRemoval?: (
       ref: PersistedClawMcpServerRef,
       options: OpenClawStateDatabaseOptions,
@@ -59,6 +61,7 @@ export async function applyClawMcpUpdate(
   const setServer = options.setServer ?? setConfiguredMcpServer;
   const unsetServer = options.unsetServer ?? unsetConfiguredMcpServer;
   const readRefs = options.readRefs ?? readClawMcpServerRefs;
+  const readRefsByName = options.readRefsByName ?? readClawMcpServerRefsByName;
   const planRemoval = options.planRemoval ?? planClawMcpServerRemoval;
   const upsertRef = options.upsertRef ?? upsertClawMcpServerRef;
   const deleteRef = options.deleteRef ?? deleteClawMcpServerRef;
@@ -137,7 +140,9 @@ export async function applyClawMcpUpdate(
           const removed = await unsetServer({ name, expectedServer: previousServer });
           configMutationUncertain = false;
           if (!removed.ok) {
+            configMutationUncertain = true;
             upsertRef(previousRef, options);
+            configMutationUncertain = false;
             throw new Error(removed.error);
           }
           undo.push(
@@ -188,16 +193,33 @@ export async function applyClawMcpUpdate(
         });
         configMutationUncertain = false;
         if (!written.ok) {
+          configMutationUncertain = true;
           if (previousRef) {
             upsertRef(previousRef, options);
           } else {
             deleteRef(updatePlan.agentId, name, options);
           }
+          configMutationUncertain = false;
           throw new Error(written.error);
         }
         undo.push(
           async () =>
             await withMcpLifecycleLease(name, options, async () => {
+              const currentRefs = readRefsByName(name, options);
+              const currentOwnRef = currentRefs.find(
+                (candidate) => candidate.agentId === updatePlan.agentId,
+              );
+              const otherOwners = currentRefs.filter(
+                (candidate) => candidate.agentId !== updatePlan.agentId,
+              );
+              if (
+                otherOwners.length > 0 ||
+                (currentOwnRef?.independentOwner && !targetRef.independentOwner)
+              ) {
+                throw new Error(
+                  `MCP server ${JSON.stringify(name)} gained another owner during rollback; current configuration was retained.`,
+                );
+              }
               if (previousServer && previousRef) {
                 const restored = await setServer({
                   name,
