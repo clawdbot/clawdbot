@@ -301,6 +301,24 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
+/**
+ * Manifest-declared `preferOver` ids for one channel on one record. A channel-specific
+ * declaration wins over the record's catalog-level one so a plugin can replace a single channel
+ * without claiming every channel it ships. Shared so schema ownership and auto-enable read the
+ * same declaration; two copies of this precedence would let the validator and the runtime
+ * disagree about which plugin owns a channel.
+ */
+export function resolveManifestChannelPreferOverIds(
+  record: PluginManifestRecord,
+  channelId: string,
+): readonly string[] {
+  const channelPreferOver = record.channelConfigs?.[channelId]?.preferOver;
+  if (channelPreferOver?.length) {
+    return channelPreferOver;
+  }
+  return record.channelCatalogMeta?.preferOver ?? [];
+}
+
 export type BundledChannelConfigCollector = (params: {
   pluginDir: string;
   manifest: PluginManifest;

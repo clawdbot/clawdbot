@@ -3,7 +3,10 @@
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  resolveManifestChannelPreferOverIds,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -162,6 +165,8 @@ export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
+  // Resolving a same-origin conflict needs the CURRENT owner's manifest, not just its id.
+  const recordsById = new Map(registry.plugins.map((record) => [record.id, record]));
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
@@ -188,14 +193,29 @@ export function collectChannelSchemaMetadataWithOwnership(
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
       const current = byChannelId.get(channelId);
-      if (
-        current &&
-        current.originRank < originRank &&
-        (current.configSchema !== undefined || current.configUiHints !== undefined)
-      ) {
+      const currentOwnsSchema =
+        current !== undefined &&
+        (current.configSchema !== undefined || current.configUiHints !== undefined);
+      if (currentOwnsSchema && current.originRank < originRank) {
         // A closer-origin channel config owns schema/UI hints even if a farther plugin also
         // advertises the same channel id.
         continue;
+      }
+      // Equal-origin claimants would otherwise be decided by iteration order. Auto-enable already
+      // skips a candidate that another configured plugin lists in `preferOver`, so schema
+      // ownership has to follow the same declaration or config validation rejects the very
+      // plugin the runtime activates. Mutual declarations stay order-dependent, as before.
+      if (currentOwnsSchema && current.originRank === originRank && current.schemaPluginId) {
+        const replacedByIncoming = resolveManifestChannelPreferOverIds(record, channelId).includes(
+          current.schemaPluginId,
+        );
+        const currentOwnerRecord = recordsById.get(current.schemaPluginId);
+        const incomingReplacedByCurrent =
+          currentOwnerRecord !== undefined &&
+          resolveManifestChannelPreferOverIds(currentOwnerRecord, channelId).includes(record.id);
+        if (incomingReplacedByCurrent && !replacedByIncoming) {
+          continue;
+        }
       }
       const coreOwnedSchema =
         record.origin === "bundled" || channelConfig.schema === undefined

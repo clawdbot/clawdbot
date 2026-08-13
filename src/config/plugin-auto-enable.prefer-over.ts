@@ -6,7 +6,10 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  resolveManifestChannelPreferOverIds,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -129,13 +132,11 @@ function resolvePreferredOverIds(
   const channelId =
     candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
   const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
-  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[channelId]?.preferOver;
-  if (manifestChannelPreferOver?.length) {
-    return [...manifestChannelPreferOver];
-  }
-  const installedChannelMeta = installedPlugin?.channelCatalogMeta;
-  if (installedChannelMeta?.preferOver?.length) {
-    return [...installedChannelMeta.preferOver];
+  const manifestPreferOver = installedPlugin
+    ? resolveManifestChannelPreferOverIds(installedPlugin, channelId)
+    : [];
+  if (manifestPreferOver.length) {
+    return [...manifestPreferOver];
   }
   const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
   if (builtInChannelPreferOver.length) {
