@@ -730,7 +730,8 @@ export const en: TranslationMap = {
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
-    browseRequiresAdmin: "Browsing outside agent workspaces needs an admin connection",
+    browseRequiresAdmin:
+      "To browse outside agent workspaces, request admin in the access banner, then approve in Devices.",
     connectMachine: "Connect a machine…",
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
@@ -3606,6 +3607,21 @@ export const en: TranslationMap = {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     retryNow: "Retry now",
+    scopeUpgrade: {
+      limited: "This browser has limited access.",
+      guidance:
+        "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
+      request: "Request admin",
+      requesting: "Requesting administrator access…",
+      requestingAction: "Requesting…",
+      pending:
+        "Approve this browser by running openclaw devices on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
+      retry: "Retry",
+      cancel: "Cancel",
+      rejected: "The administrator access request was rejected.",
+      expired: "The administrator access request expired.",
+      error: "Administrator access request failed: {error}",
+    },
     access: {
       title: "Gateway Access",
       subtitle: "Where the dashboard connects and how it authenticates.",
