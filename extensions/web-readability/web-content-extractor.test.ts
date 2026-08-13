@@ -104,6 +104,20 @@ describe("web readability extractor", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it("stays bounded when unmatched closing tags flood a nearly full stack", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const flood = `${"<div>".repeat(790)}${"</x>".repeat(180_000)}${"<div>".repeat(20)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${flood}`);
+    const started = performance.now();
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+    expect(performance.now() - started).toBeLessThan(150);
+  });
+
   it("extracts many well-formed sibling elements with matching close tags", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const siblings = "<div>word</div>".repeat(2_000);

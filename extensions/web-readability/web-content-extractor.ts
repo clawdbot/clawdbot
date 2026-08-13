@@ -84,6 +84,7 @@ function findRawTextClose(html: string, tagName: string, from: number): number {
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   const openTags: string[] = [];
+  const openCounts = new Map<string, number>();
   const len = html.length;
   for (let i = 0; i < len; i++) {
     if (html.charCodeAt(i) !== 60) {
@@ -126,16 +127,19 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     const tagName = html.slice(nameStart, j).toLowerCase();
 
     if (closing) {
-      // Mirror htmlparser2's HTML-mode stack: a close pops back only to a
+      // Mirror htmlparser2's HTML-mode stack: a close pops back to the nearest
       // matching open tag; an unmatched close pops nothing. A scalar decrement
       // instead let `<div></x>` net to zero while the parser nests every div.
-      const top = openTags[openTags.length - 1];
-      if (top === tagName) {
-        openTags.pop();
-      } else {
-        const matchIndex = openTags.lastIndexOf(tagName);
-        if (matchIndex !== -1) {
-          openTags.length = matchIndex;
+      // openCounts settles "nothing to pop" without touching the stack, so a
+      // flood of unmatched closes cannot scan every open tag per token; the
+      // popping loop only ever walks tags it removes.
+      if (!openCounts.get(tagName)) {
+        continue;
+      }
+      for (let name = openTags.pop(); name !== undefined; name = openTags.pop()) {
+        openCounts.set(name, (openCounts.get(name) ?? 1) - 1);
+        if (name === tagName) {
+          break;
         }
       }
       continue;
@@ -168,6 +172,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     // htmlparser2 in HTML mode has recognizeSelfClosing off, so a trailing
     // slash on a non-void tag is ignored and `<div/>` still opens an element.
     openTags.push(tagName);
+    openCounts.set(tagName, (openCounts.get(tagName) ?? 0) + 1);
     if (openTags.length > maxDepth) {
       return true;
     }
