@@ -2016,6 +2016,7 @@ openclaw-chat-session-rail {
   position: static;
   width: 100%;
   height: 100%;
+  border-left-width: 0;
 }
 
 @media (max-width: 768px) {

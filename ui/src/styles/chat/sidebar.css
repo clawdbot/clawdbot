@@ -257,12 +257,6 @@
   background: var(--accent);
 }
 
-/* The docked companion already has the shared resizer hairline. Its overlay
-   border is only for the narrow sheet presentation and would double this edge. */
-.chat-main--rail-docked > openclaw-chat-session-rail .chat-session-rail--expanded {
-  border-left-width: 0;
-}
-
 openclaw-chat-sidebar-region,
 .sidebar-region__right-runtime,
 .sidebar-region__panels-runtime {
