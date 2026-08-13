@@ -377,7 +377,6 @@ async function finishPreparedManualRun(
   } finally {
     // Terminal receipt persistence is fallible; local liveness and admission
     // ownership must still retire or this process permanently self-fences the job.
-    let receiptFailure: { error: unknown } | undefined;
     try {
       if (!finalized) {
         finishCronRunReceipt({
@@ -387,8 +386,6 @@ async function finishPreparedManualRun(
           error: "cron run result was not applied to the current job revision",
         });
       }
-    } catch (error) {
-      receiptFailure = { error };
     } finally {
       releaseLocalCronRunReceiptOwnership(prepared.runReceipt);
       try {
@@ -396,9 +393,6 @@ async function finishPreparedManualRun(
       } finally {
         clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
       }
-    }
-    if (receiptFailure) {
-      throw receiptFailure.error;
     }
   }
 }
