@@ -148,7 +148,10 @@ export function restoreFinalizedStartupRun(params: {
       state,
       job,
       { startedAt, endedAt, triggerEval: params.triggerEval },
-      { scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance" },
+      {
+        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        deferredNotifications: params.deferredNotifications,
+      },
     );
     return {
       shouldDelete: false,

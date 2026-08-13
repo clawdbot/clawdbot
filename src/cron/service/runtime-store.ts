@@ -31,9 +31,14 @@ export function applyCronRuntimeRowsToState(
   }
   const jobsById = new Map([...jobs].map((job) => [job.id, job] as const));
   const deleted = new Set(deletedJobIds);
-  state.store.jobs = state.store.jobs
+  const residentJobIds = new Set(state.store.jobs.map((job) => job.id));
+  const residentJobs = state.store.jobs
     .filter((job) => !deleted.has(job.id))
     .map((job) => jobsById.get(job.id) ?? job);
+  const importedJobs = [...jobsById.values()].filter(
+    (job) => !residentJobIds.has(job.id) && !deleted.has(job.id),
+  );
+  state.store.jobs = [...residentJobs, ...importedJobs];
   publishCronRuntimeRows(state);
 }
 

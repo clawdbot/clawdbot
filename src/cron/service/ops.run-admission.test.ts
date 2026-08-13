@@ -566,6 +566,53 @@ describe("cron service run admission", () => {
     expect(completedJob?.state.lastRunStatus).toBe("skipped");
   });
 
+  it("drops stale invalid-run notifications when the row changes before commit", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.200Z");
+    const job = createDueIsolatedJob({
+      id: "invalid-manual-stale-notification",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.sessionTarget = "main";
+    job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const sendCronFailureAlert = vi.fn(async () => {});
+    let edited = false;
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
+      runIsolatedAgentJob: vi.fn(),
+      onEvent: (event) => {
+        if (edited || event.action !== "finished" || event.jobId !== job.id) {
+          return;
+        }
+        edited = true;
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE cron_jobs SET name = ?, updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
+          )
+          .run("edited before invalid-run commit", cronStoreKey(store.storePath), job.id);
+      },
+    });
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({
+      ok: true,
+      ran: false,
+      reason: "invalid-spec",
+    });
+
+    const persisted = (await loadCronStore(store.storePath)).jobs[0];
+    expect(persisted?.name).toBe("edited before invalid-run commit");
+    expect(persisted?.state.lastRunStatus).toBeUndefined();
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+  });
+
   it("keeps a same-millisecond replacement reservation when stale cleanup runs", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.250Z");

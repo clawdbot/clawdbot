@@ -211,10 +211,12 @@ async function skipInvalidPersistedManualRun(params: {
       return { upsertJobIds: [current.id], value: current };
     },
   });
-  runPostPersistCronNotifications(params.state, postPersistNotifications);
-  if (committedJob) {
-    applyCronRuntimeRowsToState(params.state, [committedJob]);
+  if (!committedJob) {
+    armTimer(params.state);
+    return;
   }
+  runPostPersistCronNotifications(params.state, postPersistNotifications);
+  applyCronRuntimeRowsToState(params.state, [committedJob]);
   armTimer(params.state);
 }
 

@@ -6,6 +6,7 @@ import {
   adjudicateActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
+  finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
@@ -366,9 +367,22 @@ export async function persistQueuedCronRunReservations(params: {
       const receiptByJobId = new Map(
         committedReservations.map(({ job, runReceipt }) => [job.id, runReceipt] as const),
       );
-      return (params.state.store?.jobs ?? [])
+      const reloadedReservations = (params.state.store?.jobs ?? [])
         .filter((job) => committed.has(job.id))
         .map((job) => ({ job, runReceipt: receiptByJobId.get(job.id)! }));
+      const reloadedJobIds = new Set(reloadedReservations.map(({ job }) => job.id));
+      for (const reservation of committedReservations) {
+        if (reloadedJobIds.has(reservation.job.id)) {
+          continue;
+        }
+        finishCronRunReceipt({
+          handle: reservation.runReceipt,
+          status: "skipped",
+          finishedAtMs: params.state.deps.nowMs(),
+          error: "cron reservation job disappeared before local handoff",
+        });
+      }
+      return reloadedReservations;
     } catch (error) {
       for (const prepared of preparedClaims.values()) {
         releaseLocalCronRunReceiptOwnership(prepared.handle);

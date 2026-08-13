@@ -186,4 +186,74 @@ describe("cron outcome receipt finalization", () => {
       expect.any(Number),
     );
   });
+
+  it("publishes the committed outcome before best-effort maintenance fails", async () => {
+    const store = fixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const completed = createDueIsolatedJob({
+      id: "published-before-maintenance",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    completed.state.runningAtMs = startedAt;
+    const sibling = createDueIsolatedJob({
+      id: "maintenance-write-fails",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt + 60_000,
+    });
+    sibling.state.nextRunAtMs = undefined;
+    await saveCronStore(store.storePath, { version: 1, jobs: [completed, sibling] });
+    const receipt = claimReceipt(store.storePath, completed, startedAt);
+    const events: Array<{ action: string; jobId: string }> = [];
+    const warn = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: { ...noopLogger, warn },
+      nowMs: () => startedAt + 1,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      onEvent: (event) => events.push(event),
+    });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TEMP TRIGGER reject_post_finalization_maintenance
+      BEFORE UPDATE ON cron_jobs
+      WHEN NEW.job_id = '${sibling.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'maintenance unavailable');
+      END;
+    `);
+
+    try {
+      await expect(
+        finalizeCompletedCronRunOutcomes(state, [
+          {
+            jobId: completed.id,
+            job: completed,
+            activeJobMarker: markCronJobActive(completed.id),
+            runReceipt: receipt,
+            status: "ok",
+            startedAt,
+            endedAt: startedAt + 1,
+          },
+        ]),
+      ).resolves.toHaveLength(1);
+
+      expect(events).toContainEqual(
+        expect.objectContaining({ action: "finished", jobId: completed.id }),
+      );
+      const persistedReceipt = database
+        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId) as { status: string } | undefined;
+      expect(persistedReceipt?.status).toBe("ok");
+      expect(warn).toHaveBeenCalledWith(
+        { err: expect.stringContaining("maintenance unavailable") },
+        "cron: post-finalization schedule maintenance failed",
+      );
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_post_finalization_maintenance");
+    }
+  });
 });

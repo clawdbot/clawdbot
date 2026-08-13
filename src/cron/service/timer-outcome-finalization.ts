@@ -234,14 +234,6 @@ export async function finalizeCompletedCronRunOutcomes(
         committed.upsertedJobs,
         committed.removedJobs.map((job) => job.id),
       );
-      const maintenance = recomputeUnownedCronSchedules(
-        state,
-        opts?.repairFutureCronNextRunAtMs === false
-          ? { repairFutureCronNextRunAtMs: false }
-          : undefined,
-      );
-      runPostPersistCronNotifications(state, maintenance.notifications);
-      applyCronRuntimeRowsToState(state, maintenance.jobs);
       for (const plan of committed.eventPlans) {
         if (plan.job) {
           emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
@@ -255,6 +247,21 @@ export async function finalizeCompletedCronRunOutcomes(
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of committed.removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+      }
+      try {
+        const maintenance = recomputeUnownedCronSchedules(
+          state,
+          opts?.repairFutureCronNextRunAtMs === false
+            ? { repairFutureCronNextRunAtMs: false }
+            : undefined,
+        );
+        applyCronRuntimeRowsToState(state, maintenance.jobs);
+        runPostPersistCronNotifications(state, maintenance.notifications);
+      } catch (error) {
+        state.deps.log.warn(
+          { err: String(error) },
+          "cron: post-finalization schedule maintenance failed",
+        );
       }
     });
 

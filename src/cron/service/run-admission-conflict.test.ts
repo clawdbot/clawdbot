@@ -4,12 +4,16 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
+  isCronRunReceiptOwnerDefinitelyStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
@@ -300,4 +304,67 @@ it("terminalizes an owned reservation after another gateway deletes the job", as
   ) as { status: string } | undefined;
   expect(receipt?.status).toBe("skipped");
   stop(state);
+});
+
+it("retires a reservation when its row disappears during the post-commit reload", async () => {
+  const store = fixtures.makeStorePath();
+  const now = Date.parse("2026-08-13T17:30:00.000Z");
+  const job = createDueIsolatedJob({
+    id: "deleted-during-reservation-reload",
+    nowMs: now,
+    nextRunAtMs: now,
+  });
+  await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(),
+  });
+  await list(state);
+  const database = openOpenClawStateDatabase().db;
+  database.exec(`
+    CREATE TEMP TRIGGER delete_reserved_job_before_reload
+    AFTER UPDATE OF state_json ON cron_jobs
+    WHEN NEW.job_id = '${job.id}' AND json_extract(NEW.state_json, '$.queuedAtMs') IS NOT NULL
+    BEGIN
+      DELETE FROM cron_jobs WHERE store_key = NEW.store_key AND job_id = NEW.job_id;
+    END;
+  `);
+
+  try {
+    const reservations = await persistQueuedCronRunReservations({
+      state,
+      candidates: [job],
+      reservedAtMs: now,
+    });
+
+    expect(reservations).toEqual([]);
+    const receipt = database
+      .prepare(
+        "SELECT receipt_id AS receiptId, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",
+      )
+      .get(cronStoreKey(store.storePath), job.id) as
+      | { receiptId: string; status: string }
+      | undefined;
+    expect(receipt?.status).toBe("skipped");
+    expect(
+      isCronRunReceiptOwnerDefinitelyStale({
+        receiptId: receipt!.receiptId,
+        storeKey: cronStoreKey(store.storePath),
+        jobId: job.id,
+        configRevision: "unused",
+        agentId: job.agentId ?? "main",
+        ownerPid: process.pid,
+        ownerStartTime: null,
+        startedAtMs: now,
+      }),
+    ).toBe(true);
+  } finally {
+    database.exec("DROP TRIGGER IF EXISTS delete_reserved_job_before_reload");
+    stop(state);
+  }
 });
