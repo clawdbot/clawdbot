@@ -1074,6 +1074,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
+      agentId: "ops",
       entry: {
         sessionId: "sess-heartbeat-no-registry",
         updatedAt: 1,
@@ -1090,6 +1091,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg: {},
+      agentId: "ops",
       allowBootstrap: true,
     });
     expect(
@@ -1202,6 +1204,12 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("forum");
     expect(resolved.to).toBe("room:ops");
     expect(resolved.threadId).toBe(1008013);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg,
+      agentId: "main",
+      allowBootstrap: true,
+    });
   });
 
   it("bootstraps explicit external heartbeat targets before strict validation", () => {

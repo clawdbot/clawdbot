@@ -181,6 +181,7 @@ function resolveHeartbeatOwnerRoute(params: {
 /** Read-only owner-route probe for status/doctor surfaces. Unproven targets fail closed. */
 export function hasResolvableHeartbeatOwnerRoute(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): boolean {
@@ -196,6 +197,7 @@ export function hasResolvableHeartbeatOwnerRoute(params: {
  */
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
@@ -205,8 +207,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const rawTarget = heartbeat?.target;
   const implicitDefaultRoute = rawTarget === undefined;
   let target = implicitDefaultRoute ? "owner" : "none";
-  let preparedExplicitPlugin: ChannelPlugin | undefined;
-  let preparedExplicitTo: string | undefined;
+  let preparedExplicitPlugin: ChannelPlugin | undefined, preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last" || rawTarget === "owner") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
@@ -219,6 +220,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
         preparedExplicitPlugin = resolveOutboundChannelPlugin({
           channel: rawTarget,
           cfg,
+          agentId: params.agentId,
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
@@ -313,6 +315,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
     });
 
@@ -497,6 +500,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   const plugin = resolveOutboundChannelPlugin({
     channel: delivery.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
