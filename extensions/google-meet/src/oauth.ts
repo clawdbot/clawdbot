@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
 const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
@@ -91,23 +92,27 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       const detail = await readGoogleApiErrorDetail(response);
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
-    const payload = await readProviderJsonResponse<{
-      access_token?: string;
-      expires_in?: number;
-      refresh_token?: string;
-      scope?: string;
-      token_type?: string;
-    }>(response, "Google OAuth token", { maxBytes: GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES });
-    const accessToken = payload.access_token?.trim();
+    const payload = await readProviderJsonResponse<unknown>(
+      response,
+      "Google OAuth token",
+      { maxBytes: GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES },
+    );
+    if (!isRecord(payload)) {
+      throw new Error("Google OAuth token response was malformed");
+    }
+    const accessToken =
+      typeof payload.access_token === "string" ? payload.access_token.trim() : undefined;
     if (!accessToken) {
       throw new Error("Google OAuth token response was missing access_token");
     }
     return {
       accessToken,
       expiresAt: resolveGoogleMeetTokenExpiresAt(payload.expires_in),
-      refreshToken: payload.refresh_token?.trim() || undefined,
-      scope: payload.scope?.trim() || undefined,
-      tokenType: payload.token_type?.trim() || undefined,
+      refreshToken:
+        typeof payload.refresh_token === "string" ? payload.refresh_token.trim() || undefined : undefined,
+      scope: typeof payload.scope === "string" ? payload.scope.trim() || undefined : undefined,
+      tokenType:
+        typeof payload.token_type === "string" ? payload.token_type.trim() || undefined : undefined,
     };
   } finally {
     await release();
