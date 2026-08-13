@@ -869,8 +869,8 @@ function assertSessionMetadataMigrated(stateDir) {
         `legacy session transcript was not moved for ${sessionId}`,
       );
       assert(
-        entry?.sessionFile === expectedPath,
-        `legacy session row still points at the old sessions directory for ${sessionId}`,
+        !Object.hasOwn(entry ?? {}, "sessionFile"),
+        `legacy session row retained retired sessionFile metadata for ${sessionId}`,
       );
     }
   }
