@@ -143,6 +143,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   );
   protected readonly transcript = new ChatTranscriptController(this);
   protected readonly backgroundTaskTranscript = new ChatTranscriptController(this);
+  protected readonly subagentSidebarTranscript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();

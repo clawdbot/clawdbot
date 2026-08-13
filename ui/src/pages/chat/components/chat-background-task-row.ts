@@ -175,9 +175,6 @@ export function renderTaskDetail(task: TaskSummary, props: BackgroundTasksProps)
   const detailedTask = props.taskDetails.get(task.id);
   const newest = newestTaskSnapshot(task, detailedTask);
   const facts = taskDisplayFacts(newest);
-  const output = taskDetail(newest);
-  const detailLoading = props.taskDetailLoadingIds.has(task.id);
-  const detailError = props.taskDetailErrors.get(task.id);
   const cancelling = props.cancellingTaskIds.has(task.id);
   return html`
     <div class="chat-tasks-rail__detail" data-task-detail=${task.id}>
@@ -212,30 +209,40 @@ export function renderTaskDetail(task: TaskSummary, props: BackgroundTasksProps)
             <strong>${newest.progressSummary}</strong>
           </div>`
         : nothing}
-      ${detailError
-        ? html`<div
-            class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
-          >
-            ${detailError}
-          </div>`
-        : nothing}
-      <div class="chat-tasks-rail__detail-blocks">
-        <section class="chat-tasks-rail__task-inspector-block">
-          <div class="chat-tasks-rail__task-inspector-label">
-            ${t("chat.backgroundTasks.prompt")}
-          </div>
-          <pre>
+      ${renderTaskInspector(newest, props)}
+    </div>
+  `;
+}
+
+export function renderTaskInspector(
+  task: TaskSummary,
+  props: BackgroundTasksProps,
+): TemplateResult {
+  const detailedTask = props.taskDetails.get(task.id);
+  const newest = newestTaskSnapshot(task, detailedTask);
+  const output = taskDetail(newest);
+  const detailLoading = props.taskDetailLoadingIds.has(task.id);
+  const detailError = props.taskDetailErrors.get(task.id);
+  return html`
+    ${detailError
+      ? html`<div
+          class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+        >
+          ${detailError}
+        </div>`
+      : nothing}
+    <div class="chat-tasks-rail__detail-blocks">
+      <section class="chat-tasks-rail__task-inspector-block">
+        <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>
+        <pre>
 ${detailLoading
-              ? t("chat.backgroundTasks.detailLoading")
-              : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
-        </section>
-        <section class="chat-tasks-rail__task-inspector-block">
-          <div class="chat-tasks-rail__task-inspector-label">
-            ${t("chat.backgroundTasks.output")}
-          </div>
-          <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
-        </section>
-      </div>
+            ? t("chat.backgroundTasks.detailLoading")
+            : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
+      </section>
+      <section class="chat-tasks-rail__task-inspector-block">
+        <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.output")}</div>
+        <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
+      </section>
     </div>
   `;
 }

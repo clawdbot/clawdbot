@@ -27,6 +27,7 @@ import type {
   BackgroundTasksRailView,
 } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
+import { observeSubagentTaskEvent } from "./chat-subagent-detail-state.ts";
 
 type BackgroundTaskLoadEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
 
@@ -381,6 +382,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   ) {
     return;
   }
+  observeSubagentTaskEvent(host, normalizedEvent);
   const event =
     normalizedEvent.action === "upserted"
       ? {
@@ -680,7 +682,10 @@ function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { narrowLayout?: boolean } = {},
+  opts: {
+    narrowLayout?: boolean;
+    onOpenSubagentDetail?: (task: TaskSummary) => void;
+  } = {},
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -733,6 +738,8 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
+    onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
+    onOpenSubagentDetail: opts.onOpenSubagentDetail,
     onSelectTask: (task) => selectBackgroundTaskDetail(host, state, task),
     onBack: () => showPreviousBackgroundTaskView(host, state),
     onOpenTranscript: (task, returnTo) => openBackgroundTaskTranscript(host, state, task, returnTo),
