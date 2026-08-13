@@ -181,8 +181,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
     resolveNodeWorkerBuild: async (deviceId) => {
-      const connected = await deviceNodeRegistry?.listCurrentConnected();
-      const build = connected?.find((node) => node.nodeId === deviceId)?.workerRuns;
+      const build = await deviceRuntime.resolveWorkerBuild(deviceId);
       return build ? structuredClone(build) : undefined;
     },
     tunnelManager: workerTunnelManager,
