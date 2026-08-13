@@ -1867,7 +1867,7 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("emits an issue when the provider closes before ready", () => {
+  it("emits an issue and releases retained Gateway work when the provider closes before ready", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
@@ -1884,17 +1884,24 @@ describe("talk realtime gateway relay", () => {
         events.push({ event, payload, connIds: [...connIds] });
       },
     } as never;
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
-      model: "gpt-realtime-2",
-    });
+    const admission = tryBeginGatewayRootWorkAdmission();
+    expect(admission).toBeDefined();
+    const session = await admission!.run(async () =>
+      createTalkRealtimeRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        model: "gpt-realtime-2",
+      }),
+    );
+    admission!.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
 
     bridgeRequest?.onClose?.("error");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
     expectRecordFields(errorPayload, {
