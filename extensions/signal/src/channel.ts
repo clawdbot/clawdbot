@@ -12,6 +12,7 @@ import {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
@@ -595,7 +596,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             accountId: account.accountId,
             config: ctx.cfg,
             runtime: ctx.runtime,
-            channelRuntime: ctx.channelRuntime,
+            channelRuntime: ctx.channelRuntime as PluginRuntime["channel"],
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
             statusSink,

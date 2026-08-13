@@ -8,7 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
-import { bindChannelIngressAdmissionEvidence } from "./admission-evidence.js";
+import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
 import {
@@ -669,7 +669,7 @@ export async function resolveChannelMessageIngress(
     commandAccess,
     activationAccess,
   };
-  return bindChannelIngressAdmissionEvidence({
+  return recordChannelIngressResolution({
     result,
     channelId,
     accountId: params.accountId,

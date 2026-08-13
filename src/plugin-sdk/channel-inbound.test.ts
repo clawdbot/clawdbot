@@ -83,7 +83,7 @@ describe("channel-inbound public helpers", () => {
     expect(channelIngressRuntime).not.toHaveProperty("createChannelParticipantAdmissionEvidence");
   });
 
-  it("preserves exact resolver evidence through the deprecated turn-context wrapper", async () => {
+  it("keeps public resolver and builder paths non-authoritative", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
       const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
@@ -103,12 +103,7 @@ describe("channel-inbound public helpers", () => {
       });
 
       expect(ctx.InboundTurnKind).toBe("user_request");
-      expect(
-        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(ctx)),
-      ).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present", kind: "person" },
-      });
+      expect(readChannelContextAdmissionEvidence(ctx)).toBeUndefined();
     } finally {
       cleanup();
     }

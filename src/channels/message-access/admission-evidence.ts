@@ -38,6 +38,13 @@ type ConsumedChannelAdmissionEvidence = Readonly<{
   decisionCoverage?: "enforced" | "attribution-only" | "unknown" | "unsupported";
 }>;
 
+type ChannelIngressResolutionBinding = Readonly<{
+  channelId: string;
+  accountId?: string;
+  rawPrincipalRef: string | number | null | undefined;
+  participantOutcomeAffecting: boolean;
+}>;
+
 const CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS = 16;
 const CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 const CHANNEL_ADMISSION_EVIDENCE_STATE_KEY = Symbol.for("openclaw.channelAdmissionEvidenceState");
@@ -45,6 +52,7 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   collectionEnabled: false,
   generation: 0,
   payloadByEvidence: new WeakMap<object, ChannelAdmissionEvidencePayload>(),
+  resolutionByIngress: new WeakMap<object, ChannelIngressResolutionBinding>(),
   evidenceByIngress: new WeakMap<object, ChannelAdmissionEvidence>(),
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
   consumedEvidence: new WeakSet<object>(),
@@ -123,32 +131,79 @@ function participantContribution(params: {
   );
 }
 
-/** Bind an admitted resolver result to its host-owned participant without exposing that value. */
-export function bindChannelIngressAdmissionEvidence(params: {
+/** Brand an exact resolver object with its non-authoritative input binding. */
+export function recordChannelIngressResolution(params: {
   result: ResolvedChannelMessageIngress;
   channelId: string;
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
 }): ResolvedChannelMessageIngress {
+  state.resolutionByIngress.set(
+    params.result,
+    Object.freeze({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      rawPrincipalRef: params.rawPrincipalRef,
+      participantOutcomeAffecting: params.participantOutcomeAffecting,
+    }),
+  );
+  return params.result;
+}
+
+/** Bind host-admitted resolver results without exposing participant values on public SDK paths. */
+function bindChannelIngressAdmissionEvidence(params: {
+  result: ResolvedChannelMessageIngress;
+  channelId: string;
+  accountId?: string;
+  rawPrincipalRef: string | number | null | undefined;
+}): void {
   if (!state.collectionEnabled || params.result.ingress.admission !== "dispatch") {
-    return params.result;
+    return;
   }
-  const contribution = participantContribution(params);
+  const resolution = state.resolutionByIngress.get(params.result);
+  if (!resolution || scopedParticipantRef(resolution) !== scopedParticipantRef(params)) {
+    return;
+  }
+  const contribution = participantContribution(resolution);
   const evidence = mintChannelAdmissionEvidence({
     kind: "leaf",
     contribution: Object.freeze({
       ...contribution,
       decision: Object.freeze({
         participantAware: contribution.participant.state === "present",
-        outcomeAffecting: params.participantOutcomeAffecting,
+        outcomeAffecting: resolution.participantOutcomeAffecting,
       }),
     }),
   });
   if (evidence) {
     state.evidenceByIngress.set(params.result, evidence);
   }
-  return params.result;
+}
+
+/** Bind ingress results only at the host-owned bundled channel context boundary. */
+export function bindHostChannelContextAdmissionEvidence(params: {
+  context: object;
+  channelId: string;
+  accountId?: string;
+  ingress?:
+    | ResolvedChannelMessageIngress
+    | readonly ResolvedChannelMessageIngress[]
+    | "unsupported";
+  rawPrincipalRef: string | number | null | undefined;
+}): void {
+  if (params.ingress !== undefined && params.ingress !== "unsupported") {
+    const ingressResults = Array.isArray(params.ingress) ? params.ingress : [params.ingress];
+    for (const result of ingressResults) {
+      bindChannelIngressAdmissionEvidence({
+        result,
+        channelId: params.channelId,
+        accountId: params.accountId,
+        rawPrincipalRef: params.rawPrincipalRef,
+      });
+    }
+  }
+  bindChannelContextAdmissionEvidence(params);
 }
 
 function evidenceMatchesContextParticipant(params: {
@@ -167,7 +222,7 @@ function evidenceMatchesContextParticipant(params: {
 }
 
 /** Attach private evidence to the finalized context returned by the existing SDK builder. */
-export function bindChannelContextAdmissionEvidence(params: {
+function bindChannelContextAdmissionEvidence(params: {
   context: object;
   channelId: string;
   accountId?: string;

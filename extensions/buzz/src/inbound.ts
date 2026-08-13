@@ -23,6 +23,7 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
   const { account, cfg, bus, message, signal } = params;
@@ -87,7 +88,7 @@ export async function handleBuzzInbound(params: {
     timestamp: new Date(message.createdAt * 1000),
     body: textForAgent,
   });
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channelIngress: access,
     channel: "buzz",
     accountId: route.accountId ?? account.accountId,

@@ -384,7 +384,13 @@ export function createPluginApiFactory(
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
         // without opting into the wider full-registration surface.
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
-        registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+        registerChannel: (registration) =>
+          registerChannel(
+            record,
+            registration,
+            registrationMode,
+            resolvePluginRuntime(record.id).channel,
+          ),
       },
     });
   };

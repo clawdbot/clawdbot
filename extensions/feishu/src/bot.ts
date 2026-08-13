@@ -1,5 +1,4 @@
 import {
-  buildChannelInboundEventContext,
   formatAgentEnvelope,
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
@@ -1372,7 +1371,7 @@ export async function handleFeishuMessage(params: {
     ) => {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
-      return buildChannelInboundEventContext({
+      return core.channel.inbound.buildContext({
         channelIngress: isGroup ? groupChannelIngress! : effectiveDmIngress!,
         channel: "feishu",
         supplemental: {

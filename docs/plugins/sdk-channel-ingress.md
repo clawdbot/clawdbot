@@ -23,7 +23,6 @@ import {
   defineStableChannelIngressIdentity,
   resolveChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 
 const identity = defineStableChannelIngressIdentity({
   key: "platform-user-id",
@@ -51,7 +50,7 @@ const result = await resolveChannelMessageIngress({
   command: hasControlCommand ? { allowTextCommands: true, hasControlCommand } : undefined,
 });
 
-const ctx = buildChannelInboundEventContext({
+const ctx = runtime.channel.inbound.buildContext({
   // Pass the exact host result; do not rebuild participant evidence from
   // SenderId, From, session keys, routes, rooms, or message metadata.
   channelIngress: result,
@@ -82,8 +81,10 @@ Deprecated third-party SDK helpers may rebuild older shapes internally. New
 bundled receive paths should not translate modern results back into local
 DTOs.
 
-When execution-identity audit collection is enabled, the inbound context
-builder privately carries the exact admitted participant to run admission.
+When execution-identity audit collection is enabled, the host-injected bundled
+runtime builder privately carries the exact admitted participant to run
+admission. The public standalone builder remains non-authoritative and cannot
+mint participant evidence.
 Queue collection retains attribution only when every contribution has valid
 evidence for the same participant; mixed, missing, stale, or unminted evidence
 is `unknown`. The carrier is opaque, bounded, one-shot, and diagnostic only.

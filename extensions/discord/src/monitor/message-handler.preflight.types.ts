@@ -16,6 +16,8 @@ export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
 type LoadedConfig = OpenClawConfig;
+type BuildChannelInboundContext =
+  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
@@ -28,6 +30,7 @@ type DiscordMessagePreflightSharedFields = {
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
+  buildContext?: BuildChannelInboundContext;
   botUserId?: string;
   abortSignal?: AbortSignal;
   guildHistories: Map<string, DiscordHistoryEntry[]>;

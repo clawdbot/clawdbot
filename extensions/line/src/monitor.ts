@@ -53,6 +53,7 @@ interface MonitorLineProviderOptions {
   accountId?: string;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
@@ -134,6 +135,7 @@ export async function monitorLineProvider(
     accountId,
     config,
     runtime,
+    buildContext,
     abortSignal,
     webhookPath,
     statusSink,
@@ -154,6 +156,7 @@ export async function monitorLineProvider(
     channelSecret: secret,
     accountId,
     runtime,
+    buildContext,
     config,
     onMessage: async (ctx, deliveryControl) => {
       if (!ctx) {

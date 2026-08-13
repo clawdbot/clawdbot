@@ -47,6 +47,7 @@ interface BuildLineMessageContextParams {
   commandAuthorized: boolean;
   channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
+  buildContext?: typeof buildChannelInboundEventContext;
 }
 
 type LineSourceInfo = {
@@ -265,6 +266,7 @@ async function finalizeLineInboundContext(params: {
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
   const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
@@ -302,7 +304,7 @@ async function finalizeLineInboundContext(params: {
     envelope: envelopeOptions,
   });
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channelIngress: params.channelIngress,
     channel: "line",
     accountId: params.route.accountId,
@@ -470,6 +472,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     messageSid: messageId,
     commandAuthorized,
     channelIngress: params.channelIngress,
+    buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
@@ -496,6 +499,7 @@ export async function buildLinePostbackContext(params: {
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
   channelIngress?: ResolvedChannelMessageIngress;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
 
@@ -531,6 +535,7 @@ export async function buildLinePostbackContext(params: {
     messageSid,
     commandAuthorized,
     channelIngress: params.channelIngress,
+    buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },
   });

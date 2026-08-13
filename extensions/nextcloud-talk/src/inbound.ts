@@ -1,7 +1,4 @@
-import {
-  buildChannelInboundEventContext,
-  resolveChannelInboundRouteEnvelope,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 // Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
@@ -332,7 +329,7 @@ export async function handleNextcloudTalkInbound(params: {
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channelIngress: access,
     channel: CHANNEL_ID,
     accountId: route.accountId,

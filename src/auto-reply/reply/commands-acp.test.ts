@@ -3,13 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
+import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import {
-  bindChannelContextAdmissionEvidence,
-  configureChannelAdmissionEvidenceCollection,
-} from "../../channels/message-access/admission-evidence.js";
+import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -1690,17 +1687,11 @@ describe("/acp command", () => {
         `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
         cfg,
       );
-      const evidence = createChannelParticipantAdmissionEvidence({
-        channelId: "discord",
-        accountId: "default",
-        participantId: "user-1",
-      });
-      bindChannelContextAdmissionEvidence({
+      bindTestChannelParticipantAdmissionEvidence({
         context: params.ctx,
         channelId: "discord",
         accountId: "default",
-        evidence,
-        rawPrincipalRef: "user-1",
+        participantId: "user-1",
       });
 
       await handleAcpCommand(params, true);

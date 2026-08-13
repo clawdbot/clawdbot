@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelInboundEventContext } from "../inbound-event/context.js";
+import { buildHostChannelInboundEventContext } from "../inbound-event/context.js";
 import {
   combineChannelAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
@@ -20,7 +20,7 @@ async function buildAdmittedContext(participantId: string, allowFrom = [particip
     groupPolicy: "allowlist",
     allowFrom,
   });
-  return buildChannelInboundEventContext({
+  return buildHostChannelInboundEventContext({
     channel: "test",
     accountId: "acct:primary",
     messageId: "msg-1",
@@ -32,6 +32,10 @@ async function buildAdmittedContext(participantId: string, allowFrom = [particip
     message: { rawBody: "hello" },
     channelIngress,
   });
+}
+
+function inspectChannelContext(context: object) {
+  return consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context));
 }
 
 describe("channel admission evidence", () => {
@@ -77,6 +81,37 @@ describe("channel admission evidence", () => {
       ).toMatchObject({
         ingressState: "unknown",
         invoker: { state: "unknown" },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("cannot bootstrap evidence through the public copy helper", () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const source = { OriginatingChannel: "test", AccountId: "default", SenderId: "person-a" };
+      const target = { ...source };
+
+      copyChannelParticipantAdmissionEvidence(source, target);
+
+      expect(readChannelContextAdmissionEvidence(target)).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("preserves evidence only across a same-identity public copy", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const source = await buildAdmittedContext("person-a");
+      const target = { ...source };
+
+      copyChannelParticipantAdmissionEvidence(source, target);
+
+      expect(inspectChannelContext(target)).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
       });
     } finally {
       cleanup();
@@ -173,11 +208,11 @@ describe("channel admission evidence", () => {
         reply: { to: "legacy:route:room-1" },
         message: { rawBody: "hello" },
       };
-      const unsupported = buildChannelInboundEventContext({
+      const unsupported = buildHostChannelInboundEventContext({
         ...base,
         channelIngress: "unsupported",
       });
-      const omitted = buildChannelInboundEventContext(base);
+      const omitted = buildHostChannelInboundEventContext(base);
       const exact = await resolveStableChannelMessageIngress({
         channelId: "legacy",
         accountId: "default",
@@ -185,7 +220,7 @@ describe("channel admission evidence", () => {
         conversation: { kind: "direct", id: "room-1" },
         dmPolicy: "open",
       });
-      const mismatched = buildChannelInboundEventContext({
+      const mismatched = buildHostChannelInboundEventContext({
         ...base,
         channelIngress: { ...exact },
       });

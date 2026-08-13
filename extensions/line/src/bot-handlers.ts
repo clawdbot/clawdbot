@@ -1,6 +1,7 @@
 // Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import {
+  type buildChannelInboundEventContext,
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
@@ -76,6 +77,7 @@ interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
+  buildContext?: typeof buildChannelInboundEventContext;
   mediaMaxBytes: number;
   processMessage: (
     ctx: LineInboundContext,
@@ -449,6 +451,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       commandAuthorized: decision.commandAccess.authorized,
       channelIngress: decision,
       inboundHistory: historyReservation.inboundHistory,
+      buildContext: context.buildContext,
     });
 
     if (!messageContext) {
@@ -507,6 +510,7 @@ async function handlePostbackEvent(
     account: context.account,
     commandAuthorized: decision.commandAccess.authorized,
     channelIngress: decision,
+    buildContext: context.buildContext,
   });
   if (!postbackContext) {
     return;

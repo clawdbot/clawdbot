@@ -1,6 +1,5 @@
 // Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
@@ -145,7 +144,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channelIngress: admission.channelIngress,
     channel: "msteams",
     contextVisibility: contextVisibilityMode,

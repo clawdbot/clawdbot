@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildChannelInboundEventContext,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
@@ -400,6 +401,7 @@ export async function prepareWhatsAppInboundContext(params: {
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
   suppressMessageReceivedHooks?: boolean;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   inbound: PreparedChannelInbound;
   control: Parameters<typeof projectPreparedChannelInbound>[0]["control"];
@@ -515,7 +517,11 @@ export async function prepareWhatsAppInboundContext(params: {
       location: params.msg.payload.location,
     },
   };
-  const projected = projectPreparedChannelInbound({ inbound, control });
+  const projected = projectPreparedChannelInbound({
+    inbound,
+    control,
+    buildContext: params.buildContext ?? buildChannelInboundEventContext,
+  });
   return {
     inbound,
     control,

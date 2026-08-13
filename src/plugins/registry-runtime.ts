@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
@@ -26,6 +27,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
+import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
@@ -70,6 +72,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
+  const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
 
   const addPluginRuntimeResolutionContext = (params: {
     error: unknown;
@@ -539,6 +542,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
     };
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    let scopedChannelRuntime: PluginRuntime["channel"] | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
@@ -659,6 +663,40 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             replaceConfigFile: (params) =>
               runWithPluginScope(() => config.replaceConfigFile(params)),
           } satisfies PluginRuntime["config"];
+        }
+        if (prop === "channel") {
+          if (scopedChannelRuntime) {
+            return scopedChannelRuntime;
+          }
+          const channel: PluginRuntime["channel"] = getRuntimeProperty();
+          const ownerRecord = pluginRuntimeRecordById.get(pluginId);
+          if (ownerRecord?.origin !== "bundled") {
+            return channel;
+          }
+          const buildHostContext = createHostChannelInboundEventContextBuilder(
+            channel.inbound.buildContext,
+          );
+          const buildContext = ((
+            params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
+          ) => {
+            const ownsLiveRegistrySlot =
+              activePluginRuntimeRecords.has(ownerRecord) &&
+              pluginRuntimeRecordById.get(pluginId) === ownerRecord &&
+              isPluginRegistryActivated(registry) &&
+              !isPluginRegistryRetired(registry) &&
+              registry.plugins.some(
+                (candidate) => candidate === ownerRecord && candidate.status === "loaded",
+              );
+            // Audit provenance is passive: stale closures still build the message context,
+            // but only the exact live bundled owner may attach participant evidence.
+            const builder = ownsLiveRegistrySlot ? buildHostContext : channel.inbound.buildContext;
+            return builder(params as never);
+          }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+          scopedChannelRuntime = {
+            ...channel,
+            inbound: { ...channel.inbound, buildContext },
+          };
+          return scopedChannelRuntime;
         }
         if (prop === "llm") {
           const llm = getRuntimeProperty();
@@ -912,6 +950,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     resolvePluginRuntime,
     setPluginRuntimeRecord: (record: PluginRecord) => {
       pluginRuntimeRecordById.set(record.id, record);
+      activePluginRuntimeRecords.add(record);
+    },
+    revokePluginRuntimeRecord: (pluginId: string, record?: PluginRecord) => {
+      const ownedRecord = record ?? pluginRuntimeRecordById.get(pluginId);
+      if (ownedRecord) {
+        activePluginRuntimeRecords.delete(ownedRecord);
+      }
     },
   };
 }

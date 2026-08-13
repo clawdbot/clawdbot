@@ -1,5 +1,4 @@
 import {
-  buildChannelInboundEventContext,
   toLocationContext,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
@@ -79,6 +78,7 @@ function resolvePreparedCommandFacts(
 export function projectPreparedChannelInbound(params: {
   inbound: PreparedChannelInbound;
   control: PreparedChannelInboundControl;
+  buildContext: (params: BuildChannelInboundEventContextParams) => BuiltChannelInboundEventContext;
 }): {
   input: {
     id: string;
@@ -106,7 +106,7 @@ export function projectPreparedChannelInbound(params: {
       textForCommands: inbound.message.commandBody,
       raw: inbound,
     },
-    context: buildChannelInboundEventContext({
+    context: params.buildContext({
       ...inbound,
       messageId: inbound.event.id,
       messageIdFull: inbound.event.fullId,

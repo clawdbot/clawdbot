@@ -1,7 +1,7 @@
 // Imessage plugin module implements inbound processing behavior.
 import {
-  buildMentionRegexes,
   buildChannelInboundEventContext,
+  buildMentionRegexes,
   formatMediaPlaceholderText,
   type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
@@ -893,6 +893,7 @@ export async function buildIMessageInboundContext(params: {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmHistory?: IMessageDmHistoryContext;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   ctxPayload: FinalizedMsgContext;
   fromLabel: string;
@@ -998,7 +999,7 @@ export async function buildIMessageInboundContext(params: {
   const media = await toInboundMediaFactsWithMetadata(
     params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
   );
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channelIngress: decision.channelIngress,
     channel: "imessage",
     supplemental: {

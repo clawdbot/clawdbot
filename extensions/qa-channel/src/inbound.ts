@@ -268,6 +268,7 @@ export async function handleQaInbound(params: {
   account: ResolvedQaChannelAccount;
   config: CoreConfig;
   message: QaBusMessage;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getQaChannelRuntime();
   const inbound = params.message;
@@ -365,7 +366,7 @@ export async function handleQaInbound(params: {
       })
     : undefined;
   const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channel: params.channelId,
     accountId: route.accountId ?? params.account.accountId,
     messageId: inbound.id,

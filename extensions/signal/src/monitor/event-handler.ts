@@ -260,7 +260,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       entry.isBatched === true,
     );
     const media = await toInboundMediaFactsWithMetadata(entry.media);
-    const ctxPayload = buildChannelInboundEventContext({
+    const ctxPayload = (
+      deps.channelRuntime?.inbound.buildContext ?? buildChannelInboundEventContext
+    )({
       channel: "signal",
       supplemental: {
         quote: entry.replyToBody

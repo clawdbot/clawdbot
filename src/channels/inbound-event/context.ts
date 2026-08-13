@@ -24,7 +24,6 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
-import { bindChannelContextAdmissionEvidence } from "../message-access/admission-evidence.js";
 import type { ChannelIngressCommandAccess } from "../message-access/runtime-types.js";
 import type { ResolvedChannelMessageIngress } from "../message-access/runtime-types.js";
 import type {
@@ -37,6 +36,7 @@ import type {
   SenderFacts,
   SupplementalContextFacts,
 } from "../turn/types.js";
+import { createHostChannelInboundEventContextBuilder } from "./host-context-builder.js";
 import type { InboundEventKind } from "./kind.js";
 import { buildChannelInboundMediaPayload } from "./media.js";
 
@@ -492,6 +492,31 @@ export function buildChannelInboundEventContext(
   params: BuildChannelInboundEventContextParams &
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<BuiltChannelInboundEventContext> {
+  return buildChannelInboundEventContextValue(params);
+}
+
+const buildHostChannelInboundEventContextValue = createHostChannelInboundEventContextBuilder(
+  buildChannelInboundEventContextValue,
+);
+
+/** Core-only bundled channel boundary that binds diagnostic admission evidence. */
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextAsyncParams,
+): Promise<BuiltChannelInboundEventContext>;
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextParams,
+): BuiltChannelInboundEventContext;
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextParams &
+    Partial<ChannelInboundSupplementalResolutionOptions>,
+): MaybePromise<BuiltChannelInboundEventContext> {
+  return buildHostChannelInboundEventContextValue(params);
+}
+
+function buildChannelInboundEventContextValue(
+  params: BuildChannelInboundEventContextParams &
+    Partial<ChannelInboundSupplementalResolutionOptions>,
+): MaybePromise<BuiltChannelInboundEventContext> {
   const body = params.message.body ?? params.message.rawBody;
   const commandTurn = resolveChannelCommandContext({
     command: params.command,
@@ -576,16 +601,7 @@ export function buildChannelInboundEventContext(
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
     : finalizeChannelInboundContextValue(finalizeParams);
-  const bindEvidence = (finalized: FinalizeChannelInboundContextResult<typeof context>) => {
-    const built = finalized.context as BuiltChannelInboundEventContext;
-    bindChannelContextAdmissionEvidence({
-      context: built,
-      channelId: params.channel,
-      accountId: params.accountId,
-      ingress: params.channelIngress,
-      rawPrincipalRef: params.sender.id,
-    });
-    return built;
-  };
-  return isPromiseLike(result) ? result.then(bindEvidence) : bindEvidence(result);
+  const unwrap = (finalized: FinalizeChannelInboundContextResult<typeof context>) =>
+    finalized.context as BuiltChannelInboundEventContext;
+  return isPromiseLike(result) ? result.then(unwrap) : unwrap(result);
 }

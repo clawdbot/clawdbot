@@ -1,5 +1,4 @@
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -222,7 +221,7 @@ export async function resolveMatrixInboundContext(config: {
       senderAllowed: replySenderAllowed,
     }).include,
   );
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channelIngress,
     channel: "matrix",
     contextVisibility: contextVisibilityMode,

@@ -6,7 +6,7 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { buildChannelInboundEventContext } from "./inbound-event/context.js";
+import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
 import {
   resolveChannelInboundRouteEnvelope,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
@@ -68,7 +68,7 @@ function buildDirectDmContext(
   body: string,
 ): FinalizedMsgContext {
   const accountId = route.accountId ?? params.accountId;
-  return buildChannelInboundEventContext({
+  return buildHostChannelInboundEventContext({
     channel: params.channel,
     accountId,
     provider: params.provider,

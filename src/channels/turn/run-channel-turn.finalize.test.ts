@@ -1,6 +1,6 @@
 // Channel turn finalize tests cover orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
+import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
-  bindChannelContextAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
   readChannelContextAdmissionEvidence,
 } from "../message-access/admission-evidence.js";
@@ -777,15 +776,10 @@ describe("channel turn finalize", () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     try {
       const ctx = createCtx();
-      const evidence = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-1",
-      });
-      bindChannelContextAdmissionEvidence({
+      const evidence = bindTestChannelParticipantAdmissionEvidence({
         context: ctx,
         channelId: "test",
-        evidence,
-        rawPrincipalRef: "person-1",
+        participantId: "person-1",
       });
       dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
 

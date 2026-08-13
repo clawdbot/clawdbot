@@ -361,7 +361,7 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = await buildChannelInboundEventContext({
+  const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
     channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
