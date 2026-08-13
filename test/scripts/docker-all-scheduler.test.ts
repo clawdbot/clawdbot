@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -514,7 +515,10 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(captured.OPENCLAW_DOCKER_E2E_SELECTED_SHA).toBe(fixture.sourceSha);
     expect(captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION).toBe(fixture.version);
     expect(captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256).toMatch(/^[0-9a-f]{64}$/u);
-    const registryDir = captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+    const registryDir = expectDefined(
+      captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+      "captured prepublish plugin registry directory",
+    );
     expect(path.isAbsolute(registryDir)).toBe(true);
     const manifest = JSON.parse(
       readFileSync(path.join(registryDir, "prepublish-plugin-registry.json"), "utf8"),
