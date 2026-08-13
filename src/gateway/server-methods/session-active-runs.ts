@@ -96,7 +96,7 @@ export function hasRegisteredChatRunForSessionKey(params: {
   defaultAgentId?: string;
 }): boolean {
   const controllers = params.context.chatAbortControllers;
-  return Boolean(
+  return (
     controllers instanceof Map &&
     [...controllers.values()].some((active) =>
       isTrackedActiveSessionRunForKey(
@@ -105,7 +105,7 @@ export function hasRegisteredChatRunForSessionKey(params: {
         params.agentId,
         params.defaultAgentId,
       ),
-    ),
+    )
   );
 }
 
