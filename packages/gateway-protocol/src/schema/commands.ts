@@ -76,6 +76,15 @@ const CommandArgSchema = closedObject({
   dynamic: Type.Optional(Type.Boolean()),
 });
 
+const CommandClientPresentationActionSchema = Type.Union([
+  closedObject({ kind: Type.Literal("device-pairing") }),
+]);
+
+const CommandClientPresentationSchema = closedObject({
+  when: Type.Literal("no-arguments"),
+  action: CommandClientPresentationActionSchema,
+});
+
 /** One command catalog entry visible to clients. */
 export const CommandEntrySchema = closedObject({
   name: BoundedNonEmptyString(COMMAND_NAME_MAX_LENGTH),
@@ -93,6 +102,7 @@ export const CommandEntrySchema = closedObject({
   scope: CommandScopeSchema,
   acceptsArgs: Type.Boolean(),
   args: Type.Optional(Type.Array(CommandArgSchema, { maxItems: COMMAND_ARGS_MAX_ITEMS })),
+  clientPresentation: Type.Optional(CommandClientPresentationSchema),
 });
 
 /** Command catalog request filters. */

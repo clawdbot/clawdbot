@@ -25,6 +25,8 @@ function createPairingShell(params: {
   auth: PairingAuth | null;
   connected?: boolean;
   setupCode?: string;
+  access?: "full" | "limited" | "node";
+  expiresAtMs?: number;
 }) {
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
@@ -38,6 +40,34 @@ function createPairingShell(params: {
     lastErrorCode: null,
   };
   const openDevicePairSetup = vi.fn(async () => undefined);
+  const access = params.access ?? "full";
+  const overlaySnapshot = {
+    approvalQueue: [],
+    approvalErrors: new Map(),
+    approvalNowMs: 0,
+    approvalBusy: false,
+    devicePairSetupOpen: Boolean(params.setupCode),
+    devicePairSetupLifecycle: params.setupCode
+      ? {
+          phase: "waiting" as const,
+          access,
+          setup: {
+            setupId: "setup-copy-test",
+            expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
+            setupCode: params.setupCode,
+            gatewayUrl: "wss://gateway.example.test",
+            auth: "token",
+            urlSource: "test",
+            access,
+          },
+        }
+      : { phase: "selection" as const, access },
+    devicePairPendingCount: 0,
+    updateAvailable: null,
+    updateRunning: false,
+    updateStatusBanner: null,
+    controlUiRefreshRequired: false,
+  };
   const context = {
     basePath: "",
     gateway: {
@@ -48,32 +78,7 @@ function createPairingShell(params: {
       snapshot: { navCollapsed: false, navWidth: 258, sidebarEntries: [], pinnedAgentIds: [] },
     },
     overlays: {
-      snapshot: {
-        approvalQueue: [],
-        approvalErrors: new Map(),
-        approvalNowMs: 0,
-        approvalBusy: false,
-        devicePairSetupOpen: Boolean(params.setupCode),
-        devicePairSetupLifecycle: params.setupCode
-          ? {
-              phase: "waiting",
-              access: "full",
-              setup: {
-                setupId: "setup-copy-test",
-                expiresAtMs: Date.now() + 60_000,
-                setupCode: params.setupCode,
-                gatewayUrl: "wss://gateway.example.test",
-                auth: "token",
-                urlSource: "test",
-              },
-            }
-          : { phase: "selection", access: "full" },
-        devicePairPendingCount: 0,
-        updateAvailable: null,
-        updateRunning: false,
-        updateStatusBanner: null,
-        controlUiRefreshRequired: false,
-      },
+      snapshot: overlaySnapshot,
       openDevicePairSetup,
     },
     config: { current: {} },
@@ -112,11 +117,21 @@ function createPairingShell(params: {
     });
   };
 
-  return { shell, snapshot, openDevicePairSetup, renderSidebar, renderPairingDialog, container };
+  return {
+    shell,
+    snapshot,
+    overlaySnapshot,
+    openDevicePairSetup,
+    renderSidebar,
+    renderPairingDialog,
+    container,
+  };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  vi.useRealTimers();
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");
@@ -225,5 +240,29 @@ describe("application shell pairing access", () => {
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
     expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+  });
+
+  it("expires a node setup link from the pairing clock", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
+    const { shell, container, renderSidebar } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-node-secret",
+      access: "node",
+      expiresAtMs: 5_000,
+    });
+
+    renderSidebar();
+    await vi.waitFor(() => {
+      render(shell.render(), container);
+      expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");
+    });
+    expect(container.querySelector(".device-pair-setup__command code")).not.toBeNull();
+
+    now.mockReturnValue(5_000);
+    render(shell.render(), container);
+    expect(container.querySelector('[role="timer"]')?.textContent?.toLowerCase()).toContain(
+      "expired",
+    );
+    expect(container.querySelector(".device-pair-setup__command code")).toBeNull();
   });
 });

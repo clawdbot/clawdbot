@@ -182,6 +182,7 @@ async function sendSlackOutboundMessage(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  forceDocument?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -227,6 +228,7 @@ async function sendSlackOutboundMessage(params: {
           mediaAccess: params.mediaAccess,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
+          ...(params.forceDocument ? { forceDocument: true } : {}),
         }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),

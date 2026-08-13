@@ -10,8 +10,11 @@ type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type DevicePairSetup = DevicePairSetupCodeResult & { setupId: string; expiresAtMs: number };
-export type DevicePairSetupAccess = "full" | "limited";
+export type DevicePairSetup = DevicePairSetupCodeResult & {
+  setupId: string;
+  expiresAtMs: number;
+};
+export type DevicePairSetupAccess = "full" | "limited" | "node";
 // Only the fields the modal actually shows. The event also carries deviceId and
 // ts; validating what is never rendered would just be shipped dead weight.
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
@@ -36,6 +39,12 @@ export type DevicePairSetupLifecycle =
       deviceName?: string;
     }
   | { phase: "expired"; access: DevicePairSetupAccess };
+export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
+  return client.request<DevicePairSetup>("device.pair.setupCode", {
+    includeQr: false,
+    joinUrl: true,
+  });
+}
 
 type DevicePairSetupState = {
   client: GatewayRequestClient | null;
@@ -43,6 +52,7 @@ type DevicePairSetupState = {
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairSetupExpiryTimer: ReturnType<typeof setTimeout> | null;
+  devicePairSetupCountdownTimer: ReturnType<typeof setInterval> | null;
   onDevicePairSetupChange: () => void;
 };
 
@@ -59,6 +69,7 @@ export function createDevicePairSetupState(params: {
     devicePairSetupOpen: false,
     devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairSetupExpiryTimer: null,
+    devicePairSetupCountdownTimer: null,
     onDevicePairSetupChange: params.onChange ?? (() => {}),
     pendingCount: 0,
   };
@@ -73,6 +84,33 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
 }
 
 // A refresh owns the lifecycle only while its token is current; replacement or close retires it.
+function stopDevicePairSetupCountdown(state: DevicePairSetupState) {
+  if (state.devicePairSetupCountdownTimer) {
+    clearInterval(state.devicePairSetupCountdownTimer);
+    state.devicePairSetupCountdownTimer = null;
+  }
+}
+
+export function syncDevicePairSetupCountdown(state: DevicePairSetupState, onTick: () => void) {
+  stopDevicePairSetupCountdown(state);
+  const lifecycle = state.devicePairSetupLifecycle;
+  const expiresAtMs = lifecycle.phase === "waiting" ? lifecycle.setup.expiresAtMs : undefined;
+  if (
+    lifecycle.access !== "node" ||
+    !state.devicePairSetupOpen ||
+    typeof expiresAtMs !== "number" ||
+    expiresAtMs <= Date.now()
+  ) {
+    return;
+  }
+  state.devicePairSetupCountdownTimer = setInterval(() => {
+    if (!state.devicePairSetupOpen || expiresAtMs <= Date.now()) {
+      stopDevicePairSetupCountdown(state);
+    }
+    onTick();
+  }, 1_000);
+}
+
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
 
 function hasDevicePairSetupLifecycle(setup: DevicePairSetupCodeResult): setup is DevicePairSetup {
@@ -223,7 +261,7 @@ export async function openDevicePairSetup(state: DevicePairSetupState) {
 export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   const client = state.client;
   const lifecycle = state.devicePairSetupLifecycle;
-  const access = lifecycle.access === "limited" ? "limited" : "full";
+  const access = lifecycle.access;
   if (
     !client ||
     !state.connected ||
@@ -247,7 +285,11 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   try {
     const result = await client.request<DevicePairSetup>(
       "device.pair.setupCode",
-      access === "limited" ? { bootstrapProfile: "limited" } : {},
+      access === "full"
+        ? {}
+        : access === "node"
+          ? { bootstrapProfile: "node", includeQr: false }
+          : { bootstrapProfile: "limited" },
     );
     if (
       devicePairSetupRequests.get(state) !== requestToken ||
@@ -262,7 +304,10 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
         "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
       );
     }
-    const resolvedAccess = result.access === "limited" ? "limited" : access;
+    const resolvedAccess =
+      result.access === "full" || result.access === "limited" || result.access === "node"
+        ? result.access
+        : access;
     state.devicePairSetupLifecycle = { phase: "waiting", access: resolvedAccess, setup: result };
     scheduleDevicePairSetupExpiry(state, result);
   } catch (err) {
@@ -301,6 +346,7 @@ export async function setDevicePairSetupAccess(
 }
 
 export function closeDevicePairSetup(state: DevicePairSetupState) {
+  stopDevicePairSetupCountdown(state);
   devicePairSetupRequests.delete(state);
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupOpen = false;

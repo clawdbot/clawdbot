@@ -93,9 +93,6 @@ extensions/discord/src/monitor/provider.test.ts
 extensions/discord/src/monitor/thread-bindings.lifecycle.test.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
-extensions/discord/src/voice/manager.e2e.test.ts
-extensions/discord/src/voice/manager.ts
-extensions/discord/src/voice/realtime.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -153,7 +150,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
-extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -339,7 +335,6 @@ src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
-src/agents/cli-runner.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
@@ -411,12 +406,9 @@ src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
-src/agents/subagents/announce/subagent-announce-delivery.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
-src/agents/subagents/registry/subagent-control.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
-src/agents/subagents/registry/subagent-registry-run-manager.ts
 src/agents/subagents/registry/subagent-registry.steer-restart.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
@@ -689,7 +681,6 @@ src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
 src/gateway/server-startup-post-attach.ts
-src/gateway/server.auth.control-ui.suite.ts
 src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts

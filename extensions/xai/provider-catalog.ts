@@ -2,6 +2,9 @@
 import {
   buildLiveModelProviderConfig,
   getCachedLiveProviderModelRows,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -106,10 +109,7 @@ function withXaiOAuthAutoModel(
 }
 
 function readXaiOAuthDefaultModelId(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return readLiveModelString(value, "default_model");
+  return readLiveModelCatalogStringField(value, "default_model");
 }
 
 async function fetchXaiOAuthDefaultModelId(params: {
@@ -171,36 +171,6 @@ export async function buildLiveXaiProvider(params: {
   });
 }
 
-function readLiveModelString(row: unknown, key: string): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const value = (row as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readLiveModelPositiveInteger(row: unknown, keys: readonly string[]): number | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const record = row as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readLiveModelBoolean(row: unknown, key: string): boolean | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const value = (row as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function resolveXaiOauthMetadataFallback(modelId: string) {
   if (modelId === "grok-build") {
     return resolveXaiCatalogEntry("grok-build-0.1");
@@ -209,14 +179,15 @@ function resolveXaiOauthMetadataFallback(modelId: string) {
 }
 
 function isXaiOAuthResponsesModel(row: unknown, fallback: ModelDefinitionConfig | undefined) {
-  const modelId = readLiveModelString(row, "id") ?? readLiveModelString(row, "model");
+  const modelId =
+    readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
   if (modelId && (XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
     return false;
   }
   const backend =
-    readLiveModelString(row, "api_backend") ??
-    readLiveModelString(row, "apiBackend") ??
-    readLiveModelString(row, "backend");
+    readLiveModelCatalogStringField(row, "api_backend") ??
+    readLiveModelCatalogStringField(row, "apiBackend") ??
+    readLiveModelCatalogStringField(row, "backend");
   if (backend) {
     const normalizedBackend = backend.toLowerCase();
     return (
@@ -229,7 +200,8 @@ function isXaiOAuthResponsesModel(row: unknown, fallback: ModelDefinitionConfig 
 }
 
 function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
-  const modelId = readLiveModelString(row, "id") ?? readLiveModelString(row, "model");
+  const modelId =
+    readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
   if (!modelId) {
     return undefined;
   }
@@ -238,16 +210,19 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
     return undefined;
   }
   const contextWindow =
-    readLiveModelPositiveInteger(row, ["context_window", "contextWindow"]) ??
+    readLiveModelCatalogPositiveSafeIntegerField(row, ["context_window", "contextWindow"]) ??
     fallback?.contextWindow ??
     XAI_DEFAULT_CONTEXT_WINDOW;
   const maxTokens =
-    readLiveModelPositiveInteger(row, ["max_completion_tokens", "maxCompletionTokens"]) ??
+    readLiveModelCatalogPositiveSafeIntegerField(row, [
+      "max_completion_tokens",
+      "maxCompletionTokens",
+    ]) ??
     fallback?.maxTokens ??
     XAI_DEFAULT_MAX_TOKENS;
   const supportsReasoningEffort =
-    readLiveModelBoolean(row, "supports_reasoning_effort") ??
-    readLiveModelBoolean(row, "supportsReasoningEffort");
+    readLiveModelCatalogBooleanField(row, "supports_reasoning_effort") ??
+    readLiveModelCatalogBooleanField(row, "supportsReasoningEffort");
   const reasoning =
     supportsReasoningEffort === true ||
     fallback?.reasoning === true ||
@@ -255,7 +230,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
   return {
     id: modelId,
-    name: readLiveModelString(row, "name") ?? fallback?.name ?? modelId,
+    name: readLiveModelCatalogStringField(row, "name") ?? fallback?.name ?? modelId,
     api: "openai-responses",
     baseUrl: XAI_GROK_OAUTH_BASE_URL,
     reasoning,

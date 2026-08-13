@@ -28,10 +28,18 @@ data class GatewayClawHubSkillSearchState(
 
 data class GatewayClawHubSkillSummary(
   val slug: String,
+  val installRef: String?,
   val displayName: String,
   val summary: String?,
   val version: String?,
-)
+) {
+  /**
+   * Several publishers can share one slug, so the Gateway-supplied reference is what identifies a
+   * result, what distinguishes rows, and what detail and install must send back.
+   */
+  val reference: String
+    get() = installRef?.trim()?.takeIf(String::isNotEmpty) ?: slug
+}
 
 data class GatewayClawHubInstallReview(
   val slug: String,
@@ -60,6 +68,7 @@ internal fun parseClawHubSearchResults(
       val displayName = value.string("displayName") ?: return@mapNotNull null
       GatewayClawHubSkillSummary(
         slug = slug,
+        installRef = value.string("installRef"),
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),

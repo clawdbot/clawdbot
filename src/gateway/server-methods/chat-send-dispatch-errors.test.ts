@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
+import * as sessionLifecycleState from "../session-lifecycle-state.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 
 describe("createChatSendDispatchErrorLifecycle", () => {
@@ -285,5 +287,93 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect.objectContaining({ runId, state: "error" }),
       expect.anything(),
     );
+  });
+
+  it("cleans up a failed non-default global send beside the compatibility owner's run", async () => {
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      },
+      "main",
+    );
+    const persistLifecycleEvent = vi
+      .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockResolvedValue(undefined);
+    const cleanupAdmittedRun = vi.fn();
+    const activeRunCleanup = vi.fn();
+    const clientRunId = "failed-ops-global-send";
+    const chatAbortControllers = new Map([
+      [
+        "compat-owner-run",
+        {
+          controller: new AbortController(),
+          sessionId: "sess-main",
+          sessionKey: "global",
+        },
+      ],
+    ]);
+
+    try {
+      const lifecycle = createChatSendDispatchErrorLifecycle({
+        admission: {
+          activeRunAbort: {
+            cleanup: activeRunCleanup,
+            controller: new AbortController(),
+            entry: undefined,
+            registered: true,
+          } as never,
+          cleanupAdmittedRun,
+          lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
+        },
+        context: {
+          agentRunSeq: new Map(),
+          broadcast: vi.fn(),
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers,
+          chatRunState: createChatRunState(),
+          dedupe: new Map(),
+          getRuntimeConfig: () => cfg,
+          getSessionEventSubscriberConnIds: () => new Set<string>(),
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
+        } as never,
+        isQueuedFollowupEnqueued: () => false,
+        persistUserTurnTranscript: vi.fn(),
+        session: {
+          agentId: "ops",
+          backingSessionId: "sess-ops",
+          cfg,
+          clientRunId,
+          now: 1,
+          rawSessionKey: "global",
+          sessionKey: "global",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+        userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
+      });
+
+      await lifecycle.handleError(new Error("dispatch rejected"));
+      lifecycle.finalize();
+
+      await vi.waitFor(() => {
+        expect(persistLifecycleEvent).toHaveBeenCalledWith({
+          sessionKey: "global",
+          agentId: "ops",
+          event: expect.objectContaining({
+            runId: clientRunId,
+            sessionId: "sess-ops",
+            data: expect.objectContaining({ phase: "error" }),
+          }),
+        });
+      });
+      expect(activeRunCleanup).toHaveBeenCalledWith({ force: true });
+      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+    } finally {
+      persistLifecycleEvent.mockRestore();
+    }
   });
 });

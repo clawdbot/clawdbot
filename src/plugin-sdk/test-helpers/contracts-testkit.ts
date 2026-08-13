@@ -12,9 +12,8 @@ import {
 } from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
-import { uniqueSortedStrings } from "./string-utils.js";
 
-export { registerProviders, requireProvider, uniqueSortedStrings };
+export { registerProviders, requireProvider };
 
 /** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(

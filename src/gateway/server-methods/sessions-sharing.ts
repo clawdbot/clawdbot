@@ -19,6 +19,7 @@ import {
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   allowedSessionVisibilities,
   canManageSessionSharing,
@@ -63,10 +64,19 @@ function requireManageableTarget(params: {
   agentId?: string;
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"];
 }) {
+  const requestedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.sessionKey,
+    params.agentId,
+  );
+  if (!requestedAgent.ok) {
+    params.respond(false, undefined, requestedAgent.error);
+    return null;
+  }
   const target = resolveSessionSharingTarget({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: requestedAgent.agentId,
   });
   if (!target) {
     params.respond(

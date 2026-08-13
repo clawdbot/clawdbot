@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -256,33 +256,23 @@ export function createGatewayHooksRequestHandler(params: {
   const loadIsolatedAgentModule = () =>
     (isolatedAgentModulePromise ??= import("../../cron/isolated-agent.js"));
 
-  const dispatchWakeHook = (value: {
-    text: string;
-    mode: "now" | "next-heartbeat";
-    agentId?: string;
-    sessionKey?: string;
-  }) => {
-    const targeted = Boolean(value.agentId || value.sessionKey);
+  const dispatchWakeHook = (
+    value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
+    agentId: string,
+  ) => {
     // A targeted wake must enqueue and wake the same canonical store key;
     // otherwise the heartbeat runs for one agent while its event waits elsewhere.
-    const target = targeted
-      ? (() => {
-          const cfg = getRuntimeConfig();
-          const agentId = value.agentId ?? resolveDefaultAgentId(cfg);
-          return resolveHookEventTarget({
-            cfg,
-            resolvedAgentId: agentId,
-            explicitAgentId: value.agentId,
-            sessionKey: value.sessionKey,
-          });
-        })()
-      : undefined;
-    const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+    const target = resolveHookEventTarget({
+      cfg: getRuntimeConfig(),
+      resolvedAgentId: agentId,
+      sessionKey: value.sessionKey,
+    });
+    const sessionKey = target.eventSessionKey;
     const eventOptions = { sessionKey };
     enqueueSystemEvent(
       value.text,
-      isUnscopedSessionKeySentinel(sessionKey) && target?.heartbeatTarget.agentId
-        ? withSystemEventOwner(eventOptions, target.heartbeatTarget.agentId)
+      isUnscopedSessionKeySentinel(sessionKey)
+        ? withSystemEventOwner(eventOptions, agentId)
         : eventOptions,
     );
     if (value.mode === "now") {
@@ -290,7 +280,7 @@ export function createGatewayHooksRequestHandler(params: {
         source: "hook",
         intent: "immediate",
         reason: "hook:wake",
-        ...target?.heartbeatTarget,
+        ...target.heartbeatTarget,
       });
     }
   };
@@ -308,7 +298,7 @@ export function createGatewayHooksRequestHandler(params: {
     const nowMs = resolveDateTimestampMs(Date.now());
     const job: CronJob = {
       id: jobId,
-      agentId: value.agentId,
+      agentId: value.effectiveAgentId,
       name: safeName,
       enabled: true,
       createdAtMs: nowMs,
@@ -364,9 +354,7 @@ export function createGatewayHooksRequestHandler(params: {
           hookEventTarget?.heartbeatTarget ??
           (isGlobalEvent
             ? {
-                agentId:
-                  normalizeOptionalString(value.agentId) ??
-                  resolveDefaultAgentId(getRuntimeConfig()),
+                agentId: value.effectiveAgentId,
               }
             : { sessionKey: eventSessionKey });
       }
@@ -405,7 +393,7 @@ export function createGatewayHooksRequestHandler(params: {
         runId,
       };
     }
-    const agentId = acceptedValue.agentId ?? resolveDefaultAgentId(dispatchCfg);
+    const agentId = acceptedValue.effectiveAgentId;
     const queueKey = resolveCronAgentSessionKey({
       sessionKey,
       agentId,

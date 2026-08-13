@@ -142,7 +142,11 @@ export class ChatPage extends OpenClawLightDomElement {
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const activeSessionKey = this.layout ? (activePane?.sessionKey ?? null) : undefined;
-    const draftRendered = this.draftFocus.rendered(data, activeSessionKey, this.consumedDraftData);
+    const routeHandoffRendered = this.draftFocus.rendered(
+      data,
+      activeSessionKey,
+      this.consumedDraftData,
+    );
     if (changedProperties.has("data")) {
       this.routeHref = window.location.href;
       if (
@@ -171,7 +175,7 @@ export class ChatPage extends OpenClawLightDomElement {
       this.syncRouteToActivePane();
       this.retainedSessions.settleRoute(data.sessionKey);
     }
-    if (data && draftRendered) {
+    if (data && routeHandoffRendered) {
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.draftFocus.beforeDraftCleanup(data);
@@ -388,7 +392,12 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
-    if (data?.sessionKey === sessionKey && (data.face ?? "chat") === face && !data.draft) {
+    if (
+      data?.sessionKey === sessionKey &&
+      (data.face ?? "chat") === face &&
+      !data.draft &&
+      !data.focusComposer
+    ) {
       return;
     }
     const options = sessionNavigationTarget({

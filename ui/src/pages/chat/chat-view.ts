@@ -47,6 +47,7 @@ import { isChatRunWorking, renderChatComposer } from "./components/chat-composer
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { renderReadOnlyTranscript } from "./components/chat-read-only-transcript.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
@@ -402,46 +403,13 @@ export function renderChat(props: ChatProps) {
     backgroundTaskView?.kind === "transcript" &&
     backgroundTaskView.load.status === "loaded" &&
     backgroundTaskView.load.messages.length > 0
-      ? renderChatThread(
-          {
-            paneId: `${props.paneId}:background-task-transcript`,
-            sessionKey: backgroundTaskView.sessionKey,
-            announceTranscript: false,
-            loading: false,
-            messages: backgroundTaskView.load.messages,
-            toolMessages: [],
-            streamSegments: [],
-            stream: null,
-            streamStartedAt: null,
-            runId: null,
-            queue: [],
-            showThinking: props.showThinking,
-            showToolCalls: props.showToolCalls,
-            persistCommentary: props.persistCommentary,
-            sessions: props.sessions,
-            sessionHost: props.sessionHost,
-            assistantName: props.assistantName,
-            assistantAvatar: props.assistantAvatar,
-            assistantAvatarUrl: props.assistantAvatarUrl,
-            userId: props.userId,
-            userName: props.userName,
-            userAvatar: props.userAvatar,
-            basePath: props.basePath,
-            fullMessageAgentId: props.fullMessageAgentId,
-            loadFullAssistantMessage: props.loadFullAssistantMessage,
-            localMediaPreviewRoots: props.localMediaPreviewRoots,
-            assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
-            resolveArtifactDownload: props.resolveArtifactDownload,
-            canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-            embedSandboxMode: props.embedSandboxMode,
-            allowExternalEmbedUrls: props.allowExternalEmbedUrls,
-            autoExpandToolCalls: props.autoExpandToolCalls,
-            onRequestUpdate: requestUpdate,
-            onDraftChange: () => undefined,
-            onSend: () => undefined,
-          },
-          backgroundTaskTranscript,
-        )
+      ? renderReadOnlyTranscript({
+          chat: props,
+          messages: backgroundTaskView.load.messages,
+          paneId: `${props.paneId}:background-task-transcript`,
+          sessionKey: backgroundTaskView.sessionKey,
+          transcript: backgroundTaskTranscript,
+        })
       : nothing;
 
   const chatColumnFooter = renderChatComposer({

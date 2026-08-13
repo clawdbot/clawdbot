@@ -2,6 +2,7 @@
 // Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -244,10 +245,6 @@ export function parseArgs(argv: string[]): WindowsOptions {
     die(`unknown arg: ${arg}`);
   }
   return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class WindowsSmoke extends SmokeRunController<WindowsOptions> {
@@ -690,7 +687,7 @@ $config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
 ${windowsScopedEnvFunction}
 $script:OpenClawUpdateExit = 0
-Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'${devTargetEntry} } {
+Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'${devTargetEntry} } {
   Invoke-OpenClaw update --channel dev --yes --json --no-restart --timeout ${this.updateTimeoutSeconds}
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }

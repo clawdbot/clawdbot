@@ -86,6 +86,33 @@ function createTool(params: {
 }
 
 describe("sessions_search tool", () => {
+  it("rejects a literal global target owned by another fixed-store agent", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { research: {}, ops: {} },
+        },
+        tools: { sessions: { visibility: "all" } },
+      },
+      results: [hit({ sessionKey: "global", agentId: "ops" })],
+      requests,
+    });
+
+    const result = await tool.execute("foreign-global", {
+      query: "text",
+      sessionKey: "global",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+  });
+
   it("declares exact success and error result contracts", async () => {
     const tool = createTool({ results: [hit()] });
     const success = await tool.execute("success-contract", { query: "text" });

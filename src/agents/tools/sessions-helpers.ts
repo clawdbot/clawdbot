@@ -21,7 +21,10 @@ export {
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type {
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
@@ -29,6 +32,16 @@ import type { FastModeSource } from "../../shared/fast-mode.js";
 
 /** Coarse session category used by session list/status tools. */
 type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+
+const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
+  main: "main",
+  global: "main",
+  group: "group",
+  channel: "group",
+  cron: "cron",
+  hook: "hook",
+  node: "node",
+};
 
 /** Delivery target metadata attached to session rows. */
 type SessionListDeliveryContext = {
@@ -42,8 +55,10 @@ type SessionListDeliveryContext = {
 export type GatewaySessionListRow = {
   key: string;
   agentId?: string;
-  kind: SessionKind;
-  channel: string;
+  classification: NonNullable<SessionRow["classification"]>;
+  peerKind?: SessionRow["peerKind"];
+  kind: SessionRow["kind"];
+  channel?: string;
   origin?: {
     provider?: string;
     accountId?: string;
@@ -133,34 +148,15 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
-/** Classifies a session key/gateway kind into the row category used by tools. */
+/** Projects the Gateway's authoritative classification into the tool's coarse categories. */
 export function classifySessionListKind(params: {
-  key: string;
-  gatewayKind?: string | null;
-  alias: string;
-  mainKey: string;
+  classification: NonNullable<GatewaySessionListRow["classification"]>;
+  peerKind?: GatewaySessionListRow["peerKind"];
 }): SessionKind {
-  const key = params.key;
-  if (key === params.alias || key === params.mainKey) {
-    return "main";
+  if (params.classification === "thread") {
+    return params.peerKind === "group" || params.peerKind === "channel" ? "group" : "other";
   }
-  if (key.startsWith("cron:")) {
-    return "cron";
-  }
-  if (key.startsWith("hook:")) {
-    return "hook";
-  }
-  if (key.startsWith("node-") || key.startsWith("node:")) {
-    return "node";
-  }
-  if (params.gatewayKind === "group") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    // Gateway-less archived rows still encode group/channel shape in the session key.
-    return "group";
-  }
-  return "other";
+  return SESSION_KIND_BY_CLASSIFICATION[params.classification] ?? "other";
 }
 
 /** Derives the best channel label for a session row. */

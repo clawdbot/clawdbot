@@ -12,6 +12,7 @@ import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import { resetSubagentDetail } from "./components/chat-subagent-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
@@ -63,6 +64,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (state) {
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
+      // The detail slot's render guard cannot run once the content is wiped,
+      // so the transcript loader's timer/fetch loop must be stopped here.
+      resetSubagentDetail(state);
       state.sidebarContent = null;
       state.requestUpdate?.();
     }

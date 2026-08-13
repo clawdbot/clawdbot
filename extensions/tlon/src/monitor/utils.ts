@@ -11,7 +11,6 @@ import {
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -242,8 +241,6 @@ export async function resolveAuthorizedMessageText(params: {
   const citedContent = await resolveAllCites(content);
   return citedContent + rawText;
 }
-
-export const formatErrorMessage = sharedFormatErrorMessage;
 
 // Helper to recursively extract text from inline content
 function renderInlineItem(

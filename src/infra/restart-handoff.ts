@@ -1,6 +1,7 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -136,7 +137,7 @@ export function formatGatewayRestartHandoffDiagnostic(
 }
 
 function normalizePid(pid: number | undefined): number | null {
-  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  return asPositiveSafeInteger(pid) ?? null;
 }
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {

@@ -246,6 +246,7 @@ describe("qa scenario catalog", () => {
       "matrix-restart-resume",
       "qa-channel-reconnect-dedupe",
       "remember-across-conversations",
+      "remember-across-reset-private",
       "slack-restart-resume",
       "subagent-stale-child-links",
       "telegram-repeated-command-authorization",

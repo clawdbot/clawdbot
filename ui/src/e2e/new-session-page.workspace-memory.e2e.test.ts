@@ -235,6 +235,65 @@ suite.define(() => {
     });
   });
 
+  it("separates model shortcuts from numeric search input by focus", async () => {
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      await installMockGateway(page, { models: MODELS });
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const picker = page.locator(".chat-controls__model-picker");
+      const search = page.locator('[data-chat-model-search="true"]');
+      const firstModel = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
+      const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+
+      await modelSelect.click();
+      await expect.poll(() => picker.getAttribute("open")).toBe("");
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
+      await expect.poll(() => secondShortcut.count()).toBe(1);
+      const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
+      const actionBoxBeforeFocus = await secondModel
+        .locator(".chat-controls__model-option-action")
+        .boundingBox();
+      expect(menuBoxBeforeFocus).not.toBeNull();
+      expect(actionBoxBeforeFocus).not.toBeNull();
+      await expect
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+
+      await search.focus();
+      await expect
+        .poll(() => search.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expect
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("0");
+      expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
+        menuBoxBeforeFocus,
+      );
+      expect(
+        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
+      ).toEqual(actionBoxBeforeFocus);
+      await search.press("1");
+      await expect.poll(() => search.inputValue()).toBe("1");
+      await expect.poll(() => picker.getAttribute("open")).toBe("");
+
+      await search.fill("anthropic");
+      await expect.poll(() => firstModel.isVisible()).toBe(false);
+      await expect.poll(() => secondModel.isVisible()).toBe(true);
+      await modelSelect.focus();
+      const filteredShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
+      await expect
+        .poll(() => filteredShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await page.keyboard.press("1");
+      await expect.poll(() => picker.getAttribute("open")).toBe(null);
+      await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
+    });
+  });
+
   it("keeps the effort label, slider stop, and create payload aligned after a model switch", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));
@@ -341,10 +400,13 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const projectTrigger = page.locator("#new-session-project-trigger");
       await choosePackagesFolder(page);
       await placeTrigger.click();
       await page.getByRole("button", { name: "Worktree" }).click();
+      await page.getByLabel("Base branch").fill("release/next");
+      await page.getByLabel("Worktree name").fill("remembered-task");
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -357,10 +419,19 @@ suite.define(() => {
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
       await page.goto(`${suite.server.baseUrl}new`);
-      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+      await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "packages",
       );
+      await pollLocatorText(
+        page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
+      ).toBe("Local");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await placeTrigger.click();
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/next");
+      await expect
+        .poll(() => page.getByLabel("Worktree name").inputValue())
+        .toBe("remembered-task");
+      await page.keyboard.press("Escape");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
@@ -445,7 +516,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
       const recent = page.locator('[data-value="recent-project:registered"]');
@@ -550,9 +621,10 @@ suite.define(() => {
             },
           },
         });
-        const trigger = page.locator("#new-session-place-trigger");
+        const trigger = page.locator("#new-session-project-trigger");
+        const detailTrigger = page.locator("#new-session-detail-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
-        await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
         await captureProjectUiProof(page, "identity-preferences-migrated.png");
 
         await navigateInApp(page, "chat");
@@ -646,7 +718,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
       await placeTrigger.click();
       await page.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
@@ -721,7 +793,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await placeTrigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
@@ -788,7 +860,7 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: `Error: ENOENT: no such file or directory, scandir '${PICKED}'`,
       });
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
@@ -806,7 +878,9 @@ suite.define(() => {
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect
+        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .toBe("false");
       await expect
         .poll(
           async () =>
@@ -854,10 +928,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("fs.listDir")).length)
         .toBeGreaterThan(validationRequests);
 
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await placeTrigger.click();
       await page
-        .locator('wa-popover.new-session-page__place-popover [data-value="workspace"]')
+        .locator('wa-popover.new-session-page__project-popover [data-value="workspace"]')
         .click();
       await gateway.resolveDeferred("fs.listDir", {
         path: PICKED,
@@ -888,7 +962,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       const browserPath = page.locator("input.new-session-page__browser-path");

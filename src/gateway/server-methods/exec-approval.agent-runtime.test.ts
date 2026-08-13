@@ -12,6 +12,10 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+vi.mock("../../infra/command-analysis/explain.js", () => ({
+  resolveCommandAnalysisSummaryForDisplay: vi.fn(async () => null),
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {

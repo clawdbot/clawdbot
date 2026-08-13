@@ -223,6 +223,7 @@ export class SubagentLifecycleController {
 
   settleRequesterTurnAfterSessionSpawns = (args: {
     requesterSessionKey: string;
+    requesterAgentId?: string;
     requesterTurnRunId: string;
     requesterYielded: boolean;
     acceptedSessionSpawns: readonly AcceptedSessionSpawn[];

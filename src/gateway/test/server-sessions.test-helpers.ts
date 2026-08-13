@@ -11,12 +11,12 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
 import type { connectOk } from "../test-helpers.server.js";
 import { installGatewayTestHooks, writeSessionStore } from "../test-helpers.server.js";
-import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -34,8 +34,10 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
   () => import("../server.e2e-ws-harness.js"),
 );
 
+const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
+
 export async function getSessionsHandlers() {
-  return sessionHandlerTestSurface;
+  return (await getGatewayServerMethodsModule()).coreGatewayHandlers;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -704,6 +706,7 @@ export async function directSessionReq<TPayload = unknown>(
       };
     },
     context: {
+      ...createDirectChatContext(),
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),

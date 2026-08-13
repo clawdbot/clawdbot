@@ -18,7 +18,8 @@ struct SessionDashboardScreen: View {
                     authScript: AuthenticatedControlUI.authUserScript(
                         config: config,
                         pageURL: url,
-                        storedOperatorToken: storedOperatorToken))
+                        storedOperatorToken: storedOperatorToken),
+                    tls: config?.tls)
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
                         storedOperatorToken: storedOperatorToken))

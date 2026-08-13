@@ -212,6 +212,43 @@ describe("skills proposal gateway handlers", () => {
     ).resolves.toContain("Use current weather");
   });
 
+  it("marks manually created create targets stale before list and inspect responses", async () => {
+    const create = await callHandler("skills.proposals.create", {
+      name: "Manual Gateway Skill",
+      description: "Installed before its proposal was applied.",
+      content: "# Manual Gateway Skill\n",
+    });
+    expect(create.ok).toBe(true);
+    const created = create.response as {
+      record: { id: string; target: { skillFile: string } };
+    };
+    await fs.mkdir(path.dirname(created.record.target.skillFile), { recursive: true });
+    await fs.writeFile(
+      created.record.target.skillFile,
+      "# Manual Gateway Skill\n\nAlready installed.\n",
+      "utf8",
+    );
+
+    const list = await callHandler("skills.proposals.list", {});
+    expect(list.ok).toBe(true);
+    expect(
+      (list.response as { proposals: Array<{ id: string; status: string }> }).proposals,
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: created.record.id, status: "stale" })]),
+    );
+
+    const inspect = await callHandler("skills.proposals.inspect", {
+      proposalId: created.record.id,
+    });
+    expect(inspect.ok).toBe(true);
+    expect(
+      (inspect.response as { record: { status: string; statusReason?: string } }).record,
+    ).toMatchObject({
+      status: "stale",
+      statusReason: "Target skill was created after proposal creation.",
+    });
+  });
+
   it("keeps list and inspect bound to the agent after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const first = await callHandler("skills.proposals.create", {

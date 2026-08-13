@@ -720,6 +720,10 @@ openclaw-session-owner-chip {
   stroke-linejoin: round;
 }
 
+openclaw-github-link-hovercard-provider {
+  display: contents;
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -1106,7 +1110,6 @@ openclaw-session-owner-chip {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-  touch-action: manipulation;
 }
 
 .oc-sensitive-toggle:hover:not(:disabled) {
@@ -3947,6 +3950,12 @@ td.data-table-key-col {
     margin var(--duration-normal) var(--ease-out);
 }
 
+/* A refusal or empty-state message is a few lines; without this the reader height reserved for
+   long skill documents leaves the dialog looking broken rather than deliberate. */
+.md-preview-dialog__panel--message-only {
+  min-height: 0;
+}
+
 .md-preview-dialog__header {
   display: flex;
   align-items: flex-start;
@@ -4408,7 +4417,6 @@ td.data-table-key-col {
     background-color var(--duration-fast) var(--ease-in-out),
     border-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tools-runtime-chip:hover {
@@ -4465,7 +4473,6 @@ td.data-table-key-col {
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tools-group__summary::before {
@@ -4582,7 +4589,6 @@ td.data-table-key-col {
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tool-summary::after {
@@ -5280,6 +5286,12 @@ td.data-table-key-col {
   font-size: 14px;
   line-height: 1.5;
   text-align: center;
+}
+
+.device-pair-setup__command {
+  display: grid;
+  width: min(540px, 100%);
+  gap: 10px;
 }
 
 .device-pair-setup__meta {

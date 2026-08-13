@@ -1,5 +1,5 @@
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import {
@@ -7,6 +7,10 @@ import {
   loadResolvedPublishedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import {
+  tryGetLegacyDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
@@ -76,8 +80,10 @@ function createLocalGatewayRequestContext(
         cronEnabled: cfg.cron?.enabled !== false,
         cronConfig: cfg.cron,
         log: getChildLogger({ module: "cron", storePath }),
-        defaultAgentId: resolveDefaultAgentId(cfg),
-        resolveDefaultAgentId: () => resolveDefaultAgentId(params.getRuntimeConfig()),
+        defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
+        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
+        resolveDefaultAgentId: () =>
+          tryResolveLegacyCompatibilityAgentId(params.getRuntimeConfig()),
         isAgentAvailable: (id) =>
           !isAgentDeletionBlocked(id) &&
           listAgentIds(params.getRuntimeConfig()).some(

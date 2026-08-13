@@ -77,6 +77,7 @@ export function buildGatewaySessionEventFields(params: {
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
+    restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     lastChannel: sessionRow.lastChannel,

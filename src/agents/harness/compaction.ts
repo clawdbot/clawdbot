@@ -186,7 +186,7 @@ async function resolveHarnessCompactApiKey(params: {
         }),
       ),
       config: compactParams.config,
-      agentId: params.agentId,
+      agentId: parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId,
       sessionKey: params.sessionKey,
       agentHarnessId: params.pinnedHarnessId,
     });

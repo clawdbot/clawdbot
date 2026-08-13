@@ -77,7 +77,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       ];
       if (refreshModelAuth) {
         loads.push(
-          loadModelAuthStatus(client, { signal })
+          loadModelAuthStatus(client, {
+            signal,
+            ...(gateway.snapshot.assistantAgentId
+              ? { agentId: gateway.snapshot.assistantAgentId }
+              : {}),
+          })
             .catch(() => null)
             .then((modelAuthStatus) => {
               if (!signal.aborted) {

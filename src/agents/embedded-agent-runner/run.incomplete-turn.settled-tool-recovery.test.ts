@@ -398,38 +398,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
   it("continues once after settled side-effecting tools finish without a final answer", async () => {
-    const acceptedSessionSpawns = [
-      { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
-    ];
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [
         { type: "toolCall", id: "tool_write", name: "write", arguments: { path: "note.txt" } },
         { type: "toolCall", id: "tool_cron", name: "cron", arguments: { action: "add" } },
-        {
-          type: "toolCall",
-          id: "tool_spawn",
-          name: "sessions_spawn",
-          arguments: { task: "follow up" },
-        },
       ],
     });
     const settledToolResults = [
       toolUseAssistant,
       { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
       { role: "toolResult", toolCallId: "tool_cron", toolName: "cron", isError: false },
-      {
-        role: "toolResult",
-        toolCallId: "tool_spawn",
-        toolName: "sessions_spawn",
-        isError: false,
-      },
     ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"];
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -437,15 +422,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       return makeAttemptResult({
         assistantTexts: [],
         latestMcpAppChannelView: { viewId: "view-after-tools" },
-        toolMetas: [
-          { toolName: "write", meta: "path=note.txt" },
-          { toolName: "cron" },
-          { toolName: "sessions_spawn" },
-        ],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }, { toolName: "cron" }],
         successfulNestedToolNames: ["read"],
-        acceptedSessionSpawns,
         successfulCronAdds: 1,
-        itemLifecycle: { startedCount: 3, completedCount: 3, activeCount: 0 },
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
         messagesSnapshot: settledToolResults,
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
@@ -475,10 +455,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
     expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-after-tools" });
     expect(result.successfulCronAdds).toBe(1);
-    expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
     expect(result.meta.toolSummary).toEqual({
-      calls: 3,
-      tools: ["write", "cron", "sessions_spawn"],
+      calls: 2,
+      tools: ["write", "cron"],
       failures: 0,
     });
     expect(result.meta.agentMeta).toMatchObject({
@@ -493,7 +472,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(secondCall.disableTools).toBe(true);
     expect(secondCall.operation).toBe("settled-tool-finalization");
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });

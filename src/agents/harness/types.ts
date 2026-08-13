@@ -347,6 +347,11 @@ type AgentHarnessRunCapability<
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
+  /**
+   * Canonical OpenClaw tool names whose exact denies are fully enforced outside
+   * this harness's native surface. Every other deny remains fail-closed.
+   */
+  conversationToolPolicySafeDenyTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";

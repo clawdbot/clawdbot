@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+import {
+  preserveRosterPresentationMetadata,
+  reconcileSessionChanged,
+  reconcileSessionHistory,
+} from "./reconcile.ts";
 
 function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -12,6 +16,48 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
     sessions,
   };
 }
+
+describe("preserveRosterPresentationMetadata", () => {
+  it("does not preserve presentation metadata without a known matching session identity", () => {
+    const key = "agent:main:dashboard:replacement";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "replacement-session", updatedAt: 20 },
+        {
+          key,
+          kind: "direct",
+          updatedAt: 10,
+          derivedTitle: "Previous session title",
+          lastMessagePreview: "Previous session preview",
+        },
+      ),
+    ).toEqual({
+      key,
+      kind: "direct",
+      sessionId: "replacement-session",
+      updatedAt: 20,
+    });
+  });
+
+  it("does not infer archive state from row timestamps", () => {
+    const key = "agent:main:dashboard:archived";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false },
+        {
+          key,
+          kind: "direct",
+          sessionId: "s1",
+          updatedAt: 20,
+          archived: true,
+          archivedAt: 20,
+        },
+      ),
+    ).toEqual({ key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false });
+  });
+});
 
 test("sessions.changed removes a label when the event carries null", () => {
   const result: SessionsListResult = {

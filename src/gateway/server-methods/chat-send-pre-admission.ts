@@ -1,5 +1,4 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -20,6 +19,7 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
@@ -90,18 +90,20 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    const stopAgentId =
-      sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+    const stopOwnerScope = resolveChatSendStopOwnerScope({
+      cfg,
+      selectedAgentId: selectedAgent.agentId,
+      sessionKey,
+    });
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-      agentId: stopAgentId,
+      agentId: stopOwnerScope.agentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,
-      defaultAgentId,
+      defaultAgentId: stopOwnerScope.defaultAgentId,
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),

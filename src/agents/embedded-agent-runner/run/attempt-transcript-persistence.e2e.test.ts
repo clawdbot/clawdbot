@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -9,10 +9,16 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { createOpenClawAgentHarness } from "../../harness/builtin-openclaw.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 import { materializeProviderContext } from "./images.js";
+
+const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
+
+vi.mock("./attempt.js", () => ({ runEmbeddedAttempt }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
@@ -44,6 +50,84 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("embedded attempt transcript persistence", () => {
+  it("omits the host-private settled-turn recovery prompt from the raw transcript", async () => {
+    const dir = tempDirs.make("openclaw-settled-turn-finalization-");
+    const target = {
+      agentId: "main",
+      sessionId: "settled-turn-finalization",
+      sessionKey: "agent:main:settled-turn-finalization",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const recoveryPrompt =
+      "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+    const finalAssistant = buildAssistantMessage("Recovered final answer.");
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(target, {
+      cwd: dir,
+      eventId: "original-user",
+      message: { role: "user", content: "Original operator request." },
+      now: 1,
+    });
+
+    runEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
+      const finalization = attempt as {
+        prompt: string;
+        suppressNextUserMessagePersistence?: boolean;
+      };
+      const sessionManager = guardSessionManager(SessionManager.open(target, dir), {
+        skipBeforeMessageWriteHooks: true,
+        suppressNextUserMessagePersistence: finalization.suppressNextUserMessagePersistence,
+      });
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: finalization.prompt }],
+        timestamp: Date.now(),
+      });
+      sessionManager.appendMessage(finalAssistant);
+      flushSessionManagerTranscript(sessionManager);
+      return {
+        terminal: { kind: "ok" },
+        sessionIdUsed: target.sessionId,
+        messagesSnapshot: [finalAssistant],
+        assistantTexts: ["Recovered final answer."],
+        toolMetas: [],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+        didSendViaMessagingTool: false,
+        didDeliverSourceReplyViaMessageTool: false,
+        didSendDeterministicApprovalPrompt: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [],
+        hasToolMediaBlockReply: false,
+        cloudCodeAssistFormatError: false,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      } as never;
+    });
+
+    await createOpenClawAgentHarness().finalizeSettledTurn?.({
+      attempt: { prompt: recoveryPrompt } as never,
+      settledAttempt: {} as never,
+    });
+
+    const raw = await readSessionTranscriptRawDelta({
+      ...target,
+      maxBytes: 100_000,
+      maxEvents: 100,
+    });
+    const serialized = JSON.stringify(raw);
+    expect(serialized).toContain("Original operator request.");
+    expect(serialized).toContain("Recovered final answer.");
+    expect(serialized).not.toContain(recoveryPrompt);
+  });
+
   it("replays native video after reopening the canonical transcript", async () => {
     const stateDir = tempDirs.make("openclaw-video-transcript-replay-");
     const inboundDir = path.join(stateDir, "media", "inbound");

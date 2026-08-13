@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
-import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
+import {
+  getPluginCommandEntrySpecs,
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+} from "./command-specs.js";
 import {
   clearPluginCommands,
   executePluginCommand,
@@ -394,6 +398,68 @@ describe("registerPluginCommand", () => {
         error: "Command nativeNames must be an object",
       },
     },
+    {
+      name: "rejects primitive client presentation metadata",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: "device-pairing",
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must be an object",
+      },
+    },
+    {
+      name: "rejects unknown client presentation actions",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "open-route" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action kind is not supported",
+      },
+    },
+    {
+      name: "rejects additional client presentation fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+          route: "/settings/devices",
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must contain only when and action",
+      },
+    },
+    {
+      name: "rejects additional client presentation action fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing", callback: "run" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action must contain only kind",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
@@ -403,6 +469,10 @@ describe("registerPluginCommand", () => {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
       agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
+      clientPresentation: {
+        when: "no-arguments",
+        action: { kind: "device-pairing" },
+      },
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -419,6 +489,18 @@ describe("registerPluginCommand", () => {
         name: "demo_cmd",
         description: "Demo command",
         acceptsArgs: false,
+      },
+    ]);
+    expect(getPluginCommandEntrySpecs()).toEqual([
+      {
+        name: "demo_cmd",
+        nativeName: "demo_cmd",
+        description: "Demo command",
+        acceptsArgs: false,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);

@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
-import { coerceErrorMessage as formatSpawnError } from "./lib/error-format.mts";
+import { coerceErrorMessage } from "./lib/error-format.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -361,7 +361,7 @@ export function signalTestGroupReportChild(
     } catch (error) {
       if (error && !hasErrorCode(error, "ESRCH")) {
         appendDiagnostic(
-          `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
+          `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
         );
       }
     }
@@ -733,7 +733,7 @@ function readReportInputs(entries: ReportInputEntry[]) {
     } catch (error) {
       invalid.push({
         entry,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: coerceErrorMessage(error),
       });
     }
   }
@@ -1134,7 +1134,7 @@ export async function runReportPlans(params: {
               `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
             );
           } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
+            const reason = coerceErrorMessage(error);
             console.error(
               `[test-group-report] config failed; skipping unusable JSON report from ${run.reportPath} (${reason})`,
             );
@@ -1283,7 +1283,7 @@ const isMain =
 
 if (isMain) {
   main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   });
 }

@@ -638,6 +638,14 @@ describe("worker environment store", () => {
         patch: { leaseId: "lease-1" },
       }),
     ).toThrow("requires an SSH endpoint reference");
+    expect(() =>
+      store.transition({
+        environmentId: "worker-1",
+        from: "provisioning",
+        to: "ready",
+        patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
+      }),
+    ).toThrow("requires bootstrap proof or a node lease");
 
     store.transition({
       environmentId: "worker-1",
@@ -660,6 +668,33 @@ describe("worker environment store", () => {
         patch: { leaseId: "different-lease" },
       }),
     ).toThrow("lease id is immutable");
+  });
+
+  it("persists a ready node lease without validating SSH metadata", () => {
+    createIntent("worker-node", { settings: { device: "device-1" } });
+    store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
+
+    const ready = store.transition({
+      environmentId: "worker-node",
+      from: "provisioning",
+      to: "ready",
+      patch: { leaseId: "device-lease-1", sshEndpoint: null, sharedHost: true },
+    });
+
+    expect(ready).toMatchObject({
+      state: "ready",
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      bootstrapReceipt: null,
+      sharedHost: true,
+      ownerEpoch: 1,
+    });
+    expect(store.get("worker-node")).toEqual(ready);
+    expect(
+      database.db
+        .prepare("SELECT ssh_host, ssh_host_key FROM worker_environments WHERE environment_id = ?")
+        .get("worker-node"),
+    ).toEqual({ ssh_host: null, ssh_host_key: null });
   });
 
   it("enforces one credential-bound session and teardown fencing", () => {

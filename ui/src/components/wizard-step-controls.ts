@@ -161,7 +161,12 @@ function renderContinueStep(props: WizardStepControlsProps) {
   return html`
     ${renderMessage(props)}
     ${step.externalUrl
-      ? html`<a class="btn btn--sm" href=${step.externalUrl} target="_blank" rel="noreferrer">
+      ? html`<a
+          class="btn btn--sm wizard-step__external-link"
+          href=${step.externalUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
           ${t("modelSetup.wizard.openSignIn")}
         </a>`
       : nothing}

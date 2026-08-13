@@ -62,13 +62,17 @@ const matrixSessionBindingAuth = {
   accessToken: "token",
 } as const;
 
-async function getContractApi<T extends Record<string, unknown>>(pluginId: string): Promise<T> {
-  const existing = contractApiPromises.get(pluginId);
+async function getContractApi<T extends Record<string, unknown>>(
+  pluginId: string,
+  artifact = "session-binding-contract-api",
+): Promise<T> {
+  const cacheKey = `${pluginId}:${artifact}`;
+  const existing = contractApiPromises.get(cacheKey);
   if (existing) {
     return (await existing) as T;
   }
-  const next = importBundledChannelContractArtifact<T>(pluginId, "session-binding-contract-api");
-  contractApiPromises.set(pluginId, next);
+  const next = importBundledChannelContractArtifact<T>(pluginId, artifact);
+  contractApiPromises.set(cacheKey, next);
   return await next;
 }
 
@@ -149,17 +153,13 @@ const baseSessionBindingCfg = {
 type ChannelConversationBindingManagerFactory = NonNullable<
   NonNullable<ChannelPlugin["conversationBindings"]>["createManager"]
 >;
+type ChannelConversationBindingManager = Awaited<
+  ReturnType<ChannelConversationBindingManagerFactory>
+>;
+let discordSessionBindingManager: ChannelConversationBindingManager | null = null;
 
 type DiscordContractApi = {
-  createThreadBindingManager: (params: {
-    accountId: string;
-    cfg?: OpenClawConfig;
-    persist: boolean;
-    enableSweeper: boolean;
-  }) => unknown;
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
+  discordPlugin: ChannelPlugin;
 };
 
 type FeishuContractApi = {
@@ -234,9 +234,27 @@ function setRegistryBackedConversationBindingPlugin(params: {
   );
 }
 
+async function getDiscordContractApi() {
+  return await getContractApi<DiscordContractApi>("discord", "channel-plugin-api");
+}
+
+async function stopDiscordSessionBindingManager() {
+  await discordSessionBindingManager?.stop();
+  discordSessionBindingManager = null;
+}
+
 async function prepareDiscordSessionBindingContract() {
-  const api = await getContractApi<DiscordContractApi>("discord");
-  api.discordThreadBindingTesting.resetThreadBindingsForTests();
+  await stopDiscordSessionBindingManager();
+  const { discordPlugin } = await getDiscordContractApi();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: discordPlugin,
+        source: "test",
+      },
+    ]),
+  );
 }
 
 async function prepareFeishuSessionBindingContract() {
@@ -338,17 +356,19 @@ const sessionBindingContractEntries = {
     targetKind: "subagent",
     label: "discord-child",
     placements: ["current", "child"],
-    preload: () => getContractApi<DiscordContractApi>("discord"),
+    preload: getDiscordContractApi,
     beforeEach: prepareDiscordSessionBindingContract,
     ensureManager: async () => {
-      const { createThreadBindingManager } = await getContractApi<DiscordContractApi>("discord");
-      createThreadBindingManager({
-        accountId: "default",
+      discordSessionBindingManager ??= await createContractChannelConversationBindingManager({
+        channelId: "discord",
         cfg: baseSessionBindingCfg,
-        persist: false,
-        enableSweeper: false,
+        accountId: "default",
       });
+      if (!discordSessionBindingManager) {
+        throw new Error("Discord session binding manager is unavailable");
+      }
     },
+    stopManager: stopDiscordSessionBindingManager,
   }),
   feishu: createSessionBindingContractEntry({
     id: "feishu",

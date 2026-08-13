@@ -55,6 +55,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
+    onOpenSubagentDetail: undefined,
     onSelectTask: () => {},
     onBack: () => {},
     onOpenTranscript: () => {},
@@ -95,6 +96,47 @@ afterEach(() => {
 });
 
 describe("subagent activity rows", () => {
+  it("opens the selected subagent from an accessible activity control", () => {
+    const task = makeTask({ id: "clickable-subagent" });
+    const onOpenSubagentDetail = vi.fn();
+    const container = renderStatusRow({
+      tasks: [task],
+      subagentActivity: deriveSubagentActivity({
+        tasks: [task],
+        sessionKey: "agent:main:current",
+        terminalObservedAtByTask: new Map(),
+        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+      }),
+      onOpenSubagentDetail,
+    });
+
+    const row = container.querySelector<HTMLButtonElement>(
+      '[data-subagent-task-id="clickable-subagent"]',
+    );
+    expect(row?.tagName).toBe("BUTTON");
+    expect(row?.getAttribute("aria-label")).toBe("Open subagent details for Map codebase");
+    row?.click();
+    expect(onOpenSubagentDetail).toHaveBeenCalledWith(task);
+  });
+
+  it("keeps activity rows non-interactive when no open callback is provided", () => {
+    const task = makeTask({ id: "status-only-subagent" });
+    const container = renderStatusRow({
+      tasks: [task],
+      subagentActivity: deriveSubagentActivity({
+        tasks: [task],
+        sessionKey: "agent:main:current",
+        terminalObservedAtByTask: new Map(),
+        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+      }),
+    });
+
+    const row = container.querySelector('[data-subagent-task-id="status-only-subagent"]');
+    expect(row?.tagName).toBe("DIV");
+    expect(row?.getAttribute("role")).toBe("status");
+    expect(row?.hasAttribute("tabindex")).toBe(false);
+  });
+
   it("filters by requester, runtime, and retention while leaving other work in the aggregate", () => {
     const now = 100_000;
     const current = makeTask({

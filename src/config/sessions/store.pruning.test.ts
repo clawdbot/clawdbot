@@ -158,7 +158,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -175,10 +174,8 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
-      resumed: { laneId: "main" },
       cleared: false,
     });
   });
@@ -196,7 +193,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "circuit_open",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -981,6 +977,30 @@ describe("resolveMaintenanceConfigFromInput", () => {
       expect(result).toBeNull();
       await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
     });
+  });
+
+  it.each([
+    ["the number 0", 0],
+    ["the string '0'", "0"],
+    ["the byte string '0b'", "0b"],
+    ["a byte string that rounds to zero", "0.4b"],
+  ])("falls back to the default high-water mark when highWaterBytes is %s", (_label, raw) => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: raw,
+    });
+
+    expect(maintenance.maxDiskBytes).toBe(500 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(500 * 1024 * 1024 * 0.8));
+  });
+
+  it("keeps an explicit positive highWaterBytes", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: "300mb",
+    });
+
+    expect(maintenance.highWaterBytes).toBe(300 * 1024 * 1024);
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {

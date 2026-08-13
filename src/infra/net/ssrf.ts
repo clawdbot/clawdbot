@@ -43,7 +43,7 @@ export class SsrFBlockedError extends Error {
   }
 }
 
-export type LookupFn = typeof dnsLookup;
+export type LookupFn = (hostname: string, options: { all: true }) => Promise<LookupAddress[]>;
 
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
@@ -607,9 +607,7 @@ export async function resolvePinnedHostnameWithPolicy(
   );
 
   const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = normalizeLookupResults(
-    (await lookupFn(normalized, { all: true })) as LookupResult,
-  );
+  const results = normalizeLookupResults(await lookupFn(normalized, { all: true }));
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

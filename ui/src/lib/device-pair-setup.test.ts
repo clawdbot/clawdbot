@@ -7,6 +7,7 @@ import {
   openDevicePairSetup,
   parseDevicePairSetupCompletion,
   refreshDevicePairSetup,
+  requestDevicePairJoinSetup,
   setDevicePairSetupAccess,
   type DevicePairSetupLifecycle,
 } from "./device-pair-setup.ts";
@@ -27,7 +28,7 @@ function setupResult(
   setupId: string,
   setupCode: string,
   params: {
-    access?: "full" | "limited";
+    access?: "full" | "limited" | "node";
     accessDowngraded?: boolean;
     expiresAtMs?: number;
   } = {},
@@ -63,6 +64,22 @@ afterEach(() => {
 });
 
 describe("device pairing setup state", () => {
+  it("requests a one-paste join URL without rendering a QR", async () => {
+    const result = setupResult("NODE", "node");
+    const request = vi.fn().mockResolvedValue({
+      ...result,
+      joinUrl: "https://gateway.example.com/j/fresh-code",
+    });
+
+    await expect(requestDevicePairJoinSetup({ request })).resolves.toMatchObject({
+      joinUrl: "https://gateway.example.com/j/fresh-code",
+    });
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      includeQr: false,
+      joinUrl: true,
+    });
+  });
+
   it("opens in access selection without minting a setup credential", async () => {
     const request = vi.fn();
     const state = createDevicePairSetupState({
@@ -176,6 +193,23 @@ describe("device pairing setup state", () => {
     request.mockResolvedValueOnce(setupResult("full-setup", "FULL"));
     await refreshDevicePairSetup(state);
     expect(request).toHaveBeenLastCalledWith("device.pair.setupCode", {});
+    closeDevicePairSetup(state);
+  });
+
+  it("requests the node bootstrap profile when selected", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("NODE", "node"));
+    const state = stateWithClient({
+      request,
+    } as unknown as DevicePairSetupState["client"]);
+
+    await setDevicePairSetupAccess(state, "node");
+    await refreshDevicePairSetup(state);
+
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      bootstrapProfile: "node",
+      includeQr: false,
+    });
+    expect(state.devicePairSetupLifecycle).toMatchObject({ phase: "waiting", access: "node" });
     closeDevicePairSetup(state);
   });
 

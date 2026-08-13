@@ -2,6 +2,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
+  vi.fn<() => Promise<typeof import("typescript")>>(),
+);
+
+vi.mock("./code-mode-typescript-runtime.js", () => ({
+  loadCodeModeTypeScriptRuntime,
+}));
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -13,28 +21,18 @@ import {
 } from "./code-mode.test-support.js";
 
 describe("Code Mode TypeScript execution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    loadCodeModeTypeScriptRuntime.mockReset();
     resetCodeModeTestState();
   });
 
   it("supports TypeScript source transform", async () => {
-    testing.setTypescriptRuntimeForTest({
-      ...(await import("typescript")),
-      transpileModule: vi.fn((code: string) => ({
-        outputText: code.replace(": number", ""),
-        diagnostics: [],
-      })),
-      ScriptTarget: { ES2022: 9 },
-      ModuleKind: { ESNext: 99 },
-      ImportsNotUsedAsValues: { Remove: 0 },
-      DiagnosticCategory: { Error: 1 },
-      flattenDiagnosticMessageText: (message: unknown) => String(message),
-    } as never);
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -131,7 +129,7 @@ describe("Code Mode TypeScript execution", () => {
       runId: "run-code-mode",
       catalogRef,
     });
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
 
     const result = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -161,7 +159,7 @@ describe("Code Mode TypeScript execution", () => {
       runId: "run-code-mode",
       catalogRef,
     });
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
     const controller = new AbortController();
     const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
       "code-call-typescript-load-abort",

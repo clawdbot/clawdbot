@@ -628,6 +628,38 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toStrictEqual([]);
   });
 
+  it("keeps unrelated installed plugins usable beside a vanished package owner", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const demoDir = path.join(stateDir, "extensions", "demo");
+    const goneDir = path.join(stateDir, "extensions", "gone");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    writePackagePlugin(demoDir, { pluginId: "demo" });
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+          gone: { enabled: true },
+        },
+      },
+    };
+    const installRecords = {
+      demo: { source: "path" as const, sourcePath: demoDir, installPath: demoDir },
+      gone: { source: "path" as const, sourcePath: goneDir, installPath: goneDir },
+    };
+    const index = loadInstalledPluginIndex({ config, env, stateDir, installRecords });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
+  });
+
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");

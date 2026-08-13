@@ -1,5 +1,5 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/run-state.js";
-import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
+import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -100,6 +100,9 @@ export async function prepareGatewayLifecycle(params: {
     defaultWorkspaceDir,
     activeTaskCount,
     residentRegistry,
+    desktopSessionRegistry,
+    nodeDesktopStreamBroker,
+    bindDeviceNodeRegistry,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -155,6 +158,9 @@ export async function prepareGatewayLifecycle(params: {
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
     (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
+  const nodeDesktopServiceRef: {
+    current?: import("./desktop/node-source.js").NodeDesktopService;
+  } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -175,11 +181,26 @@ export async function prepareGatewayLifecycle(params: {
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
     onPairingInvalidated: ({ nodeId, connId }) => {
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
       broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
+    onPairingGenerationChanged: ({ nodeId }) => {
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
+    },
   });
+  const nodeDesktopService =
+    desktopSessionRegistry && nodeDesktopStreamBroker
+      ? (await import("./desktop/node-source.js")).createNodeDesktopService({
+          getConfig: getRuntimeConfig,
+          nodeRegistry,
+          desktopRegistry: desktopSessionRegistry,
+          streamBroker: nodeDesktopStreamBroker,
+        })
+      : undefined;
+  nodeDesktopServiceRef.current = nodeDesktopService;
+  bindDeviceNodeRegistry?.(nodeRegistry);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -202,7 +223,7 @@ export async function prepareGatewayLifecycle(params: {
         instanceId: session.nodeId,
         reason: "connect",
       });
-      incrementPresenceVersion();
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
         connId: session.connId,
@@ -444,7 +465,7 @@ export async function prepareGatewayLifecycle(params: {
     return configReloaderStopPromise;
   };
   const beginClosePrelude = async () => {
-    clearSessionSuspensionTimers();
+    fenceSessionSuspensionWritesForGatewayShutdown();
     markClosePreludeStarted();
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
@@ -633,6 +654,7 @@ export async function prepareGatewayLifecycle(params: {
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,
     nodeRegistry,
+    nodeDesktopService,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,

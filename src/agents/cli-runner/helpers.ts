@@ -388,6 +388,7 @@ export async function prepareCliPromptImagePayload(params: {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
+  localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   media?: MediaFact[];
@@ -411,6 +412,7 @@ export async function prepareCliPromptImagePayload(params: {
         existingImages: params.images,
         imageOrder: params.imageOrder,
         maxBytes: MAX_IMAGE_BYTES,
+        localRoots: params.localRoots,
       })
     : undefined;
   if (imageResult?.failedMediaCount) {

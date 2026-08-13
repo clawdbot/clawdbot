@@ -17,7 +17,6 @@ import {
   resolveAgentConfig,
   resolveAgentExplicitModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -59,11 +58,8 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   if (explicitAgentWorkspace) {
     return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
-  if (params.agentId === resolveDefaultAgentId(params.cfg)) {
-    const defaultWorkspace = normalizeText(params.cfg.agents?.defaults?.workspace);
-    if (defaultWorkspace) {
-      return resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    }
+  if (normalizeText(params.cfg.agents?.defaults?.workspace)) {
+    return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
   return undefined;
 }

@@ -191,6 +191,41 @@ describe("media understanding attachments SSRF", () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
       expect(result.buffer.toString()).toBe("ok");
+      expect(result.localPath).toBeDefined();
+    });
+  });
+
+  it("carries no local path when a blocked path recovers through the URL fallback", async () => {
+    await withTestDir({ prefix: "openclaw-media-cache-blocked-" }, async (base) => {
+      const blockedPath = path.join(base, "outside-roots", "report.doc");
+      await fs.mkdir(path.dirname(blockedPath), { recursive: true });
+      await fs.writeFile(blockedPath, "blocked");
+      const fetchSpy = vi.fn().mockResolvedValue(
+        new Response("remote-bytes", {
+          headers: { "content-type": "application/msword" },
+        }),
+      );
+      globalThis.fetch = withFetchPreconnect(fetchSpy);
+
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, path: blockedPath, url: "http://198.18.0.153/report.doc" }],
+        {
+          localPathRoots: [path.join(base, "allowed-only")],
+          includeDefaultLocalPathRoots: false,
+          ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+        },
+      );
+
+      const result = await cache.getBuffer({
+        attachmentIndex: 0,
+        maxBytes: 1024,
+        timeoutMs: 1000,
+      });
+
+      // Bytes recovered remotely; the blocked path must never surface as a
+      // self-serve target in model context.
+      expect(result.buffer.toString()).toBe("remote-bytes");
+      expect(result.localPath).toBeUndefined();
     });
   });
 

@@ -13,6 +13,10 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
@@ -24,6 +28,7 @@ import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -779,6 +784,21 @@ function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnos
   return deduped;
 }
 
+function resolveCandidateInstallOwner(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  installRecords: Record<string, PluginInstallRecord>;
+}): string | undefined {
+  if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
+    return undefined;
+  }
+  const installOwner = resolvePluginCandidateInstallOwner(params.candidate);
+  if (installOwner) {
+    return Object.hasOwn(params.installRecords, installOwner) ? installOwner : undefined;
+  }
+  return undefined;
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -790,7 +810,8 @@ function matchesInstalledPluginRecord(params: {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
   }
-  const record = params.installRecords[params.pluginId];
+  const installOwner = resolveCandidateInstallOwner(params);
+  const record = installOwner ? params.installRecords[installOwner] : undefined;
   if (!record) {
     return false;
   }
@@ -845,7 +866,9 @@ function isTrustedOfficialPluginInstall(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
+  const installOwner = resolveCandidateInstallOwner(params);
   if (
+    !installOwner ||
     (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
     !matchesInstalledPluginRecord({
       pluginId: params.pluginId,
@@ -862,18 +885,18 @@ function isTrustedOfficialPluginInstall(params: {
     return false;
   }
   const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
+  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== installOwner) {
     return false;
   }
   const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
-  const installRecord = params.installRecords[params.pluginId];
+  const installRecord = params.installRecords[installOwner];
   if (!installRecord) {
     return false;
   }
   const officialClawHubInstall =
     installRecord.source === "clawhub"
       ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: params.pluginId,
+          pluginId: installOwner,
           record: installRecord,
         })
       : undefined;
@@ -1190,7 +1213,11 @@ export function loadPluginManifestRegistryCore(
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),
         });
-
+    recordPluginManifestInstallOwner(
+      record,
+      resolvePluginCandidateInstallOwner(candidate),
+      isPluginCandidateInstallOwnerAmbiguous(candidate),
+    );
     const existing = seenIds.get(effectivePluginId);
     if (existing) {
       // Check whether both candidates point to the same physical directory

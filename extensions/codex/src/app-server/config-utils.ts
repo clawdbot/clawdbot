@@ -2,7 +2,8 @@ import { createHmac, randomBytes } from "node:crypto";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  normalizeTrimmedStringList,
+  asOptionalRecord as readRecord,
+  normalizeOptionalString as readNonEmptyString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.js";
@@ -12,11 +13,7 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-export function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+export { readNonEmptyString, readRecord };
 
 export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
   if (typeof value !== "string") {
@@ -71,10 +68,6 @@ export function normalizeCodexAppServerSecretInput(params: {
   return normalizeResolvedSecretInputString(params);
 }
 
-export function normalizeStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 export function readBooleanEnv(value: string | undefined): boolean | undefined {
   return parseBooleanValue(value);
 }
@@ -106,14 +99,6 @@ export function resolveArgs(configArgs: unknown, envArgs: string | undefined): s
     return splitShellWords(configArgs);
   }
   return splitShellWords(envArgs ?? "");
-}
-
-export function readNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 export function hashSecretForKey(value: string | undefined, label: string): string | null {

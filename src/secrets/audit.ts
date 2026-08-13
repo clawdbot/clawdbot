@@ -194,9 +194,10 @@ function collectConfigSecrets(params: {
   config: OpenClawConfig;
   configPath: string;
   collector: AuditCollector;
+  env: NodeJS.ProcessEnv;
 }): void {
   const defaults = params.config.secrets?.defaults;
-  for (const target of discoverConfigSecretTargets(params.config)) {
+  for (const target of discoverConfigSecretTargets(params.config, { env: params.env })) {
     if (!target.entry.includeInAudit) {
       continue;
     }
@@ -236,14 +237,7 @@ function collectConfigSecrets(params: {
       }
       continue;
     }
-
-    if (isNonSecretHeader) {
-      continue;
-    }
-    if (isModelMarker) {
-      continue;
-    }
-    if (!hasPlaintext) {
+    if (isNonSecretHeader || isModelMarker || !hasPlaintext) {
       continue;
     }
     addFinding(params.collector, {
@@ -670,6 +664,7 @@ export async function runSecretsAudit(
       config,
       configPath,
       collector,
+      env,
     });
     for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({

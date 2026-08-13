@@ -653,6 +653,7 @@ jobs:
           const compactPlan =
             isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
           let changedNodeTestShards = null;
+          let changedExtensionFallbackShards = [];
           if (
             compactPullRequest &&
             changedPaths &&
@@ -662,6 +663,18 @@ jobs:
               changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
             } catch (error) {
               console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+            }
+            if (
+              changedNodeTestShards === null &&
+              typeof changedNodeTestPlan.createChangedExtensionFallbackShards === "function"
+            ) {
+              try {
+                changedExtensionFallbackShards =
+                  changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
+              } catch (error) {
+                console.warn(`Changed extension fallback planning failed; using compact full suite: ${error}`);
+                changedExtensionFallbackShards = [];
+              }
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -706,10 +719,13 @@ jobs:
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
-              : createNodeTestPlan({
-                  includeReleaseOnlyPluginShards: false,
-                  compact: compactPlan,
-                })
+              : [
+                  ...createNodeTestPlan({
+                    includeReleaseOnlyPluginShards: false,
+                    compact: compactPlan,
+                  }),
+                  ...changedExtensionFallbackShards,
+                ]
             : [];
           const assignVitestFsCacheWriter =
             typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
@@ -896,6 +912,17 @@ jobs:
 
           if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
             echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
+          fi
+
+          # StickyDisk's pinned on-change mode compares whole-filesystem
+          # allocation to its mount-time baseline. Only a successful real
+          # dependency capture creates this runner-local signal. Force and
+          # verify the delta after pruning so a same-size rebuild commits while
+          # validated warm restores remain read-only.
+          if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]; then
+            bash "$GITHUB_WORKSPACE/.github/actions/setup-node-env/sticky-importers.sh" \
+              ensure-change /var/tmp/openclaw-node-deps \
+              "${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"
           fi
 
   # Run dependency-free security checks on a hosted runner in parallel with
@@ -1282,6 +1309,8 @@ jobs:
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Verify built Doctor plugin index persistence
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         run: |
           if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
             # Cold hosted runners can spend over five minutes in E2E setup before

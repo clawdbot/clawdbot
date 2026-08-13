@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchRemoteProjects } from "./project-github-search.js";
 
 function repository(fullName: string, updatedAt: string, description?: string) {
@@ -23,6 +23,10 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("project GitHub search", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns anonymous public results with a typed missing-credential state", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       json({
@@ -100,5 +104,36 @@ describe("project GitHub search", () => {
     expect(cached).toBe(first);
     expect(refreshed).toEqual(first);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse cached results after the GitHub token rotates", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return json({
+        items: [
+          repository(
+            authorization === "Bearer github-token-a"
+              ? "acme/token-rotation-a"
+              : "acme/token-rotation-b",
+            "2026-08-10T00:00:00Z",
+          ),
+        ],
+      });
+    });
+    vi.stubEnv("GH_TOKEN", "github-token-a");
+    vi.stubEnv("GITHUB_TOKEN", "");
+
+    const first = await searchRemoteProjects("token-rotation", { fetchImpl, now: 70_000 });
+
+    vi.stubEnv("GH_TOKEN", "github-token-b");
+    const second = await searchRemoteProjects("token-rotation", { fetchImpl, now: 70_001 });
+
+    expect(first.projects).toContainEqual(
+      expect.objectContaining({ fullName: "acme/token-rotation-a" }),
+    );
+    expect(second.projects).toContainEqual(
+      expect.objectContaining({ fullName: "acme/token-rotation-b" }),
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 });

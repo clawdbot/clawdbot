@@ -167,6 +167,9 @@ const testing = {
     if (params.sourceReplyDeliveryMode === "message_tool_only") {
       names.push("message");
     }
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      names.push("update_plan");
+    }
     return names;
   },
   setOpenClawCodingToolsFactoryForTests(
@@ -2314,7 +2317,9 @@ describe("runCodexAppServerAttempt", () => {
   it("replaces the native surface with an exact conversation-policy-filtered catalog", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) =>
       createOpenClawCodingTools(options).filter((tool) =>
-        ["read", "write", "edit", "apply_patch", "exec", "process"].includes(tool.name),
+        ["read", "write", "edit", "apply_patch", "exec", "process", "update_plan"].includes(
+          tool.name,
+        ),
       ),
     );
     const params = createRunParams();
@@ -2325,6 +2330,8 @@ describe("runCodexAppServerAttempt", () => {
       deny: ["exec", "process", "write", "edit"],
     };
     params.pluginHarnessToolPolicyRestricted = true;
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
@@ -2353,7 +2360,12 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
-    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read"]);
+    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read", "update_plan"]);
+    const updatePlanSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
+      (tool) => tool.name === "update_plan",
+    );
+    expect(updatePlanSpec).not.toHaveProperty("namespace");
+    expect(updatePlanSpec).not.toHaveProperty("deferLoading");
     expect(startParams?.config).toMatchObject({
       "features.hooks": false,
       "hooks.PreToolUse": [],
@@ -2362,6 +2374,34 @@ describe("runCodexAppServerAttempt", () => {
       "hooks.Stop": [],
     });
     expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
+
+    const plan = [
+      { step: "Inspect regression", status: "completed" },
+      { step: "Restore progress", status: "in_progress" },
+    ];
+    const response = await harness.handleServerRequest({
+      id: "request-plan-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-plan-1",
+        namespace: null,
+        tool: "update_plan",
+        arguments: { explanation: "Plan restored", plan },
+      },
+    });
+    expect(response).toMatchObject({ success: true });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "Plan restored",
+        steps: plan,
+      },
+    });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;

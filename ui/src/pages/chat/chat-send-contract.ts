@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import type { CommandClientPresentationAction } from "../../app/command-client-presentation.ts";
 import type { ChatFollowUpMode } from "../../app/settings.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
@@ -57,4 +58,6 @@ export type ChatHost = ChatInputHistoryState &
     } | null;
     /** Control UI route for /btw and /side; server/TUI command handling remains unchanged. */
     openSessionCompanion?: (question: string) => Promise<void> | void;
+    /** Handles a recognized catalog action only when this client can complete it. */
+    dispatchClientPresentation?: (action: CommandClientPresentationAction) => Promise<boolean>;
   };

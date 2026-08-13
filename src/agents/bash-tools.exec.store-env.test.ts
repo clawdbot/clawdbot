@@ -120,6 +120,30 @@ describe("exec store environment", () => {
     );
   });
 
+  it("applies store env when code mode invokes exec through the hidden tool catalog", async () => {
+    // Code mode never runs shell itself: its guest calls `openclaw:core:exec`, which
+    // re-enters this same tool object. Re-executing one instance is what that nested
+    // route does, so store env must land on every call, not only the first.
+    await withTeamStoreEntries(
+      [
+        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
+        { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
+      ],
+      async () => {
+        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+
+        await tool.execute("code-mode-first", { command: "echo one", yieldMs: 120_000 });
+        await tool.execute("code-mode-nested", { command: "echo two", yieldMs: 120_000 });
+
+        expect(mocks.gatewayParams).toHaveLength(2);
+        for (const params of mocks.gatewayParams) {
+          expect(params.env.AWS_REGION).toBe("us-west-2");
+          expect(params.env).not.toHaveProperty("INTERNAL_VALUE");
+        }
+      },
+    );
+  });
+
   it("lets explicitly requested env override a store entry", async () => {
     await withTeamStoreEntries(
       [{ name: "AWS_REGION", value: "us-west-2", kind: "env" }],

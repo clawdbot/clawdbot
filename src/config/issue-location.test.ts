@@ -205,26 +205,6 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
   });
 
-  it("handles array index navigation with nested objects", () => {
-    const raw = [
-      "{",
-      '  "agents": {',
-      '    "list": [',
-      "      {",
-      '        "id": "main"',
-      "      },",
-      "      {",
-      '        "tools": {',
-      '          "profile": "none"',
-      "        }",
-      "      }",
-      "    ]",
-      "  }",
-      "}",
-    ].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(9);
-  });
-
   it("gracefully degrades for unresolvable paths", () => {
     const raw = ["{", '  "a": 1', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();

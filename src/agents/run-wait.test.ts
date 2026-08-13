@@ -838,6 +838,7 @@ describe("isRecoverableAgentWaitError", () => {
     "EHOSTUNREACH",
     "ENETUNREACH",
     "EAI_AGAIN",
+    "UND_ERR_SOCKET",
   ])("recovers from %s connection failures", (code) => {
     expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
   });

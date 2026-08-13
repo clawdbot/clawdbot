@@ -1,5 +1,9 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
@@ -18,7 +22,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 type AgentRosterEntry = {
   id: string;
@@ -530,13 +533,6 @@ export function resolveEffectiveModelFallbacks(
   // An agent-owned primary is strict; only an inherited primary can use
   // the global fallback chain, matching the Gateway's model routing.
   return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
-}
-
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 type ConfiguredModelOption = {
