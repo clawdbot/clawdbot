@@ -719,6 +719,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
+    neverConnected: "Never connected",
+    offlineFor: "Offline for {duration}",
+    lastSeen: "Last seen {time}",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",
@@ -948,6 +951,8 @@ export const en: TranslationMap = {
     cloudWorkerPlacement: "Cloud worker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspace conflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspace conflicts",
+    cloudWorkerDiskWarning: "Cloud session disk space is low",
+    cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename session",
@@ -2266,6 +2271,8 @@ export const en: TranslationMap = {
       auth: "Review the provider credential or sign-in, then retry.",
       rateLimit: "Wait for the provider limit to reset, then retry.",
       billing: "Restore provider billing or quota, then retry.",
+      timeout:
+        "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
       unavailable: "Make sure the provider service is running and reachable, then retry.",
       format: "Check that the endpoint exposes a compatible chat model, then retry.",
       unknown: "Review the connection details, then retry.",
@@ -4081,6 +4088,7 @@ export const en: TranslationMap = {
         format: "Invalid response",
         unknown: "Connection failed",
         no_model: "No models available",
+        partial: "Connected with warnings",
       },
     },
     readiness: {
@@ -4525,6 +4533,14 @@ export const en: TranslationMap = {
   },
   chat: {
     cloudWorkerFailed: "Cloud worker failed: {error}",
+    diskSpace: {
+      warningTitle: "Cloud session disk space is low",
+      criticalTitle: "Cloud session disk space is critically low",
+      warningBody:
+        "{percent}% used · {free} free. Delete unneeded files or stop the cloud worker before large writes.",
+      criticalBody:
+        "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
+    },
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
       steerRunNoLongerActive:

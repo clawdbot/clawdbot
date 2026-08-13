@@ -39,9 +39,6 @@
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-}
-
-.workboard-toolbar {
   padding: 9px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 56%, transparent);
   border-radius: 8px;
@@ -673,13 +670,6 @@
   --workboard-health-highlight-color: var(--warn);
 }
 
-.workboard-card--health-highlight::before {
-  background: var(--workboard-health-highlight-color);
-  inset: -1px auto -1px -1px;
-  width: 5px;
-  border-radius: 8px 0 0 8px;
-}
-
 .workboard-card--busy {
   opacity: 0.62;
 }
@@ -1198,6 +1188,9 @@
 
 .workboard-card--health-highlight::before {
   background: var(--workboard-health-highlight-color);
+  inset: -1px auto -1px -1px;
+  width: 5px;
+  border-radius: 8px 0 0 8px;
   box-shadow: 1px 0 0 color-mix(in srgb, var(--workboard-health-highlight-color) 52%, transparent);
 }
 

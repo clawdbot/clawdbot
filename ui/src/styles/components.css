@@ -3634,12 +3634,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.btn--ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--muted);
-}
-
 .btn--ghost:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
@@ -5506,6 +5500,14 @@ td.data-table-key-col {
 
 .session-row-badge--cloud[data-workspace-conflicts] {
   color: var(--warn);
+}
+
+.session-row-badge--cloud[data-disk-space-status="warning"] {
+  color: var(--warn);
+}
+
+.session-row-badge--cloud[data-disk-space-status="critical"] {
+  color: var(--danger);
 }
 
 .session-row-badge svg {

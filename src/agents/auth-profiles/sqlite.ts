@@ -29,7 +29,7 @@ import {
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -47,13 +47,6 @@ type AuthProfileReadPoolCloseScope =
   | { kind: "database"; databasePath: string }
   | { kind: "root"; rootPath: string };
 
-function resolveAgentDir(agentDir?: string): string {
-  if (agentDir) {
-    return resolveUserPath(agentDir);
-  }
-  return resolveSharedMainAuthAgentDir();
-}
-
 function inferAgentIdFromDir(agentDir: string): string {
   const normalized = path.normalize(agentDir);
   if (path.basename(normalized) === "agent") {
@@ -68,7 +61,15 @@ function inferAgentIdFromDir(agentDir: string): string {
 // The auth database lives in the agent dir and shares the openclaw-agent schema
 // so auth store/state can move with the rest of agent-local durable state.
 function resolveAuthProfileDatabaseOptions(agentDir?: string) {
-  const dir = resolveAgentDir(agentDir);
+  if (!agentDir) {
+    const pathname = resolveSharedAuthStorePath();
+    const dir = path.dirname(pathname);
+    return {
+      agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
+      path: pathname,
+    };
+  }
+  const dir = resolveUserPath(agentDir);
   return {
     agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
     path: path.join(dir, "openclaw-agent.sqlite"),
@@ -76,17 +77,17 @@ function resolveAuthProfileDatabaseOptions(agentDir?: string) {
 }
 
 /** Resolves the SQLite database path that stores auth profiles for an agent dir. */
-export function resolveAuthProfileDatabasePath(agentDir?: string): string {
+export function resolveAuthProfileDatabasePath(agentDir: string): string {
   return resolveAuthProfileDatabaseOptions(agentDir).path;
 }
 
 /** Resolves the durable agent owner expected for an auth-profile database. */
-export function resolveAuthProfileDatabaseOwnerId(agentDir?: string): string {
+export function resolveAuthProfileDatabaseOwnerId(agentDir: string): string {
   return resolveAuthProfileDatabaseOptions(agentDir).agentId;
 }
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
-export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
+export function resolveAuthProfileDatabaseFilePaths(agentDir: string): string[] {
   return resolveSqliteDatabaseFilePaths(resolveAuthProfileDatabasePath(agentDir));
 }
 
@@ -286,7 +287,10 @@ export function inspectPersistedAuthProfileStoreRaw(
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "store");
   }
-  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabasePath(agentDir), "store");
+  return inspectAuthProfileJsonCellReadOnly(
+    resolveAuthProfileDatabaseOptions(agentDir).path,
+    "store",
+  );
 }
 
 /** Distinguishes an absent auth-state row from state that could not be read. */
@@ -297,7 +301,10 @@ export function inspectPersistedAuthProfileStateRaw(
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "state");
   }
-  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabasePath(agentDir), "state");
+  return inspectAuthProfileJsonCellReadOnly(
+    resolveAuthProfileDatabaseOptions(agentDir).path,
+    "state",
+  );
 }
 
 /** Reads the raw persisted secrets-store payload without coercing the schema. */
@@ -317,7 +324,7 @@ export function readPersistedAuthProfileStoreRaw(
     return parseJsonCell(row?.store_json);
   }
   const result = inspectAuthProfileJsonCellReadOnly(
-    resolveAuthProfileDatabasePath(agentDir),
+    resolveAuthProfileDatabaseOptions(agentDir).path,
     "store",
   );
   return result.status === "readable" ? result.raw : null;
@@ -340,7 +347,7 @@ export function readPersistedAuthProfileStateRaw(
     return parseJsonCell(row?.state_json);
   }
   const result = inspectAuthProfileJsonCellReadOnly(
-    resolveAuthProfileDatabasePath(agentDir),
+    resolveAuthProfileDatabaseOptions(agentDir).path,
     "state",
   );
   return result.status === "readable" ? result.raw : null;

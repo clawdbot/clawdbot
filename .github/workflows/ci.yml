@@ -112,6 +112,7 @@ jobs:
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
+      ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
       strict_native_i18n: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.strict_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -451,6 +452,7 @@ jobs:
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
         run: |
           node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -599,6 +601,8 @@ jobs:
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
+          const uiE2eShardCount =
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 8 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
@@ -651,8 +655,13 @@ jobs:
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
           // validation) keeps the full named matrix.
-          const compactPlan =
-            isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
+          const compactPlanMode = !isCanonicalRepository
+            ? undefined
+            : eventName === "pull_request"
+              ? "pull-request"
+              : eventName === "push"
+                ? "push"
+                : undefined;
           let changedNodeTestShards = null;
           let changedExtensionFallbackShards = [];
           if (
@@ -723,7 +732,11 @@ jobs:
               : [
                   ...createNodeTestPlan({
                     includeReleaseOnlyPluginShards: false,
-                    compact: compactPlan,
+                    // Keep the legacy boolean for historical target planners;
+                    // current planners use the event-specific mode.
+                    compact: compactPlanMode !== undefined,
+                    compactMode: compactPlanMode,
+                    runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND,
                   }),
                   ...changedExtensionFallbackShards,
                 ]
@@ -804,6 +817,17 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
+            ui_e2e_matrix: createMatrix(
+              Array.from({ length: uiE2eShardCount }, (_, index) => {
+                const shard = index + 1;
+                return {
+                  shard,
+                  shard_count: uiE2eShardCount,
+                  task: shard === uiE2eShardCount ? "browser-extension" : "control-ui",
+                  vitest_shard_count: uiE2eShardCount - 1,
+                };
+              }),
+            ),
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -1578,7 +1602,7 @@ jobs:
   checks-ui-e2e:
     permissions:
       contents: read
-    name: checks-ui-e2e (${{ matrix.shard }}/4)
+    name: checks-ui-e2e (${{ matrix.shard }}/${{ matrix.shard_count }})
     needs: [preflight]
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
@@ -1592,9 +1616,8 @@ jobs:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: 4
-      matrix:
-        shard: [1, 2, 3, 4]
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 8 || 4 }}
+      matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1610,15 +1633,18 @@ jobs:
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
-        if: matrix.shard != 4
+        if: matrix.task == 'control-ui'
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
-          --shard ${{ matrix.shard }}/3
+          --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Test browser extension bootstrap end-to-end
-        if: matrix.shard == 4
+        if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension
 
   checks-ui-e2e-real-gateway:
@@ -2160,7 +2186,7 @@ jobs:
       fail-fast: false
       # Canonical main admits only one complete run at a time, so widen this
       # matrix within the current runner-registration budget.
-      max-parallel: 28
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2362,6 +2388,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
+          RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -2431,7 +2458,12 @@ jobs:
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
-              if [ "$(nproc)" -lt 8 ]; then
+              if [ "$RUNNER_BACKEND" = "github" ]; then
+                # Three dedicated hosted jobs own the split core stripes. Keep
+                # extension preparation, optional UI checks, and formatting in
+                # this fourth lane so each 4-core runner stays below ~6m.
+                lint_args=(--only=extensions --only=scripts --threads=1)
+              elif [ "$(nproc)" -lt 8 ]; then
                 # Fork PRs run on 4-core hosted runners with 16GB. Bound both
                 # the core process size and its threads so type-aware oxlint
                 # does not intermittently lose the runner under memory pressure.
@@ -2538,6 +2570,38 @@ jobs:
               exit 1
               ;;
           esac
+
+  # In degraded GitHub-hosted mode, split the serial 12-minute core oxlint path
+  # across three runners. This job is absent from normal Blacksmith runs, which
+  # retain the existing single check-lint registration and runner policy.
+  check-lint-hosted-core-shard:
+    permissions:
+      contents: read
+    name: check-lint-core-${{ matrix.stripe }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_check == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        stripe: [1, 2, 3]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Run hosted core lint stripe
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: >-
+          node --import tsx scripts/run-oxlint-shards.mts
+          --only=core --split-core --core-stripe=${{ matrix.stripe }}/3 --threads=1
 
   check-additional-shard:
     permissions:
@@ -3825,6 +3889,7 @@ jobs:
       - checks-node-compat
       - checks-node-core-test-nondist-shard
       - check-shard
+      - check-lint-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python
@@ -3859,6 +3924,7 @@ jobs:
             checks-node-compat=${{ needs.checks-node-compat.result }}
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
             check-shard=${{ needs.check-shard.result }}
+            check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}
             check-additional-shard=${{ needs.check-additional-shard.result }}
             check-docs=${{ needs.check-docs.result }}
             skills-python=${{ needs.skills-python.result }}
@@ -3918,6 +3984,7 @@ jobs:
       - checks-node-compat
       - checks-node-core-test-nondist-shard
       - check-shard
+      - check-lint-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python

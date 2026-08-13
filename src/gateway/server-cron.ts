@@ -16,6 +16,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSystemMainSessionTarget,
 } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -451,6 +452,10 @@ export function buildGatewayCronService(params: {
     if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
     }
+    if (!requestedAgentId && !requestedSessionKey) {
+      const runtimeConfig = getRuntimeConfig();
+      return { runtimeConfig, ...resolveSystemMainSessionTarget(runtimeConfig) };
+    }
 
     // Derive from canonical agent-prefixed keys only. Relative keys intentionally
     // fall through to the configured default instead of hardcoding "main".
@@ -743,18 +748,20 @@ export function buildGatewayCronService(params: {
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
       const { agentId, sessionKey } = resolveCronTarget(opts);
-      if (!sessionKey) {
-        throw new Error("Cron system event target did not resolve a session key.");
+      if (!agentId || !sessionKey) {
+        throw new Error("Cron system event target did not resolve an owner and session key.");
       }
-      const eventOptions = {
-        sessionKey,
-        contextKey: opts?.contextKey,
-        deliveryContext: opts?.deliveryContext,
-      };
-      if (sessionKey === "global" && agentId) {
-        withSystemEventOwner(eventOptions, agentId);
-      }
-      const remove = enqueueSystemEventWithReceipt(text, eventOptions);
+      const remove = enqueueSystemEventWithReceipt(
+        text,
+        withSystemEventOwner(
+          {
+            sessionKey,
+            contextKey: opts?.contextKey,
+            deliveryContext: opts?.deliveryContext,
+          },
+          agentId,
+        ),
+      );
       return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
@@ -771,7 +778,10 @@ export function buildGatewayCronService(params: {
       return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
     requestHeartbeat: (opts) => {
-      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
+      const { agentId, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: opts?.source !== "manual",
+      });
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",

@@ -264,6 +264,9 @@ async function runEmbeddedAgentInternal(
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        ...(params.preparedModelRuntimeMode === "isolated-read-only"
+          ? { loadRuntimePlugins: true }
+          : {}),
         runtimePluginSelections,
       };
       startupStages.mark("harness-selection");

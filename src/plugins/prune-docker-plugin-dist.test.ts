@@ -148,8 +148,25 @@ describe("pruneDockerPluginDist", () => {
       optionalDependencies: {
         "@zed-industries/codex-acp-linux-x64": "0.0.0",
       },
+      peerDependencies: {
+        vitest: "0.0.0",
+      },
+      peerDependenciesMeta: {
+        vitest: { optional: true },
+      },
     });
     writeNodePackage(repoRoot, "@zed-industries/codex-acp-linux-x64");
+    writeNodePackage(repoRoot, "vitest", {
+      dependencies: {
+        vite: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "vite", {
+      dependencies: {
+        postcss: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "postcss");
 
     const removed = pruneDockerPluginDist({
       repoRoot,
@@ -160,6 +177,9 @@ describe("pruneDockerPluginDist", () => {
       "node_modules/@openclaw/acpx",
       "node_modules/@zed-industries/codex-acp",
       "node_modules/@zed-industries/codex-acp-linux-x64",
+      "node_modules/postcss",
+      "node_modules/vite",
+      "node_modules/vitest",
       "extensions/acpx",
     ]);
     expect(fs.existsSync(path.join(repoRoot, "node_modules", "zod"))).toBe(true);
@@ -168,6 +188,7 @@ describe("pruneDockerPluginDist", () => {
       true,
     );
     expect(fs.existsSync(path.join(repoRoot, "node_modules", "@zed-industries"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "vitest"))).toBe(false);
     expect(fs.existsSync(path.join(repoRoot, "extensions", "codex"))).toBe(true);
   });
 });

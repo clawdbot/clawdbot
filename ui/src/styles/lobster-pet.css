@@ -47,12 +47,8 @@ openclaw-lobster-pet {
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   transition: left 1.15s ease-in-out;
-}
-
-/* Seeded glint tint rides its own variable, mapped here (before the palette
-   rules) so palette and offline class rules still out-cascade it on both
-   look surfaces. */
-.lobster-pet {
+  /* Seeded glint tint is mapped before the palette rules so palette and
+     offline class rules still out-cascade it on both look surfaces. */
   --lob-glint: var(--lob-glint-seed, #00e5cc);
 }
 

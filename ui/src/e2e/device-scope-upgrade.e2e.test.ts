@@ -269,16 +269,21 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
-      const contentBox = await page.locator(".content").boundingBox();
-      const calloutBox = await page.locator("openclaw-update-banner .callout").boundingBox();
-      const contentInset = await page
-        .locator(".content")
-        .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
-      expect(contentBox).not.toBeNull();
-      expect(calloutBox).not.toBeNull();
-      if (contentBox && calloutBox) {
-        expect(calloutBox.x).toBe(contentBox.x + contentInset);
-      }
+      // Poll the geometry invariant: one-shot boundingBox reads can catch the
+      // nav-collapse transition mid-flight and report a stale callout offset.
+      await expect
+        .poll(async () => {
+          const contentBox = await page.locator(".content").boundingBox();
+          const calloutBox = await page.locator("openclaw-update-banner .callout").boundingBox();
+          if (!contentBox || !calloutBox) {
+            return Number.NaN;
+          }
+          const contentInset = await page
+            .locator(".content")
+            .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+          return calloutBox.x - contentBox.x - contentInset;
+        })
+        .toBe(0);
     },
   );
 

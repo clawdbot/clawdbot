@@ -1032,9 +1032,6 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.chat-activity-group__icon {
   color: var(--muted);
 }
 

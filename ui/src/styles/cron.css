@@ -1029,6 +1029,7 @@
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
+/* stylelint-disable-next-line no-duplicate-selectors -- popover sizing stays with its Web Awesome part overrides */
 .cron-filter-popover {
   --max-width: min(280px, calc(100vw - 48px));
 }

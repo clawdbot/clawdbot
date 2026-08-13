@@ -131,9 +131,16 @@ Two secret-free provider-owned facts describe the selected route:
 
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
+Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce
+the exact prepared request without dropping authored behavior. Core then uses
+that fallback for explicit and persisted selections as well as multi-route
+retry sets. Leave it absent for provider, route, or authentication failures
+that must remain fail-closed.
+
 When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
-own the full set; an explicit or persisted plugin selection fails closed.
+own the full set; an explicit or persisted plugin selection fails closed unless
+the plugin declares the lossless OpenClaw fallback.
 
 ## Register a harness
 

@@ -590,14 +590,36 @@ async function closeBrowserPage(page: Page): Promise<void> {
   await page.close().catch(() => {});
 }
 
-async function waitForLayoutSettled(page: Page): Promise<void> {
-  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
-  // to land, then observe one stable frame before measuring viewport bounds.
+async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
+  // content-visibility and container queries can defer descendant layout beyond
+  // a fixed rAF pair. Measure the owning geometry until two frames agree.
   await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
+    async ({ maxFrames, selector: targetSelector }) => {
+      let previousGeometry: string | undefined;
+      let stableFrames = 0;
+      for (let frame = 0; frame < maxFrames; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
+        if (elements.length === 0) {
+          throw new Error(`No layout elements matched ${targetSelector}`);
+        }
+        const geometry = JSON.stringify(
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height];
+          }),
+        );
+        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
+        if (stableFrames >= 2) {
+          return;
+        }
+        previousGeometry = geometry;
+      }
+      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
+    },
+    { maxFrames: 60, selector },
   );
 }
 
@@ -700,7 +722,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <html>
           <head><style>${readUiCss()}</style></head>
           <body>
-            <section class="chat">
+            <section class="card chat">
               <div class="agent-chat__search-bar">
                 ${iconSvg()}
                 <input type="text" placeholder="Search messages" />
@@ -713,8 +735,28 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
       const icons = await page.locator(".agent-chat__search-bar svg").all();
       const input = page.locator(".agent-chat__search-bar input");
+      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
+        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
+        if (!search) {
+          throw new Error("Expected transcript search bar");
+        }
+        const radii = (element: Element) => {
+          const style = getComputedStyle(element);
+          return [
+            style.borderTopLeftRadius,
+            style.borderTopRightRadius,
+            style.borderBottomRightRadius,
+            style.borderBottomLeftRadius,
+          ];
+        };
+        return { chat: radii(chat), search: radii(search) };
+      });
 
       expect(searchBar.height).toBeLessThan(64);
+      expect(cornerRadii).toEqual({
+        chat: ["0px", "0px", "0px", "0px"],
+        search: ["0px", "0px", "14px", "14px"],
+      });
       expect(icons).toHaveLength(2);
       for (const icon of icons) {
         const box = await icon.boundingBox();
@@ -1059,7 +1101,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "580px";
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
       const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
       expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
@@ -1077,7 +1119,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "1000px";
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
         const headerElement = element as HTMLElement;
         headerElement.style.containerType = "normal";
@@ -1088,7 +1130,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return width;
       });
       await setHeaderContentWidth(801);
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
       const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
         clientWidth: element.clientWidth,
         scrollWidth: element.scrollWidth,
@@ -1503,6 +1545,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           </div>
         </body></html>`,
       );
+      await waitForLayoutSettled(page, "[data-first-row], .chat-group-footer");
 
       const layout = await page.evaluate(() => {
         const first = document.querySelector<HTMLElement>("[data-first-row]")!;
@@ -1654,7 +1697,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             2,
           ),
         );
-        await waitForLayoutSettled(page);
+        await waitForLayoutSettled(page, ".agent-chat__composer-combobox > textarea");
         const wideHeight = (await textarea.boundingBox())?.height ?? 0;
 
         await page.setViewportSize({ width: 430, height: 800 });
@@ -2443,9 +2486,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           await page.locator(picker.trigger).evaluate((node) => {
             node.parentElement?.setAttribute("open", "");
           });
-          await waitForLayoutSettled(page);
+          await waitForLayoutSettled(page, `${picker.menu}, .agent-chat__input`);
           await syncFixtureComposerPopoverAnchor(page);
-          await waitForLayoutSettled(page);
+          await waitForLayoutSettled(page, `${picker.menu}, .agent-chat__input`);
           const menu = await getBoundingBox(page, picker.menu);
           const trigger = await getBoundingBox(page, picker.trigger);
           const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
@@ -2487,9 +2530,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
         node.parentElement?.setAttribute("open", "");
       });
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-controls__model-menu, .agent-chat__input");
       await syncFixtureComposerPopoverAnchor(page);
-      await waitForLayoutSettled(page);
+      await waitForLayoutSettled(page, ".chat-controls__model-menu, .agent-chat__input");
       const composer = await getBoundingBox(page, ".agent-chat__input");
       const menu = await getBoundingBox(page, ".chat-controls__model-menu");
       const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({

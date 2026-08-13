@@ -16,6 +16,7 @@ import {
   resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
+  selectCoreOxlintStripe,
   shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mts";
@@ -521,11 +522,56 @@ describe("run-oxlint", () => {
   });
 
   it("parses shard runner flags without forwarding them to oxlint", () => {
-    const parsed = parseShardRunnerArgs(["--only=core", "--split-core", "--max-warnings", "0"]);
+    const parsed = parseShardRunnerArgs([
+      "--only=core",
+      "--split-core",
+      "--core-stripe=2/3",
+      "--max-warnings",
+      "0",
+    ]);
 
     expect([...parsed.only]).toEqual(["core"]);
+    expect(parsed.coreStripe).toEqual({ index: 2, total: 3 });
     expect(parsed.splitCore).toBe(true);
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
+  });
+
+  it("partitions split core lint targets into deterministic disjoint stripes", () => {
+    const shards = createOxlintShards({
+      cwd: "/repo",
+      splitCore: true,
+      readDir: () =>
+        [
+          { name: "alpha", isDirectory: () => true, isFile: () => false },
+          { name: "beta", isDirectory: () => true, isFile: () => false },
+          { name: "gamma", isDirectory: () => true, isFile: () => false },
+        ] as never,
+    }).filter((shard) => shard.name.startsWith("core:"));
+    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+
+    expect(
+      stripes
+        .flat()
+        .map((shard) => shard.name)
+        .toSorted(),
+    ).toEqual(shards.map((shard) => shard.name).toSorted());
+    expect(new Set(stripes.flat().map((shard) => shard.name))).toHaveProperty(
+      "size",
+      shards.length,
+    );
+    expect(() =>
+      selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
+    ).toThrow("--core-stripe requires a non-empty core-only shard selection");
+  });
+
+  it.each([
+    ["--core-stripe=0/3"],
+    ["--core-stripe=4/3"],
+    ["--core-stripe=1/0"],
+    ["--core-stripe=wat"],
+    ["--core-stripe", "1/3"],
+  ])("rejects invalid core stripe arguments: %s", (...args) => {
+    expect(() => parseShardRunnerArgs(args)).toThrow(/--core-stripe/u);
   });
 
   it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(

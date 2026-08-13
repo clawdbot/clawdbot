@@ -128,11 +128,8 @@
   border-style: solid;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text-strong);
-}
-
-/* The bottom zone paints over the right zone's lower corner; keep the active
-   one on top so its label stays readable. */
-.chat-workbench__dock-zone--active {
+  /* The bottom zone paints over the right zone's lower corner; keep the active
+     one on top so its label stays readable. */
   z-index: 1;
 }
 
@@ -787,9 +784,6 @@ openclaw-chat-sidebar-region,
 
 .chat-workspace-rail__browser-caption {
   color: var(--muted);
-}
-
-.chat-workspace-rail__browser-caption {
   padding: 0 12px 6px;
   font-size: var(--control-ui-text-xs);
   line-height: 1.2;
