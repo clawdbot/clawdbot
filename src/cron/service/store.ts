@@ -12,6 +12,10 @@ import {
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import {
+  CronRunReceiptConflictError,
+  CronRunReceiptRevisionError,
+} from "../store/run-receipt-store.js";
+import {
   type CronStoreTransactionHooks,
   saveCronJobsStoreWithTransactionHooks,
 } from "../store/transaction-hooks.js";
@@ -296,7 +300,11 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       await saveCronJobsStore(state.deps.storePath, store, saveOptions);
     }
   } catch (error) {
-    if (!quarantine) {
+    if (
+      !quarantine ||
+      error instanceof CronRunReceiptConflictError ||
+      error instanceof CronRunReceiptRevisionError
+    ) {
       throw error;
     }
     const errorMessage = error instanceof Error ? error.message : String(error);

@@ -345,7 +345,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("keeps a live run fenced across an overlapping gateway start", async () => {
+  it("recovers a foreign run whose owner dies after overlapping startup", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -358,26 +358,36 @@ describe("cron durable run ownership", () => {
 
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
     const replacement = makeParentService(storePath, replacementRunner);
-    await replacement.start();
-    await expect(replacement.run(job.id, "force")).resolves.toEqual({
-      ok: true,
-      ran: false,
-      reason: "already-running",
-    });
-    expect(replacementRunner).not.toHaveBeenCalled();
-    expect(receipts(storePath, job.id)).toMatchObject([{ status: "running" }]);
-    replacement.stop();
+    try {
+      await replacement.start();
+      await expect(replacement.run(job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "already-running",
+      });
+      expect(replacementRunner).not.toHaveBeenCalled();
+      expect(receipts(storePath, job.id)).toMatchObject([{ status: "running" }]);
 
-    owner.kill("SIGKILL");
-    await waitForExit(owner);
-    const recovered = makeParentService(storePath);
-    await recovered.start();
-    recovered.stop();
+      owner.kill("SIGKILL");
+      await waitForExit(owner);
+      await vi.waitFor(
+        async () => {
+          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+          expect((await loadCronStore(storePath)).jobs[0]?.state.lastError).toContain(
+            "interrupted by gateway restart",
+          );
+        },
+        { timeout: 6_000, interval: 50 },
+      );
 
-    expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-    expect((await loadCronStore(storePath)).jobs[0]?.state.lastError).toContain(
-      "interrupted by gateway restart",
-    );
+      await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(replacementRunner).toHaveBeenCalledOnce();
+    } finally {
+      replacement.stop();
+      if (owner.exitCode === null && owner.signalCode === null) {
+        owner.kill("SIGKILL");
+      }
+    }
   });
 
   it("admits one payload across overlapping scheduler processes", async () => {
