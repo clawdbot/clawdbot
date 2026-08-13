@@ -215,33 +215,37 @@ describe("googlechat inbound access policy", () => {
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.resolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
-    await expect(
-      applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            botUser: "users/app-bot",
-            groups: {
-              "spaces/AAA": {
-                users: ["users/alice"],
-                requireMention: true,
-                systemPrompt: " group prompt ",
-              },
+    const result = await applyInboundAccessPolicy({
+      account: {
+        accountId: "default",
+        config: {
+          botUser: "users/app-bot",
+          groups: {
+            "spaces/AAA": {
+              users: ["users/alice"],
+              requireMention: true,
+              systemPrompt: " group prompt ",
             },
           },
-        } as never,
-        core: core as never,
-        message: {
-          annotations: [
-            {
-              type: "USER_MENTION",
-              userMention: { user: { name: "users/app-bot" } },
-            },
-          ],
-        } as never,
-      }),
-    ).resolves.toEqual({
+        },
+      } as never,
+      core: core as never,
+      message: {
+        annotations: [
+          {
+            type: "USER_MENTION",
+            userMention: { user: { name: "users/app-bot" } },
+          },
+        ],
+      } as never,
+    });
+
+    expect(result).toMatchObject({
       ok: true,
+      channelIngress: {
+        ingress: { admission: "dispatch" },
+        senderAccess: { decision: "allow" },
+      },
       commandAuthorized: true,
       effectiveWasMentioned: true,
       groupSystemPrompt: "group prompt",

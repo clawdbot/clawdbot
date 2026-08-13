@@ -1,9 +1,9 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 function tableCount(
-  database: DatabaseSync,
+  database: ReturnType<typeof openNodeSqliteDatabase>,
   tableName: "execution_identity_contexts" | "execution_decision_facts",
 ): number {
   const table = database
@@ -31,7 +31,7 @@ export function inspectQaExecutionIdentityStorage(env: Pick<QaSuiteRuntimeEnv, "
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
   }
-  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+  const database = openNodeSqliteDatabase(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
