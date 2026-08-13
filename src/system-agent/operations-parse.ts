@@ -9,7 +9,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
+import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
 type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
@@ -49,7 +49,11 @@ export type SystemAgentCommandDeps = {
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
+  runPluginInstall?: (
+    spec: string,
+    runtime: RuntimeEnv,
+    options: { allowInstallPolicyWarningPrompt: false },
+  ) => Promise<void>;
   runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;

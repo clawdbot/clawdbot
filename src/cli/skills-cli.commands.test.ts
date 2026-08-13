@@ -1,7 +1,28 @@
 // Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";
+
+const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+function setTty(value: boolean): void {
+  Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value, configurable: true });
+}
+
+function restoreTty(): void {
+  if (ORIGINAL_STDIN_TTY) {
+    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
+  } else {
+    Reflect.deleteProperty(process.stdin, "isTTY");
+  }
+  if (ORIGINAL_STDOUT_TTY) {
+    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
+  } else {
+    Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+}
 
 const mocks = vi.hoisted(() => {
   const runtimeLogs: string[] = [];
@@ -145,6 +166,8 @@ function primeSkillVerification(overrides: Record<string, unknown> = {}) {
     ...overrides,
   });
 }
+
+afterEach(() => restoreTty());
 
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -518,6 +541,7 @@ describe("skills cli commands", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      config: {},
     });
     expectLogger(installArgs.logger);
     expect(
@@ -619,6 +643,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/workspace",
       spec: "git:owner/tools",
       force: false,
+      config: {},
     });
     expect(installArgs.slug).toBeUndefined();
     expectLogger(installArgs.logger);
@@ -642,6 +667,43 @@ describe("skills cli commands", () => {
 
     expect(mockFirstObjectArg(installSkillFromSourceMock).spec).toBe("git:owner/tools@main");
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("passes an install-policy warning prompt to interactive skill installs", async () => {
+    setTty(true);
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand(["skills", "install", "git:owner/tools"]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).onInstallPolicyWarning).toEqual(
+      expect.any(Function),
+    );
+  });
+
+  it("passes noninteractive install-policy acknowledgement to skill installs", async () => {
+    setTty(false);
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand([
+      "skills",
+      "install",
+      "git:owner/tools",
+      "--acknowledge-install-policy-warning",
+    ]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).onInstallPolicyWarning).toEqual(
+      expect.any(Function),
+    );
   });
 
   it("installs a skill from a local directory", async () => {
