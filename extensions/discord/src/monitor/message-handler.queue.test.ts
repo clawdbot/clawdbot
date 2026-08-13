@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   type ChannelIngressQueue,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -15,6 +16,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler as createDurableDiscordMessageHandler } from "./message-handler.js";
 import {
@@ -22,10 +24,12 @@ import {
   preflightDiscordMessageMock,
   processDiscordMessageMock,
 } from "./message-handler.module-test-helpers.js";
+import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -631,6 +635,88 @@ describe("createDiscordMessageHandler queue behavior", () => {
         ).resolves.toMatchObject({ kind: "completed" });
       } finally {
         await replacement.deactivate();
+      }
+    });
+  });
+
+  it("preserves retry facts when deactivation skips a queued durable Discord job", async () => {
+    await withDiscordQueue(async (queue) => {
+      const raw = createRawMessage("queued-cancelled", "lane-a");
+      await queue.enqueue(
+        "queued-cancelled",
+        { version: 1, receivedAt: 10, rawMessage: raw },
+        { laneKey: "channel:lane-a", receivedAt: 10 },
+      );
+      const failedClaim = await queue.claim("queued-cancelled", { ownerId: "failed-owner" });
+      expect(failedClaim).not.toBeNull();
+      if (!failedClaim) {
+        return;
+      }
+      await queue.release(failedClaim, {
+        lastError: "previous genuine failure",
+        releasedAt: 20,
+      });
+      const before = (await queue.listPending())[0];
+      const params = createDiscordHandlerParams();
+      const processDiscordMessage = vi.fn(async () => {});
+      const messageRunQueue = createDiscordMessageRunQueue({
+        runtime: params.runtime,
+        testing: { processDiscordMessage: processDiscordMessage as never },
+      });
+      const skipped = createDeferred<void>();
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: params.runtime,
+        queue,
+        dispatch: async (_event, lifecycle) => {
+          const ingress = fanInChannelIngressLifecycles([lifecycle]);
+          messageRunQueue.enqueue(
+            buildDiscordInboundJob(await createBaseDiscordMessageContext(), {
+              ingressSettlement: ingress,
+            }),
+          );
+          await messageRunQueue.deactivate();
+          skipped.resolve();
+          return { kind: "deferred" };
+        },
+      });
+      monitor.start();
+      try {
+        await skipped.promise;
+        await monitor.stop();
+        expect(processDiscordMessage).not.toHaveBeenCalled();
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: "queued-cancelled",
+            attempts: before?.attempts,
+            lastAttemptAt: before?.lastAttemptAt,
+            lastError: before?.lastError,
+          }),
+        ]);
+      } finally {
+        await monitor.stop();
+        await messageRunQueue.deactivate();
+      }
+
+      const recovered = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const replacement = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: params.runtime,
+        queue,
+        dispatch: recovered,
+      });
+      replacement.start();
+      try {
+        await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1));
+        await expect(
+          queue.enqueue("queued-cancelled", {} as DiscordIngressPayload),
+        ).resolves.toMatchObject({ kind: "completed" });
+      } finally {
+        await replacement.stop();
       }
     });
   });

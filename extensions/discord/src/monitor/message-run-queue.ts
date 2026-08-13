@@ -57,9 +57,7 @@ async function processDiscordQueuedMessage(params: {
 
 async function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
   // A skipped job never reached reply-lane adoption; reopen its durable claim.
-  await params.job.ingressSettlement?.abandon(
-    new Error("discord queued run skipped before processing"),
-  );
+  await params.job.ingressSettlement?.cancel();
 }
 
 export function createDiscordMessageRunQueue(
