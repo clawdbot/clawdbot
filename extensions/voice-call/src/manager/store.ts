@@ -219,7 +219,11 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
   return boundedCall;
 }
 
-/** Register a serialized call record event and its chunks, then prune old events. */
+/**
+ * Register a serialized call record event: prune, then metadata, then chunks.
+ * Each row commits independently; chunks must never exist without their
+ * metadata row, or an interrupted write strands them until they evict live rows.
+ */
 function registerCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
@@ -234,6 +238,13 @@ function registerCallRecordEvent(
       `voice-call record exceeds SQLite chunk limit (${chunkCount}/${MAX_CHUNKS_PER_CALL_RECORD_EVENT})`,
     );
   }
+  pruneCallRecordEvents(stores);
+  stores.events.register(eventKey, {
+    chunkCount,
+    byteLength: buffer.byteLength,
+    persistedAt: order?.persistedAt,
+    sequence: order?.sequence,
+  });
   for (let index = 0; index < chunkCount; index += 1) {
     const chunk = buffer.subarray(
       index * RAW_CALL_RECORD_CHUNK_BYTES,
@@ -244,25 +255,17 @@ function registerCallRecordEvent(
       dataBase64: chunk.toString("base64"),
     });
   }
-  stores.events.register(eventKey, {
-    chunkCount,
-    byteLength: buffer.byteLength,
-    persistedAt: order?.persistedAt,
-    sequence: order?.sequence,
-  });
-  pruneCallRecordEvents(stores);
 }
 
-/** Delete metadata and all chunk rows for one call record event. */
+/** Delete chunk rows, then metadata last so interrupted deletes stay visible. */
 function deleteCallRecordEventRows(stores: CallRecordStateStores, eventKey: string): void {
   const meta = stores.events.lookup(eventKey);
+  if (meta) {
+    for (let index = 0; index < meta.chunkCount; index += 1) {
+      stores.chunks.delete(buildChunkKey(eventKey, index));
+    }
+  }
   stores.events.delete(eventKey);
-  if (!meta) {
-    return;
-  }
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    stores.chunks.delete(buildChunkKey(eventKey, index));
-  }
 }
 
 /** Keep only the newest bounded call record events. */

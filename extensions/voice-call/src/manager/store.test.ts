@@ -16,6 +16,10 @@ import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
+  CALL_RECORD_CHUNK_MAX_ENTRIES,
+  CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+  CALL_RECORD_EVENT_META_MAX_ENTRIES,
+  CALL_RECORD_EVENTS_NAMESPACE,
   findCallMatchesInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
@@ -139,6 +143,69 @@ describe("voice-call call record store", () => {
       voiceCallPersistence: { transcriptTruncated: true },
     });
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
+  });
+
+  it("leaves no chunk rows without metadata when persistence is interrupted", () => {
+    const storePath = createTestStorePath();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(makePersistedCall({ callId: "call-interrupted", state: "ringing" })),
+    );
+    setVoiceCallStateRuntime({
+      state: {
+        resolveStateDir: () => "",
+        openKeyedStore: (() => {
+          throw new Error("openKeyedStore is not used by voice-call store tests");
+        }) as never,
+        openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          const store = createPluginStateSyncKeyedStoreForTests<T>("voice-call", options);
+          if (options.namespace !== CALL_RECORD_EVENTS_NAMESPACE) {
+            return store;
+          }
+          return {
+            ...store,
+            register: () => {
+              throw new Error("simulated interruption");
+            },
+          };
+        },
+        openChannelIngressQueue: (() => {
+          throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+        }) as never,
+      },
+    });
+    expect(() =>
+      persistCallRecord(
+        storePath,
+        CallRecordSchema.parse(
+          makePersistedCall({ callId: "call-interrupted", state: "answered" }),
+        ),
+      ),
+    ).toThrow("simulated interruption");
+
+    installStateRuntime();
+    const events = createPluginStateSyncKeyedStoreForTests<{ chunkCount: number }>("voice-call", {
+      namespace: CALL_RECORD_EVENTS_NAMESPACE,
+      maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+      env,
+    });
+    const chunks = createPluginStateSyncKeyedStoreForTests<{ index: number }>("voice-call", {
+      namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+      maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+      env,
+    });
+    const orphanEventKeys = chunks
+      .entries()
+      .map((entry) => entry.key.replace(/:chunk:\d+$/, ""))
+      .filter((eventKey) => events.lookup(eventKey) === undefined);
+    expect(orphanEventKeys).toEqual([]);
+
+    const restored = loadActiveCallsFromStore(storePath);
+    expect(restored.activeCalls.get("call-interrupted")?.state).toBe("ringing");
   });
 
   it("replays same-millisecond snapshots in write order", () => {
