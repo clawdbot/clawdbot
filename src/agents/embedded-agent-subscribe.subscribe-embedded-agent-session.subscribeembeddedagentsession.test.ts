@@ -1770,6 +1770,35 @@ describe("subscribeEmbeddedAgentSession", () => {
       };
     }
 
+    it("stays on the fast path when an indexed thinking_start precedes the first delta", () => {
+      // Real native producers (e.g. the OpenAI-completions transport) emit an
+      // indexed thinking_start before any thinking_delta. That thinking_start
+      // must not poison nativeReasoningContentIndex to -1 (which would
+      // permanently disable the fast path for the rest of the run) — the
+      // accumulator should only be established once a real delta arrives.
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit({
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "" }] },
+        assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+      });
+      emit(thinkingDelta("Hello", 0));
+      emit(thinkingDelta(" world", 0));
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      expect(events.map((e) => e.data?.text)).toEqual(["Hello", "Hello world"]);
+      expect(events.map((e) => e.data?.delta)).toEqual(["Hello", " world"]);
+      emitAgentEventSpy.mockRestore();
+    });
+
     it('splits ["a ", "b"] into text/delta snapshots identical to full-reconstruction semantics', () => {
       const emitAgentEventSpy = vi
         .spyOn(agentEvents, "emitAgentEvent")

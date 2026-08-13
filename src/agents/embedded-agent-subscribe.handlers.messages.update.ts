@@ -166,7 +166,18 @@ export function handleMessageUpdate(
       const trimmed = ctx.state.nativeReasoningRaw.trim();
       ctx.emitReasoningStream(trimmed, thinkingDelta);
     } else {
-      if (contentIndex !== undefined && ctx.state.nativeReasoningContentIndex !== contentIndex) {
+      // Only a thinking_delta can prove ambiguity (two distinct content
+      // blocks actually interleaving deltas). A thinking_start/thinking_end
+      // for the "normal" single-block case also carries a contentIndex but
+      // no delta of its own — poisoning the accumulator here would permanently
+      // disable the fast path before the first real delta ever arrives, since
+      // native producers emit thinking_start (indexed) before thinking_delta.
+      if (
+        evtType === "thinking_delta" &&
+        contentIndex !== undefined &&
+        ctx.state.nativeReasoningContentIndex !== undefined &&
+        ctx.state.nativeReasoningContentIndex !== contentIndex
+      ) {
         ctx.state.nativeReasoningContentIndex = -1;
       }
       // Prefer full partial-message thinking when available; fall back to event payloads.
