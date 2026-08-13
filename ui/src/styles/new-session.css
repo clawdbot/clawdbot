@@ -749,6 +749,7 @@ wa-dropdown.new-session-page__start-menu {
      Keep those pills intrinsic and let the model picker use the remaining width. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
   }
 

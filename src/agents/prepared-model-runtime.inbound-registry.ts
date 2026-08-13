@@ -54,10 +54,12 @@ export function prepareWorkspacePluginRegistries(
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
 } {
-  if (input.readOnly) {
+  // Read-only catalog owners stay runtime-free, but setup probes carry an exact harness selection.
+  // That selected registry must belong to the generation instead of leaking from an outer scope.
+  if (input.readOnly && !input.runtimePluginSelections) {
     return {};
   }
-  const inboundPluginRegistry = loadInboundRegistry?.(input);
+  const inboundPluginRegistry = input.readOnly ? undefined : loadInboundRegistry?.(input);
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({

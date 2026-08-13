@@ -77,6 +77,18 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     expect(result?.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
   });
 
+  it("does not replace a successfully recovered final assistant after a prompt-timeout race", () => {
+    expect(
+      resolveEmbeddedRunTerminalTimeout(
+        makeTimeoutInput(makeTimedOutAttempt(), {
+          hasSuccessfulFinalAssistantAfterPromptTimeout: true,
+          payloads: [{ text: "Completed answer after the timeout race." }],
+          payloadsWithToolMedia: [{ text: "Completed answer after the timeout race." }],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("prefers harness timeout metadata while retaining terminal attribution", () => {
     const setTerminalLifecycleMeta = vi.fn();
     const attempt = makeTimedOutAttempt({

@@ -2804,12 +2804,12 @@ NODE
     expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
   });
 
-  it("runs canonical main CI single-flight while coalescing the pending tip", () => {
+  it("pipelines canonical main CI across two non-canceling slots", () => {
     const workflow = readCiWorkflow();
 
-    // GitHub concurrency keeps one running and one pending run by default.
-    // Replacing only the pending run preserves a complete integration cycle
-    // while coalescing merge bursts to the newest main tip.
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}",
+    );
     expect(workflow.concurrency["cancel-in-progress"]).toBe(
       "${{ github.event_name == 'pull_request' }}",
     );
@@ -3995,21 +3995,95 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
   });
 
-  it("runs the Plugin SDK API baseline as a visible additional check", () => {
+  it("reports the Plugin SDK API diff as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
     const matrixRows = additionalJob.strategy.matrix.include;
     expect(matrixRows).toContainEqual({
-      check_name: "check-plugin-sdk-api-baseline",
-      group: "plugin-sdk-api-baseline",
+      check_name: "report-plugin-sdk-api-diff",
+      group: "plugin-sdk-api-diff",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
+
+    expect(workflow.jobs.preflight.outputs.diff_head_revision).toBe(
+      "${{ steps.diff_base.outputs.head_sha }}",
+    );
+    const ensureHeadStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Ensure Plugin SDK API diff head commit",
+    );
+    expect(ensureHeadStep.with["base-sha"]).toBe(
+      "${{ needs.preflight.outputs.diff_head_revision }}",
+    );
+    expect(ensureHeadStep.with["fetch-ref"]).toContain("refs/pull/{0}/merge");
 
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
     );
-    expect(runStep.run).toContain("plugin-sdk-api-baseline)");
-    expect(runStep.run).toContain('run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check');
+    expect(runStep.run).toContain("plugin-sdk-api-diff)");
+    expect(runStep.run).toContain('run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff');
+    expect(runStep.run).toContain('--base "${{ needs.preflight.outputs.diff_base_revision }}"');
+    expect(runStep.run).toContain('--head "${{ needs.preflight.outputs.diff_head_revision }}"');
+    expect(runStep.run).not.toContain('--head "${{ needs.preflight.outputs.checkout_revision }}"');
+  });
+
+  it("uses the current SDK diff and preserves the historical baseline check", () => {
+    const workflow = readCiWorkflow();
+    const runStep = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    const runCase = (scripts: Record<string, string>, compatibilityTarget: boolean) => {
+      const root = tempDirs.make("openclaw-plugin-sdk-api-workflow-");
+      const binDir = path.join(root, "bin");
+      const callsPath = path.join(root, "pnpm-calls.txt");
+      const summaryPath = path.join(root, "summary.md");
+      mkdirSync(binDir);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts }), "utf8");
+      const pnpmPath = path.join(binDir, "pnpm");
+      writeFileSync(
+        pnpmPath,
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$*" >> "$PNPM_CALLS"\n',
+        "utf8",
+      );
+      chmodSync(pnpmPath, 0o755);
+      const script = runStep.run
+        .replaceAll("${{ needs.preflight.outputs.diff_base_revision }}", "base-sha")
+        .replaceAll("${{ needs.preflight.outputs.diff_head_revision }}", "synthetic-head-sha");
+      const result = runWorkflowShellScript(script, {
+        cwd: root,
+        env: {
+          ...process.env,
+          ADDITIONAL_CHECK_GROUP: "plugin-sdk-api-diff",
+          COMPATIBILITY_TARGET: compatibilityTarget ? "true" : "false",
+          GITHUB_STEP_SUMMARY: summaryPath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PNPM_CALLS: callsPath,
+          RUN_PROMPT_SNAPSHOTS: "false",
+        },
+      });
+      return {
+        calls: existsSync(callsPath) ? readFileSync(callsPath, "utf8").trim().split("\n") : [],
+        result,
+        summaryPath,
+      };
+    };
+
+    const current = runCase({ "plugin-sdk:api:diff": "mock" }, false);
+    expect(current.result.status, current.result.stderr).toBe(0);
+    expect(current.calls).toEqual([
+      "run plugin-sdk:api:diff -- --base base-sha --head synthetic-head-sha --json .artifacts/plugin-sdk-api-diff.json --summary " +
+        current.summaryPath,
+    ]);
+
+    const historical = runCase({ "plugin-sdk:api:check": "mock" }, true);
+    expect(historical.result.status, historical.result.stderr).toBe(0);
+    expect(historical.calls).toEqual(["run plugin-sdk:api:check"]);
+
+    const missingCurrent = runCase({ "plugin-sdk:api:check": "mock" }, false);
+    expect(missingCurrent.result.status).toBe(1);
+    expect(missingCurrent.calls).toEqual([]);
+    expect(missingCurrent.result.stdout).toContain(
+      "Current CI targets must provide plugin-sdk:api:diff.",
+    );
   });
 
   it("runs the SQLite transaction ratchet in the session boundary check", () => {
@@ -4391,17 +4465,13 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
   });
 
-  it("runs generated baseline drift checks in workflow sanity", () => {
+  it("runs committed generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;
     const stepNames = steps.map((step: WorkflowStep) => step.name);
 
-    expect(stepNames).toContain("Check plugin SDK API contract manifest");
     expect(stepNames).toContain("Check SQLite sessions/transcripts schema baseline drift");
     expect(stepNames).toContain("Check plugin SDK surface budget");
-    expect(stepNames.indexOf("Check plugin SDK API contract manifest")).toBeLessThan(
-      stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
-    );
     expect(
       stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     ).toBeLessThan(stepNames.indexOf("Check plugin SDK surface budget"));

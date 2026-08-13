@@ -1,18 +1,21 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { buildEmbeddedRunPayloads } from "./payloads.js";
+import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
+
+const payloadMocks = vi.hoisted(() => ({
+  buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),
+}));
 
 vi.mock("./payloads.js", () => ({
-  buildEmbeddedRunPayloads: () => [],
+  buildEmbeddedRunPayloads: payloadMocks.buildEmbeddedRunPayloads,
 }));
 vi.mock("./run-attempt-result.js", () => ({
   buildTraceToolSummary: () => undefined,
-}));
-vi.mock("./tool-media-payloads.js", () => ({
-  mergeAttemptToolMediaPayloads: ({ payloads }: { payloads?: unknown[] }) => payloads,
 }));
 
 function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
@@ -66,7 +69,42 @@ function attemptResult(
   };
 }
 
+async function prepareAttempt(input: {
+  attempt: EmbeddedRunAttemptWithReceiptEvidence;
+  currentAttemptCompletedAssistant?: AssistantMessage;
+  terminalState: EmbeddedRunTerminalState;
+}) {
+  const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+  return prepareEmbeddedRunTerminal({
+    runParams: {
+      admittedRunContext: createTestAdmittedRunContext("run-focused"),
+      sessionId: "session-focused",
+      runId: "run-focused",
+      workspaceDir: "/tmp/openclaw-test",
+      prompt: "hi",
+      trigger: "user",
+      timeoutMs: 60_000,
+    },
+    attempt: input.attempt,
+    currentAttemptCompletedAssistant: input.currentAttemptCompletedAssistant,
+    provider: "openai",
+    model: "gpt-5.4",
+    activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+    authProfileStore: { version: 1, profiles: {} },
+    sessionIdUsed: input.attempt.sessionIdUsed,
+    outerContextTokenMeta: {},
+    usageAccumulator: createUsageAccumulator(),
+    contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+    resolvedToolResultFormat: "markdown",
+    terminalState: input.terminalState,
+  });
+}
+
 describe("prepareEmbeddedRunTerminal", () => {
+  beforeEach(() => {
+    payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
+  });
+
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
     async (stopReason) => {
@@ -164,6 +202,111 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.finalAssistantVisibleText).toBe(finalText);
     expect(prepared.finalAssistantRawText).toBe(finalText);
     expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
+  });
+
+  it("recovers current final text and tool media after a prompt-timeout race", async () => {
+    const completedText = "Completed answer block before the timeout.";
+    const partialText = "Partial final response before the timeout.";
+    const finalText = "Complete final response after the timeout.";
+    const finalAssistant = {
+      ...assistantMessage("stop"),
+      content: [{ type: "text" as const, text: finalText }],
+    };
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: completedText },
+      { text: partialText },
+    ]);
+
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+        assistantTexts: [completedText, partialText],
+        toolMediaUrls: ["https://example.test/recovered-output.png"],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+      currentAttemptCompletedAssistant: finalAssistant,
+      terminalState: {
+        outcome: {
+          reason: "hard_timeout",
+          status: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(true);
+    expect(prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toEqual([
+      expect.objectContaining({
+        mediaUrl: "https://example.test/recovered-output.png",
+        text: completedText,
+      }),
+      { text: finalText },
+    ]);
+  });
+
+  it("does not recover stale session text after the current prompt times out", async () => {
+    const staleAssistant = {
+      ...assistantMessage("stop"),
+      content: [{ type: "text" as const, text: "Stale answer from the prior attempt." }],
+    };
+
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+        assistantTexts: [],
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+      }),
+      currentAttemptCompletedAssistant: undefined,
+      terminalState: {
+        outcome: {
+          reason: "hard_timeout",
+          status: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantVisibleText).toBeUndefined();
+    expect(prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
+    expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
+  });
+
+  it("uses the yielded assistant for paused-turn payload classification", async () => {
+    const completedAssistant = assistantMessage("stop");
+    const yieldedAssistant = {
+      ...assistantMessage("aborted"),
+      content: [
+        { type: "toolCall" as const, id: "yield-1", name: "sessions_yield", arguments: {} },
+      ],
+    };
+    const attempt = attemptResult({
+      assistantTexts: [],
+      lastAssistant: yieldedAssistant,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: completedAssistant,
+      yieldDetected: true,
+    });
+
+    await prepareAttempt({
+      attempt,
+      currentAttemptCompletedAssistant: completedAssistant,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
+    );
   });
 });
 

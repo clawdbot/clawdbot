@@ -10,14 +10,16 @@ read_when:
 
 OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
 at the trigger), on every non-draft pull request, and on manual dispatch.
-Canonical `main` pushes are single-flight: the `CI` concurrency group lets one
-complete integration cycle run while GitHub keeps only the newest pending push.
-New merges replace that pending run instead of canceling work that already
-registered a Blacksmith matrix. Pull requests still cancel superseded heads,
-and manual dispatches use isolated groups. `preflight` classifies the diff and
-turns expensive lanes off when only unrelated areas changed. Ordinary manual
-`workflow_dispatch` runs intentionally bypass smart scoping and fan out the
-full graph for release candidates and broad validation. Exact-head
+Canonical `main` pushes use a two-slot pipeline keyed by run-number parity, so
+at most two integration runs overlap. Each slot is non-canceling and keeps one
+coalesced pending tip: a new merge replaces that slot's older pending run
+instead of canceling work that already registered a Blacksmith matrix. Runs in
+the two slots can complete out of order; exact-head consumers remain bound to
+their requested SHA and are unaffected. Pull requests still cancel superseded
+heads, and manual dispatches use isolated groups. `preflight` classifies the
+diff and turns expensive lanes off when only unrelated areas changed. Ordinary
+manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out
+the full graph for release candidates and broad validation. Exact-head
 `release_gate` fallbacks retain the pull request's macOS and iOS scope instead
 of forcing unrelated Apple lanes. Android lanes stay opt-in through
 `include_android` (or the `release_gate` input). Release-only
@@ -59,7 +61,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 
 ## Fail-fast order
 
-1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately, but its concurrency group admits only one complete run and coalesces later pushes into one newest pending run. On Node-relevant canonical `main` pushes and same-repository pull requests, preflight is the sole exact dependency-cache writer; downstream jobs wait for it, then restore the immutable archive or fall back to the ordinary pnpm-store cache on a miss.
+1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately in one of two parity slots; each slot admits one complete run and coalesces later pushes into its newest pending tip. On Node-relevant canonical `main` pushes and same-repository pull requests, preflight is the sole exact dependency-cache writer; downstream jobs wait for it, then restore the immutable archive or fall back to the ordinary pnpm-store cache on a miss.
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
@@ -74,7 +76,7 @@ that unchanged head during the freshness window.
 
 The default-branch ruleset requires the GitHub Actions-owned `openclaw/ci-gate` check. Repository maintainers and admins have an audited break-glass bypass intended only for signed direct fast-forward landings; the organization ruleset still blocks deletion and non-fast-forward updates. Normal pull-request merges should continue to use the gate rather than bypass failed CI. The separate strict App-owned test-merge check still binds the head to current `main`.
 
-GitHub may mark superseded pull-request jobs as `cancelled` when a newer head lands. Treat that as CI noise unless the newest run for the same PR is also failing. Canonical `main` runs are not canceled after admission; when merge traffic arrives, GitHub replaces only the older pending run with the newest tip. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs. The plugin-list startup-memory guard keeps a 350 MiB ceiling on self-hosted Blacksmith Linux and allows 425 MiB on GitHub-hosted Linux, whose RSS baseline is higher for the same built CLI.
+GitHub may mark superseded pull-request jobs as `cancelled` when a newer head lands. Treat that as CI noise unless the newest run for the same PR is also failing. Canonical `main` runs are not canceled after admission; each of the two parity slots replaces only its older pending run with the newest tip. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The canonical-main CI concurrency key is versioned (`CI-v8-*`) so GitHub-side zombies in the old group cannot block the two-slot pipeline; other automatic groups remain on `CI-v7-*`. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs. The plugin-list startup-memory guard keeps a 350 MiB ceiling on self-hosted Blacksmith Linux and allows 425 MiB on GitHub-hosted Linux, whose RSS baseline is higher for the same built CLI.
 
 Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings.mjs <run-id>` to summarize wall time, start delay, slowest jobs, failures, and the `pnpm-store-warmup` fanout barrier from GitHub Actions. Use `pnpm ci:timings:trend` for a 72-hour baseline and a latest-12-hours versus prior-12-hours comparison. Trend mode includes every main push outcome, cancellation/pass rates, and successful-run wall time, then loads a balanced latest/prior sample of at most 100 successful runs by default. Its detailed sample separates workflow admission, job dependency/gate delay (`job.created_at` minus the first job's creation), runner queue/start latency (`job.started_at` minus `job.created_at`), and execution; it also reports critical-path ownership and the actual GitHub API request count. Reruns use attempt-specific jobs and are excluded from run-level wall/admission distributions because GitHub retains the original workflow creation time. Raise or lower the detailed-run selection cap with `--detail-runs` (a run with more than 100 jobs requires multiple requests), emit JSON to stdout with `--json`, or save the same report with `--output .artifacts/ci-timings/trend.json`; missing output directories are created automatically. The baseline must cover at least two comparison windows.
 

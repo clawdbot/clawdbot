@@ -668,7 +668,24 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
+      const overlayCoversStage = await panel.evaluate((element) => {
+        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
+        const overlay = element.shadowRoot?.querySelector<HTMLElement>(
+          ".desktop-stage__take-control",
+        );
+        if (!stage || !overlay) {
+          return false;
+        }
+        const stageRect = stage.getBoundingClientRect();
+        const overlayRect = overlay.getBoundingClientRect();
+        return (
+          Math.abs(stageRect.width - overlayRect.width) < 1 &&
+          Math.abs(stageRect.height - overlayRect.height) < 1
+        );
+      });
+      expect(overlayCoversStage).toBe(true);
+      await takeControl.click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
       const observeRequests = await gateway.getRequests("desktop.observe");
       expect(observeRequests[2]?.params).toEqual({
@@ -682,6 +699,145 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(Number((await panel.getAttribute("data-disconnect-count")) ?? "0")).toBeGreaterThan(0);
+    });
+  });
+
+  it("takes control by clicking a real noVNC-mounted desktop", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": { environments: [workerDesktopEnvironment] },
+          "desktop.observe": {
+            cases: [
+              {
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: false,
+                },
+                response: {
+                  transport: "rfb",
+                  wsPath: "/desktop/observe?token=view",
+                  expiresAtMs: 60_000,
+                  control: false,
+                },
+              },
+              {
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: true,
+                },
+                response: {
+                  transport: "rfb",
+                  wsPath: "/desktop/observe?token=control",
+                  expiresAtMs: 60_000,
+                  control: true,
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      // Route desktop observe sockets to an in-page RFB 3.8 server (security
+      // None) so the production DesktopClient drives the real noVNC client.
+      await page.evaluate(() => {
+        const GatewaySocket = window.WebSocket;
+        class FakeRfbSocket extends EventTarget {
+          binaryType = "arraybuffer";
+          protocol = "";
+          readyState = 0;
+          onerror: ((event: Event) => void) | null = null;
+          onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null = null;
+          onopen: ((event: Event) => void) | null = null;
+          onclose: ((event: CloseEvent) => void) | null = null;
+          private handshake = 0;
+          constructor() {
+            super();
+            setTimeout(() => {
+              if (this.readyState !== 0) {
+                return;
+              }
+              this.readyState = 1;
+              this.onopen?.(new Event("open"));
+              this.deliver(new TextEncoder().encode("RFB 003.008\n"));
+            }, 0);
+          }
+          private deliver(bytes: Uint8Array<ArrayBuffer>): void {
+            setTimeout(() => {
+              if (this.readyState === 1) {
+                this.onmessage?.(new MessageEvent("message", { data: bytes.buffer }));
+              }
+            }, 0);
+          }
+          send(): void {
+            // Handshake replies are fixed-size, so respond by stage instead of
+            // parsing: version -> security types, choice -> ok, init -> ServerInit.
+            this.handshake += 1;
+            if (this.handshake === 1) {
+              this.deliver(new Uint8Array([1, 1]));
+            } else if (this.handshake === 2) {
+              this.deliver(new Uint8Array([0, 0, 0, 0]));
+            } else if (this.handshake === 3) {
+              const name = new TextEncoder().encode("fake-desktop");
+              const init = new Uint8Array(24 + name.length);
+              const view = new DataView(init.buffer);
+              view.setUint16(0, 800);
+              view.setUint16(2, 600);
+              init.set([32, 24, 0, 1], 4);
+              view.setUint16(8, 255);
+              view.setUint16(10, 255);
+              view.setUint16(12, 255);
+              init.set([16, 8, 0], 14);
+              view.setUint32(20, name.length);
+              init.set(name, 24);
+              this.deliver(init);
+            }
+          }
+          close(code = 1000, reason = ""): void {
+            if (this.readyState === 3) {
+              return;
+            }
+            this.readyState = 3;
+            const event = new CloseEvent("close", { code, reason });
+            this.onclose?.(event);
+            this.dispatchEvent(new CloseEvent("close", { code, reason }));
+          }
+        }
+        const RoutedSocket = function (url: string, protocols?: string | string[]) {
+          return url.includes("/desktop/observe")
+            ? new FakeRfbSocket()
+            : new GatewaySocket(url, protocols);
+        };
+        RoutedSocket.prototype = GatewaySocket.prototype;
+        Object.assign(RoutedSocket, {
+          CONNECTING: 0,
+          OPEN: 1,
+          CLOSING: 2,
+          CLOSED: 3,
+        });
+        window.WebSocket = RoutedSocket as unknown as typeof WebSocket;
+      });
+
+      await openDirectDesktop(page, "worker-desktop-1");
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.locator("section[aria-label='Desktop']").waitFor();
+      await panel.locator(".desktop-surface canvas").waitFor();
+
+      const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
+      await takeControl.waitFor();
+      // Playwright refuses the click if the noVNC canvas intercepted it, so a
+      // successful click proves the overlay hit-tests above the real surface.
+      await takeControl.click();
+      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
+      const observeRequests = await gateway.getRequests("desktop.observe");
+      expect(observeRequests[1]?.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: true,
+      });
+      await panel.locator(".desktop-surface canvas").waitFor();
+      expect(await takeControl.count()).toBe(0);
     });
   });
 

@@ -4,7 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-worker-supervisor-dialect.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { createDeviceWorkerRuntime } from "./device-provider.js";

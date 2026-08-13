@@ -305,6 +305,45 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.traceAttempts).toEqual([]);
   });
 
+  it("records a same-model rate-limit retry without a profile-rotation trace", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "error",
+      errorMessage: "HTTP 429 Too Many Requests",
+      content: [{ type: "text", text: "rate limited" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.emptyErrorRetries = 0;
+    fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValueOnce("rate_limit");
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome).toMatchObject({
+      action: "retry",
+      preserveSameModelRateLimitRetryCount: true,
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider: "anthropic",
+        model: "mock-1",
+        result: "same_model_rate_limit",
+        reason: "rate_limit",
+        stage: "assistant",
+      },
+    ]);
+  });
+
   it("retries a replay-safe reasoning-only assistant error before failover", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     const assistant = buildEmbeddedRunnerAssistant({

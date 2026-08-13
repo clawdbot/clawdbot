@@ -267,6 +267,7 @@ describe("terminal resolution", () => {
     const retryInput = makeTerminalInput({
       attempt,
       attemptAssistant: assistant,
+      runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
       activateInternalPrompt,
     });
 
@@ -299,6 +300,43 @@ describe("terminal resolution", () => {
       fallbackSafe: true,
       terminalPresentation: true,
     });
+  });
+
+  it("does not surface a read-only presentation after a sibling side effect", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [
+        { toolName: "exec", replaySafe: false },
+        { toolName: "web_fetch", replaySafe: true },
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+        readTerminalToolPresentation: () => "Fetched https://example.com",
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads?.[0]?.text).not.toContain("Fetched https://example.com");
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: false,
+    });
+    expect(resolved.result.meta.error?.terminalPresentation).toBe(false);
   });
 
   it.each([
@@ -359,5 +397,151 @@ describe("terminal resolution", () => {
 
     expect(request("required")).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(request("optional")).toBeNull();
+    expect(
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-heartbeat",
+          runId: "run:settled-heartbeat",
+          trigger: "heartbeat",
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState,
+        settledTurnFinalizationAvailable: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("requires an available finalizer and no visible structured error", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec", isError: true, replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        assistant,
+        { role: "toolResult", toolCallId: "tool-1", toolName: "exec", isError: true } as never,
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      lastToolError: { toolName: "exec", error: "post-processing error" },
+    });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    const request = (overrides: {
+      payloadsWithToolMedia?: TerminalInput["payloadsWithToolMedia"];
+      settledTurnFinalizationAvailable?: boolean;
+    }) =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-policy",
+          runId: "run:settled-policy",
+          trigger: "user",
+          terminalReplyExpectation: "required",
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: overrides.payloadsWithToolMedia ?? [],
+        hasTerminalToolPresentation: false,
+        terminalState,
+        settledTurnFinalizationAvailable: overrides.settledTurnFinalizationAvailable ?? true,
+      });
+
+    expect(
+      request({
+        payloadsWithToolMedia: [
+          {
+            text: "Review the failed operation.",
+            isError: true,
+            channelData: { structuredError: true },
+          },
+        ],
+      }),
+    ).toBeNull();
+    expect(request({ settledTurnFinalizationAvailable: false })).toBeNull();
+    expect(
+      request({ payloadsWithToolMedia: [{ text: "⚠️ 🛠️ Exec failed", isError: true }] }),
+    ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it.each([
+    { expectation: "required" as const, expectedError: true },
+    { expectation: "optional" as const, expectedError: false },
+  ])(
+    "handles completed-empty finalization for $expectation replies",
+    async ({ expectation, expectedError }) => {
+      const assistant = emptyAssistant();
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          attempt,
+          attemptAssistant: assistant,
+          runParams: {
+            allowEmptyAssistantReplyAsSilent: true,
+            terminalReplyExpectation: expectation,
+          },
+          replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+          settledTurnFinalizationOutcome: "completed-empty",
+        }),
+      );
+
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        return;
+      }
+      if (expectedError) {
+        expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
+        expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
+      } else {
+        expect(resolved.result.payloads).toBeUndefined();
+        expect(resolved.result.meta.error).toBeUndefined();
+        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
+      }
+    },
+  );
+
+  it("does not retry after isolated finalization fails", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs-finalizer-failed", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const activateInternalPrompt = vi.fn();
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        activateInternalPrompt,
+        settledTurnFinalizationOutcome: "failed",
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 });
