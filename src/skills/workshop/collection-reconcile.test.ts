@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -926,9 +927,7 @@ describe("skill collection reconciliation", () => {
   });
 });
 
-async function readCollectionReceipt(
-  config?: Parameters<typeof listWritableSkillCollection>[1]["config"],
-) {
+async function readCollectionReceipt(config?: OpenClawConfig) {
   const skills = listWritableSkillCollection(workspaceDir, { config });
   return {
     readSkillHashes: new Map(
