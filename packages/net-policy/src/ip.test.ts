@@ -44,7 +44,10 @@ describe("shared ip helpers", () => {
       ["::ffff:127.0.0.1", "127.0.0.1"],
       ["::127.0.0.1", "127.0.0.1"],
       ["64:ff9b::8.8.8.8", "8.8.8.8"],
-      ["64:ff9b:1::10.0.0.1", "10.0.0.1"],
+      ["64:ff9b:1:a00:0:100::", "10.0.0.1"],
+      ["64:ff9b:1:a9fe:a9:fe00:808:808", "169.254.169.254"],
+      ["64:ff9b:1:7f00:0:100:808:808", "127.0.0.1"],
+      ["64:ff9b:1:6464:64:c800:808:808", "100.100.100.200"],
       ["2002:0808:0808::", "8.8.8.8"],
       ["2001::f7f7:f7f7", "8.8.8.8"],
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
@@ -85,7 +88,7 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
-    expect(isLinkLocalIpAddress("64:ff9b:1::a9fe:a9fe")).toBe(true);
+    expect(isLinkLocalIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
     expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
@@ -98,7 +101,7 @@ describe("shared ip helpers", () => {
     expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
-    expect(isCloudMetadataIpAddress("64:ff9b:1::6464:64c8")).toBe(true);
+    expect(isCloudMetadataIpAddress("64:ff9b:1:6464:64:c800:808:808")).toBe(true);
     expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
     expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);

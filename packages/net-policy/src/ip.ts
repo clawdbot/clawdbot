@@ -305,7 +305,13 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
     case "ipv4Mapped":
       return address.toIPv4Address();
     case "rfc6145":
+      return decodeIpv4FromHextets(parts[6], parts[7]);
     case "rfc6052":
+      if (parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001) {
+        // RFC8215 /48 embeds IPv4 around RFC6052's null octet; trailing bits are suffix.
+        // Reading the suffix lets a public decoy bypass SSRF embedded-IPv4 policy.
+        return decodeIpv4FromHextets(parts[3], ((parts[4] & 0xff) << 8) | (parts[5] >>> 8));
+      }
       return decodeIpv4FromHextets(parts[6], parts[7]);
     case "6to4":
       return decodeIpv4FromHextets(parts[1], parts[2]);
