@@ -444,7 +444,7 @@ export async function prepareCliRunContext(
       preparedRunAdmission: candidate.preparedRunAdmission,
     });
     const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
-    return { ...rest, admittedRunContext };
+    return { ...rest, agentId: workspaceResolution.agentId, admittedRunContext };
   };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -466,8 +466,10 @@ export async function prepareCliRunContext(
   const cwd = params.cwd ? resolveUserPath(params.cwd) : workspaceDir;
   const cwdHash = hashCliSessionText(cwd);
 
+  // params.agentId may identify a distinct runtime-policy requester. Backend
+  // config and managed process reuse must key from the resolved session owner.
   const backendResolved = resolveCliBackendConfig(params.provider, params.config, {
-    agentId: params.agentId,
+    agentId: workspaceResolution.agentId,
   });
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
@@ -1414,7 +1416,7 @@ export async function prepareCliRunContext(
       prepareDeps.getClaudeGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
-        agentId: params.agentId,
+        agentId: workspaceResolution.agentId,
         authProfileId: effectiveAuthProfileId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,

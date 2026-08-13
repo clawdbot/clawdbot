@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   markMcpLoopbackToolCallFinished,
@@ -149,6 +150,32 @@ async function createCliPackageFixture(version: string): Promise<{
 }
 
 describe("runCliAgent spawn path", () => {
+  it("hydrates a session-key-owned agent workspace image before spawning the CLI", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-agent-image-");
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+    const context = buildPreparedCliRunContext({
+      sessionKey: "agent:arthur:main",
+      agentId: "arthur",
+      workspaceDir,
+      config: {
+        agents: { entries: { arthur: { default: true, workspace: workspaceDir } } },
+      },
+      backend: { imageArg: "--image" },
+    });
+    context.params.media = [{ path: imagePath, contentType: "image/png" }];
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
+    const spawn = requireRecord(mockCallArg(supervisorSpawnMock), "CLI spawn");
+    const hydratedPath = requireArgAfter(spawn.argv as string[], "--image");
+    await expect(fs.readFile(hydratedPath)).resolves.toEqual(image);
+  });
+
   it("formats output digests without logging response content", () => {
     expect(formatCliBackendOutputDigest("one")).toBe("outBytes=3 outHash=7692c3ad3540");
     expect(formatCliBackendOutputDigest("∑")).toBe("outBytes=3 outHash=be27c7179a61");
