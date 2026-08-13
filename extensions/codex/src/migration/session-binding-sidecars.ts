@@ -101,7 +101,12 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
   const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
-  const add = async (root: string, storePath: string, agentId: string, scan: boolean) => {
+  const add = async (
+    root: string,
+    storePath: string,
+    agentId: string | undefined,
+    scan: boolean,
+  ) => {
     const canonicalRoot = await canonicalPathFromExistingAncestor(root);
     const surface = surfaces.get(canonicalRoot) ?? {
       root: canonicalRoot,
@@ -113,7 +118,9 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
     // A store's configured path defines how relative sessionFile locators are
     // resolved. Keep it intact; canonicalize only when deduplicating aliases.
     surface.storePaths.add(path.resolve(storePath));
-    surface.agentIds.add(agentId);
+    if (agentId) {
+      surface.agentIds.add(agentId);
+    }
     surfaces.set(canonicalRoot, surface);
   };
 
@@ -147,8 +154,9 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
-  const defaultAgentId = resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), defaultAgentId, true);
+  // The retired global store has no intrinsic agent owner. Resolve ownership
+  // from an indexed session key only if a sidecar actually exists.
+  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), undefined, true);
   return [...surfaces.values()].toSorted((a, b) => a.root.localeCompare(b.root));
 }
 
@@ -336,11 +344,17 @@ async function collectBindingOwners(
     const sessionsDir = path.dirname(storePath);
     for (const { sessionKey, entry } of index.entries) {
       const sessionId = entry.sessionId;
-      const agentId = resolveLegacyBindingOwnerAgentId({
-        sessionKey,
-        config: params.config,
-        storeAgentIds: storeAgentIds.get(storePath),
-      });
+      let agentId: string;
+      try {
+        agentId = resolveLegacyBindingOwnerAgentId({
+          sessionKey,
+          config: params.config,
+          storeAgentIds: storeAgentIds.get(storePath),
+        });
+      } catch {
+        failures.push(`session index ${storePath} has no agent owner for ${sessionKey}`);
+        continue;
+      }
       let legacyTranscriptPath: string;
       let canonicalLegacyTranscriptPath: string;
       try {
