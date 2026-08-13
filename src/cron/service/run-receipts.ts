@@ -1,4 +1,3 @@
-import type { CronStoreTransactionHooks } from "../store.js";
 import {
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
@@ -9,6 +8,7 @@ import {
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
 } from "../store/run-receipt-store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { resolveEffectiveJobAgentId } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";

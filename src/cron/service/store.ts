@@ -9,9 +9,9 @@ import {
   getCronJobsStoreRevision,
   loadCronJobsStoreWithConfigJobs,
   saveCronJobsStore,
-  type CronStoreTransactionHooks,
   type QuarantinedCronConfigJob,
 } from "../store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";

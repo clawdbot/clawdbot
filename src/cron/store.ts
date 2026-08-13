@@ -28,6 +28,7 @@ import {
   repairCronRuntimeAuthorityRows,
   replaceCronRuntimeAuthorityRows,
 } from "./store/runtime-authority-store.js";
+import type { CronStoreTransactionHooks } from "./store/transaction-hooks.js";
 import type {
   CronQuarantinedJob,
   LoadedCronStore,
@@ -234,13 +235,6 @@ export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
 
 type SaveCronStoreOptions = {
   stateOnly?: boolean;
-};
-
-export type CronStoreTransactionHooks = {
-  /** Runs inside the authoritative write transaction before cron rows change. */
-  beforeWrite?: (db: DatabaseSync) => void;
-  /** Runs after row changes but before the same transaction commits. */
-  afterWrite?: (db: DatabaseSync) => void;
 };
 
 type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
