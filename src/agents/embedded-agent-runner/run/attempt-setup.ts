@@ -477,9 +477,20 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
+  let restoreApplied = () => {};
+  const restoreSkillEnv = () => {
+    try {
+      restoreApplied();
+    } finally {
+      releasePublishedSandboxSkills(params.sandbox);
+    }
+  };
+  // Settled finalization still leases a published generation during sandbox
+  // setup. Skip skill load/env, but keep this restore hook so prune can drop
+  // that generation after the attempt instead of retaining it indefinitely.
   if (params.attempt.operation === "settled-tool-finalization") {
     return {
-      restoreSkillEnv: () => {},
+      restoreSkillEnv,
       skillUsagePaths: undefined,
       skillsPrompt: "",
       skillsSnapshotForRun: undefined,
@@ -497,14 +508,6 @@ export function prepareEmbeddedAttemptSkills(params: {
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  let restoreApplied = () => {};
-  const restoreSkillEnv = () => {
-    try {
-      restoreApplied();
-    } finally {
-      releasePublishedSandboxSkills(params.sandbox);
-    }
-  };
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: skillsWorkspaceDir,
