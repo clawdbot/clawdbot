@@ -375,7 +375,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
           disabled: props.disabled,
           custom: {
             label: t("cron.form.customModel"),
-            placeholder: t(spec.placeholderKey),
+            placeholder: spec.placeholderKey ? t(spec.placeholderKey) : "",
             commit: "change",
           },
           onChange: (value) => props.onPatch(spec.path, value.trim() || undefined),

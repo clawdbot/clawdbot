@@ -37,7 +37,7 @@ export function renderModelPicker(params: ModelPickerParams) {
     customValue += "_";
   }
   const currentIsKnown = params.options.some((option) => option.value === params.value);
-  const options = [
+  const options: Array<ModelPickerOption & { description?: string }> = [
     ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
