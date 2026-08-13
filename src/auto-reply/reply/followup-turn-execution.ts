@@ -7,7 +7,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
-import { resolveTurnCommentaryPayloadsEnabled } from "./commentary-progress-owner.js";
+import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -115,15 +115,12 @@ export async function executeFollowupTurn(params: {
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
     (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
-  const commentaryPayloadsEnabled = resolveTurnCommentaryPayloadsEnabled({
-    commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
-    options: sourceOpts,
-    resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
-  });
-  const draftOwnsCommentaryProgress =
-    sourceOpts?.commentaryPayloadsEnabled === true &&
-    sourceOpts.shouldDeliverCommentaryPayloads !== undefined &&
-    !commentaryPayloadsEnabled;
+  const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
+    resolveTurnCommentaryProgressOwner({
+      commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
+      options: sourceOpts,
+      resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
+    });
   let visibleToolError = false;
   let progressChain: Promise<void> = Promise.resolve();
   let pendingProgressTaskFailure: unknown;

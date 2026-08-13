@@ -12,7 +12,7 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import { resolveTurnCommentaryPayloadsEnabled } from "./commentary-progress-owner.js";
+import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import {
   hasAskUserPayload,
@@ -368,7 +368,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress &&
     shouldSendVerboseProgressMessages() &&
     !shouldSuppressProgressDelivery();
-  const commentaryPayloadsEnabled = resolveTurnCommentaryPayloadsEnabled({
+  const { commentaryPayloadsEnabled } = resolveTurnCommentaryProgressOwner({
     commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
     options: params.replyOptions,
     resolveVerboseProgressVisibility,
