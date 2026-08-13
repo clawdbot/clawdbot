@@ -261,6 +261,29 @@ function runCiManifestFixture(options: {
                     : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
                 }]
               : null;
+          export const createChangedExtensionFallbackShards = (changedPaths) =>
+            changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))
+              ? changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
+                ? [{
+                    checkName: "changed-extension-fallback-plan",
+                    configs: ["test/vitest/vitest.extension-matrix.config.ts"],
+                    includePatterns: [
+                      "extensions/matrix/src/client.test.ts",
+                      "extensions/matrix/src/monitor.test.ts",
+                    ],
+                    requiresDist: false,
+                    runner: "ubuntu-24.04",
+                    shardName: "changed-extension-fallback-plan",
+                  }]
+                : [{
+                  checkName: "changed-extension-fallback-plan",
+                  configs: [],
+                  requiresDist: false,
+                  runner: "ubuntu-24.04",
+                  shardName: "changed-extension-fallback-plan",
+                  targets: ["extensions/codex/src/focused.test.ts"],
+                }]
+              : [];
           export const hasBuildArtifactAffectingChange = (changedPaths) =>
             !changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
           export const hasSqliteSessionLifecycleAffectingChange = (changedPaths) =>
@@ -5375,7 +5398,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,
-      changedPaths: ["src/focused.ts"],
+      changedPaths: ["src/focused.ts", "extensions/codex/src/focused.ts"],
       eventName: "pull_request",
     });
     expect(changedPullRequest.status, changedPullRequest.output).toBe(0);
@@ -5393,8 +5416,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         targets: ["src/focused.test.ts"],
       }),
     ]);
+    expect(
+      JSON.parse(
+        expectDefined(
+          changedPullRequest.outputs.checks_node_core_nondist_matrix,
+          "changed PR node matrix output",
+        ),
+      ).include,
+    ).not.toContainEqual(
+      expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
+    );
     expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
     expect(changedPullRequest.outputs.run_sqlite_session_lifecycle).toBe("false");
+
+    const mixedFallbackPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: [
+        "packages/gateway-protocol/src/frame-guards.ts",
+        "extensions/codex/src/focused.ts",
+      ],
+      eventName: "pull_request",
+    });
+    expect(mixedFallbackPullRequest.status, mixedFallbackPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          mixedFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
+          "mixed fallback PR node matrix output",
+        ),
+      ).include,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ check_name: "bundled-node-plan" }),
+        expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
+      ]),
+    );
+
+    const matrixFallbackPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: [
+        "packages/gateway-protocol/src/frame-guards.ts",
+        "extensions/matrix/src/channel.ts",
+      ],
+      eventName: "pull_request",
+    });
+    expect(matrixFallbackPullRequest.status, matrixFallbackPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          matrixFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
+          "Matrix fallback PR node matrix output",
+        ),
+      ).include,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          check_name: "changed-extension-fallback-plan",
+          configs: ["test/vitest/vitest.extension-matrix.config.ts"],
+          includePatterns: [
+            "extensions/matrix/src/client.test.ts",
+            "extensions/matrix/src/monitor.test.ts",
+          ],
+        }),
+      ]),
+    );
 
     const sqliteLifecyclePullRequest = runCiManifestFixture({
       bundledPlanner: true,
