@@ -166,6 +166,9 @@ importers:
       linkedom:
         specifier: 0.18.13
         version: 0.18.13
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3(supports-color@10.2.2)
       minimatch:
         specifier: 10.2.5
         version: 10.2.5

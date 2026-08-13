@@ -744,9 +744,6 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
   }
   const missingImporters = new Map<string, Set<string>>();
-  const bundledExtensionRuntimeDependencyOwners =
-    collectBundledExtensionRuntimeDependencyOwners(packageRoot);
-
   for (const filePath of distFiles.files) {
     const fileStat = lstatSync(filePath);
     if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
@@ -769,12 +766,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
         OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
-        declaredRuntimeDeps.has(dependencyName) ||
-        isBundledExtensionOwnedRuntimeImport({
-          dependencyName,
-          ownersByDependency: bundledExtensionRuntimeDependencyOwners,
-          source,
-        })
+        declaredRuntimeDeps.has(dependencyName)
       ) {
         continue;
       }
@@ -790,35 +782,6 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-function collectBundledExtensionRuntimeDependencyOwners(
-  packageRoot: string,
-): Map<string, Set<string>> {
-  const ownersByDependency = new Map<string, Set<string>>();
-  const { manifests } = readBundledExtensionPackageJsons(packageRoot);
-  for (const { id, manifest } of manifests) {
-    for (const dependencyName of collectRuntimeDependencySpecs(manifest).keys()) {
-      const owners = ownersByDependency.get(dependencyName) ?? new Set<string>();
-      owners.add(id);
-      ownersByDependency.set(dependencyName, owners);
-    }
-  }
-  return ownersByDependency;
-}
-
-function isBundledExtensionOwnedRuntimeImport(params: {
-  dependencyName: string;
-  ownersByDependency: Map<string, Set<string>>;
-  source: string;
-}): boolean {
-  const owners = params.ownersByDependency.get(params.dependencyName);
-  if (!owners) {
-    return false;
-  }
-  return [...owners].some((pluginId) =>
-    params.source.includes(`//#region extensions/${pluginId}/`),
-  );
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

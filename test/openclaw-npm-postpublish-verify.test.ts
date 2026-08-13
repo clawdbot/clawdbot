@@ -1024,6 +1024,38 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("requires bundled extension imports to resolve from root dependencies", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.8.1",
+        dependencies: {},
+      });
+      writePackageFile(packageRoot, "dist/extensions/memory-wiki/package.json", {
+        name: "@openclaw/memory-wiki",
+        dependencies: { "mdast-util-from-markdown": "2.0.3" },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "memory-wiki-runtime.js"),
+        [
+          "//#region extensions/memory-wiki/src/markdown.ts",
+          'import { fromMarkdown } from "mdast-util-from-markdown";',
+          "export { fromMarkdown };",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'mdast-util-from-markdown' for dist importers: memory-wiki-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 

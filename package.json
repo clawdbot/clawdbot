@@ -2020,6 +2020,7 @@
     "jszip": "3.10.1",
     "kysely": "0.29.4",
     "linkedom": "0.18.13",
+    "mdast-util-from-markdown": "2.0.3",
     "minimatch": "10.2.5",
     "ms": "2.1.3",
     "node-edge-tts": "1.2.10",
