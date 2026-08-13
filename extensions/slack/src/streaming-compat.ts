@@ -11,7 +11,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type StreamingMode = "off" | "partial" | "block" | "progress";
-export type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
+// Inbound-only: doctor migration still parses these legacy draft-mode values.
+type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
 
 function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
