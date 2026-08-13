@@ -1,5 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -104,6 +105,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createWorkerSessionPlacementGate },
     { createWorkerTranscriptCommitter },
     { createWorkerTunnelManager },
+    { createNodeWorkerTunnelManager },
     { createWorkerSessionToolExecutor },
     { resolveWorkerProvider },
   ] = await Promise.all([
@@ -112,6 +114,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/placement-worker-gate.js"),
     import("./worker-environments/transcript-commit.js"),
     import("./worker-environments/tunnel.js"),
+    import("./worker-environments/node-worker-tunnel.js"),
     import("./worker-environments/worker-session-tool-executor.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);
@@ -165,6 +168,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
+  const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
+    gatewayDeviceId: loadOrCreateProcessDeviceIdentity().deviceId,
+    getEnvironment: (environmentId) => params.startup.store.get(environmentId),
+    getTransport: () => deviceRuntime.getNodeTransport(),
+    launchNodeWorker: async (request) => await deviceRuntime.launchNodeWorker(request),
+    validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
@@ -185,6 +195,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       return build ? structuredClone(build) : undefined;
     },
     tunnelManager: workerTunnelManager,
+    nodeTunnelManager: nodeWorkerTunnelManager,
     resolveWorkerGateway: params.resolveWorkerGateway,
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,

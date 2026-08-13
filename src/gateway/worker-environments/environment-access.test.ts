@@ -24,7 +24,6 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
           launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
@@ -70,15 +69,40 @@ describe("worker environment service", () => {
     });
   });
 
-  it("rejects node tunnel startup with the typed milestone gate before SSH", async () => {
+  it("starts a local-install node tunnel without entering SSH", async () => {
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
+    support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
+    support.testState.config.cloudWorkers!.profiles!.development!.settings = {
+      device: "device-1",
+    };
+    const nodeHandle = {
+      environmentId: "pending",
+      ownerEpoch: 0,
+      launchTurn: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      quiesceWorkspace: vi.fn(),
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(),
+      stop: vi.fn(async () => {}),
+    };
+    const nodeTunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(async (request) => ({
+        ...nodeHandle,
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+      })),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    };
     const workerService = support.createService(
       support.createProvider({
+        id: "device",
         provision: async () => ({
           leaseId: "device-lease",
           node: { deviceId: "device-1" },
@@ -86,6 +110,7 @@ describe("worker environment service", () => {
       }),
       {
         tunnelManager,
+        nodeTunnelManager,
         resolveNodeWorkerBuild: async () => ({
           bundleHash: "c".repeat(64),
           openclawVersion: VERSION,
@@ -94,17 +119,26 @@ describe("worker environment service", () => {
       },
     );
     const environment = await workerService.create("development", "device-tunnel-gate");
+    const credential = await workerService.attachSession({
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      sessionId: "session-device",
+    });
 
     await expect(
       workerService.startTunnel({
         environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
+        ownerEpoch: credential.ownerEpoch,
       }),
-    ).rejects.toMatchObject({
-      code: "device-runner-transport-unimplemented",
-      message: expect.stringContaining("device-runner-transport-unimplemented"),
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    ).resolves.toMatchObject({ environmentId: environment.environmentId });
     expect(tunnelManager.start).not.toHaveBeenCalled();
+    expect(nodeTunnelManager.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "device-1",
+        sessionId: "session-device",
+        expectedBuild: expect.objectContaining({ bundleHash: "c".repeat(64) }),
+      }),
+    );
   });
 
   it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {
@@ -125,7 +159,6 @@ describe("worker environment service", () => {
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
-        connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),
@@ -160,7 +193,7 @@ describe("worker environment service", () => {
 
   it("fences an existing tunnel before changing its shared-host isolation", async () => {
     support.seedReady("worker-isolation-change");
-    const stop = vi.fn(async () => {
+    const stop = vi.fn(async (_environmentId: string, _ownerEpoch?: number) => {
       expect(support.testState.store.get("worker-isolation-change")?.sharedHost).toBe(false);
     });
     const tunnelManager = {
@@ -175,7 +208,7 @@ describe("worker environment service", () => {
 
     await support.createService(provider, { tunnelManager }).reconcileOnce();
 
-    expect(stop).toHaveBeenCalledWith("worker-isolation-change");
+    expect(stop.mock.calls[0]?.[0]).toBe("worker-isolation-change");
     expect(support.testState.store.get("worker-isolation-change")?.sharedHost).toBe(true);
   });
 
@@ -383,10 +416,11 @@ describe("worker environment service", () => {
 
   it("fences a draining tunnel before reporting an unavailable provider", async () => {
     support.seedReady("worker-provider-missing");
+    const stop = vi.fn(async (_environmentId: string, _ownerEpoch?: number) => {});
     const tunnelManager = {
       status: () => "connected" as const,
       start: vi.fn(),
-      stop: vi.fn(async () => {}),
+      stop,
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
     const workerService = support.createService(support.createProvider(), { tunnelManager });
@@ -396,7 +430,7 @@ describe("worker environment service", () => {
       code: "provider_not_found",
     } satisfies Partial<WorkerEnvironmentServiceError>);
 
-    expect(tunnelManager.stop).toHaveBeenCalledWith("worker-provider-missing");
+    expect(stop.mock.calls[0]?.[0]).toBe("worker-provider-missing");
     expect(support.testState.store.get("worker-provider-missing")).toMatchObject({
       state: "draining",
       destroyRequestedAtMs: expect.any(Number),
