@@ -21,8 +21,7 @@ const contextTestState = vi.hoisted(() => {
     staticCatalogModels: [] as DiscoveredModel[],
     runtimeConfigSnapshot: null as OpenClawConfig | null,
     runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
-    loadModelCatalogOwnerSnapshot: vi.fn(async (params: { config: OpenClawConfig }) => ({
-      config: params.config,
+    loadModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
       modelCatalog: {
         entries: state.discoveredModels,
         routeVariants: [],
@@ -159,8 +158,7 @@ describe("lookupContextTokens", () => {
     contextTestState.runtimeConfigSnapshot = null;
     contextTestState.runtimeConfigSourceSnapshot = null;
     contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
-    contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async (params) => ({
-      config: params.config,
+    contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
       modelCatalog: {
         entries: contextTestState.discoveredModels,
         routeVariants: [],

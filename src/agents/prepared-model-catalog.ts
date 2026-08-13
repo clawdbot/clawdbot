@@ -300,8 +300,17 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
 ): Promise<PreparedModelRuntimeSnapshot> {
+  const publishedReadOnlyOwner = params.readOnly
+    ? getPreparedModelCatalogOwnerSnapshot(params)
+    : undefined;
+  const snapshot = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy);
+  // A fallback read-only lease retires before this projection. Only a published owner can safely
+  // expose its generation cache; the leased snapshot already contains its exact prepared facts.
+  if (params.readOnly && !publishedReadOnlyOwner) {
+    return snapshot;
+  }
   return await materializeRequestedModelCatalog(
-    await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy),
+    snapshot,
     params.readOnly,
     params.refreshFullCatalog,
   );
