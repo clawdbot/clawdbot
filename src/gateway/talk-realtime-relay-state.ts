@@ -117,6 +117,7 @@ export type RelaySession = {
   voiceSessionClose?: Promise<void>;
   failSession: (message: string) => void;
   pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
+  releaseGatewayRootContinuation: (() => void) | undefined;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
