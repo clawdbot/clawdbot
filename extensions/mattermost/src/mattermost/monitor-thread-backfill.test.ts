@@ -40,6 +40,7 @@ function createHarness(options: {
   sessionId?: string | undefined;
   historyLimit?: number;
   channelHistories?: Map<string, HistoryEntry[]>;
+  shouldRetainSenderHistory?: (senderId: string) => boolean;
 }) {
   const requests: { path: string; timeoutMs?: number }[] = [];
   let currentSessionId = options.sessionId ?? "session-a";
@@ -64,6 +65,9 @@ function createHarness(options: {
     historyLimit: options.historyLimit ?? 10,
     resolveSessionId: () => currentSessionId,
     now: () => clock,
+    ...(options.shouldRetainSenderHistory
+      ? { shouldRetainSenderHistory: options.shouldRetainSenderHistory }
+      : {}),
   });
 
   return {
@@ -174,6 +178,29 @@ describe("createMattermostThreadBackfill", () => {
     await harness.turn();
 
     expect(harness.requests).toHaveLength(0);
+  });
+
+  it("drops recovered posts from senders whose history the inbound path would omit", async () => {
+    const harness = createHarness({
+      responses: [threadResponse(3)],
+      // u1 is the denied sender: the inbound path would have dropped its message
+      // without recording it, so recovery must not read it back from the server.
+      shouldRetainSenderHistory: (senderId) => senderId !== "u1",
+    });
+
+    await harness.turn();
+
+    const seeded = harness.channelHistories.get(HISTORY_KEY) ?? [];
+    expect(seeded.map((entry) => entry.sender)).toEqual(["u0", "u2"]);
+  });
+
+  it("keeps every recovered post when context visibility opts denied senders in", async () => {
+    const harness = createHarness({ responses: [threadResponse(3)] });
+
+    await harness.turn();
+
+    const seeded = harness.channelHistories.get(HISTORY_KEY) ?? [];
+    expect(seeded.map((entry) => entry.sender)).toEqual(["u0", "u1", "u2"]);
   });
 
   it("seeds through the bounded history owner so the map stays capped", async () => {

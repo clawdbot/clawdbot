@@ -62,6 +62,13 @@ type MattermostThreadBackfillDeps = {
   historyLimit: number;
   /** Resolves the stored session id backing a history key, if the store has one. */
   resolveSessionId: (params: { historyKey: string; agentId: string }) => string | undefined;
+  /**
+   * Whether a recovered post from this sender may be kept as history. The
+   * decision belongs to the inbound path, which owns the allowlist and the
+   * context-visibility mode; this module only applies it. Defaults to keeping
+   * everything so callers that have no allowlist stay unchanged.
+   */
+  shouldRetainSenderHistory?: (senderId: string) => boolean;
   logVerboseMessage?: (message: string) => void;
   now?: () => number;
   timeoutMs?: number;
@@ -127,6 +134,7 @@ export function createMattermostThreadBackfill(
     channelHistories,
     historyLimit,
     resolveSessionId,
+    shouldRetainSenderHistory = () => true,
     logVerboseMessage,
     now = () => Date.now(),
     timeoutMs = THREAD_BACKFILL_TIMEOUT_MS,
@@ -184,6 +192,12 @@ export function createMattermostThreadBackfill(
     return order
       .map((id) => posts[id])
       .filter((post): post is MattermostPost => Boolean(post) && post?.id !== params.currentPostId)
+      // The server returns the whole thread, including senders the inbound path
+      // would have dropped without recording. Recovery must not become a way
+      // around that boundary: under a trigger allowlist their text is only
+      // history when context visibility opts in, and reading it back from the
+      // server would otherwise expose it after every restart.
+      .filter((post) => shouldRetainSenderHistory(post.user_id ?? ""))
       .slice(-historyLimit)
       .map((post) => ({
         sender: post.user_id || "unknown",

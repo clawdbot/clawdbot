@@ -20,7 +20,9 @@ import type { MattermostPost } from "./client.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
+  isMattermostSenderAllowed,
   normalizeMattermostAllowEntry,
+  normalizeMattermostAllowList,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
@@ -68,6 +70,27 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     channelHistories,
     historyLimit,
     resolveSessionId: createSessionIdResolver(cfg.session?.store),
+    // Same boundary the inbound path applies to a denied sender below: a trigger
+    // allowlist does not hide history unless context visibility opts in. Resolved
+    // here because the allowlist and the visibility mode live with the account,
+    // and recovery must not become a second, unpoliced way into the window.
+    shouldRetainSenderHistory: (senderId) =>
+      isMattermostSenderAllowed({
+        senderId,
+        allowFrom: normalizeMattermostAllowList(
+          account.config.groupAllowFrom ?? account.config.allowFrom ?? [],
+        ),
+        allowNameMatching: false,
+      }) ||
+      shouldIncludeSupplementalContext({
+        mode: resolveChannelContextVisibilityMode({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+        }),
+        kind: "history",
+        senderAllowed: false,
+      }),
     logVerboseMessage: (message) => monitor.logVerboseMessage(message),
   });
 
