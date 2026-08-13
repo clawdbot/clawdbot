@@ -258,7 +258,7 @@ async function updateCommandInternal(
     });
     return;
   }
-  const switchToGit = requestedChannel === "dev" && installKind !== "git";
+  const switchToGit = selectedChannel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;

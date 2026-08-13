@@ -6751,6 +6751,32 @@ describe("update-cli", () => {
     expectNoSideEffects(runRestartScript, runDaemonRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+  it("uses the stored dev channel to continue a package-to-git update", async () => {
+    const tempDir = createCaseDir("openclaw-update-package-root");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: { update: { channel: "dev" } },
+      resolved: { update: { channel: "dev" } } as OpenClawConfig,
+      sourceConfig: { update: { channel: "dev" } } as OpenClawConfig,
+      runtimeConfig: { update: { channel: "dev" } } as OpenClawConfig,
+      config: { update: { channel: "dev" } } as OpenClawConfig,
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue(
+      makeOkUpdateResult({
+        mode: "git",
+        root: path.join(tempDir, "..", "openclaw"),
+        after: { version: "2026.4.10" },
+      }),
+    );
+    mockNoopPostUpdatePluginConvergence();
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(vi.mocked(runGatewayUpdate)).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "dev" }),
+    );
+  });
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();

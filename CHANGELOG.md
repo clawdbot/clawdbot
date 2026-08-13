@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Docs: https://docs.openclaw.ai
 
@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Updater stored dev routing:** continue no-flag updates from package installs through the configured dev git checkout instead of resolving the nonexistent npm `dev` tag. Fixes #123073. Thanks @galli-personal.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.
