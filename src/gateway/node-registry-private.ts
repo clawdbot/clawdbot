@@ -13,10 +13,27 @@ import type {
   PendingInvoke,
   PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
-import type { NodeInvokeResult, NodeRegistry, NodeSession } from "./node-registry.js";
 import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
 
-type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
+type NodeRegistryPrivateSession = {
+  nodeId: string;
+  connId: string;
+  pairingIdentity?: string;
+  pairingGeneration?: string;
+  client: { invalidated?: boolean };
+  clientId?: string;
+  clientMode?: string;
+  commands: string[];
+};
+
+type NodeInvokeResult = {
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string | null;
+  error?: { code?: string; message?: string } | null;
+};
+
+type PairingBoundNodeSession = NodeRegistryPrivateSession & { pairingIdentity: string };
 type PairingLeaseResolution =
   | { status: "current"; session: PairingBoundNodeSession }
   | { status: "stale"; presenceInvalidated: boolean }
@@ -71,12 +88,16 @@ type NodeProtocolFeatureProof = Omit<NodeWorkerSupervisorNodeProof, "commands"> 
 
 type NodeRegistryPrivateContext = {
   getNode: (nodeId: string) => PairingBoundNodeSession | undefined;
-  listCurrentConnected: () => Promise<NodeSession[]>;
+  listCurrentConnected: () => Promise<NodeRegistryPrivateSession[]>;
   hasCurrentPairingStateResolver: boolean;
   resolvePairingLease: (node: PairingBoundNodeSession) => Promise<PairingLeaseResolution>;
   pendingInvokes: Map<string, PendingInvoke>;
   invokeStreams: NodeInvokeStreamController;
-  sendEventToSession: (node: NodeSession, event: string, payload: unknown) => boolean;
+  sendEventToSession: (
+    node: NodeRegistryPrivateSession,
+    event: string,
+    payload: unknown,
+  ) => boolean;
   rememberAuthorizedSystemRunEvent: (event: {
     nodeId: string;
     connId: string;
@@ -105,7 +126,7 @@ type NodeRegistryPrivateState = {
   workerSupervisorTransport: NodeWorkerSupervisorTransport;
 };
 
-const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<NodeRegistry, NodeRegistryPrivateState>();
+const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
 
 function resolvePendingSystemRunEvent(params: {
   command: string;
@@ -152,7 +173,7 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
 }
 
 function resolveWorkerSupervisorProof(
-  node: NodeSession,
+  node: NodeRegistryPrivateSession,
   protocolFeaturesByConn: ReadonlyMap<string, NodeProtocolFeatureProof>,
 ): NodeWorkerSupervisorNodeProof | undefined {
   const proof = protocolFeaturesByConn.get(node.connId);
@@ -405,7 +426,7 @@ async function invokeNodeRegistryCore(
 }
 
 export function registerNodeRegistryPrivateRuntime(
-  nodeRegistry: NodeRegistry,
+  nodeRegistry: object,
   context: NodeRegistryPrivateContext,
 ): void {
   const state = {} as NodeRegistryPrivateState;
@@ -461,8 +482,10 @@ export function registerNodeRegistryPrivateRuntime(
   NODE_REGISTRY_PRIVATE_STATES.set(nodeRegistry, state);
 }
 
-export function createNodeRegistryRuntime(create: () => NodeRegistry): {
-  nodeRegistry: NodeRegistry;
+export function createNodeRegistryRuntime<TRegistry extends object>(
+  create: () => TRegistry,
+): {
+  nodeRegistry: TRegistry;
   nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport;
 } {
   const nodeRegistry = create();
@@ -477,7 +500,7 @@ export function createNodeRegistryRuntime(create: () => NodeRegistry): {
 }
 
 export function invokePublicNodeRegistry(
-  nodeRegistry: NodeRegistry,
+  nodeRegistry: object,
   params: NodeInvokeParams,
 ): Promise<NodeInvokeResult> {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
@@ -488,7 +511,7 @@ export function invokePublicNodeRegistry(
 }
 
 export function updateNodeWorkerSupervisorProtocolFeatures(params: {
-  registry: NodeRegistry;
+  registry: object;
   nodeId: string;
   connId: string | undefined;
   protocolFeatures: readonly string[];
@@ -503,16 +526,16 @@ export function updateNodeWorkerSupervisorProtocolFeatures(params: {
 }
 
 export function forgetNodeWorkerSupervisorProtocolFeatures(
-  nodeRegistry: NodeRegistry,
+  nodeRegistry: object,
   connId: string,
 ): void {
   NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry)?.protocolFeaturesByConn.delete(connId);
 }
 
 export function isNodeRegistryPendingInvokeConnectionActive(params: {
-  registry: NodeRegistry;
+  registry: object;
   pending: PendingInvoke;
-  currentNode: NodeSession | undefined;
+  currentNode: NodeRegistryPrivateSession | undefined;
 }): boolean {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
   const binding = state?.generationBoundInvokes.get(params.pending);
@@ -523,7 +546,7 @@ export function isNodeRegistryPendingInvokeConnectionActive(params: {
 }
 
 export function settleNodeRegistryPairingGenerationChange(params: {
-  registry: NodeRegistry;
+  registry: object;
   nodeId: string;
   connId: string;
   nextPairingGeneration: string;

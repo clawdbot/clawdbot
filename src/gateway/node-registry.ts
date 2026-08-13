@@ -286,13 +286,28 @@ export class NodeRegistry {
       getNode: (nodeId) => this.nodesById.get(nodeId),
       listCurrentConnected: () => this.listCurrentConnected(),
       hasCurrentPairingStateResolver: Boolean(this.options.resolveCurrentPairingState),
-      resolvePairingLease: async (node) =>
-        await this.resolvePairingLease(this.capturePairingLease(node), {
+      resolvePairingLease: async (node) => {
+        const current = this.nodesById.get(node.nodeId);
+        if (
+          !current ||
+          current.connId !== node.connId ||
+          current.pairingIdentity !== node.pairingIdentity ||
+          current.pairingGeneration !== node.pairingGeneration
+        ) {
+          return { status: "stale", presenceInvalidated: false };
+        }
+        return await this.resolvePairingLease(this.capturePairingLease(current), {
           invalidateStale: false,
-        }),
+        });
+      },
       pendingInvokes: this.pendingInvokes,
       invokeStreams: this.invokeStreams,
-      sendEventToSession: (node, event, payload) => this.sendEventToSession(node, event, payload),
+      sendEventToSession: (node, event, payload) => {
+        const current = this.nodesById.get(node.nodeId);
+        return current?.connId === node.connId
+          ? this.sendEventToSession(current, event, payload)
+          : false;
+      },
       rememberAuthorizedSystemRunEvent: (event) => this.rememberAuthorizedSystemRunEvent(event),
       publishActiveNodeContext: () => this.publishActiveNodeContext(),
     });

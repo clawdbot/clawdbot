@@ -15,7 +15,7 @@ import {
   inspectNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
-import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-identity.js";
 
 type NodeWorkerLaunchState =
   | "pending"

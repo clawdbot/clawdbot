@@ -6,6 +6,9 @@ import {
   type WorkerLaunchDescriptor,
 } from "../worker/launch-descriptor.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-identity.js";
+
+export type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-identity.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -17,16 +20,6 @@ export type NodeWorkerLaunchInput = {
   bundleHash: string;
   placementGeneration: number;
   descriptor: WorkerLaunchDescriptor;
-};
-
-export type NodeWorkerSupervisorIdentity = {
-  launchId: string;
-  planHash: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-  placementGeneration: number;
-  runId: string;
 };
 
 export type NodeWorkerSupervisorReceipt = NodeWorkerSupervisorIdentity & {
