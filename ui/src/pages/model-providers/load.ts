@@ -86,10 +86,10 @@ export async function loadModelProvidersData(
         .catch((error: unknown) => ({ ok: false as const, error }))
     : Promise.resolve({ ok: true as const, result: null });
   const modelsLoad = opts?.refresh
-    ? catalogRefresh.then(() =>
+    ? catalogRefresh.then((catalogResult) =>
         loadModels(client, {
           ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          refresh: true,
+          ...(catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
         }),
       )
     : loadModels(client, {

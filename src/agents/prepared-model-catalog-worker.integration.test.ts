@@ -24,9 +24,9 @@ import {
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
 import {
+  createPreparedModelCatalogWorker,
   createPreparedModelCatalogWorkerInput,
   getPreparedModelFullCatalogAuth,
-  runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -49,6 +49,8 @@ const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
 const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
 const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
+const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
+const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -81,7 +83,11 @@ function writeCodexAuth(codexHome: string, marker: string): void {
   fs.utimesSync(authPath, future, future);
 }
 
-function writeFixturePlugin(params: { root: string; spinMs: number }): string {
+function writeFixturePlugin(params: {
+  root: string;
+  spinMs: number;
+  pluginVersion?: string;
+}): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   const pluginFile = path.join(pluginDir, "index.cjs");
@@ -95,6 +101,23 @@ module.exports = {
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
       auth: [],
+      resolveExternalAuthProfiles() {
+        const credentialPath = process.env[${JSON.stringify(EXTERNAL_AUTH_PATH_ENV)}];
+        if (!credentialPath || !fs.existsSync(credentialPath)) {
+          return [];
+        }
+        const credentialMarker = fs.readFileSync(credentialPath, "utf8").trim();
+        return [{
+          profileId: ${JSON.stringify(EXTERNAL_AUTH_PROFILE_ID)},
+          credential: {
+            type: "oauth",
+            provider: ${JSON.stringify(PROVIDER_ID)},
+            access: ${JSON.stringify(params.pluginVersion ?? "v1")} + ":" + credentialMarker,
+            refresh: "refresh-" + credentialMarker + "-not-real",
+            expires: Date.now() + 60_000,
+          },
+        }];
+      },
       catalog: {
         run(context) {
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
@@ -107,6 +130,10 @@ module.exports = {
             api: "openai-completions",
             models: [
               { id: "sqlite-model", name: "SQLite model" },
+              {
+                id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
+                name: "Plugin generation proof",
+              },
               {
                 id: \`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`,
                 name: "Ref-only worker proof",
@@ -149,6 +176,7 @@ module.exports = {
       id: PLUGIN_ID,
       providers: [PROVIDER_ID],
       configSchema: { type: "object", additionalProperties: false, properties: {} },
+      contracts: { externalAuthProviders: [PROVIDER_ID] },
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
     }),
     "utf8",
@@ -166,14 +194,17 @@ async function createStaticSnapshot(
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const workspaceDir = path.join(root, "workspace");
   const marker = path.join(root, "worker-marker.txt");
+  const externalAuthPath = path.join(root, "external-auth.txt");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const pluginFile = writeFixturePlugin({ root, spinMs });
+  fs.writeFileSync(externalAuthPath, "A", "utf8");
   const env = {
     ...process.env,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
     ...envOverride,
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
@@ -247,9 +278,11 @@ async function createStaticSnapshot(
     config,
     env,
     marker,
+    externalAuthPath,
     hydratedAuthStore,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
+    root,
     supersede: () => (current = false),
     workspaceDir,
   };
@@ -449,6 +482,56 @@ describe("prepared model catalog worker boundary", () => {
     expect(
       removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
     ).toBeUndefined();
+  });
+
+  it("refreshes plugin external auth without changing the prepared plugin generation", async () => {
+    const fixture = await createStaticSnapshot(0);
+    fs.rmSync(fixture.externalAuthPath);
+    const loggedOutAtStartup = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(loggedOutAtStartup?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toBeUndefined();
+
+    fs.writeFileSync(fixture.externalAuthPath, "A", "utf8");
+    const loggedIn = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(loggedIn?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+      access: "v1:A",
+    });
+
+    writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+    fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
+
+    const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(refreshed?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+      access: "v1:B",
+    });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "plugin-generation-v1",
+      }),
+    );
+    expect(catalog?.entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "plugin-generation-v2",
+      }),
+    );
+    expect(
+      getPreparedModelFullCatalogAuth(catalog!)?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID],
+    ).toMatchObject({ access: "v1:B" });
+
+    fs.rmSync(fixture.externalAuthPath);
+    const loggedOut = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(loggedOut?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toBeUndefined();
   });
 
   it("makes a post-startup Codex login available to direct models.list", async () => {
@@ -667,7 +750,10 @@ describe("prepared model catalog worker boundary", () => {
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
     });
 
-    const catalog = await runPreparedModelCatalogWorker({ input, isCurrent: () => true });
+    const catalog = await createPreparedModelCatalogWorker({
+      input,
+      isCurrent: () => true,
+    }).loadCatalog();
 
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({

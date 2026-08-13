@@ -226,18 +226,27 @@ export function overlayExternalAuthProfiles(
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
 ): AuthProfileStore {
   const scoped = hasScopedExternalCliOverlay(params);
+  const runtimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
+  // Provider hooks are authoritative on every combined refresh. Remove their previous
+  // generation-owned rows before reevaluating them, while limiting CLI removal to its scope.
   const refreshedProfileIds = new Set(
-    getRuntimeExternalCliProfileIds(store).filter(
-      (profileId) =>
-        scoped &&
-        externalCliSync.isExternalCliAuthProfileInScope({
-          store,
-          profileId,
-          providerIds: params?.externalCliProviderIds,
-          profileIds: params?.externalCliProfileIds,
-        }),
+    (store.runtimeExternalProfileIds ?? []).filter(
+      (profileId) => !runtimeExternalCliProfileIds.has(profileId),
     ),
   );
+  for (const profileId of runtimeExternalCliProfileIds) {
+    if (
+      scoped &&
+      externalCliSync.isExternalCliAuthProfileInScope({
+        store,
+        profileId,
+        providerIds: params?.externalCliProviderIds,
+        profileIds: params?.externalCliProfileIds,
+      })
+    ) {
+      refreshedProfileIds.add(profileId);
+    }
+  }
   const base = removeRuntimeExternalProfileReferences({ store, profileIds: refreshedProfileIds });
   const resolved = resolveExternalAuthProfiles({
     store: base,

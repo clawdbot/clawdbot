@@ -214,7 +214,12 @@ describe("ModelsListParamsSchema", () => {
         view: "all",
       },
     );
-    expectRejected(ModelsListParamsSchema, { view: "provider-route" }, { agentId: "" });
+    expectRejected(
+      ModelsListParamsSchema,
+      { view: "provider-route" },
+      { agentId: "" },
+      { preparedOnly: true, refresh: true },
+    );
   });
 });
 

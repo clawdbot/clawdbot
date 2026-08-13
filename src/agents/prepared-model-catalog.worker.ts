@@ -1,12 +1,12 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
-import { overlayExternalCliAuthProfiles } from "./auth-profiles/external-auth.js";
+import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
@@ -16,8 +16,8 @@ import {
 } from "./auth-profiles/store.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
-  type PreparedModelAuthRefreshWorkerInput,
   type PreparedModelCatalogWorkerInput,
+  type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -30,6 +30,9 @@ function refreshAuthStore(params: {
   env: NodeJS.ProcessEnv;
   profileIds?: readonly string[];
   providerIds?: readonly string[];
+  pluginGeneration: Awaited<
+    ReturnType<(typeof import("./prepared-model-runtime.facts.js"))["prepareWorkspaceBuildGroup"]>
+  >["pluginGeneration"];
 }) {
   const durable = preserveResolvedSecretBackedCredentials({
     next: loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
@@ -53,55 +56,74 @@ function refreshAuthStore(params: {
     next: durable,
     existing: params.authStore,
   });
-  return overlayExternalCliAuthProfiles(prepared, {
-    config: params.config,
-    env: params.env,
-    ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
-    ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
-    allowKeychainPrompt: false,
-  });
+  return withPluginRuntimeGenerationScope(
+    {
+      config: params.config,
+      metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: params.pluginGeneration.pluginRegistry,
+      workspaceDir: params.pluginGeneration.pluginMetadataSnapshot.workspaceDir,
+    },
+    () =>
+      overlayExternalAuthProfiles(prepared, {
+        config: params.config,
+        env: params.env,
+        ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
+        ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
+        allowKeychainPrompt: false,
+      }),
+  );
 }
 
-export async function runPreparedModelCatalogWorkerInput(
-  value: PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput,
+async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
+  const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
+  const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
+  const agentFacts = prepared.agentFacts[0];
+  if (!agentFacts) {
+    throw new Error("prepared model catalog worker produced no agent facts");
+  }
+  const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
+    input: value.input,
+    authStore: value.authStore,
+    providerIds: value.providerIds,
+    pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+  });
+  if (reconstructedFingerprint !== value.generationFingerprint) {
+    throw new Error("prepared model catalog worker reconstructed a different runtime generation");
+  }
+  return { agentFacts, pluginGeneration: prepared.pluginGeneration };
+}
+
+export async function runPreparedModelCatalogWorkerRequest(
+  value: PreparedModelCatalogWorkerInput,
+  request: PreparedModelWorkerRequest,
+  preparedGeneration = prepareWorkerGeneration(value),
 ): Promise<PreparedModelWorkerResult> {
   try {
-    if (value.kind === "auth-refresh") {
+    const prepared = await preparedGeneration;
+    if (request.kind === "auth-refresh") {
       const authStore = refreshAuthStore({
-        agentDir: value.agentDir,
-        inheritedAuthDir: value.inheritedAuthDir,
+        agentDir: value.input.agentDir,
+        inheritedAuthDir: value.input.inheritedAuthDir,
         authStore: value.authStore,
-        config: value.config,
-        env: value.env,
-        ...(value.profileIds ? { profileIds: value.profileIds } : {}),
-        providerIds: value.providerIds,
+        config: value.input.config,
+        env: value.input.env ?? process.env,
+        ...(request.profileIds ? { profileIds: request.profileIds } : {}),
+        providerIds: request.providerIds,
+        pluginGeneration: prepared.pluginGeneration,
       });
       return {
         status: "ok",
+        requestId: request.requestId,
         kind: "auth-refresh",
         generationFingerprint: value.generationFingerprint,
         authStore,
         authModes: resolveUsableAgentCredentialModes(
-          resolveAgentCredentialMapFromStore(authStore, { config: value.config }),
+          resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
         ),
       };
     }
-    const { prepareAgentCatalogSource, prepareFullCatalogFacts, prepareWorkspaceBuildGroup } =
+    const { prepareAgentCatalogSource, prepareFullCatalogFacts } =
       await import("./prepared-model-runtime.facts.js");
-    const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
-    const agentFacts = prepared.agentFacts[0];
-    if (!agentFacts) {
-      throw new Error("prepared model catalog worker produced no agent facts");
-    }
-    const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
-      input: value.input,
-      authStore: value.authStore,
-      providerIds: value.providerIds,
-      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-    });
-    if (reconstructedFingerprint !== value.generationFingerprint) {
-      throw new Error("prepared model catalog worker reconstructed a different runtime generation");
-    }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -111,10 +133,16 @@ export async function runPreparedModelCatalogWorkerInput(
       config: value.input.config,
       env: value.input.env ?? process.env,
       providerIds: listExternalCliSyncProviderIds(),
+      pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = withPluginRuntimeRegistryScope(
-      prepared.pluginGeneration.pluginRegistry,
+    const ambientCredentials = withPluginRuntimeGenerationScope(
+      {
+        config: value.input.config,
+        metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry: prepared.pluginGeneration.pluginRegistry,
+        workspaceDir: value.input.workspaceDir,
+      },
       () =>
         resolveAmbientAgentCredentialsForDiscovery({
           config: value.input.config,
@@ -127,7 +155,7 @@ export async function runPreparedModelCatalogWorkerInput(
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
     };
     const exactAgentFacts = {
-      ...agentFacts,
+      ...prepared.agentFacts,
       authStore,
       templateAuthStorage: AuthStorage.inMemory(credentials),
       credentials,
@@ -150,6 +178,7 @@ export async function runPreparedModelCatalogWorkerInput(
     );
     return {
       status: "ok",
+      requestId: request.requestId,
       kind: "catalog",
       generationFingerprint: value.generationFingerprint,
       snapshot: facts.modelCatalog,
@@ -157,16 +186,23 @@ export async function runPreparedModelCatalogWorkerInput(
       authModes: resolveUsableAgentCredentialModes(credentials),
     };
   } catch (error) {
-    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+    return {
+      status: "failed",
+      requestId: request.requestId,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
 if (parentPort) {
   const send: (message: PreparedModelWorkerResult) => void =
     parentPort.postMessage.bind(parentPort);
-  send(
-    await runPreparedModelCatalogWorkerInput(
-      workerData as PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput,
-    ),
-  );
+  const value = workerData as PreparedModelCatalogWorkerInput;
+  const preparedGeneration = prepareWorkerGeneration(value);
+  let queue = Promise.resolve();
+  parentPort.on("message", (request: PreparedModelWorkerRequest) => {
+    queue = queue.then(async () => {
+      send(await runPreparedModelCatalogWorkerRequest(value, request, preparedGeneration));
+    });
+  });
 }

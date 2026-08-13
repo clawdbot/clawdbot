@@ -117,9 +117,12 @@ describe("loadModelProvidersData", () => {
         case "models.authStatus":
           return { ts: 1, providers: [], providerCapabilities: [] };
         case "models.list":
-          return {
-            models: [{ id: "cached", name: "Cached", provider: "openai" }],
-          };
+          if ((params as { preparedOnly?: boolean } | undefined)?.preparedOnly === true) {
+            return {
+              models: [{ id: "cached", name: "Cached", provider: "openai" }],
+            };
+          }
+          throw new Error("configured discovery repeated after refresh failure");
         case "config.get":
           return { config: {}, hash: "hash" };
         case "usage.status":
@@ -131,14 +134,19 @@ describe("loadModelProvidersData", () => {
       }
     });
     const client = { request } as unknown as GatewayBrowserClient;
+    await loadModelProvidersData(client, { agentId: "writer" });
+    request.mockClear();
 
     const result = await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
 
     expect(result.catalogError).toBe("catalog refresh failed");
     expect(result.models).toEqual([{ id: "cached", name: "Cached", provider: "openai" }]);
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "writer",
-    });
+    expect(
+      request.mock.calls.filter(
+        ([method, params]) =>
+          method === "models.list" &&
+          (params as { view?: string } | undefined)?.view === "configured",
+      ),
+    ).toHaveLength(0);
   });
 });

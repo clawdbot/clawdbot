@@ -1038,6 +1038,9 @@ Two optional controls separate automatic reads from operator-requested discovery
   Concurrent refreshes share one build; a failed refresh leaves the previous completed catalog
   available and returns the failure to the caller.
 
+`preparedOnly: true` and `refresh: true` are mutually exclusive because one forbids discovery
+while the other requests it.
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts

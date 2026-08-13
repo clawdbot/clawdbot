@@ -8,7 +8,10 @@ import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import type {
+  PreparedModelRuntimeAuth,
+  PreparedModelRuntimeAuthScope,
+} from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
@@ -25,21 +28,26 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   providerIds: readonly string[];
 }>;
 
-export type PreparedModelAuthRefreshWorkerInput = Readonly<{
-  kind: "auth-refresh";
-  generationFingerprint: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  authStore: AuthProfileStore;
-  config: PreparedModelRuntimeInput["config"];
-  env: NodeJS.ProcessEnv;
-  profileIds?: readonly string[];
-  providerIds: readonly string[];
-}>;
+export type PreparedModelWorkerRequest =
+  | Readonly<{ requestId: number; kind: "catalog" }>
+  | Readonly<{
+      requestId: number;
+      kind: "auth-refresh";
+      profileIds?: readonly string[];
+      providerIds: readonly string[];
+    }>;
+type PreparedModelWorkerRequestInput =
+  | Readonly<{ kind: "catalog" }>
+  | Readonly<{
+      kind: "auth-refresh";
+      profileIds?: readonly string[];
+      providerIds: readonly string[];
+    }>;
 
 export type PreparedModelWorkerResult =
   | Readonly<{
       status: "ok";
+      requestId: number;
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
@@ -48,12 +56,13 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{
       status: "ok";
+      requestId: number;
       kind: "auth-refresh";
       generationFingerprint: string;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
-  | Readonly<{ status: "failed"; error: string }>;
+  | Readonly<{ status: "failed"; requestId: number; error: string }>;
 
 const authByFullCatalog = new WeakMap<
   object,
@@ -137,44 +146,6 @@ export function createPreparedModelCatalogWorkerInput(params: {
   };
 }
 
-export function createPreparedModelAuthRefreshWorkerInput(params: {
-  agentDir: string;
-  inheritedAuthDir?: string;
-  authStore: AuthProfileStore;
-  config: PreparedModelRuntimeInput["config"];
-  env: NodeJS.ProcessEnv;
-  profileIds?: readonly string[];
-  providerIds: readonly string[];
-}): PreparedModelAuthRefreshWorkerInput {
-  const providerIds = [...new Set(params.providerIds)].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  const authStore = cloneAuthProfileStore(params.authStore);
-  const env = { ...params.env };
-  const profileIds = params.profileIds
-    ? [...new Set(params.profileIds)].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-  return {
-    kind: "auth-refresh",
-    agentDir: params.agentDir,
-    ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-    generationFingerprint: fingerprintPreparedRuntimeFacts({
-      agentDir: params.agentDir,
-      inheritedAuthDir: params.inheritedAuthDir,
-      authStore,
-      config: params.config,
-      env,
-      profileIds,
-      providerIds,
-    }),
-    authStore,
-    config: params.config,
-    env,
-    ...(profileIds ? { profileIds } : {}),
-    providerIds,
-  };
-}
-
 function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
   const normalized = currentPath.replaceAll(path.sep, "/");
@@ -188,126 +159,143 @@ function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url
   return new URL(`./prepared-model-catalog.worker${extension}`, currentModuleUrl);
 }
 
-function runPreparedModelWorker<T>(params: {
-  input: PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput;
+export type PreparedModelCatalogWorker = Readonly<{
+  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+  loadCatalog: () => Promise<ModelCatalogSnapshot>;
+}>;
+
+export function createPreparedModelCatalogWorker(params: {
+  input: PreparedModelCatalogWorkerInput;
   isCurrent: () => boolean;
-  project: (message: Extract<PreparedModelWorkerResult, { status: "ok" }>) => T;
-}): Promise<T> {
+}): PreparedModelCatalogWorker {
   const superseded = () =>
     new PreparedModelRuntimePublicationSupersededError(
-      `prepared model runtime catalog generation was superseded for ${
-        params.input.kind === "catalog" ? params.input.input.agentDir : params.input.agentDir
-      }`,
+      `prepared model runtime catalog generation was superseded for ${params.input.input.agentDir}`,
     );
-  if (!params.isCurrent()) {
-    return Promise.reject(superseded());
-  }
+  let worker: Worker | undefined;
+  let generationPoll: NodeJS.Timeout | undefined;
+  let terminalError: Error | undefined;
+  let nextRequestId = 1;
+  const pending = new Map<
+    number,
+    {
+      timeout: NodeJS.Timeout;
+      resolve: (message: Extract<PreparedModelWorkerResult, { status: "ok" }>) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
-  const workerUrl = resolvePreparedModelCatalogWorkerUrl();
-  let worker: Worker;
-  try {
-    worker = new Worker(workerUrl, {
+  const rejectPending = (error: Error) => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timeout);
+      request.reject(error);
+    }
+    pending.clear();
+  };
+  const stop = (error: Error) => {
+    terminalError ??= error;
+    if (generationPoll) {
+      clearInterval(generationPoll);
+      generationPoll = undefined;
+    }
+    const active = worker;
+    worker = undefined;
+    active?.removeAllListeners();
+    rejectPending(error);
+    if (active) {
+      void active.terminate();
+    }
+  };
+  const ensureWorker = (): Worker => {
+    if (terminalError) {
+      throw terminalError;
+    }
+    if (!params.isCurrent()) {
+      const error = superseded();
+      stop(error);
+      throw error;
+    }
+    if (worker) {
+      return worker;
+    }
+    const workerUrl = resolvePreparedModelCatalogWorkerUrl();
+    const active = new Worker(workerUrl, {
       workerData: params.input,
       ...(workerUrl.pathname.endsWith(".ts") ? { execArgv: ["--import", "tsx"] } : {}),
       // Establish state/config environment before worker module initialization reads process.env.
-      env: {
-        ...process.env,
-        ...(params.input.kind === "catalog" ? params.input.input.env : params.input.env),
-      },
+      env: { ...process.env, ...params.input.input.env },
     });
-  } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-  }
-  worker.unref();
-
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    type Outcome = { status: "resolved"; value: T } | { status: "rejected"; error: Error };
-    const settle = (outcome: Outcome, terminate = true) => {
-      if (settled) {
+    active.unref();
+    active.on("message", (message: PreparedModelWorkerResult) => {
+      const request = pending.get(message.requestId);
+      if (!request) {
         return;
       }
-      settled = true;
-      clearTimeout(timeout);
-      clearInterval(generationPoll);
-      worker.removeAllListeners();
-      const finish = () => {
-        if (outcome.status === "resolved") {
-          if (params.isCurrent()) {
-            resolve(outcome.value);
-          } else {
-            reject(superseded());
-          }
-        } else {
-          reject(outcome.error);
-        }
-      };
-      if (!terminate) {
-        finish();
-        return;
-      }
-      void worker.terminate().then(finish, (terminationError: unknown) => {
-        const error =
-          terminationError instanceof Error
-            ? terminationError
-            : new Error(String(terminationError));
-        reject(
-          outcome.status === "rejected"
-            ? new AggregateError([outcome.error, error], outcome.error.message)
-            : new Error("prepared model catalog worker termination failed", { cause: error }),
-        );
-      });
-    };
-    const fail = (error: Error, terminate = true) =>
-      settle({ status: "rejected", error }, terminate);
-    const timeout = setTimeout(
-      () => fail(new Error("prepared model catalog worker timed out")),
-      PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-    );
-    timeout.unref();
-    const generationPoll = setInterval(() => {
+      pending.delete(message.requestId);
+      clearTimeout(request.timeout);
       if (!params.isCurrent()) {
-        fail(superseded());
+        const error = superseded();
+        request.reject(error);
+        stop(error);
+      } else if (message.status === "failed") {
+        request.reject(new Error(message.error));
+      } else if (message.generationFingerprint !== params.input.generationFingerprint) {
+        const error = new Error("prepared model catalog worker returned a stale generation");
+        request.reject(error);
+        stop(error);
+      } else {
+        request.resolve(message);
+      }
+    });
+    active.once("error", (error) =>
+      stop(error instanceof Error ? error : new Error(String(error))),
+    );
+    active.once("exit", (code) => {
+      if (worker === active) {
+        stop(
+          new Error(
+            `prepared model catalog worker exited with code ${code} before its generation retired`,
+          ),
+        );
+      }
+    });
+    worker = active;
+    generationPoll = setInterval(() => {
+      if (!params.isCurrent()) {
+        stop(superseded());
       }
     }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
     generationPoll.unref();
-
-    worker.once("message", (message: PreparedModelWorkerResult) => {
+    return active;
+  };
+  const request = (
+    value: PreparedModelWorkerRequestInput,
+  ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
+    let active: Worker;
+    try {
+      active = ensureWorker();
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    const requestId = nextRequestId++;
+    return new Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        stop(new Error("prepared model catalog worker timed out"));
+      }, PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
+      timeout.unref();
+      pending.set(requestId, { timeout, resolve, reject });
+      active.postMessage({ ...value, requestId } satisfies PreparedModelWorkerRequest, []);
+    }).then((message) => {
       if (!params.isCurrent()) {
-        fail(superseded());
-      } else if (message.status === "failed") {
-        fail(new Error(message.error));
-      } else if (message.generationFingerprint !== params.input.generationFingerprint) {
-        fail(new Error("prepared model catalog worker returned a stale generation"));
-      } else {
-        try {
-          settle({ status: "resolved", value: params.project(message) });
-        } catch (error) {
-          fail(error instanceof Error ? error : new Error(String(error)));
-        }
+        throw superseded();
       }
+      return message;
     });
-    worker.once("error", (error) =>
-      fail(error instanceof Error ? error : new Error(String(error))),
-    );
-    worker.once("exit", (code) =>
-      fail(
-        new Error(
-          `prepared model catalog worker exited with code ${code} before returning a result`,
-        ),
-        false,
-      ),
-    );
-  });
-}
+  };
 
-export function runPreparedModelCatalogWorker(params: {
-  input: PreparedModelCatalogWorkerInput;
-  isCurrent: () => boolean;
-}): Promise<ModelCatalogSnapshot> {
-  return runPreparedModelWorker({
-    ...params,
-    project: (message) => {
+  return {
+    loadCatalog: async () => {
+      const message = await request({ kind: "catalog" });
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }
@@ -318,20 +306,22 @@ export function runPreparedModelCatalogWorker(params: {
       });
       return modelCatalog;
     },
-  });
-}
-
-export function runPreparedModelAuthRefreshWorker(params: {
-  input: PreparedModelAuthRefreshWorkerInput;
-  isCurrent: () => boolean;
-}): Promise<PreparedModelRuntimeAuth> {
-  return runPreparedModelWorker({
-    ...params,
-    project: (message) => {
+    loadAuth: async ({ providerIds, profileIds }) => {
+      const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>
+        left.localeCompare(right),
+      );
+      const normalizedProfileIds = profileIds
+        ? [...new Set(profileIds)].toSorted((left, right) => left.localeCompare(right))
+        : undefined;
+      const message = await request({
+        kind: "auth-refresh",
+        providerIds: normalizedProviderIds,
+        ...(normalizedProfileIds ? { profileIds: normalizedProfileIds } : {}),
+      });
       if (message.kind !== "auth-refresh") {
         throw new Error("prepared model auth refresh worker returned a catalog result");
       }
       return { authStore: message.authStore, authModes: message.authModes };
     },
-  });
+  };
 }

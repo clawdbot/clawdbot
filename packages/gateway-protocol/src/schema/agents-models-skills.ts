@@ -227,22 +227,31 @@ export const AgentsFilesSetResultSchema = closedObject({
 });
 
 /** Model catalog request with optional visibility scope. */
-export const ModelsListParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  includeProviderCapabilities: Type.Optional(Type.Boolean()),
-  /** Reuse prepared/cached facts without starting provider discovery. */
-  preparedOnly: Type.Optional(Type.Boolean()),
-  /** Force replacement of a completed full-catalog generation. */
-  refresh: Type.Optional(Type.Boolean()),
-  view: Type.Optional(
-    Type.Union([
-      Type.Literal("default"),
-      Type.Literal("configured"),
-      Type.Literal("provider-config"),
-      Type.Literal("all"),
-    ]),
-  ),
-});
+export const ModelsListParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    includeProviderCapabilities: Type.Optional(Type.Boolean()),
+    /** Reuse prepared/cached facts without starting provider discovery. */
+    preparedOnly: Type.Optional(Type.Boolean()),
+    /** Force replacement of a completed full-catalog generation. */
+    refresh: Type.Optional(Type.Boolean()),
+    view: Type.Optional(
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("configured"),
+        Type.Literal("provider-config"),
+        Type.Literal("all"),
+      ]),
+    ),
+  },
+  {
+    additionalProperties: false,
+    not: {
+      properties: { preparedOnly: { const: true }, refresh: { const: true } },
+      required: ["preparedOnly", "refresh"],
+    },
+  },
+);
 
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({

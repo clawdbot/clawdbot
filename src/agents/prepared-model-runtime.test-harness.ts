@@ -89,13 +89,6 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelAuthRefreshWorkerInput: (params: {
-    agentDir: string;
-    authStore: unknown;
-    config: unknown;
-    env: unknown;
-    providerIds: unknown;
-  }) => ({ kind: "auth-refresh", generationFingerprint: "test-auth-generation", ...params }),
   createPreparedModelCatalogWorkerInput: ({
     agentFacts,
   }: {
@@ -111,10 +104,15 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
     authStore: agentFacts.authStore,
     providerIds: agentFacts.providerIds,
   }),
-  runPreparedModelCatalogWorker: (...args: unknown[]) =>
-    preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
-  runPreparedModelAuthRefreshWorker: ({ input }: { input: { authStore: unknown } }) =>
-    Promise.resolve({ authStore: input.authStore, authModes: {} }),
+  createPreparedModelCatalogWorker: () => ({
+    loadCatalog: (...args: unknown[]) =>
+      preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
+    loadAuth: () =>
+      Promise.resolve({
+        authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+        authModes: {},
+      }),
+  }),
 }));
 
 vi.mock("./model-catalog.js", () => ({

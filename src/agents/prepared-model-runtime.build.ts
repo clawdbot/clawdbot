@@ -8,10 +8,8 @@ import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
-  createPreparedModelAuthRefreshWorkerInput,
+  createPreparedModelCatalogWorker,
   createPreparedModelCatalogWorkerInput,
-  runPreparedModelAuthRefreshWorker,
-  runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
 import {
   setPreparedModelRuntimeAuthMaterializations,
@@ -138,6 +136,15 @@ function createFullModelCatalogAccess(params: {
       );
     }
   };
+  // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
+  // request initializes one registry and reuses that exact plugin generation until retirement.
+  const worker = createPreparedModelCatalogWorker({
+    input: createPreparedModelCatalogWorkerInput({
+      agentFacts: params.agentFacts,
+      pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+    }),
+    isCurrent: params.isCurrent,
+  });
   return {
     loadAuth: ({ providerIds, profileIds }) => {
       const key = [...new Set(providerIds)]
@@ -150,19 +157,8 @@ function createFullModelCatalogAccess(params: {
       if (pendingAuth?.key === cacheKey) {
         return pendingAuth.promise;
       }
-      const input = createPreparedModelAuthRefreshWorkerInput({
-        agentDir: params.agentFacts.input.agentDir,
-        inheritedAuthDir: params.agentFacts.input.inheritedAuthDir,
-        authStore: params.agentFacts.authStore,
-        config: params.agentFacts.input.config,
-        env: params.agentFacts.env,
-        providerIds,
-        ...(profileIds?.length ? { profileIds } : {}),
-      });
-      const promise = runPreparedModelAuthRefreshWorker({
-        input,
-        isCurrent: params.isCurrent,
-      })
+      const promise = worker
+        .loadAuth({ providerIds, ...(profileIds?.length ? { profileIds } : {}) })
         .then((refreshed) => {
           const authModes = {
             ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
@@ -204,13 +200,7 @@ function createFullModelCatalogAccess(params: {
               // Full inventory belongs to explicit control-plane reads. The generation queue
               // prevents a stale plan from overlapping or following a replacement build.
               assertCurrent();
-              const catalog = await runPreparedModelCatalogWorker({
-                input: createPreparedModelCatalogWorkerInput({
-                  agentFacts: params.agentFacts,
-                  pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-                }),
-                isCurrent: params.isCurrent,
-              });
+              const catalog = await worker.loadCatalog();
               assertCurrent();
               return catalog;
             }),

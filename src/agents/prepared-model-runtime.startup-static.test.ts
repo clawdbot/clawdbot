@@ -116,7 +116,10 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
     generationFingerprint: "test-generation",
     input: (agentFacts as { input: unknown }).input,
   }),
-  runPreparedModelCatalogWorker: mocks.runPreparedModelCatalogWorker,
+  createPreparedModelCatalogWorker: () => ({
+    loadCatalog: mocks.runPreparedModelCatalogWorker,
+    loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
+  }),
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
