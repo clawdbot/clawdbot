@@ -627,13 +627,14 @@ export function createApplicationOverlays(
     async openDevicePairSetup() {
       const access = readGatewayOperatorAccess(gateway.snapshot);
       if (disposed || (!access.canAdmin && !access.canPair)) {
-        return;
+        return false;
       }
       devicePairSetupState.pendingCount = 0;
       const setupOperation = openDevicePairSetupState(devicePairSetupState);
       // Pairing-list latency must not keep a ready setup code behind the loading state.
       void pairingPendingCount.refresh();
       await publishDevicePairSetupOperation(setupOperation);
+      return devicePairSetupState.devicePairSetupOpen;
     },
     async refreshDevicePairSetup() {
       if (disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {

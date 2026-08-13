@@ -371,7 +371,7 @@ exit 1
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
   });
 
-  it("relaunches POSIX gateways after a transient post-update startup failure", () => {
+  it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
     const input = {
       auth: TEST_AUTH,
       expectedNeedle: "2026.7.2-beta.5",
@@ -379,9 +379,39 @@ exit 1
     };
 
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script).toContain("attempt=$((attempt + 1))");
-      expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+      expect(script).toContain(
+        "OpenClaw plugin migration inputs changed during startup convergence;",
+      );
+      expect(script).toContain("gateway_launch_log_offset=");
+      expect(script).toContain("gateway_pid=$!");
+      expect(script).toContain('if ! kill -0 "$gateway_pid" 2>/dev/null; then');
+      expect(script).toContain('tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log"');
+      expect(script).toContain(
+        'if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then',
+      );
+      expect(script).toContain("gateway_restart_count=1");
+      expect(script).not.toContain('if [ "$attempt" -eq 4 ]');
     }
+  });
+
+  it("restarts the Windows gateway only after its current launch exits with the exact refusal", () => {
+    const script = windowsUpdateScript({
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    });
+
+    expect(script).toContain(
+      "OpenClaw plugin migration inputs changed during startup convergence;",
+    );
+    expect(script).toContain("$script:gatewayProcess.HasExited");
+    expect(script).toContain("$script:gatewayProcess.WaitForExit()");
+    expect(script).toContain("$script:gatewayRestartCount -eq 0");
+    expect(script).toContain("Test-CurrentGatewayStartupMigrationRefusal");
+    expect(script).toContain("Select-String -Path $script:gatewayLogPath -SimpleMatch");
+    expect(script).toContain("$script:gatewayRestartCount = 1");
+    expect(script).not.toContain("$attempt -eq 4");
+    expect(script).not.toContain("Invoke-OpenClaw gateway restart");
   });
 
   it("keeps POSIX provider secrets out of executable command lines", () => {
@@ -515,8 +545,7 @@ exit 1
     expect(scripts).toContain("print_log_tail()");
     expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
     expect(scripts).toContain('print_log_tail "$output_file"');
-    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2");
-    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
+    expect(scripts).toContain('print_log_tail "$gateway_log" >&2');
     expect(scripts).not.toContain('cat "$output_file"');
     expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
@@ -1222,14 +1251,14 @@ exit 7
       "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
     );
     const versionIndex = script.indexOf("Invoke-OpenClaw --version", scopedIndex);
-    const restartIndex = script.indexOf("Invoke-OpenClaw gateway restart");
+    const startIndex = script.indexOf("\nStart-OpenClawGateway\n", updateIndex);
     const agentIndex = script.indexOf("Invoke-OpenClaw agent --local");
 
     expect(updateIndex).toBeGreaterThanOrEqual(0);
     expect(scopedIndex).toBeGreaterThanOrEqual(0);
     expect(updateIndex).toBeGreaterThan(scopedIndex);
     expect(versionIndex).toBeGreaterThan(updateIndex);
-    expect(restartIndex).toBeGreaterThan(updateIndex);
+    expect(startIndex).toBeGreaterThan(updateIndex);
     expect(agentIndex).toBeGreaterThan(updateIndex);
     expect(script).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
   });

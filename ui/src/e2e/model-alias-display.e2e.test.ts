@@ -63,15 +63,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const picker = main.locator('[data-chat-model-select="true"]').first();
+      const picker = main.locator("wa-select.chat-controls__model-picker").first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
 
       const opus = main.locator(
-        '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
+        'wa-option[value="anthropic/claude-opus-4-8"] .picker-select__label',
       );
       const sonnet = main.locator(
-        '[data-chat-model-option="anthropic/claude-sonnet-5"] .chat-controls__model-option-name',
+        'wa-option[value="anthropic/claude-sonnet-5"] .picker-select__label',
       );
       await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
@@ -84,7 +84,7 @@ suite.define(() => {
       }
 
       const nvidia = main.locator(
-        '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
+        'wa-option[value="nvidia/moonshotai/kimi-k2.5"] .picker-select__label',
       );
       await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -146,16 +146,16 @@ suite.define(() => {
       expect(modelRequest.params).toEqual({ agentId: "main" });
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
-      const select = page.locator("select.settings-select").first();
+      const select = page.locator("wa-select.model-picker__select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-opus-4-8"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-opus-4-8"]').textContent())
         .toContain("Opus 4.8 · opus");
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-sonnet-5"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-sonnet-5"]').textContent())
         .toContain("Sonnet 5 · sonnet");
       await expect
-        .poll(() => select.locator('option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
+        .poll(() => select.locator('wa-option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
         .toContain("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 

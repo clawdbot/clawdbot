@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { QaBusConversationKind } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { BuzzInboundMessage } from "../message-event.js";
 import { buildBuzzTarget } from "../target.js";
@@ -90,7 +91,10 @@ export async function createBuzzQaTransportAdapter(
   const accountId = options.sutAccountId?.trim() || "sut";
   const nativeMessageIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
+  // QA scenarios own the logical target while Buzz uses one physical group room.
+  // Preserve both logical fields so outbound matching sees the conversation it sent.
   let logicalConversationId = credentials.roomId;
+  let logicalConversationKind: QaBusConversationKind = "group";
   let relayDriver: Awaited<ReturnType<typeof createBuzzQaRelayDriver>>;
 
   const resolveBusMessageId = async (nativeId: string | undefined) => {
@@ -118,7 +122,7 @@ export async function createBuzzQaTransportAdapter(
     ]);
     const outbound = await context.messages.addOutboundMessage({
       accountId,
-      to: `group:${logicalConversationId}`,
+      to: `${logicalConversationKind}:${logicalConversationId}`,
       senderId: credentials.sutPublicKey,
       text: message.text,
       timestamp: message.createdAt * 1_000,
@@ -154,6 +158,7 @@ export async function createBuzzQaTransportAdapter(
       heartbeat.throwIfFailed();
       relayDriver.assertHealthy();
       logicalConversationId = input.conversation.id;
+      logicalConversationKind = input.conversation.kind;
       const sent = await relayDriver.sendMessage({
         text: input.text,
         mentionSut: isBuzzMention(input.text),
@@ -172,6 +177,7 @@ export async function createBuzzQaTransportAdapter(
     },
     resetTransport() {
       logicalConversationId = credentials.roomId;
+      logicalConversationKind = "group";
       nativeMessageIds.clear();
       busMessageIds.clear();
     },

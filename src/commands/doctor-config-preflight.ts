@@ -218,7 +218,7 @@ export async function runDoctorConfigPreflight(
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
   const migrationCheckpointRequired =
     gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
-  const migrationCheckpoint = migrationCheckpointRequired
+  let migrationCheckpoint = migrationCheckpointRequired
     ? await measurePreflightStep(
         "startup-checkpoint-import",
         () => import("../infra/startup-migration-checkpoint.js"),
@@ -341,6 +341,11 @@ export async function runDoctorConfigPreflight(
       );
       skipPristineStartupStateMigrations = pristineStatePlan.skipAllStateMigrations;
       skipPristineCoreStateMigrations ||= pristineStatePlan.skipCoreStateMigrations;
+    }
+    if (skipPristineStartupStateMigrations && !gatewayStartupCheckpointRequired) {
+      // A pristine non-Gateway command has nothing to checkpoint. Leave the state root absent
+      // until command execution reaches a real state consumer.
+      migrationCheckpoint = undefined;
     }
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.

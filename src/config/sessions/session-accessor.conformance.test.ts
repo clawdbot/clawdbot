@@ -1660,6 +1660,77 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
+  it("preserves pinned SQLite entries and transcripts during write-triggered capping", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const pinnedKey = "agent:main:pinned-dashboard";
+    const pinnedSessionId = "pinned-dashboard-session";
+    const pinnedTranscriptEvent = {
+      id: "pinned-event",
+      timestamp: new Date().toISOString(),
+      type: "metadata",
+    };
+
+    await patchSessionEntryCore(
+      scopeFor(pinnedKey),
+      () => ({ sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 }),
+      {
+        fallbackEntry: { sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor(pinnedKey), sessionId: pinnedSessionId },
+      pinnedTranscriptEvent,
+    );
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard"),
+      () => ({ sessionId: "recent-dashboard-session", updatedAt: 3 }),
+      {
+        fallbackEntry: { sessionId: "recent-dashboard-session", updatedAt: 3 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger-session", updatedAt: 4 }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: 4 },
+        replaceEntry: true,
+      },
+    );
+
+    expect(loadSessionEntry(scopeFor(pinnedKey))).toMatchObject({
+      pinnedAt: 2,
+      sessionId: pinnedSessionId,
+    });
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: pinnedSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([pinnedTranscriptEvent]);
+  });
+
   it("preserves an admitted SQLite session when another session triggers maintenance", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {

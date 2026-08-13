@@ -127,32 +127,22 @@ Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, 
 
 ## 7) Configure channels
 
-Edit the config file:
+Keep the Telegram token in the Gateway environment rather than copying it into
+`openclaw.json`. Add `TELEGRAM_BOT_TOKEN=<bot-token>` to
+`~/.openclaw/.env`, then load it in the current shell and add the channel:
 
 ```bash
-nano ~/.openclaw/openclaw.json
+export TELEGRAM_BOT_TOKEN="<bot-token>"
+openclaw channels add --channel telegram --use-env
 ```
 
-Add your channels:
-
-```json5
-{
-  channels: {
-    telegram: {
-      botToken: "YOUR_BOT_TOKEN",
-    },
-    whatsapp: {
-      dmPolicy: "allowlist",
-      allowFrom: ["+15551234567"],
-    },
-  },
-}
-```
-
-Then log in to WhatsApp (scan QR):
+The managed Gateway reads the same state-directory `.env` after restart. For
+WhatsApp, configure your allowlist and then scan the login QR code:
 
 ```bash
-openclaw channels login
+openclaw config set channels.whatsapp.dmPolicy allowlist
+openclaw config set channels.whatsapp.allowFrom '["+15551234567"]' --strict-json
+openclaw channels login --channel whatsapp
 ```
 
 ## 8) Run the VM headlessly

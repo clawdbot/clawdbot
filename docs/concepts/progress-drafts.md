@@ -278,7 +278,7 @@ enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
+[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds

@@ -1346,11 +1346,11 @@ candidate refs are replaced with neutral labels such as `candidate-01`; the
 report maps rankings back to real refs after parsing.
 
 Candidate runs default to `high` thinking, with `medium` for GPT-5.6 Luna and
-`xhigh` for older OpenAI eval refs that support it. Override a specific
-candidate inline with `--model provider/model,thinking=<level>`; inline
-options also support `fast`, `no-fast`, and `fast=<bool>`. `--thinking
-<level>` still sets a global fallback, and the older `--model-thinking
-<provider/model=level>` form is kept for compatibility. OpenAI candidate
+`xhigh` for older OpenAI eval refs that support it. Override a specific candidate
+inline with `--model provider/model,thinking=<level>`; inline options also support
+`fast`, `no-fast`, and `fast=<bool>`. `--thinking <level>` still sets a global
+fallback, and the older `--model-thinking <provider/model=level>` form is kept for
+compatibility. OpenAI candidate
 refs default to fast mode so priority processing is used where the provider
 supports it. Pass `--fast` only when you want to force fast mode on for
 every candidate model. Candidate and judge durations are recorded in the

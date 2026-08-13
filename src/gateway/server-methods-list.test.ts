@@ -184,10 +184,24 @@ describe("listGatewayMethods", () => {
 
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
+    expect(methods).not.toContain("node.protocolFeatures.update");
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("registers the hidden node protocol feature publication method", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "node.protocolFeatures.update",
+    );
+
+    expect(coreGatewayHandlers["node.protocolFeatures.update"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "node.protocolFeatures.update",
+      scope: "node",
+      advertise: false,
+    });
   });
 
   it("preserves the legacy advertised method order", () => {

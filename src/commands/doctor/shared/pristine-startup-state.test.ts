@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   canSkipPristineStartupStateMigrations,
   planPristineStartupConfigMigrations,
@@ -9,6 +10,7 @@ import {
 } from "./pristine-startup-state.js";
 
 const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createFixture(config: Record<string, unknown>, stateEntries: string[] = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pristine-startup-"));
@@ -106,6 +108,24 @@ afterEach(() => {
 });
 
 describe("pristine startup state", () => {
+  it("accepts a missing explicitly selected profile root", () => {
+    const root = tempDirs.make("openclaw-pristine-profile-");
+    const stateDir = path.join(root, ".openclaw-typo");
+    fs.mkdirSync(path.join(root, ".clawdbot"));
+
+    expect(
+      planPristineStartupStateMigrations({
+        HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toEqual({
+      skipAllStateMigrations: true,
+      skipCoreStateMigrations: true,
+    });
+    expect(fs.existsSync(stateDir)).toBe(false);
+  });
+
   it("accepts the core-only Gateway benchmark config", () => {
     const env = createFixture({
       browser: { enabled: false },

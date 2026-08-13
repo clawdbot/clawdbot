@@ -924,12 +924,24 @@ describe("xai web search response parsing", () => {
 describe("xai provider models", () => {
   it("publishes only current selectable chat models newest first", () => {
     expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+      "grok-4.6",
       "grok-4.5",
       "grok-build-0.1",
       "grok-4.3",
       "grok-4.20-0309-reasoning",
       "grok-4.20-0309-non-reasoning",
     ]);
+  });
+
+  it("publishes Grok 4.6 with its current metadata", () => {
+    expectCatalogEntry("grok-4.6", {
+      id: "grok-4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 64_000,
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    });
   });
 
   it("publishes Grok 4.5 with its current metadata", () => {
@@ -939,7 +951,7 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     });
   });
 
@@ -950,7 +962,7 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     });
   });
 

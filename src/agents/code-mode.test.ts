@@ -15,7 +15,6 @@ import {
   pluginTool,
   mcpTool,
   createCodeModeHarness,
-  testing,
 } from "./code-mode.test-support.js";
 import {
   createToolSearchCatalogRef,
@@ -33,15 +32,6 @@ describe("Code Mode catalog and model-visible surface", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetCodeModeTestState();
-  });
-
-  it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
   });
 
   it("hides all normal tools behind exec and wait", () => {

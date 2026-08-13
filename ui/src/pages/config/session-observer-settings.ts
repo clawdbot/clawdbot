@@ -1,6 +1,8 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { renderModelPicker } from "../../components/model-picker.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -55,6 +57,7 @@ function modelOptions(models: readonly ModelCatalogEntry[]) {
     .map((model) => ({
       value: model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`,
       label: model.name || model.id,
+      provider: model.provider,
     }))
     .filter((model) => {
       if (seen.has(model.value)) {
@@ -79,6 +82,7 @@ export function renderSessionObserverSettings(props: {
   const selected = props.utilityModel === undefined ? AUTO_VALUE : props.utilityModel;
   const options = modelOptions(props.models);
   const selectedIsCatalogModel = options.some((option) => option.value === selected);
+  const selectedProvider = providerIdFromModelRef(selected);
   return html`
     <div class="settings-group">
       ${renderSettingsToggleRow({
@@ -97,37 +101,39 @@ export function renderSessionObserverSettings(props: {
         description: props.modelsUnavailable
           ? t("configView.sessionObserver.modelCatalogUnavailable")
           : t("configView.sessionObserver.modelPickerHint"),
-        control: html`
-          <select
-            class="settings-select"
-            aria-label=${t("configView.sessionObserver.modelPicker")}
-            .value=${selected}
-            ?disabled=${props.disabled}
-            @change=${(event: Event) => {
-              const value = (event.currentTarget as HTMLSelectElement).value;
-              props.onUtilityModelChange(
-                value === AUTO_VALUE
-                  ? { kind: "auto" }
-                  : value === ""
-                    ? { kind: "disabled" }
-                    : { kind: "model", model: value },
-              );
-            }}
-          >
-            <option value=${AUTO_VALUE}>${t("configView.sessionObserver.auto")}</option>
-            <option value="">${t("configView.sessionObserver.disabled")}</option>
-            ${selected !== AUTO_VALUE && selected !== "" && !selectedIsCatalogModel
-              ? html`<option value=${selected} ?disabled=${props.modelsUnavailable}>
-                  ${selected}
-                </option>`
-              : nothing}
-            ${options.map(
-              (option) => html`<option value=${option.value} ?disabled=${props.modelsUnavailable}>
-                ${option.label}
-              </option>`,
-            )}
-          </select>
-        `,
+        control: renderModelPicker({
+          label: t("configView.sessionObserver.modelPicker"),
+          value: selected,
+          options: [
+            { value: AUTO_VALUE, label: t("configView.sessionObserver.auto") },
+            { value: "", label: t("configView.sessionObserver.disabled") },
+            ...(selected !== AUTO_VALUE && selected !== "" && !selectedIsCatalogModel
+              ? [
+                  {
+                    value: selected,
+                    label: selected,
+                    disabled: props.modelsUnavailable,
+                    ...(selectedProvider ? { provider: selectedProvider } : {}),
+                  },
+                ]
+              : []),
+            ...options.map(({ value, label, provider }) => ({
+              value,
+              label,
+              provider,
+              disabled: props.modelsUnavailable,
+            })),
+          ],
+          disabled: props.disabled,
+          onChange: (value) =>
+            props.onUtilityModelChange(
+              value === AUTO_VALUE
+                ? { kind: "auto" }
+                : value === ""
+                  ? { kind: "disabled" }
+                  : { kind: "model", model: value },
+            ),
+        }),
       })}
     </div>
   `;

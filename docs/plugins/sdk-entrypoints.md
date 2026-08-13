@@ -157,7 +157,7 @@ export default definePluginEntry({
   `resolveCreateSession({ agentId })` must return a config-derived model/runtime
   target before OpenClaw advertises creation or calls `startTerminalSession`.
   Use
-  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#apiruntimeagent)
+  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
   to apply the host's runtime and model-allowlist policy instead of duplicating
   it.
 

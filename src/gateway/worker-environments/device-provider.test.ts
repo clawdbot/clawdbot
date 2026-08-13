@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-worker-supervisor-dialect.js";
 import { WorkerProviderError } from "../../plugins/types.js";
-import { createDeviceWorkerProvider } from "./device-provider.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { createDeviceWorkerRuntime } from "./device-provider.js";
 
 const DEVICE_ID = "device-session-host";
 
@@ -24,12 +30,42 @@ function pairedDevice(deviceId = DEVICE_ID): PairedDevice {
   };
 }
 
+function connectedNode(
+  deviceId = DEVICE_ID,
+  commands: readonly string[] = ["system.run"],
+): NodeWorkerSupervisorNodeProof {
+  return {
+    nodeId: deviceId,
+    connId: `conn-${deviceId}`,
+    pairingIdentity: `identity-${deviceId}`,
+    pairingGeneration: `generation-${deviceId}`,
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    commands,
+  };
+}
+
+function deviceRuntime(params: {
+  getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
+  listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+}) {
+  const runtime = createDeviceWorkerRuntime({ getPairedDevice: params.getPairedDevice });
+  if (params.listCurrentNodes) {
+    runtime.bindNodeTransport({
+      listCurrentNodes: params.listCurrentNodes,
+      invoke: async () => ({ ok: false }),
+    });
+  }
+  return runtime;
+}
+
 describe("device worker provider", () => {
   it("provisions deterministic node leases only for connected paired session hosts", async () => {
-    const provider = createDeviceWorkerProvider({
+    const provider = deviceRuntime({
       getPairedDevice: async (deviceId) => pairedDevice(deviceId),
-      listConnectedNodes: async () => [{ nodeId: DEVICE_ID, commands: ["system.run"] }],
-    });
+      listCurrentNodes: async () => [connectedNode()],
+    }).provider;
 
     const first = await provider.provision({ device: DEVICE_ID }, "operation-1");
     const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1");
@@ -48,20 +84,20 @@ describe("device worker provider", () => {
     {
       name: "missing pairing",
       getPairedDevice: async () => null,
-      listConnectedNodes: async () => [{ nodeId: DEVICE_ID, commands: ["system.run"] }],
+      listCurrentNodes: async () => [connectedNode()],
     },
     {
       name: "offline device",
       getPairedDevice: async () => pairedDevice(),
-      listConnectedNodes: async () => [],
+      listCurrentNodes: async () => [],
     },
     {
       name: "connected node without session execution",
       getPairedDevice: async () => pairedDevice(),
-      listConnectedNodes: async () => [{ nodeId: DEVICE_ID, commands: [] }],
+      listCurrentNodes: async () => [connectedNode(DEVICE_ID, [])],
     },
-  ])("rejects $name during provision", async ({ getPairedDevice, listConnectedNodes }) => {
-    const provider = createDeviceWorkerProvider({ getPairedDevice, listConnectedNodes });
+  ])("rejects $name during provision", async ({ getPairedDevice, listCurrentNodes }) => {
+    const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
 
     await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toBeInstanceOf(
       WorkerProviderError,
@@ -71,11 +107,11 @@ describe("device worker provider", () => {
   it("reports active, dormant, and unknown from pairing plus live presence", async () => {
     let paired: PairedDevice | null = pairedDevice();
     let connected = true;
-    const provider = createDeviceWorkerProvider({
+    const runtime = deviceRuntime({
       getPairedDevice: async () => paired,
-      listConnectedNodes: async () =>
-        connected ? [{ nodeId: DEVICE_ID, commands: ["system.run"] }] : [],
+      listCurrentNodes: async () => (connected ? [connectedNode()] : []),
     });
+    const provider = runtime.provider;
     const lease = { leaseId: "device-lease", profile: { device: DEVICE_ID } };
 
     await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: true });

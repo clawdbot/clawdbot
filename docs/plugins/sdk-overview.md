@@ -158,6 +158,22 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+Commands may also declare a bounded client presentation action for parsed no-argument
+invocations:
+
+```ts
+clientPresentation: {
+  when: "no-arguments",
+  action: { kind: "device-pairing" },
+}
+```
+
+The action union is closed and intentionally does not accept routes, callbacks,
+URLs, or arbitrary client data. Supporting clients handle the action only when
+they can complete it; otherwise the command follows its normal remote path.
+This metadata expresses presentation intent, not authorization: the Gateway
+remains authoritative for every RPC the client flow performs.
+
 Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
 

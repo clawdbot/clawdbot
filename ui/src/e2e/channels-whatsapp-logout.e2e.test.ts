@@ -276,11 +276,15 @@ suite.define(() => {
       await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
       const wizard = page.locator(".channels-wizard");
       await gateway.deferNext("wizard.next");
-      await wizard.getByRole("radio", { name: "Work bot" }).click();
+      const account = wizard.locator("wa-select");
+      await account.evaluate(async (select) => {
+        const picker = select as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+        picker.value = "1";
+        await picker.updateComplete;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
       await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
-      await expect
-        .poll(() => wizard.locator("wa-radio-group").getAttribute("disabled"))
-        .not.toBeNull();
+      await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
       await gateway.resolveDeferred("wizard.next");
 
       const token = wizard.getByLabel("Telegram bot token");

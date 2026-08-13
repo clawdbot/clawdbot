@@ -42,6 +42,11 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_transcript_commits",
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
+const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
+  5: STATE_V5_ADDITIVE_TABLES,
+  6: STATE_V6_ADDITIVE_TABLES,
+} as const satisfies Record<number, readonly string[]>;
+type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 
@@ -133,7 +138,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
 
 function assertOpenClawStateDatabaseVersionForMigration(
   database: DatabaseSync,
-  options: { pathname: string; version: number; allowedMissingTables: readonly string[] },
+  options: { pathname: string; version: OpenClawStateMigrationVersion },
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion !== options.version) {
@@ -153,7 +158,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
     );
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-    allowedMissingTables: options.allowedMissingTables,
+    allowedMissingTables: STATE_MIGRATION_ALLOWED_MISSING_TABLES[options.version],
   });
 }
 
@@ -162,11 +167,7 @@ export function assertOpenClawStateDatabaseV5ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
-  assertOpenClawStateDatabaseVersionForMigration(database, {
-    ...options,
-    version: 5,
-    allowedMissingTables: STATE_V5_ADDITIVE_TABLES,
-  });
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 5 });
 }
 
 /** Require every stable v6 table before the v7 retirement migration can run. */
@@ -174,11 +175,7 @@ export function assertOpenClawStateDatabaseV6ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
-  assertOpenClawStateDatabaseVersionForMigration(database, {
-    ...options,
-    version: 6,
-    allowedMissingTables: STATE_V6_ADDITIVE_TABLES,
-  });
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 6 });
 }
 
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {

@@ -4,7 +4,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   copySessionOwnedStateForCanonicalRepair,
-  listSessionEntriesForCanonicalRepair,
   listSessionGenerationIdsForCanonicalRepair,
   loadTranscriptEvents,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
@@ -12,6 +11,7 @@ import {
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
+import { listSqliteSessionEntriesWithCanonicalOwnerEvidence } from "../config/sessions/session-accessor.sqlite-canonical-inventory.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
@@ -33,6 +33,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 type CanonicalSessionCandidate = {
@@ -41,6 +42,7 @@ type CanonicalSessionCandidate = {
   entry: SessionEntry;
   expectedEntry: SessionEntry;
   lineageRepairRequired: boolean;
+  ownerEvidenceOnly: boolean;
   rawEntryJson?: string;
   sessionKey: string;
   sqlitePath: string;
@@ -112,11 +114,11 @@ function collectCanonicalSessionCandidates(
   stores: readonly CanonicalSessionStore[],
 ): CanonicalSessionCandidate[] {
   const inventory = stores.flatMap((target) =>
-    listSessionEntriesForCanonicalRepair({
+    listSqliteSessionEntriesWithCanonicalOwnerEvidence({
       agentId: target.agentId,
       clone: false,
       storePath: target.storePath,
-    }).map(({ entry, rawEntryJson, sessionKey }) => {
+    }).map(({ canonicalOwnerSessionKey, entry, rawEntryJson, sessionKey }) => {
       const storedKey = resolveStoredSessionKeyForAgentStore({
         cfg: params.cfg,
         agentId: target.agentId,
@@ -127,6 +129,7 @@ function collectCanonicalSessionCandidates(
           ? resolveDeliveryProvenCanonicalSessionKey(storedKey, entry)
           : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: target.agentId }),
         entry,
+        canonicalOwnerSessionKey,
         rawEntryJson,
         sessionKey,
         storedKey,
@@ -134,96 +137,85 @@ function collectCanonicalSessionCandidates(
       };
     }),
   );
-  const canonicalKeysByStoredKey = new Map<string, Set<string>>();
-  const addCanonicalMapping = (mappingKey: string, canonicalKey: string) => {
-    const mapped = canonicalKeysByStoredKey.get(mappingKey) ?? new Set<string>();
-    mapped.add(canonicalKey);
-    canonicalKeysByStoredKey.set(mappingKey, mapped);
-  };
-  for (const item of inventory) {
-    const ownerAgentId = parseAgentSessionKey(item.storedKey)?.agentId ?? item.target.agentId;
-    // Never synthesize folded aliases from a canonical row: the lowercase peer may be a
-    // distinct case-sensitive session whose row was pruned. Only inventoried keys are proof.
-    for (const key of [item.sessionKey, item.storedKey]) {
-      addCanonicalMapping(`${item.target.sqlitePath}\0${ownerAgentId}\0${key}`, item.canonicalKey);
-      addCanonicalMapping(`*\0${ownerAgentId}\0${key}`, item.canonicalKey);
-    }
-  }
-  return inventory.map(({ canonicalKey, entry, rawEntryJson, sessionKey, target }) => {
-    const canonicalAgentId =
-      canonicalKey === "global" || canonicalKey === "unknown"
-        ? target.agentId
-        : resolveSessionStoreAgentId(params.cfg, canonicalKey);
-    const canonicalizeLineageKey = (value: string | undefined) => {
-      if (!value) {
-        return undefined;
-      }
-      const storedKey = resolveStoredSessionKeyForAgentStore({
-        cfg: params.cfg,
-        agentId: canonicalAgentId,
-        sessionKey: value,
-      });
-      const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
-      for (const key of [value, storedKey]) {
-        const sameStore = canonicalKeysByStoredKey.get(
-          `${target.sqlitePath}\0${ownerAgentId}\0${key}`,
-        );
-        if (sameStore?.size === 1) {
-          return [...sameStore][0];
+  const canonicalKeysByStoredKey = applyCanonicalOwnerEvidence(inventory);
+  return inventory.map(
+    ({ canonicalKey, canonicalOwnerSessionKey, entry, rawEntryJson, sessionKey, target }) => {
+      const canonicalAgentId =
+        canonicalKey === "global" || canonicalKey === "unknown"
+          ? target.agentId
+          : resolveSessionStoreAgentId(params.cfg, canonicalKey);
+      const canonicalizeLineageKey = (value: string | undefined) => {
+        if (!value) {
+          return undefined;
         }
-      }
-      for (const key of [value, storedKey]) {
-        const crossStore = canonicalKeysByStoredKey.get(`*\0${ownerAgentId}\0${key}`);
-        if (crossStore?.size === 1) {
-          return [...crossStore][0];
+        const storedKey = resolveStoredSessionKeyForAgentStore({
+          cfg: params.cfg,
+          agentId: canonicalAgentId,
+          sessionKey: value,
+        });
+        const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
+        for (const key of [value, storedKey]) {
+          const sameStore = canonicalKeysByStoredKey.get(
+            `${target.sqlitePath}\0${ownerAgentId}\0${key}`,
+          );
+          if (sameStore?.size === 1) {
+            return [...sameStore][0];
+          }
         }
-      }
-      return storedKey;
-    };
-    const parentSessionKey = canonicalizeLineageKey(entry.parentSessionKey);
-    const spawnedBy = canonicalizeLineageKey(entry.spawnedBy);
-    const forkSourceSessionKey = canonicalizeLineageKey(entry.forkSource?.sessionKey);
-    const normalizedEntry = { ...entry };
-    if (parentSessionKey) {
-      normalizedEntry.parentSessionKey = parentSessionKey;
-    } else {
-      delete normalizedEntry.parentSessionKey;
-    }
-    if (spawnedBy) {
-      normalizedEntry.spawnedBy = spawnedBy;
-    } else {
-      delete normalizedEntry.spawnedBy;
-    }
-    if (entry.forkSource && forkSourceSessionKey) {
-      normalizedEntry.forkSource = {
-        ...entry.forkSource,
-        sessionKey: forkSourceSessionKey,
+        for (const key of [value, storedKey]) {
+          const crossStore = canonicalKeysByStoredKey.get(`*\0${ownerAgentId}\0${key}`);
+          if (crossStore?.size === 1) {
+            return [...crossStore][0];
+          }
+        }
+        return storedKey;
       };
-    } else if (entry.forkSource && entry.forkSource.sessionKey !== undefined) {
-      // A present but empty-normalized key cannot survive strict runtime validation. Missing
-      // legacy keys remain untouched so unrelated repair does not erase independent provenance.
-      const { sessionKey: _invalidSessionKey, ...forkProvenance } = entry.forkSource;
-      normalizedEntry.forkSource = forkProvenance as typeof entry.forkSource;
-    }
-    const lineageRepairRequired =
-      parentSessionKey !== (entry.parentSessionKey ?? undefined) ||
-      spawnedBy !== (entry.spawnedBy ?? undefined) ||
-      forkSourceSessionKey !== (entry.forkSource?.sessionKey ?? undefined);
-    const candidate: CanonicalSessionCandidate = {
-      agentId: target.agentId,
-      canonicalKey,
-      entry: normalizedEntry,
-      expectedEntry: entry,
-      lineageRepairRequired,
-      sessionKey,
-      sqlitePath: target.sqlitePath,
-      storePath: target.storePath,
-    };
-    if (rawEntryJson !== undefined) {
-      candidate.rawEntryJson = rawEntryJson;
-    }
-    return candidate;
-  });
+      const parentSessionKey = canonicalizeLineageKey(entry.parentSessionKey);
+      const spawnedBy = canonicalizeLineageKey(entry.spawnedBy);
+      const forkSourceSessionKey = canonicalizeLineageKey(entry.forkSource?.sessionKey);
+      const normalizedEntry = { ...entry };
+      if (parentSessionKey) {
+        normalizedEntry.parentSessionKey = parentSessionKey;
+      } else {
+        delete normalizedEntry.parentSessionKey;
+      }
+      if (spawnedBy) {
+        normalizedEntry.spawnedBy = spawnedBy;
+      } else {
+        delete normalizedEntry.spawnedBy;
+      }
+      if (entry.forkSource && forkSourceSessionKey) {
+        normalizedEntry.forkSource = {
+          ...entry.forkSource,
+          sessionKey: forkSourceSessionKey,
+        };
+      } else if (entry.forkSource && entry.forkSource.sessionKey !== undefined) {
+        // A present but empty-normalized key cannot survive strict runtime validation. Missing
+        // legacy keys remain untouched so unrelated repair does not erase independent provenance.
+        const { sessionKey: _invalidSessionKey, ...forkProvenance } = entry.forkSource;
+        normalizedEntry.forkSource = forkProvenance as typeof entry.forkSource;
+      }
+      const lineageRepairRequired =
+        parentSessionKey !== (entry.parentSessionKey ?? undefined) ||
+        spawnedBy !== (entry.spawnedBy ?? undefined) ||
+        forkSourceSessionKey !== (entry.forkSource?.sessionKey ?? undefined);
+      const candidate: CanonicalSessionCandidate = {
+        agentId: target.agentId,
+        canonicalKey,
+        entry: normalizedEntry,
+        expectedEntry: entry,
+        lineageRepairRequired,
+        ownerEvidenceOnly: canonicalOwnerSessionKey !== undefined,
+        sessionKey,
+        sqlitePath: target.sqlitePath,
+        storePath: target.storePath,
+      };
+      if (rawEntryJson !== undefined) {
+        candidate.rawEntryJson = rawEntryJson;
+      }
+      return candidate;
+    },
+  );
 }
 
 function resolveCanonicalDestination(params: {
@@ -298,8 +290,9 @@ function selectCanonicalSessionCandidate(
     env: params.env,
     sourceAgentId: first.agentId,
   });
+  const metadataCandidates = candidates.filter((candidate) => !candidate.ownerEvidenceOnly);
   const selected = mergeCanonicalSessionEntryCandidates(
-    candidates
+    (metadataCandidates.length > 0 ? metadataCandidates : candidates)
       .toSorted((left, right) =>
         Buffer.compare(
           Buffer.from(`${left.sqlitePath}\0${left.sessionKey}`, "utf8"),

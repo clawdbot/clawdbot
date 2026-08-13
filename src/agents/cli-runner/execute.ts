@@ -28,7 +28,6 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliEnvAuthLog,
   buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
@@ -112,16 +111,6 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
     isolatedCompletion: params.isolatedCompletion,
     message: `CLI backend ${params.backendId} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
   });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
-    buildCliEnvAuthLog,
-    buildCliExecLogLine,
-    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
-      Object.assign(executeDeps, overrides as Partial<typeof executeDeps>);
-    },
-  };
 }
 
 type ExecutePreparedCliRunOptions = {
