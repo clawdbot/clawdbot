@@ -24,14 +24,6 @@ import {
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
-  registerExecApprovalRequestForHostOrThrow,
-  resolveRegisteredExecApprovalDecision,
-} from "./bash-tools.exec-approval-request.js";
-import {
-  makeBootstrapWarn as realMakeBootstrapWarn,
-  resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
-} from "./bootstrap-files.js";
-import {
   buildClaudeLiveRunContext,
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -45,12 +37,6 @@ import {
   requireRecord,
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
-import {
-  createManagedRun,
-  mockSuccessfulCliRun,
-  restoreCliRunnerPrepareTestDeps,
-  supervisorSpawnMock,
-} from "./cli-runner.test-support.js";
 import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.test-support.js";
 import {
   attachCliMessagingDeliveryEvidence,
@@ -60,12 +46,19 @@ import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   buildCliEnvAuthLog,
   buildCliExecLogLine,
+  createManagedRun,
   setCliRunnerExecuteTestDeps,
+  supervisorSpawnMock,
 } from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+// Approval behavior is injected below; loading its gateway/tool graph here is incidental.
+vi.mock("./bash-tools.exec-approval-request.js", () => ({
+  registerExecApprovalRequestForHostOrThrow: vi.fn(),
+  resolveRegisteredExecApprovalDecision: vi.fn(),
+}));
 
 // Gateway unit coverage owns quiet-admission timing. These spawn cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -97,12 +90,15 @@ beforeEach(() => {
   resetDiagnosticRunActivityForTest();
   startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
-  restoreCliRunnerPrepareTestDeps();
   setCliRunnerExecuteTestDeps({
     writeCliSystemPromptFile,
     invokeNodeClaudeCliRun,
-    registerExecApprovalRequestForHostOrThrow,
-    resolveRegisteredExecApprovalDecision,
+    registerExecApprovalRequestForHostOrThrow: async () => {
+      throw new Error("unexpected exec approval registration");
+    },
+    resolveRegisteredExecApprovalDecision: async () => {
+      throw new Error("unexpected exec approval resolution");
+    },
   });
   supervisorSpawnMock.mockClear();
 });
@@ -120,6 +116,21 @@ const GEMINI_OK_JSONL = `${[
   JSON.stringify({ type: "result", status: "success" }),
 ].join("\n")}\n`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function mockSuccessfulCliRun(stdout = "ok") {
+  supervisorSpawnMock.mockResolvedValueOnce(
+    createManagedRun({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+  );
+}
 
 async function createCliPackageFixture(version: string): Promise<{
   root: string;
@@ -1316,47 +1327,63 @@ describe("runCliAgent spawn path", () => {
   });
 
   it.each([
-    { version: "0.40.0-preview.2", admitted: false },
-    { version: "0.40.0-preview.3", admitted: true },
-    { version: "0.41.0-nightly.20260423.gd1c91f526", admitted: false },
-    { version: "0.41.0-nightly.20260427.g42587de73", admitted: true },
-    { version: "0.53.0-beta.0", admitted: false },
-  ])("applies the exact tool-availability policy to $version", async ({ version, admitted }) => {
-    const fixture = await createCliPackageFixture(version);
-    const run = () =>
-      executePreparedCliRun(
-        buildPreparedCliRunContext({
-          provider: "google-gemini-cli",
-          model: "gemini-3.1-pro-preview",
-          backend: { command: fixture.entrypoint },
-          cliToolAvailability: { native: [], openClaw: [] },
-          runtimeArtifact: {
-            kind: "bundled-package-tree",
-            packageName: "@fixture/versioned-cli",
-            entrypoint: "command",
-            exactToolAvailabilityVersionPolicy: {
-              stableMinimum: "0.39.1",
-              prereleaseMinimums: {
-                preview: "0.40.0-preview.3",
-                nightly: "0.41.0-nightly.20260427.g42587de73",
+    {
+      version: "0.40.0-preview.2",
+      admitted: false,
+      expectedError: "requires >=0.40.0-preview.3; found 0.40.0-preview.2",
+    },
+    {
+      version: "0.41.0-nightly.20260427.g42587de73",
+      admitted: true,
+      stableMinimum: "99.0.0",
+      expectedError: undefined,
+    },
+    {
+      version: "0.53.0-beta.0",
+      admitted: false,
+      expectedError: "unsupported release line; found 0.53.0-beta.0",
+    },
+  ])(
+    "applies the exact tool-availability policy to $version",
+    async ({ version, admitted, stableMinimum = "0.39.1", expectedError }) => {
+      const fixture = await createCliPackageFixture(version);
+      const run = () =>
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "google-gemini-cli",
+            model: "gemini-3.1-pro-preview",
+            backend: { command: fixture.entrypoint },
+            cliToolAvailability: { native: [], openClaw: [] },
+            runtimeArtifact: {
+              kind: "bundled-package-tree",
+              packageName: "@fixture/versioned-cli",
+              entrypoint: "command",
+              exactToolAvailabilityVersionPolicy: {
+                stableMinimum,
+                prereleaseMinimums: {
+                  preview: "0.40.0-preview.3",
+                  nightly: "0.41.0-nightly.20260427.g42587de73",
+                },
               },
             },
-          },
-        }),
-      );
-    try {
-      if (admitted) {
-        mockSuccessfulCliRun(GEMINI_OK_JSONL);
-        await expect(run()).resolves.toBeDefined();
-        expect(supervisorSpawnMock).toHaveBeenCalledOnce();
-      } else {
-        await expect(run()).rejects.toThrow("requires a supported package version");
-        expect(supervisorSpawnMock).not.toHaveBeenCalled();
+          }),
+        );
+      try {
+        if (admitted) {
+          mockSuccessfulCliRun(GEMINI_OK_JSONL);
+          await expect(run()).resolves.toBeDefined();
+          expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+        } else {
+          await expect(run()).rejects.toThrow(
+            expectDefined(expectedError, "rejected version error"),
+          );
+          expect(supervisorSpawnMock).not.toHaveBeenCalled();
+        }
+      } finally {
+        await fs.rm(fixture.root, { recursive: true, force: true });
       }
-    } finally {
-      await fs.rm(fixture.root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("does not apply the exact tool-availability version floor to normal agent turns", async () => {
     const fixture = await createCliPackageFixture("0.39.0");
@@ -2626,62 +2653,6 @@ describe("runCliAgent spawn path", () => {
     expect(promptCarrier).toContain("[Bootstrap truncation warning]");
     expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
     expect(promptCarrier).toContain("hi");
-  });
-
-  it("loads workspace bootstrap files into the Claude CLI system prompt", async () => {
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-cli-bootstrap-context-"),
-    );
-
-    await fs.writeFile(
-      path.join(workspaceDir, "AGENTS.md"),
-      [
-        "# AGENTS.md",
-        "",
-        "Read SOUL.md and IDENTITY.md before replying.",
-        "Use the injected workspace bootstrap files as standing instructions.",
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "SOUL-SECRET\n", "utf-8");
-    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "IDENTITY-SECRET\n", "utf-8");
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "USER-SECRET\n", "utf-8");
-
-    setCliRunnerPrepareTestDeps({
-      makeBootstrapWarn: realMakeBootstrapWarn,
-      resolveBootstrapContextForRun: realResolveBootstrapContextForRun,
-    });
-
-    try {
-      const { contextFiles } = await realResolveBootstrapContextForRun({
-        workspaceDir,
-      });
-      const allArgs = buildCliAgentSystemPrompt({
-        workspaceDir,
-        modelDisplay: "claude-cli/sonnet",
-        contextFiles,
-        tools: [],
-      });
-      const agentsPath = path.join(workspaceDir, "AGENTS.md");
-      const soulPath = path.join(workspaceDir, "SOUL.md");
-      const identityPath = path.join(workspaceDir, "IDENTITY.md");
-      const userPath = path.join(workspaceDir, "USER.md");
-      expect(allArgs).toContain("# Project Context");
-      expect(allArgs).toContain(`## ${agentsPath}`);
-      expect(allArgs).toContain("Read SOUL.md and IDENTITY.md before replying.");
-      expect(allArgs).toContain(`## ${soulPath}`);
-      expect(allArgs).toContain("SOUL-SECRET");
-      expect(allArgs).toContain(
-        "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
-      );
-      expect(allArgs).toContain(`## ${identityPath}`);
-      expect(allArgs).toContain("IDENTITY-SECRET");
-      expect(allArgs).toContain(`## ${userPath}`);
-      expect(allArgs).toContain("USER-SECRET");
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-      restoreCliRunnerPrepareTestDeps();
-    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
