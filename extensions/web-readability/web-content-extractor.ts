@@ -83,7 +83,7 @@ function findRawTextClose(html: string, tagName: string, from: number): number {
 }
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
-  let depth = 0;
+  const openTags: string[] = [];
   const len = html.length;
   for (let i = 0; i < len; i++) {
     if (html.charCodeAt(i) !== 60) {
@@ -123,14 +123,23 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     if (j === nameStart) {
       continue;
     }
+    const tagName = html.slice(nameStart, j).toLowerCase();
 
     if (closing) {
-      if (depth > 0) {
-        depth -= 1;
+      // Mirror htmlparser2's HTML-mode stack: a close pops back only to a
+      // matching open tag; an unmatched close pops nothing. A scalar decrement
+      // instead let `<div></x>` net to zero while the parser nests every div.
+      const top = openTags[openTags.length - 1];
+      if (top === tagName) {
+        openTags.pop();
+      } else {
+        const matchIndex = openTags.lastIndexOf(tagName);
+        if (matchIndex !== -1) {
+          openTags.length = matchIndex;
+        }
       }
       continue;
     }
-    const tagName = html.slice(nameStart, j).toLowerCase();
 
     let quote = 0;
     let k = j;
@@ -152,12 +161,14 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     }
     i = k;
 
-    if (HTML_VOID_TAGS.has(tagName) || html.charCodeAt(k - 1) === 47) {
+    if (HTML_VOID_TAGS.has(tagName)) {
       continue;
     }
 
-    depth += 1;
-    if (depth > maxDepth) {
+    // htmlparser2 in HTML mode has recognizeSelfClosing off, so a trailing
+    // slash on a non-void tag is ignored and `<div/>` still opens an element.
+    openTags.push(tagName);
+    if (openTags.length > maxDepth) {
       return true;
     }
 

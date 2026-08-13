@@ -78,6 +78,44 @@ describe("web readability extractor", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it("rejects self-closed non-void tags that htmlparser2 keeps open", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = SAMPLE_HTML.replace("<article>", `<article>${"<div/>".repeat(1_000)}`);
+    const started = performance.now();
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("rejects unmatched closing tags that do not pop an open element", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = SAMPLE_HTML.replace("<article>", `<article>${"<div></x>".repeat(1_000)}`);
+    const started = performance.now();
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("extracts many well-formed sibling elements with matching close tags", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const siblings = "<div>word</div>".repeat(2_000);
+    const html = SAMPLE_HTML.replace("<article>", `<article>${siblings}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
   it("does not count tag literals inside raw text elements", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const script = `<script>${'render("<div>");'.repeat(900)}</script>`;
