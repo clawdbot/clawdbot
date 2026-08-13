@@ -63,8 +63,6 @@ describe("DraftSubmissionFlow", () => {
       config: { current: {} },
     } as unknown as ApplicationContext;
     const host = new ControllerHost();
-    let place!: DraftPlaceState;
-    let flow!: DraftSubmissionFlow;
     const gateway = new DraftGatewayState(
       host,
       () => ({
@@ -96,7 +94,6 @@ describe("DraftSubmissionFlow", () => {
       gateway,
       () => ({
         context,
-        projectId: place?.projectId ?? "",
         nodes: place?.nodes ?? [],
         folder: place?.folder ?? "",
         execNode: place?.execNode ?? "",
@@ -106,15 +103,13 @@ describe("DraftSubmissionFlow", () => {
         requestUpdate: vi.fn(),
         onProjectMissing: () => place?.clearProjectSelection(),
         onSelectProject: (projectId) => place?.selectProjectId(projectId),
-        onApplyFolder: (folder, execNode, approved) =>
-          place?.applyFolder(folder, execNode, approved),
         onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
         querySelector: () => null,
         activeElement: () => null,
         body: () => null,
       },
     );
-    place = new DraftPlaceState(
+    const place = new DraftPlaceState(
       gateway,
       browser,
       () => ({
@@ -129,7 +124,7 @@ describe("DraftSubmissionFlow", () => {
         onClearError: (error) => flow?.clearErrorIf(error),
       },
     );
-    flow = new DraftSubmissionFlow(
+    const flow = new DraftSubmissionFlow(
       gateway,
       place,
       () => ({ context, data: undefined, isConnected: true }),
@@ -163,7 +158,7 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.error).toBe("clone failed");
     expect(flow.message).toBe("keep this prompt");
     expect(flow.attachmentDraft.attachments).toHaveLength(1);
-    expect(place.remoteProject).toMatchObject({
+    expect(place.browser.remoteProject).toMatchObject({
       identity: "openclaw/openclaw",
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
@@ -278,7 +273,6 @@ describe("DraftSubmissionFlow", () => {
       gateway,
       () => ({
         context,
-        projectId: place?.projectId ?? "",
         nodes: place?.nodes ?? [],
         folder: place?.folder ?? "",
         execNode: place?.execNode ?? "",
@@ -288,8 +282,6 @@ describe("DraftSubmissionFlow", () => {
         requestUpdate: vi.fn(),
         onProjectMissing: () => place?.clearProjectSelection(),
         onSelectProject: (projectId) => place?.selectProjectId(projectId),
-        onApplyFolder: (folder, execNode, approved) =>
-          place?.applyFolder(folder, execNode, approved),
         onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
         querySelector: () => null,
         activeElement: () => null,

@@ -38,7 +38,6 @@ type DraftPlaceBrowserCallbacks = {
   requestUpdate: () => void;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
-  onApplyFolder: (folder: string, execNode: string, gatewayApproved: boolean) => void;
   onApprovedListing: (listing: FsListDirResult) => void;
   querySelector: (selector: string) => Element | null;
   activeElement: () => Element | null;

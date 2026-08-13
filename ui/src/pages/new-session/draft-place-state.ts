@@ -458,6 +458,7 @@ export class DraftPlaceState {
       });
     }
     this.repositoryState.load();
+    this.browser.close();
   }
 
   selectExecNode(execNode: string) {

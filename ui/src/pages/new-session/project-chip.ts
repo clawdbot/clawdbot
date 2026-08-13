@@ -9,7 +9,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftNode } from "./discovery.ts";
-import { folderDisplayName } from "./path.ts";
+import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
 
@@ -27,16 +27,6 @@ export type DraftRemoteProject = Readonly<{
   cloneUrl: string;
   projectId?: string;
 }>;
-
-function parentFolderDisplayName(path: string): string | undefined {
-  const trimmed = path.replace(/[\\/]+$/u, "");
-  const separator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  if (separator < 0) {
-    return undefined;
-  }
-  const parent = separator === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, separator);
-  return folderDisplayName(parent) || undefined;
-}
 
 type ProjectChipState = Readonly<{
   mode: "projects" | "node-path";

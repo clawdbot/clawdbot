@@ -113,8 +113,6 @@ class NewSessionPage extends OpenClawLightDomElement {
         requestUpdate: () => this.requestUpdate(),
         onProjectMissing: () => this.place.clearProjectSelection(),
         onSelectProject: (projectId) => this.place.selectProjectId(projectId),
-        onApplyFolder: (folder, execNode, gatewayApproved) =>
-          this.place.applyFolder(folder, execNode, gatewayApproved),
         onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
         querySelector: (selector) => this.querySelector(selector),
         activeElement: () => this.ownerDocument.activeElement,
