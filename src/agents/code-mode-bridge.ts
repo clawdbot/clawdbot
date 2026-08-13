@@ -6,7 +6,7 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
@@ -393,6 +393,7 @@ export async function runBridgeRequest(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
+  maxOutputBytes: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -542,7 +543,11 @@ export async function runBridgeRequest(params: {
         break;
       }
     }
-    return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
+    return {
+      id: params.request.id,
+      ok: true,
+      value: boundCodeModeValue(value, params.maxOutputBytes),
+    };
   } catch (error) {
     return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
   }

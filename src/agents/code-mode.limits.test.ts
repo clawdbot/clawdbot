@@ -25,7 +25,7 @@ describe("Code Mode runtime and output limits", () => {
     resetCodeModeTestState();
   });
 
-  it("enforces output limits on completed exec calls", async () => {
+  it("bounds oversized values on completed exec calls", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -59,12 +59,14 @@ describe("Code Mode runtime and output limits", () => {
       }),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
+    expect(details.status).toBe("completed");
+    expect(details.value).toMatchObject({
+      truncated: true,
+      guidance: expect.stringContaining("rerun with narrower args"),
+    });
   });
 
-  it("enforces output limits before suspending runs", async () => {
+  it("bounds oversized output before suspending runs", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -99,13 +101,21 @@ describe("Code Mode runtime and output limits", () => {
       }),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
+    expect(details.status).toBe("waiting");
+    expect(JSON.stringify(details.output)).toContain("rerun with narrower args");
+    expect(testing.activeRuns.size).toBe(beforeRunCount + 1);
+
+    const completed = resultDetails(
+      await expectDefined(tools[1], "Code Mode wait test invariant").execute(
+        "code-wait-large-suspend",
+        { runId: details.runId },
+      ),
+    );
+    expect(completed.status).toBe("completed");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
-  it("enforces the cumulative output limit across yielded waits", async () => {
+  it("bounds cumulative output across yielded waits", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -157,12 +167,14 @@ describe("Code Mode runtime and output limits", () => {
       ),
     );
 
-    expect(second.status).toBe("failed");
-    expect(second.code).toBe("output_limit_exceeded");
+    expect(second.status).toBe("completed");
+    expect(second.value).toBe("done");
+    expect(JSON.stringify(second.output)).toContain("rerun with narrower args");
+    expect(Buffer.byteLength(JSON.stringify(second.output), "utf8")).toBeLessThanOrEqual(1_024);
     expect(testing.activeRuns.has(first.runId as string)).toBe(false);
   });
 
-  it("enforces output limits before auto-draining namespace calls", async () => {
+  it("bounds output before auto-draining namespace calls", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -206,10 +218,9 @@ describe("Code Mode runtime and output limits", () => {
       ),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
-    expect(executeListIssues).not.toHaveBeenCalled();
+    expect(details.status).toBe("completed");
+    expect(JSON.stringify(details.output)).toContain("rerun with narrower args");
+    expect(executeListIssues).toHaveBeenCalledOnce();
   });
 
   it("preserves guest output when a run fails", async () => {
