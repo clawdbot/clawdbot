@@ -7,6 +7,7 @@
 
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -50,10 +51,20 @@ async function processTwitchMessage(params: {
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
   turnAdoptionLifecycle: TwitchIngressLifecycle;
+  channelIngress: ResolvedChannelMessageIngress;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
-  const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
-    params;
+  const {
+    message,
+    account,
+    accountId,
+    config,
+    runtime,
+    core,
+    turnAdoptionLifecycle,
+    channelIngress,
+    statusSink,
+  } = params;
   const cfg = config as OpenClawConfig;
 
   await core.channel.inbound.run({
@@ -89,6 +100,7 @@ async function processTwitchMessage(params: {
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
+          channelIngress,
           channel: "twitch",
           accountId,
           messageId: input.id,
@@ -285,6 +297,7 @@ export async function monitorTwitchProvider(
         runtime,
         core,
         turnAdoptionLifecycle,
+        channelIngress: access.channelIngress,
         statusSink,
       });
     },

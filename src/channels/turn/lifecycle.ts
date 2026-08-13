@@ -21,7 +21,6 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import { createMessageSentEmitter } from "../../infra/outbound/message-sent-hook.js";
 import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { copyChannelParticipantAdmissionEvidence } from "../message-access/admission-evidence.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
@@ -41,6 +40,7 @@ import {
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
 import { runPreparedChannelTurnCore } from "./execution.js";
+import { applyRouteDmScope } from "./route-dm-scope.js";
 import type {
   AssembledChannelTurn,
   ChannelEventDeliveryAdapter,
@@ -62,22 +62,7 @@ type RoutedAssembledChannelTurn = Omit<
   delivery: ChannelTurnDeliveryAdapter;
 };
 
-type DispatchableChannelTurn = AssembledChannelTurn | RoutedAssembledChannelTurn;
 type AnyChannelDeliveryAdapter = ChannelEventDeliveryAdapter | ChannelTurnDeliveryAdapter;
-
-function applyRouteDmScope<T extends AssembledChannelTurn["ctxPayload"]>(
-  context: T,
-  dmScope: string | undefined,
-): T {
-  if (!dmScope || context.DmScope === dmScope) {
-    return context;
-  }
-  const scoped = { ...context, DmScope: dmScope } as T;
-  // Finalized contexts carry identity evidence out-of-band; keep it attached
-  // when routing must replace the object to add the authoritative DM scope.
-  copyChannelParticipantAdmissionEvidence(context, scoped);
-  return scoped;
-}
 
 type PendingChannelDeliveryAttempt = {
   payload: ReplyPayload;
@@ -125,7 +110,7 @@ export function assembleResolvedChannelTurn<
 }
 
 function resolveAssembledReplyPipeline(
-  params: DispatchableChannelTurn,
+  params: AssembledChannelTurn | RoutedAssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   let replyOptions = adoption

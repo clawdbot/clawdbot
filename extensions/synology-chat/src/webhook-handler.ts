@@ -568,7 +568,7 @@ async function resolveSynologyReplyDeliveryUserId(params: {
 async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
-}): Promise<boolean> {
+}) {
   const auth = await authorizeUserForDmWithIngress({
     accountId: params.account.accountId,
     userId: params.payload.user_id,
@@ -581,7 +581,7 @@ async function authorizeClaimedSynologyWebhook(params: {
       `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
     );
   }
-  return auth.senderAccess.allowed;
+  return auth;
 }
 
 export async function processSynologyWebhookIngressEvent(params: {
@@ -601,7 +601,7 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const commandAuthorized = await authorizeClaimedSynologyWebhook({
+  const channelIngress = await authorizeClaimedSynologyWebhook({
     account: params.account,
     payload,
   });
@@ -621,12 +621,13 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
+      channelIngress,
       from: authorizedWebhookUserId,
       senderName: payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
-      commandAuthorized,
+      commandAuthorized: channelIngress.commandAccess.authorized,
       chatUserId: deliveryUserId,
     },
     params.lifecycle,

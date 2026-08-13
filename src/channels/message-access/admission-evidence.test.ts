@@ -5,7 +5,6 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   copyChannelParticipantAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
@@ -84,24 +83,14 @@ describe("channel admission evidence", () => {
     }
   });
 
-  it("reports same-participant collection while mixed participants fail closed", () => {
+  it("reports same-participant collection while mixed participants fail closed", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
-      const first = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        accountId: "a:b",
-        participantId: "c",
-      });
-      const same = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        accountId: "a:b",
-        participantId: "c",
-      });
-      const tupleCollisionCandidate = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        accountId: "a",
-        participantId: "b:c",
-      });
+      const first = readChannelContextAdmissionEvidence(await buildAdmittedContext("c"));
+      const same = readChannelContextAdmissionEvidence(await buildAdmittedContext("c"));
+      const tupleCollisionCandidate = readChannelContextAdmissionEvidence(
+        await buildAdmittedContext("b:c"),
+      );
 
       expect(
         consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence([first, same])),
@@ -110,19 +99,15 @@ describe("channel admission evidence", () => {
         invoker: {
           state: "present",
           kind: "person",
-          rawPrincipalRef: '["test","a:b","c"]',
+          rawPrincipalRef: '["test","acct:primary","c"]',
         },
         assuranceRef: "channel-admission",
-        decisionCoverage: "attribution-only",
+        decisionCoverage: "enforced",
       });
       expect(
         consumeChannelAdmissionEvidence(
           combineChannelAdmissionEvidence([
-            createChannelParticipantAdmissionEvidence({
-              channelId: "test",
-              accountId: "a:b",
-              participantId: "c",
-            }),
+            readChannelContextAdmissionEvidence(await buildAdmittedContext("c")),
             tupleCollisionCandidate,
           ]),
         ),
@@ -152,12 +137,9 @@ describe("channel admission evidence", () => {
     }
   });
 
-  it("rejects forged and prior-lifecycle carriers and stays empty when collection is disabled", () => {
+  it("rejects forged and prior-lifecycle carriers and stays empty when collection is disabled", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    const stale = createChannelParticipantAdmissionEvidence({
-      channelId: "test",
-      participantId: "person-1",
-    });
+    const stale = readChannelContextAdmissionEvidence(await buildAdmittedContext("person-1"));
     cleanup();
 
     const nextCleanup = configureChannelAdmissionEvidenceCollection(true);
@@ -173,14 +155,11 @@ describe("channel admission evidence", () => {
     }
 
     expect(
-      createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-1",
-      }),
+      readChannelContextAdmissionEvidence(await buildAdmittedContext("person-1")),
     ).toBeUndefined();
   });
 
-  it("distinguishes unsupported, omitted, and mismatched adapter handoffs", () => {
+  it("distinguishes unsupported, omitted, and structurally fake adapter handoffs", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
       const base = {
@@ -199,13 +178,16 @@ describe("channel admission evidence", () => {
         channelIngress: "unsupported",
       });
       const omitted = buildChannelInboundEventContext(base);
+      const exact = await resolveStableChannelMessageIngress({
+        channelId: "legacy",
+        accountId: "default",
+        subject: { stableId: "person-1" },
+        conversation: { kind: "direct", id: "room-1" },
+        dmPolicy: "open",
+      });
       const mismatched = buildChannelInboundEventContext({
         ...base,
-        channelParticipantEvidence: createChannelParticipantAdmissionEvidence({
-          channelId: "legacy",
-          accountId: "default",
-          participantId: "someone-else",
-        }),
+        channelIngress: { ...exact },
       });
 
       expect(
@@ -225,15 +207,12 @@ describe("channel admission evidence", () => {
     }
   });
 
-  it("expires a carrier at the bounded retention edge", () => {
+  it("expires a carrier at the bounded retention edge", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
-      const evidence = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-1",
-      });
+      const evidence = readChannelContextAdmissionEvidence(await buildAdmittedContext("person-1"));
       vi.setSystemTime(1_000 + 30 * 24 * 60 * 60_000 + 1);
       expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({
         ingressState: "unknown",
@@ -245,22 +224,20 @@ describe("channel admission evidence", () => {
     }
   });
 
-  it("bounds aggregate fan-in and participant material", () => {
+  it("bounds aggregate fan-in and participant material", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
-      const oversizedParticipant = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "x".repeat(4_097),
-      });
+      const oversizedParticipant = readChannelContextAdmissionEvidence(
+        await buildAdmittedContext("x".repeat(4_097)),
+      );
       expect(consumeChannelAdmissionEvidence(oversizedParticipant)).toMatchObject({
         ingressState: "unknown",
       });
 
-      const sources = Array.from({ length: 17 }, (_, index) =>
-        createChannelParticipantAdmissionEvidence({
-          channelId: "test",
-          participantId: `person-${index}`,
-        }),
+      const sources = await Promise.all(
+        Array.from({ length: 17 }, async (_, index) =>
+          readChannelContextAdmissionEvidence(await buildAdmittedContext(`person-${index}`)),
+        ),
       );
       expect(
         consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence(sources)),

@@ -11,6 +11,7 @@ import {
   resolveChannelInboundRouteEnvelope,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
+import type { ResolvedChannelMessageIngress } from "./message-access/runtime-types.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
 import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 import type { ChannelTurnPlan } from "./turn/types.js";
@@ -45,6 +46,7 @@ type DispatchInboundDirectDmParams = {
   timestamp?: number;
   commandAuthorized?: boolean;
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  channelIngress: ResolvedChannelMessageIngress | "unsupported";
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
@@ -93,6 +95,7 @@ function buildDirectDmContext(
       commandBody: params.commandBody ?? params.rawBody,
     },
     access: { commands: { authorized: params.commandAuthorized === true } },
+    channelIngress: params.channelIngress,
     extra: {
       NativeDirectUserId: params.peer.id,
       OriginatingChannel: params.originatingChannel ?? params.channel,

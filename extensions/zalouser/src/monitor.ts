@@ -562,6 +562,7 @@ async function processMessage(
   });
 
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: accessDecision,
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,

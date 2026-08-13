@@ -151,6 +151,7 @@ export async function handleFeishuCommentEvent(
   }
 
   let effectiveCfg = params.cfg;
+  let effectiveChannelIngress = commentAuthorization.ingress;
   const currentCfg = core.config.current() as ClawdbotConfig;
   if (currentCfg !== effectiveCfg) {
     const currentAuthorization = await resolveCommentAuthorization(currentCfg, true);
@@ -159,6 +160,7 @@ export async function handleFeishuCommentEvent(
       return;
     }
     effectiveCfg = currentCfg;
+    effectiveChannelIngress = currentAuthorization.ingress;
   }
   let route = core.channel.routing.resolveAgentRoute({
     cfg: effectiveCfg,
@@ -194,6 +196,7 @@ export async function handleFeishuCommentEvent(
         return;
       }
       effectiveCfg = dynamicResult.updatedCfg;
+      effectiveChannelIngress = refreshedAuthorization.ingress;
       route = core.channel.routing.resolveAgentRoute({
         cfg: dynamicResult.updatedCfg,
         channel: "feishu",
@@ -223,6 +226,7 @@ export async function handleFeishuCommentEvent(
     ? `Feishu comment · ${turn.documentTitle}`
     : "Feishu comment";
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: effectiveChannelIngress,
     channel: "feishu",
     accountId: route.accountId,
     surface: "feishu-comment",

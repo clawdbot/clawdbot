@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   DmPolicy,
@@ -61,6 +62,7 @@ type TelegramInboundMessage = {
   senderId: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
+  channelIngress: ResolvedChannelMessageIngress;
   groupConfig?: TelegramGroupConfig;
   topicConfig?: TelegramTopicConfig;
   sendOversizeWarning: boolean;
@@ -132,6 +134,7 @@ export function createTelegramInboundProcessing({
       senderId,
       effectiveGroupAllow,
       effectiveDmAllow,
+      channelIngress,
       groupConfig,
       topicConfig,
       sendOversizeWarning,
@@ -182,6 +185,7 @@ export function createTelegramInboundProcessing({
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
+        channelIngress,
       })
     ) {
       return { kind: "buffered", buffer: "text-fragment" };
@@ -206,6 +210,7 @@ export function createTelegramInboundProcessing({
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
+        channelIngress: [channelIngress],
       })
     ) {
       return { kind: "buffered", buffer: "media-group" };
@@ -225,6 +230,7 @@ export function createTelegramInboundProcessing({
       effectiveDmAllow,
       groupConfig,
       topicConfig,
+      channelIngress: [channelIngress],
     });
     if (mediaDisposition === "skip") {
       releaseDispatchDedupeClaims(dispatchDedupeClaims);
@@ -349,6 +355,7 @@ export function createTelegramInboundProcessing({
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       dispatchDedupeClaims,
+      channelIngress: [channelIngress],
     };
     const shouldBufferDebounce = Boolean(
       debounceEntry.debounceKey &&

@@ -94,7 +94,9 @@ facts. Collected messages retain a person only when every contribution proves
 the same participant. Mixed, missing, invalid, stale, or unminted evidence is
 unknown, and an adapter that explicitly lacks support is unsupported. OpenClaw
 never reconstructs a participant from `SenderId`, `From`, session keys, or
-routing metadata. Other public ingress remains explicitly unknown when its
+routing metadata. Plugins cannot publicly mint or upgrade participant evidence;
+fake, copied, changed, stale, reused, or lost host carriers remain unknown.
+Other public ingress remains explicitly unknown when its
 boundary cannot prove a more specific source. A direct local execution
 is `unattributed`: the Gateway cell, local CLI ingress, configured agent, and
 runtime binding are present, but no durable invoker principal is supplied at

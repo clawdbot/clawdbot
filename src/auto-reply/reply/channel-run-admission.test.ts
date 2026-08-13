@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -8,7 +9,6 @@ import {
   configureChannelAdmissionDecisionSink,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 

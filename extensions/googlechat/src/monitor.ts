@@ -314,6 +314,7 @@ async function processMessageWithPipeline(params: {
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: access.channelIngress,
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,

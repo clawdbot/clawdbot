@@ -10,7 +10,6 @@ import {
   type NormalizedLocation,
   type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelParticipantAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -647,11 +646,7 @@ export async function buildTelegramInboundContextPayload(params: {
       : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
-    channelParticipantEvidence: createChannelParticipantAdmissionEvidence({
-      channelId: "telegram",
-      accountId: route.accountId,
-      participantId: senderId,
-    }),
+    channelIngress: options?.channelIngress,
     resolveSupplementalMedia: true,
     accountId: route.accountId,
     messageId: options?.messageIdOverride ?? String(msg.message_id),

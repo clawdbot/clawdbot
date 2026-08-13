@@ -1,4 +1,5 @@
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Signal plugin helpers isolate active-run control scheduling from the inbound handler.
 import {
   listChatCommands,
@@ -32,6 +33,7 @@ export type SignalInboundEntry = {
   replyToSender?: string;
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
+  channelIngress?: readonly ResolvedChannelMessageIngress[];
 };
 
 type TrackedSignalInboundLane = {

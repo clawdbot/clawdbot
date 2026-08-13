@@ -263,6 +263,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const {
+        messageIngress,
         route: _route,
         hasExplicitSessionBinding,
         roomConfig,
@@ -293,6 +294,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const inboundContext = await resolveMatrixInboundContext({
+        channelIngress: messageIngress,
         client,
         core,
         cfg,

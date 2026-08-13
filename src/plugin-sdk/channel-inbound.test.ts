@@ -13,7 +13,7 @@ import {
   type BuildChannelInboundEventContextParams,
   type PluginHookChannelSenderContext,
 } from "./channel-inbound.js";
-import { createChannelParticipantAdmissionEvidence } from "./channel-ingress-runtime.js";
+import * as channelIngressRuntime from "./channel-ingress-runtime.js";
 
 declare module "./channel-inbound.js" {
   interface PluginHookChannelSenderContext {
@@ -79,17 +79,23 @@ describe("channel-inbound public helpers", () => {
     expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
   });
 
-  it("preserves participant evidence through the deprecated turn-context wrapper", () => {
+  it("does not expose public participant evidence minting", () => {
+    expect(channelIngressRuntime).not.toHaveProperty("createChannelParticipantAdmissionEvidence");
+  });
+
+  it("preserves exact resolver evidence through the deprecated turn-context wrapper", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
+      const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
+        channelId: "test",
+        accountId: "default",
+        subject: { stableId: "u1" },
+        conversation: { kind: "group", id: "room-1" },
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
       const ctx = buildChannelTurnContext({
-        ...createInboundParams({
-          channelParticipantEvidence: createChannelParticipantAdmissionEvidence({
-            channelId: "test",
-            accountId: "default",
-            participantId: "u1",
-          }),
-        }),
+        ...createInboundParams({ channelIngress }),
         message: {
           rawBody: "hello",
           inboundTurnKind: "user_request",

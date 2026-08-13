@@ -256,5 +256,5 @@ export async function resolveDiscordTextCommandAccess(params: {
       modeWhenAccessGroupsOff: "configured",
     },
   });
-  return result.commandAccess;
+  return result;
 }

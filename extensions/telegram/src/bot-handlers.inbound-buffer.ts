@@ -4,6 +4,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -37,6 +38,7 @@ export type TelegramDebounceEntry = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
+  channelIngress: readonly ResolvedChannelMessageIngress[];
 };
 
 type TextFragmentEntry = {
@@ -47,6 +49,7 @@ type TextFragmentEntry = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+  channelIngress: ResolvedChannelMessageIngress[];
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -62,6 +65,7 @@ type TelegramTextFragmentInput = {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  channelIngress: ResolvedChannelMessageIngress;
 };
 
 interface TelegramInboundBuffers {
@@ -163,6 +167,7 @@ export function createTelegramInboundBuffers({
                   last.promptContextAmbientWatermark,
                 ),
                 ...spooledReplayOptions(participants),
+                channelIngress: last.channelIngress,
               },
               dispatchDedupeClaims: last.dispatchDedupeClaims,
               spooledReplayParticipants: participants,
@@ -215,6 +220,7 @@ export function createTelegramInboundBuffers({
                 ),
               ),
               ...spooledReplayOptions(participants),
+              channelIngress: entries.flatMap((entry) => entry.channelIngress),
             },
             dispatchDedupeClaims: mergeDispatchDedupeClaims(
               ...entries.map((entry) => entry.dispatchDedupeClaims),
@@ -324,6 +330,7 @@ export function createTelegramInboundBuffers({
             entry.promptContextAmbientWatermark,
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
+          channelIngress: entry.channelIngress,
         },
         dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
@@ -390,6 +397,7 @@ export function createTelegramInboundBuffers({
             existing.dispatchDedupeClaims,
             params.dispatchDedupeClaims,
           );
+          existing.channelIngress.push(params.channelIngress);
           scheduleTextFlush(existing);
           return true;
         }
@@ -407,6 +415,7 @@ export function createTelegramInboundBuffers({
           messages: [{ msg: params.msg, ctx: params.ctx, receivedAtMs: nowMs }],
           dispatchDedupeClaims: params.dispatchDedupeClaims,
           spooledReplayParticipants: participant ? [participant] : [],
+          channelIngress: [params.channelIngress],
           ...promptContextBoundaryOptions(
             params.promptContextMinTimestampMs,
             params.promptContextAmbientWatermark,

@@ -441,6 +441,7 @@ export async function prepareWhatsAppInboundContext(params: {
     messageReceivedHooks: params.suppressMessageReceivedHooks ? "channel" : "core",
   } as const;
   const inbound: PreparedChannelInbound = {
+    channelIngress: admission.channelIngress,
     channel: "whatsapp",
     supplemental: {
       quote: params.visibleReplyTo

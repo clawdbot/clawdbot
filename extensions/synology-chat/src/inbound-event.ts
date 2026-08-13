@@ -98,6 +98,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
             ? params.msg.chatType
             : "direct";
         const msgCtx = resolved.rt.channel.inbound.buildContext({
+          channelIngress: params.msg.channelIngress,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           timestamp: input.timestamp,

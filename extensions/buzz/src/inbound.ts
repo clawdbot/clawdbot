@@ -88,6 +88,7 @@ export async function handleBuzzInbound(params: {
     body: textForAgent,
   });
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: access,
     channel: "buzz",
     accountId: route.accountId ?? account.accountId,
     messageId: message.id,

@@ -28,10 +28,14 @@ import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
+  resolveTelegramEffectiveGroupPolicy,
 } from "./group-access.js";
 import {
+  createTelegramIngressResolver,
+  createTelegramIngressSubject,
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramEventIngressAuthorization,
+  telegramAllowEntries,
 } from "./ingress.js";
 
 export type TelegramEventAuthorizationMode =
@@ -434,7 +438,27 @@ export function createTelegramHandlerAuthorization({
       }
     }
 
-    return { allowed: true, context, effectiveDmAllow };
+    const channelIngress = await createTelegramIngressResolver({
+      accountId,
+      cfg: authorizationCfg,
+    }).message({
+      subject: createTelegramIngressSubject(params.senderId),
+      conversation: {
+        kind: params.isGroup ? "group" : "direct",
+        id: String(params.chatId),
+        ...(resolvedThreadId != null ? { threadId: String(resolvedThreadId) } : {}),
+      },
+      dmPolicy,
+      groupPolicy: resolveTelegramEffectiveGroupPolicy({
+        cfg: authorizationCfg,
+        telegramCfg: authorizationTelegramCfg,
+        groupConfig: params.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
+        topicConfig,
+      }),
+      allowFrom: telegramAllowEntries(effectiveDmAllow),
+      groupAllowFrom: telegramAllowEntries(effectiveGroupAllow),
+    });
+    return { allowed: true, context, effectiveDmAllow, channelIngress };
   };
 
   return {
@@ -467,6 +491,9 @@ type TelegramInboundGate =
       allowed: true;
       context: TelegramEventAuthorizationContext;
       effectiveDmAllow: NormalizedAllowFrom;
+      channelIngress: Awaited<
+        ReturnType<ReturnType<typeof createTelegramIngressResolver>["message"]>
+      >;
     };
 
 function shouldSkipTelegramGroupMessage(

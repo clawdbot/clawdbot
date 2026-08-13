@@ -104,6 +104,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    channelIngress,
   } = ctx;
 
   const fromLabel = isDirectMessage
@@ -361,6 +362,7 @@ export async function buildDiscordMessageProcessContext(params: {
         });
 
   const ctxPayload = await buildChannelInboundEventContext({
+    channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
     contextVisibility: contextVisibilityMode,

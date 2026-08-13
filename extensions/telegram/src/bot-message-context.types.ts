@@ -1,6 +1,7 @@
 // Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
@@ -36,6 +37,7 @@ export type TelegramMessageContextOptions = {
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;
+  channelIngress?: readonly ResolvedChannelMessageIngress[];
 };
 
 export type TelegramPromptContextEntry = NonNullable<

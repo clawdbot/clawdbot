@@ -24,10 +24,7 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
-import {
-  bindChannelContextAdmissionEvidence,
-  type ChannelAdmissionEvidence,
-} from "../message-access/admission-evidence.js";
+import { bindChannelContextAdmissionEvidence } from "../message-access/admission-evidence.js";
 import type { ChannelIngressCommandAccess } from "../message-access/runtime-types.js";
 import type { ResolvedChannelMessageIngress } from "../message-access/runtime-types.js";
 import type {
@@ -106,10 +103,11 @@ export type BuildChannelInboundEventContextParams = {
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
   extra?: Record<string, unknown>;
-  /** Host-resolved ingress result, or an explicit unsupported adapter marker. */
-  channelIngress?: ResolvedChannelMessageIngress | "unsupported";
-  /** Explicit attribution-only evidence minted by the host ingress SDK. */
-  channelParticipantEvidence?: ChannelAdmissionEvidence;
+  /** Exact host-resolved ingress result, or an explicit unsupported adapter marker. */
+  channelIngress?:
+    | ResolvedChannelMessageIngress
+    | readonly ResolvedChannelMessageIngress[]
+    | "unsupported";
 };
 /**
  * @deprecated Prefer `BuildChannelInboundEventContextParams` with
@@ -585,7 +583,6 @@ export function buildChannelInboundEventContext(
       channelId: params.channel,
       accountId: params.accountId,
       ingress: params.channelIngress,
-      evidence: params.channelParticipantEvidence,
       rawPrincipalRef: params.sender.id,
     });
     return built;

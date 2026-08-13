@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import {
   loadTranscriptEvents,

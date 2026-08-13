@@ -144,6 +144,11 @@ an unknown invoker. Its `channel/admission` receipt is enforced only when the
 participant affected every contributing access decision; otherwise it is
 attribution-only.
 
+For channel ingress, `unknown` means a supported integration could not supply
+valid host-bound evidence; it never means allowed. `unsupported` is reserved
+for a named path with no authoritative Phase 0 integration. A plugin-provided
+sender or structurally copied resolver result cannot upgrade either state.
+
 A terminal approval receipt shows `allowed` or `denied`, its stable reason
 code, enforcement state, authoritative source boundary, policy and grant
 references, context fields used, and remediation. Expired and cancelled

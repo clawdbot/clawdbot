@@ -574,6 +574,9 @@ export async function handleFeishuMessage(params: {
     parseStrictNonNegativeInteger(event.message.create_time) ?? Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
+  let groupChannelIngress:
+    | Awaited<ReturnType<typeof resolveFeishuGroupSenderActivationIngressAccess>>
+    | undefined;
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -637,6 +640,7 @@ export async function handleFeishuMessage(params: {
       requireMention,
       mentionedBot: ctx.mentionedBot,
     });
+    groupChannelIngress = groupSenderActivationIngress;
     if (groupSenderActivationIngress.senderAccess.decision !== "allow") {
       log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
       return;
@@ -1369,6 +1373,7 @@ export async function handleFeishuMessage(params: {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
       return buildChannelInboundEventContext({
+        channelIngress: isGroup ? groupChannelIngress! : effectiveDmIngress!,
         channel: "feishu",
         supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,

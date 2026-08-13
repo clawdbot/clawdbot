@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -6,7 +7,6 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import {
   configureChannelAdmissionDecisionSink,
   configureChannelAdmissionEvidenceCollection,
-  createChannelParticipantAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";

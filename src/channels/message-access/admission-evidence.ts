@@ -123,22 +123,6 @@ function participantContribution(params: {
   );
 }
 
-/** Explicit attribution-only mint for adapters whose access result is owned elsewhere. */
-export function createChannelParticipantAdmissionEvidence(params: {
-  channelId: string;
-  accountId?: string;
-  participantId: string | number | null | undefined;
-}): ChannelAdmissionEvidence | undefined {
-  return mintChannelAdmissionEvidence({
-    kind: "leaf",
-    contribution: participantContribution({
-      channelId: params.channelId,
-      accountId: params.accountId,
-      rawPrincipalRef: params.participantId,
-    }),
-  });
-}
-
 /** Bind an admitted resolver result to its host-owned participant without exposing that value. */
 export function bindChannelIngressAdmissionEvidence(params: {
   result: ResolvedChannelMessageIngress;
@@ -187,37 +171,45 @@ export function bindChannelContextAdmissionEvidence(params: {
   context: object;
   channelId: string;
   accountId?: string;
-  ingress?: ResolvedChannelMessageIngress | "unsupported";
+  ingress?:
+    | ResolvedChannelMessageIngress
+    | readonly ResolvedChannelMessageIngress[]
+    | "unsupported";
+  /** Core-only carrier used by queue/ACP lifecycle owners. */
   evidence?: ChannelAdmissionEvidence;
   rawPrincipalRef: string | number | null | undefined;
 }): void {
   if (!state.collectionEnabled) {
     return;
   }
-  const ingressEvidence =
-    params.ingress && params.ingress !== "unsupported"
-      ? state.evidenceByIngress.get(params.ingress)
-      : undefined;
-  const evidence = params.evidence
-    ? evidenceMatchesContextParticipant({ ...params, evidence: params.evidence })
+  const ingressResults =
+    params.ingress == null || params.ingress === "unsupported"
+      ? []
+      : Array.isArray(params.ingress)
+        ? params.ingress
+        : [params.ingress as ResolvedChannelMessageIngress];
+  const ingressEvidenceSources = ingressResults.map((result) =>
+    state.evidenceByIngress.get(result),
+  );
+  const ingressEvidence = combineChannelAdmissionEvidence(ingressEvidenceSources);
+  const evidence =
+    params.evidence && evidenceMatchesContextParticipant({ ...params, evidence: params.evidence })
       ? params.evidence
-      : mintChannelAdmissionEvidence({
-          kind: "leaf",
-          contribution: Object.freeze({ participant: { state: "unknown" as const } }),
-        })
-    : params.ingress === "unsupported"
-      ? mintChannelAdmissionEvidence({
-          kind: "leaf",
-          contribution: Object.freeze({ participant: { state: "unsupported" as const } }),
-        })
-      : ingressEvidence &&
-          evidenceMatchesContextParticipant({ ...params, evidence: ingressEvidence })
-        ? ingressEvidence
-        : params.ingress
-          ? mintChannelAdmissionEvidence({
-              kind: "leaf",
-              contribution: Object.freeze({ participant: { state: "unknown" as const } }),
-            })
+      : params.ingress === "unsupported"
+        ? mintChannelAdmissionEvidence({
+            kind: "leaf",
+            contribution: Object.freeze({ participant: { state: "unsupported" as const } }),
+          })
+        : ingressEvidence &&
+            ingressResults.length > 0 &&
+            ingressResults.every((result) => result.ingress.admission === "dispatch") &&
+            ingressEvidenceSources.every(
+              (candidate) =>
+                candidate !== undefined &&
+                evidenceMatchesContextParticipant({ ...params, evidence: candidate }),
+            ) &&
+            compareChannelAdmissionParticipants([ingressEvidence]) === "same"
+          ? ingressEvidence
           : mintChannelAdmissionEvidence({
               kind: "leaf",
               contribution: Object.freeze({ participant: { state: "unknown" as const } }),

@@ -28,7 +28,10 @@ export async function resolveDiscordDmPreflightAccess(params: {
   dmPolicy: DiscordDmPolicy;
   resolvedAccountId: string;
   allowNameMatching: boolean;
-}): Promise<{ commandAuthorized: boolean } | null> {
+}): Promise<{
+  commandAuthorized: boolean;
+  channelIngress: Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
+} | null> {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
     return null;
@@ -64,13 +67,13 @@ export async function resolveDiscordDmPreflightAccess(params: {
     (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
     directBindingRecord != null;
   if (dmAccess.senderAccess.decision === "allow") {
-    return { commandAuthorized };
+    return { commandAuthorized, channelIngress: dmAccess };
   }
   if (directBindingRecord) {
     logVerbose(
       `discord: allow bound DM conversation ${directBindingConversationId} despite dmPolicy=${params.dmPolicy}`,
     );
-    return { commandAuthorized };
+    return { commandAuthorized, channelIngress: dmAccess };
   }
 
   await handleDiscordDmCommandDecision({

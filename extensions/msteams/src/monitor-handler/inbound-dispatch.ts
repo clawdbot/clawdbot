@@ -146,6 +146,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: admission.channelIngress,
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {

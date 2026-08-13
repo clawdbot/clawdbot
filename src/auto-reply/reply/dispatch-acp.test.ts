@@ -10,10 +10,8 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
-import {
-  configureChannelAdmissionEvidenceCollection,
-  createChannelParticipantAdmissionEvidence,
-} from "../../channels/message-access/admission-evidence.js";
+import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
@@ -554,13 +552,16 @@ describe("tryDispatchAcpReplyCore", () => {
     });
     try {
       setReadyAcpResolution();
-      const evidence = createChannelParticipantAdmissionEvidence({
+      const channelIngress = await resolveStableChannelMessageIngress({
         channelId: "discord",
         accountId: "default",
-        participantId: "person-42",
+        subject: { stableId: "person-42" },
+        conversation: { kind: "group", id: "room-1" },
+        dmPolicy: "open",
+        groupPolicy: "open",
       });
       const ctx = finalizeInboundContext(
-        await buildChannelInboundEventContext({
+        buildChannelInboundEventContext({
           channel: "discord",
           accountId: "default",
           messageId: "msg-acp",
@@ -570,7 +571,7 @@ describe("tryDispatchAcpReplyCore", () => {
           route: { agentId: "main", routeSessionKey: sessionKey },
           reply: { to: "discord:channel:room-1" },
           message: { rawBody: "run acp", bodyForAgent: "run acp" },
-          channelParticipantEvidence: evidence,
+          channelIngress,
         }),
       );
 

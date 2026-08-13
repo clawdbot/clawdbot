@@ -212,6 +212,9 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 }): Promise<
   | {
       ok: true;
+      channelIngress: Awaited<
+        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
+      >;
       commandAuthorized: boolean | undefined;
       effectiveWasMentioned: boolean | undefined;
       groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
@@ -465,6 +468,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 
   return {
     ok: true,
+    channelIngress: resolvedAccess,
     commandAuthorized,
     effectiveWasMentioned,
     groupBotLoopProtection: groupEntry?.botLoopProtection,

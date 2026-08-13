@@ -95,6 +95,7 @@ export async function resolveMatrixIngressContent(config: {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
   } = access;
+  const { messageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -521,6 +522,7 @@ export async function resolveMatrixIngressContent(config: {
   const triggerSnapshot = preparedTrigger;
 
   return {
+    messageIngress,
     route: _route,
     hasExplicitSessionBinding,
     roomConfig,

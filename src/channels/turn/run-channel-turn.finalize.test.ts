@@ -1,5 +1,6 @@
 // Channel turn finalize tests cover orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -9,7 +10,6 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   bindChannelContextAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
-  createChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../message-access/admission-evidence.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";

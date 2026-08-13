@@ -87,11 +87,20 @@ builder privately carries the exact admitted participant to run admission.
 Queue collection retains attribution only when every contribution has valid
 evidence for the same participant; mixed, missing, stale, or unminted evidence
 is `unknown`. The carrier is opaque, bounded, one-shot, and diagnostic only.
-Adapters whose access owner cannot pass the resolver result may use
-`createChannelParticipantAdmissionEvidence(...)` on this same SDK subpath and
-pass it as `channelParticipantEvidence`; that path is attribution-only, never
-proof that participant identity affected access policy. Mark adapters that
-cannot supply participant identity with `channelIngress: "unsupported"`.
+Plugins cannot mint participant evidence from caller-chosen sender, account,
+room, route, session, message, or transport fields. The SDK intentionally
+exposes no participant-evidence constructor. A structurally similar result or
+copied context does not gain host authority.
+
+The audit states are distinct:
+
+- **supported**: the authoritative ingress resolver ran. Its exact result can
+  yield a present invoker and enforced or attribution-only coverage.
+- **unknown**: a supported handoff was missing, stale, fake, reused, mixed, or
+  otherwise failed host validation. Unknown never means allowed.
+- **unsupported**: a named path has no Phase 0 authoritative integration and
+  explicitly passes `channelIngress: "unsupported"`. Unsupported never means
+  allowed and is not a shortcut for incomplete wiring.
 
 ## Access groups
 

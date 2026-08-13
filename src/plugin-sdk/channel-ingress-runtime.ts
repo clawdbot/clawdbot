@@ -9,7 +9,6 @@
 export {
   channelIngressRoutes,
   copyChannelParticipantAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   readChannelIngressStoreAllowFromForDmPolicy,

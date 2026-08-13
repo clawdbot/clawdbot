@@ -191,6 +191,7 @@ export async function checkInboundAccessControl(params: {
     admission: buildWhatsAppInboundAdmission({
       policy,
       access,
+      channelIngress: access,
       isGroup: params.group,
       conversationId,
       senderId: admissionSenderId,

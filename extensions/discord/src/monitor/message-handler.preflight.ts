@@ -350,6 +350,7 @@ export async function preflightDiscordMessage(
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
+  let channelIngress;
   if (isDirectMessage) {
     const access = await resolveDiscordDmPreflightAccess({
       preflight: params,
@@ -366,6 +367,7 @@ export async function preflightDiscordMessage(
       return null;
     }
     commandAuthorized = access.commandAuthorized;
+    channelIngress = access.channelIngress;
   }
 
   const botId = params.botUserId;
@@ -646,9 +648,10 @@ export async function preflightDiscordMessage(
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
     });
-    commandAuthorized = commandAccess.authorized;
+    commandAuthorized = commandAccess.commandAccess.authorized;
+    channelIngress = commandAccess;
 
-    if (commandAccess.shouldBlockControlCommand) {
+    if (commandAccess.commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
         log: logVerbose,
         channel: "discord",
@@ -845,6 +848,7 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
+    channelIngress: channelIngress!,
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),

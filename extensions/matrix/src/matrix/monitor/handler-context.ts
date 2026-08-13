@@ -3,6 +3,7 @@ import {
   createChannelInboundEnvelopeBuilder,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
@@ -32,6 +33,7 @@ export async function resolveMatrixInboundContext(config: {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  channelIngress: ResolvedChannelMessageIngress;
   runtime: RuntimeEnv;
   logVerboseMessage: (message: string) => void;
   roomId: string;
@@ -81,6 +83,7 @@ export async function resolveMatrixInboundContext(config: {
     core,
     cfg,
     accountId,
+    channelIngress,
     runtime,
     logVerboseMessage,
     roomId,
@@ -220,6 +223,7 @@ export async function resolveMatrixInboundContext(config: {
     }).include,
   );
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress,
     channel: "matrix",
     contextVisibility: contextVisibilityMode,
     finalize: finalizeInboundContext,

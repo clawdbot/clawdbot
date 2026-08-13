@@ -76,6 +76,7 @@ type AdmittedWhatsAppInboundMessage<T extends WhatsAppInboundAdmissionCarrier> =
  * publishing raw allowlist material or session-dependent post-admission state.
  */
 export type WhatsAppInboundAdmission = {
+  channelIngress?: ResolvedChannelMessageIngress;
   accountId: string;
   isSelfChat: boolean;
   account: {
@@ -124,11 +125,13 @@ function copyAccount(
 export function buildWhatsAppInboundAdmission(params: {
   policy: WhatsAppInboundAdmissionPolicy;
   access: WhatsAppInboundAdmissionAccess;
+  channelIngress?: ResolvedChannelMessageIngress;
   isGroup: boolean;
   conversationId: string;
   senderId: string;
 }): WhatsAppInboundAdmission {
   return {
+    channelIngress: params.channelIngress,
     accountId: params.policy.account.accountId,
     isSelfChat: params.policy.isSelfChat,
     account: copyAccount(params.policy.account),

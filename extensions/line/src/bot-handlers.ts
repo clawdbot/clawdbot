@@ -447,6 +447,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       cfg,
       account,
       commandAuthorized: decision.commandAccess.authorized,
+      channelIngress: decision,
       inboundHistory: historyReservation.inboundHistory,
     });
 
@@ -505,6 +506,7 @@ async function handlePostbackEvent(
     cfg: context.cfg,
     account: context.account,
     commandAuthorized: decision.commandAccess.authorized,
+    channelIngress: decision,
   });
   if (!postbackContext) {
     return;

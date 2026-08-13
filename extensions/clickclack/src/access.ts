@@ -180,6 +180,7 @@ export type ClickClackInboundAccess = {
   };
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   preparedRoute: ClickClackPreparedInboundRoute;
+  channelIngress?: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>;
 };
 
 /**
@@ -318,5 +319,6 @@ export async function resolveClickClackInboundAccess(params: {
     mentionFacts,
     botLoopProtection,
     preparedRoute,
+    channelIngress: resolved,
   };
 }

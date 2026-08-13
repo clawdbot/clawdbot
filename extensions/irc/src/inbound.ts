@@ -443,6 +443,7 @@ export async function handleIrcInbound(params: {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: access,
     channel: CHANNEL_ID,
     accountId: route.accountId,
     messageId: message.messageId,

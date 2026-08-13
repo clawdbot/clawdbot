@@ -316,6 +316,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           authorized: entry.commandAuthorized,
         },
       },
+      channelIngress: entry.channelIngress,
       media,
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
@@ -622,6 +623,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
       media: entries.flatMap((entry) => entry.media ?? []),
+      channelIngress: entries.flatMap((entry) => entry.channelIngress ?? []),
     });
     await settle();
   }
@@ -927,7 +929,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasControlCommandInMessage = isControlCommandMessage(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const { senderAccess, commandAccess } = await resolveSignalAccessState({
+    const accessDecision = await resolveSignalAccessState({
       accountId: deps.accountId,
       dmPolicy: deps.dmPolicy,
       groupPolicy: deps.groupPolicy,
@@ -939,6 +941,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       cfg: deps.cfg,
       hasControlCommand: hasControlCommandInMessage,
     });
+    const { senderAccess, commandAccess } = accessDecision;
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
       resolveSignalQuoteContext({
@@ -1271,6 +1274,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
       turnAdoptionLifecycle,
+      channelIngress: [accessDecision],
     };
     pendingInboundRegistry.cancelPendingOnAbort(entry, debouncer.cancelKey);
     // Normal and stateful turns stay on the existing ingress path so core session admission owns

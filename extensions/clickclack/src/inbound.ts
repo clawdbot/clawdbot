@@ -100,7 +100,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch) {
+  if (!access.shouldDispatch || !access.channelIngress) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
@@ -200,6 +200,7 @@ export async function handleClickClackInbound(params: {
     body: message.body,
   });
   const ctxPayload = runtime.channel.inbound.buildContext({
+    channelIngress: access.channelIngress,
     channel: CHANNEL_ID,
     accountId: route.accountId ?? params.account.accountId,
     messageId: message.id,

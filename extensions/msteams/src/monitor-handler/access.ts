@@ -195,6 +195,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   });
   return {
     ...resolved,
+    channelIngress: resolved,
     pairing,
     isDirectMessage,
     conversationId,

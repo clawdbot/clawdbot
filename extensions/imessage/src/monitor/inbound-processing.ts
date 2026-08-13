@@ -350,6 +350,7 @@ function resolveIMessageGroupSystemPrompt(params: {
 
 type IMessageInboundDispatchDecision = {
   kind: "dispatch";
+  channelIngress?: Awaited<ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>>;
   isGroup: boolean;
   chatId?: number;
   chatGuid?: string;
@@ -858,6 +859,7 @@ export async function resolveIMessageInboundDecision(params: {
 
   return {
     kind: "dispatch",
+    channelIngress: accessDecision,
     isGroup,
     chatId,
     chatGuid,
@@ -997,6 +999,7 @@ export async function buildIMessageInboundContext(params: {
     params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
   );
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: decision.channelIngress,
     channel: "imessage",
     supplemental: {
       quote: decision.replyContext

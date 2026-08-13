@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import {
   bindChannelContextAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
-  createChannelParticipantAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";

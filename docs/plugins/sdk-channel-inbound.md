@@ -32,7 +32,10 @@ import {
   into the prompt/session context. Pass channel-owned sender/chat metadata
   through `channelContext`, which plugin hooks see as `ctx.channelContext`.
   Augment `PluginHookChannelSenderContext` or `PluginHookChannelChatContext`
-  from this subpath for channel-specific fields.
+  from this subpath for channel-specific fields. A supported production receive
+  path also passes the exact authoritative resolver result as `channelIngress`;
+  it must not rebuild participant provenance from context fields. Only a named,
+  source-proven unsupported path passes `channelIngress: "unsupported"`.
 - `runChannelInboundEvent(...)`: runs ingest, classify, preflight, resolve,
   record, dispatch, and finalize for one inbound platform event.
 - `dispatchChannelInboundReply(...)`: records and dispatches an already

@@ -1,14 +1,12 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
-import {
-  consumeChannelAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
-} from "../channels/message-access/admission-evidence.js";
+import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {

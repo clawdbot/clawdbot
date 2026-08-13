@@ -1,11 +1,11 @@
 // Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
 import { afterEach, describe, expect, it } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   compareChannelAdmissionParticipants,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
-  createChannelParticipantAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";

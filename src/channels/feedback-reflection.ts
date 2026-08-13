@@ -134,6 +134,7 @@ export async function runChannelFeedbackReflection(params: {
   });
   const target = `conversation:${params.conversationId}`;
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: "unsupported",
     channel: params.channel,
     accountId: params.accountId,
     messageId: `feedback-reflection:${timestamp}`,

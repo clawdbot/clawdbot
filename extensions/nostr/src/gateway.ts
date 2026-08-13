@@ -181,6 +181,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
 
           const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
           await dispatchInboundDirectDm({
+            channelIngress: resolvedAccess,
             cfg: ctx.cfg,
             channel: "nostr",
             channelLabel: "Nostr",

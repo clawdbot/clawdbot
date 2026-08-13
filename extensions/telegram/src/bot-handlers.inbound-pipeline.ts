@@ -243,6 +243,7 @@ function createTelegramInboundHandlers(
         senderId: event.senderId,
         effectiveGroupAllow,
         effectiveDmAllow,
+        channelIngress: gate.channelIngress,
         groupConfig: event.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
         topicConfig,
         sendOversizeWarning: event.sendOversizeWarning,

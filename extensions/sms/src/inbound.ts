@@ -210,6 +210,7 @@ export async function dispatchSmsInboundEvent(params: {
         }),
         resolveTurn: async (input) => {
           const ctxPayload = params.channelRuntime.inbound.buildContext({
+            channelIngress: auth,
             channel: CHANNEL_ID,
             accountId: params.account.accountId,
             timestamp: input.timestamp,

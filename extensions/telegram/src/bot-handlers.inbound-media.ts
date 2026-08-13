@@ -5,6 +5,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type {
   OpenClawConfig,
@@ -53,6 +54,7 @@ type MediaAuthorization = {
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig;
   topicConfig?: TelegramTopicConfig;
+  channelIngress: readonly ResolvedChannelMessageIngress[];
 };
 
 type TelegramMediaGroupInput = MediaAuthorization & {
@@ -406,6 +408,7 @@ export function createTelegramInboundMedia({
             entry.promptContextAmbientWatermark,
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
+          channelIngress: entry.channelIngress,
         },
         dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
@@ -454,6 +457,8 @@ export function createTelegramInboundMedia({
         existing.dispatchDedupeClaims,
         input.dispatchDedupeClaims,
       );
+      // An album can span separately authorized updates; preserve each exact resolver result.
+      existing.channelIngress = [...existing.channelIngress, ...input.channelIngress];
       existing.timer = setTimeout(() => {
         buffer.delete(key);
         queueEntry(key, existing);

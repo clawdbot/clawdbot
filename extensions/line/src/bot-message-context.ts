@@ -11,6 +11,7 @@ import {
   toLocationContext,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
@@ -44,6 +45,7 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
 }
 
@@ -258,6 +260,7 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
+  channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
@@ -300,6 +303,7 @@ async function finalizeLineInboundContext(params: {
   });
 
   const ctxPayload = buildChannelInboundEventContext({
+    channelIngress: params.channelIngress,
     channel: "line",
     accountId: params.route.accountId,
     messageId: params.messageSid,
@@ -465,6 +469,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
+    channelIngress: params.channelIngress,
     media: mediaFacts,
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
@@ -490,6 +495,7 @@ export async function buildLinePostbackContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  channelIngress?: ResolvedChannelMessageIngress;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
 
@@ -524,6 +530,7 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
+    channelIngress: params.channelIngress,
     media: [],
     verboseLog: { kind: "postback" },
   });

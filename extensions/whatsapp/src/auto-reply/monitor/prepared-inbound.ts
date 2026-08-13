@@ -44,6 +44,7 @@ export type PreparedChannelInbound = Pick<
   | "sessionTranscript"
   | "media"
   | "contextVisibility"
+  | "channelIngress"
 > & {
   event: {
     id: string;

@@ -7,7 +7,10 @@ import {
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveStableChannelMessageIngress,
+  type ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -209,6 +212,7 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
   message: ZaloMessage;
 };
 type ZaloMessageAuthorizationResult = {
+  channelIngress: ResolvedChannelMessageIngress;
   chatId: string;
   commandAuthorized: boolean | undefined;
   isGroup: boolean;
@@ -563,6 +567,7 @@ async function authorizeZaloMessage(
   }
 
   return {
+    channelIngress: access,
     chatId,
     commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
     isGroup,
@@ -599,7 +604,8 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   if (!authorization) {
     return;
   }
-  const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
+  const { channelIngress, isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } =
+    authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
@@ -631,6 +637,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   });
 
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress,
     channel: "zalo",
     accountId: route.accountId,
     messageId: message_id,
