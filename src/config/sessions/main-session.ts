@@ -37,9 +37,25 @@ export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   });
 }
 
+/** Resolves the owner and canonical session target for ambient system work. */
+export function resolveSystemMainSessionTarget(cfg: OpenClawConfig): {
+  agentId: string;
+  sessionKey: string;
+} {
+  const agentId = resolveSystemAgentTargetAgentId(cfg);
+  return {
+    agentId,
+    sessionKey: resolveCanonicalMainSessionKey({
+      agentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
+    }),
+  };
+}
+
 /** Resolves the main session owned by configured ambient system work. */
 export function resolveSystemMainSessionKey(cfg: OpenClawConfig): string {
-  return resolveAgentMainSessionKey({ cfg, agentId: resolveSystemAgentTargetAgentId(cfg) });
+  return resolveSystemMainSessionTarget(cfg).sessionKey;
 }
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
