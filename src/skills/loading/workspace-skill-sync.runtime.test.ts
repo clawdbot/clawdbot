@@ -57,6 +57,10 @@ function buildWorkspaceSkillsPrompt(
   return buildSkillSnapshot(workspaceDir, opts).prompt;
 }
 
+function sortedSkillNames(names: Iterable<string>): string[] {
+  return [...names].toSorted((left, right) => left.localeCompare(right, "en"));
+}
+
 async function expectSyncedSkillConfinement(params: {
   sourceWorkspace: string;
   targetWorkspace: string;
@@ -477,8 +481,10 @@ describe("syncWorkspaceSkills", () => {
       managedSkillsDir,
       skillsSnapshot: firstSnapshot,
     });
-    const oldCatalog = [...oldNames].toSorted();
-    expect(first.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual(oldCatalog);
+    const oldCatalog = sortedSkillNames(oldNames);
+    expect(sortedSkillNames(first.skillsSnapshot.skills.map((skill) => skill.name))).toEqual(
+      oldCatalog,
+    );
 
     await fs.rm(path.join(sourceWorkspace, "skills", "skill-08"), { recursive: true, force: true });
     await writeSkill({
@@ -492,7 +498,7 @@ describe("syncWorkspaceSkills", () => {
       managedSkillsDir,
       snapshotVersion: nextVersion,
     });
-    const newCatalog = secondSnapshot.skills.map((skill) => skill.name).toSorted();
+    const newCatalog = sortedSkillNames(secondSnapshot.skills.map((skill) => skill.name));
 
     let releasePause!: () => void;
     const pause = new Promise<void>((resolve) => {
@@ -528,11 +534,13 @@ describe("syncWorkspaceSkills", () => {
       });
 
       // Live directory scan can observe a partial tree during the destructive window.
-      const liveNames = loadWorkspaceSkills(targetWorkspace, { workspaceOnly: true })
-        .map((entry) => entry.skill.name)
-        .toSorted();
-      expect(oldCatalog.some((name) => !liveNames.includes(name))).toBe(true);
-      expect(newCatalog.every((name) => liveNames.includes(name))).toBe(false);
+      const liveNameSet = new Set(
+        loadWorkspaceSkills(targetWorkspace, { workspaceOnly: true }).map(
+          (entry) => entry.skill.name,
+        ),
+      );
+      expect(oldCatalog.some((name) => !liveNameSet.has(name))).toBe(true);
+      expect(newCatalog.every((name) => liveNameSet.has(name))).toBe(false);
 
       // Sandbox prompt readers peek the sync-published generation instead.
       const {
@@ -559,18 +567,20 @@ describe("syncWorkspaceSkills", () => {
         skillsSnapshot: skillsSnapshotForRun,
         workspaceDir: skillsPromptWorkspaceDir,
       });
-      const promptNames = [...prompt.matchAll(/<name>([^<]*)<\/name>/g)]
-        .map((match) => match[1])
-        .toSorted();
-      expect(promptNames).toEqual(oldCatalog);
-      expect(skillsSnapshotForRun?.skills.map((skill) => skill.name).toSorted()).toEqual(
-        oldCatalog,
+      const promptNames = sortedSkillNames(
+        [...prompt.matchAll(/<name>([^<]*)<\/name>/g)].flatMap((match) =>
+          match[1] ? [match[1]] : [],
+        ),
       );
+      expect(promptNames).toEqual(oldCatalog);
+      expect(
+        sortedSkillNames(skillsSnapshotForRun?.skills.map((skill) => skill.name) ?? []),
+      ).toEqual(oldCatalog);
       expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/skill-01/SKILL.md");
 
       releasePause();
       const second = await syncPromise;
-      expect(second.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual(
+      expect(sortedSkillNames(second.skillsSnapshot.skills.map((skill) => skill.name))).toEqual(
         newCatalog,
       );
     } finally {
@@ -624,7 +634,7 @@ describe("syncWorkspaceSkills", () => {
         eligibility: { nodeSkills: { canExec: true } },
       });
       const nodeLocation = "node://node-1/skills/release-helper/SKILL.md";
-      expect(synced.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
+      expect(sortedSkillNames(synced.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
         "demo",
         "release-helper",
       ]);
