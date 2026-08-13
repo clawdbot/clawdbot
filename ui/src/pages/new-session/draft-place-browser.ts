@@ -4,7 +4,6 @@ import type {
   FsListDirResult,
   ProjectRecord,
   ProjectRecent,
-  ProjectsAddResult,
   ProjectsListResult,
   ProjectsRegisterResult,
   ProjectsSearchRemoteResult,
@@ -16,7 +15,7 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import type { BrowserTarget, DraftNode } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
-import { projectCloneInput } from "./project-chip.ts";
+import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 const PROJECT_SEARCH_DEBOUNCE_MS = 300;
@@ -24,18 +23,21 @@ type DraftPickerKind = "where" | "project" | "detail";
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
-  projectId: string;
   nodes: readonly DraftNode[];
   folder: string;
   execNode: string;
   isAdmin: boolean;
 }>;
 
+type DraftProjectSelection =
+  | { kind: "local"; id: string }
+  | { kind: "remote"; project: DraftRemoteProject }
+  | null;
+
 type DraftPlaceBrowserCallbacks = {
   requestUpdate: () => void;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
-  onApplyFolder: (folder: string, execNode: string, gatewayApproved: boolean) => void;
   onApprovedListing: (listing: FsListDirResult) => void;
   querySelector: (selector: string) => Element | null;
   activeElement: () => Element | null;
@@ -45,10 +47,9 @@ type DraftPlaceBrowserCallbacks = {
 export class DraftPlaceBrowser {
   private projectsValue: ProjectRecord[] = [];
   private projectRecentsValue: ProjectRecent[] | undefined;
+  private projectSelection: DraftProjectSelection = null;
   private projectQueryValue = "";
   private debouncedProjectQuery = "";
-  private projectCloneBusyValue = false;
-  private projectCloneErrorValue: string | null = null;
   private browserLoadingValue = false;
   private browserErrorValue: string | null = null;
   private browserListingValue: FsListDirResult | null = null;
@@ -60,7 +61,6 @@ export class DraftPlaceBrowser {
   // Live head input; absolute paths stay applicable even without fs.listDir.
   private browserPathDraftValue = "";
   private browserRequestToken = 0;
-  private projectCloneRequestToken = 0;
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   private readonly projectsTask: Task<readonly unknown[], ProjectsListResult>;
@@ -94,10 +94,7 @@ export class DraftPlaceBrowser {
         const projects = result.projects ?? [];
         this.projectsValue = projects;
         this.projectRecentsValue = result.recents;
-        if (
-          this.read().projectId &&
-          !projects.some((project) => project.id === this.read().projectId)
-        ) {
+        if (this.projectId && !projects.some((project) => project.id === this.projectId)) {
           this.callbacks.onProjectMissing();
         }
         this.callbacks.requestUpdate();
@@ -151,6 +148,14 @@ export class DraftPlaceBrowser {
     return this.projectRecentsValue;
   }
 
+  get projectId(): string {
+    return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
+  }
+
+  get remoteProject(): DraftRemoteProject | null {
+    return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
+  }
+
   get projectQuery(): string {
     return this.projectQueryValue;
   }
@@ -179,14 +184,6 @@ export class DraftPlaceBrowser {
     }
     const error = this.projectSearchTask.error;
     return error instanceof Error ? error.message : String(error);
-  }
-
-  get projectCloneBusy(): boolean {
-    return this.projectCloneBusyValue;
-  }
-
-  get projectCloneError(): string | null {
-    return this.projectCloneErrorValue;
   }
 
   get browserLoading(): boolean {
@@ -241,8 +238,23 @@ export class DraftPlaceBrowser {
     ]);
   }
 
-  selectedProject(projectId: string): ProjectRecord | undefined {
-    return this.projectsValue.find((project) => project.id === projectId);
+  selectedProject(): ProjectRecord | undefined {
+    return this.projectsValue.find((project) => project.id === this.projectId);
+  }
+
+  selectProject(selection: Exclude<DraftProjectSelection, null>) {
+    this.projectSelection = selection;
+  }
+
+  recordRemoteProjectId(cloneUrl: string, projectId: string) {
+    const project = this.remoteProject;
+    if (project?.cloneUrl === cloneUrl) {
+      this.projectSelection = { kind: "remote", project: { ...project, projectId } };
+    }
+  }
+
+  clearProjectSelection() {
+    this.projectSelection = null;
   }
 
   resolveProjectRecents(params: {
@@ -283,7 +295,6 @@ export class DraftPlaceBrowser {
 
   changeProjectQuery(query: string) {
     this.projectQueryValue = query;
-    this.projectCloneErrorValue = null;
     this.clearProjectSearchTimer();
     this.debouncedProjectQuery = "";
     void this.projectSearchTask.run([null, false, "", this.gateway.connectionEpoch]);
@@ -314,71 +325,17 @@ export class DraftPlaceBrowser {
     this.callbacks.requestUpdate();
   }
 
-  async addRemoteProject(gitUrl: string) {
-    const client = this.gateway.client;
-    const context = this.read().context;
-    if (
-      !client ||
-      !this.gateway.connected ||
-      this.projectCloneBusyValue ||
-      !context ||
-      !canCallGatewayMethod(context.gateway.snapshot, "projects.add", "operator.write")
-    ) {
-      return;
-    }
-    const requestId = ++this.projectCloneRequestToken;
-    const connectionEpoch = this.gateway.connectionEpoch;
-    this.projectCloneBusyValue = true;
-    this.projectCloneErrorValue = null;
-    this.callbacks.requestUpdate();
-    try {
-      const project = await client.request<ProjectsAddResult>(
-        "projects.add",
-        { gitUrl },
-        { timeoutMs: null },
-      );
-      if (
-        requestId !== this.projectCloneRequestToken ||
-        client !== this.gateway.client ||
-        connectionEpoch !== this.gateway.connectionEpoch
-      ) {
-        return;
-      }
-      await this.projectsTask.run([client, true, connectionEpoch]);
-      if (
-        requestId !== this.projectCloneRequestToken ||
-        client !== this.gateway.client ||
-        connectionEpoch !== this.gateway.connectionEpoch
-      ) {
-        return;
-      }
-      this.callbacks.onSelectProject(project.id);
-      this.close();
-    } catch (error) {
-      if (requestId === this.projectCloneRequestToken && client === this.gateway.client) {
-        this.projectCloneErrorValue = error instanceof Error ? error.message : String(error);
-      }
-    } finally {
-      if (requestId === this.projectCloneRequestToken) {
-        this.projectCloneBusyValue = false;
-        this.callbacks.requestUpdate();
-      }
-    }
-  }
-
   resetProjectSearch() {
     this.clearProjectSearchTimer();
-    this.projectCloneRequestToken += 1;
     this.projectQueryValue = "";
     this.debouncedProjectQuery = "";
-    this.projectCloneBusyValue = false;
-    this.projectCloneErrorValue = null;
     this.callbacks.requestUpdate();
   }
 
   resetProjects() {
     this.projectsValue = [];
     this.projectRecentsValue = undefined;
+    this.clearProjectSelection();
     this.resetProjectSearch();
   }
 

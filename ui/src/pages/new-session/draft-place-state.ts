@@ -17,6 +17,7 @@ import { newSessionSearch } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isKnownWorkspacePath } from "./path.ts";
 import type { NewSessionWhere } from "./preferences.ts";
+import type { DraftRemoteProject } from "./project-chip.ts";
 
 type DraftPlaceSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -34,7 +35,6 @@ type DraftPlaceCallbacks = {
 export class DraftPlaceState {
   private agentIdValue = "";
   private folderValue = "";
-  private projectIdValue = "";
   private nodesValue: DraftNode[] = [];
   private execNodeValue = "";
   private cloudProfileIdValue = "";
@@ -65,7 +65,8 @@ export class DraftPlaceState {
       () => ({
         execNode: this.execNodeValue,
         cloudProfileId: this.cloudProfileIdValue,
-        selectedProject: this.selectedProject(),
+        selectedProject: this.browser.selectedProject(),
+        remoteProjectSelected: Boolean(this.browser.remoteProject),
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,
@@ -92,10 +93,6 @@ export class DraftPlaceState {
 
   get folder(): string {
     return this.folderValue;
-  }
-
-  get projectId(): string {
-    return this.projectIdValue;
   }
 
   get worktree(): boolean {
@@ -145,10 +142,6 @@ export class DraftPlaceState {
   selectedAgent() {
     const agentId = normalizeAgentId(this.agentIdValue);
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
-  }
-
-  selectedProject() {
-    return this.browser.selectedProject(this.projectIdValue);
   }
 
   execNodes(): DraftNode[] {
@@ -201,8 +194,8 @@ export class DraftPlaceState {
   }
 
   folderSubmissionBlocked(): boolean {
-    if (this.projectIdValue) {
-      return !this.selectedProject();
+    if (this.browser.projectId || this.browser.remoteProject) {
+      return !this.browser.remoteProject && !this.browser.selectedProject();
     }
     if (this.restoredFolderValidation !== "none") {
       return true;
@@ -290,7 +283,7 @@ export class DraftPlaceState {
   resetDraft() {
     this.agentSelectedByUser = false;
     this.folderValue = "";
-    this.projectIdValue = "";
+    this.browser.clearProjectSelection();
     this.browser.resetProjectSearch();
     this.folderSelectedByUser = false;
     this.folderGatewayApproved = false;
@@ -326,7 +319,6 @@ export class DraftPlaceState {
     this.agentSelectedByUser = false;
     this.folderValue = "";
     this.browser.resetProjects();
-    this.projectIdValue = "";
     this.folderSelectedByUser = false;
     this.preferredWhereRestore = null;
     this.preferredProjectRestore = "";
@@ -355,7 +347,7 @@ export class DraftPlaceState {
   }
 
   clearProjectSelection() {
-    this.projectIdValue = "";
+    this.browser.clearProjectSelection();
     this.repositoryState.load();
     this.callbacks.requestUpdate();
   }
@@ -376,7 +368,7 @@ export class DraftPlaceState {
     this.folderSelectedByUser = false;
     this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
-    this.projectIdValue = "";
+    this.browser.clearProjectSelection();
     this.preferredWhereRestore = null;
     this.preferredProjectRestore = "";
     this.whereSelectedByUser = false;
@@ -396,7 +388,7 @@ export class DraftPlaceState {
       return;
     }
     this.execNodeValue = execNode;
-    this.projectIdValue = "";
+    this.browser.clearProjectSelection();
     this.cancelRestoredFolderValidation();
     if (execNode) {
       this.cloudProfileIdValue = "";
@@ -430,28 +422,43 @@ export class DraftPlaceState {
     if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
       return;
     }
-    const project = this.browser.selectedProject(projectId);
+    const project = this.browser.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
       return;
     }
+    this.selectProject({ kind: "local", id: project.id });
+  }
+
+  selectRemoteProject(project: DraftRemoteProject) {
+    this.selectProject({ kind: "remote", project });
+  }
+
+  private selectProject(selection: Parameters<DraftPlaceBrowser["selectProject"]>[0]) {
+    const snapshot = this.read();
+    if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
+      return;
+    }
+    this.browser.selectProject(selection);
     this.cancelRestoredFolderValidation();
     this.browser.resetProjectSearch();
-    this.projectIdValue = project.id;
     this.execNodeValue = "";
     this.callbacks.onError(null);
     this.folderSelectedByUser = false;
     this.projectSelectedByUser = true;
     this.preferredProjectRestore = "";
     this.repositoryState.selectWorktree(Boolean(this.cloudProfileIdValue));
-    this.persistPreference({
-      projectId: project.id,
-      where: this.cloudProfileIdValue
-        ? { kind: "cloud", id: this.cloudProfileIdValue }
-        : { kind: "local" },
-      worktree: this.worktree,
-      worktreeName: "",
-    });
+    if (selection.kind === "local") {
+      this.persistPreference({
+        projectId: selection.id,
+        where: this.cloudProfileIdValue
+          ? { kind: "cloud", id: this.cloudProfileIdValue }
+          : { kind: "local" },
+        worktree: this.worktree,
+        worktreeName: "",
+      });
+    }
     this.repositoryState.load();
+    this.browser.close();
   }
 
   selectExecNode(execNode: string) {
@@ -473,13 +480,13 @@ export class DraftPlaceState {
       this.folderValue = execNode ? "" : this.workspacePath();
       this.folderSelectedByUser = false;
       this.folderGatewayApproved = false;
-      this.projectIdValue = "";
+      this.browser.clearProjectSelection();
       this.projectSelectedByUser = true;
     }
     this.repositoryState.selectWorktree(keepWorktree, false);
     this.persistPreference({
       where: execNode ? { kind: "node", id: execNode } : { kind: "local" },
-      projectId: this.projectIdValue,
+      projectId: this.browser.projectId,
       folder: this.folderValue,
       worktree: this.worktree,
     });
@@ -507,7 +514,7 @@ export class DraftPlaceState {
     this.repositoryState.forceWorktree(true);
     this.persistPreference({
       where: { kind: "cloud", id: profileId },
-      projectId: this.projectIdValue,
+      projectId: this.browser.projectId,
       worktree: true,
     });
     this.browser.close();
@@ -535,9 +542,9 @@ export class DraftPlaceState {
     let preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;
 
     if (preferredWhere?.kind !== "node" && preferredProject) {
-      const project = this.browser.selectedProject(preferredProject);
+      const project = this.browser.projects.find((candidate) => candidate.id === preferredProject);
       if (project) {
-        this.projectIdValue = project.id;
+        this.browser.selectProject({ kind: "local", id: project.id });
         this.execNodeValue = "";
         this.folderSelectedByUser = false;
         this.preferredProjectRestore = "";
@@ -553,7 +560,7 @@ export class DraftPlaceState {
       const nodeAvailable = this.execNodes().some((node) => node.nodeId === preferredWhere.id);
       this.execNodeValue = nodeAvailable ? preferredWhere.id : "";
       this.cloudProfileIdValue = "";
-      this.projectIdValue = "";
+      this.browser.clearProjectSelection();
       this.repositoryState.forceWorktree(false);
       this.preferredWhereRestore = null;
       this.preferredProjectRestore = "";
@@ -562,7 +569,7 @@ export class DraftPlaceState {
       const profileAvailable = this.gateway.cloudProfiles.some(
         (profile) => profile.id === preferredWhere.id,
       );
-      const projectReady = !preferredProject || this.projectIdValue === preferredProject;
+      const projectReady = !preferredProject || this.browser.projectId === preferredProject;
       if (profileAvailable && projectReady && this.worktreeAvailable()) {
         this.execNodeValue = "";
         this.cloudProfileIdValue = preferredWhere.id;
@@ -594,7 +601,7 @@ export class DraftPlaceState {
   }
 
   private usesCustomFolder(): boolean {
-    if (this.projectIdValue) {
+    if (this.browser.projectId || this.browser.remoteProject) {
       return false;
     }
     const folder = this.folderValue.trim();

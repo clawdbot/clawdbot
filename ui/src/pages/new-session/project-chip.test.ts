@@ -43,6 +43,7 @@ describe("What chip state", () => {
         folder: "",
         workspace: "/workspace",
         projectId: "",
+        selectedRemoteProject: null,
         projects,
         recents: [
           {
