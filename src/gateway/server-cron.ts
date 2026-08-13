@@ -61,6 +61,7 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -741,15 +742,19 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { sessionKey } = resolveCronTarget(opts);
+      const { agentId, sessionKey } = resolveCronTarget(opts);
       if (!sessionKey) {
         throw new Error("Cron system event target did not resolve a session key.");
       }
-      const remove = enqueueSystemEventWithReceipt(text, {
+      const eventOptions = {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
-      });
+      };
+      if (sessionKey === "global" && agentId) {
+        withSystemEventOwner(eventOptions, agentId);
+      }
+      const remove = enqueueSystemEventWithReceipt(text, eventOptions);
       return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {

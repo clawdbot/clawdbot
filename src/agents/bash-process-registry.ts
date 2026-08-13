@@ -50,6 +50,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Agent owner frozen when the exec process starts. */
+  agentId?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
    *  Used by background-exit notifications to remap cron-run keys to the
    *  agent's main queue without an ambient config load. If config changes
