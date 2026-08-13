@@ -408,6 +408,57 @@ describe("executeFollowupTurn", () => {
     );
   });
 
+  it.each([
+    { label: "declined", result: false, visible: false },
+    { label: "confirmed", result: true, visible: true },
+    { label: "legacy void", result: undefined, visible: true },
+  ] as const)("records $label durable failed progress visibility", async ({ result, visible }) => {
+    const onDurableToolResult = vi.fn(async () => result);
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "tool failed", isError: true });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const execution = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { forceToolResultProgress: true },
+      },
+      onToolResult: onDurableToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await execution.progress.drain();
+
+    expect(execution.progress.visibleToolErrorObserved()).toBe(visible);
+  });
+
+  it("keeps rejected durable failed progress invisible", async () => {
+    const onDurableToolResult = vi.fn(async () => {
+      throw new Error("delivery rejected");
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "tool failed", isError: true });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const execution = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { forceToolResultProgress: true },
+      },
+      onToolResult: onDurableToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await expect(execution.progress.drain()).rejects.toThrow("delivery rejected");
+    expect(execution.progress.visibleToolErrorObserved()).toBe(false);
+  });
+
   it("keeps forced tool results durable when channel progress is unavailable", async () => {
     const onDurableToolResult = vi.fn(async () => {});
     const turn = createTurn({
@@ -646,7 +697,7 @@ describe("executeFollowupTurn", () => {
       warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const onToolResult = vi.fn(async () => {});
+    const onToolResult = vi.fn(async () => true);
 
     const result = await executeFollowupTurn({
       turn,

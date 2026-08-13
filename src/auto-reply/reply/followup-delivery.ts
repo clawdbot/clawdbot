@@ -8,6 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -286,7 +287,7 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
-}): Promise<void> {
+}): Promise<boolean> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -304,13 +305,13 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return;
+    return false;
   }
   if (!originRoutable && !defaults.opts?.onBlockReply) {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return;
+    return false;
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -319,6 +320,7 @@ async function sendFollowupPayloads(params: {
   });
   let crossChannelFailure = false;
   let deliveredCrossChannelOrigin = false;
+  let visibleDelivery = false;
   for (const payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
@@ -340,7 +342,10 @@ async function sendFollowupPayloads(params: {
             : "dispatcher";
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
-      await defaults.opts?.onBlockReply?.(payload);
+      const settled = await settleProgressVisibilityCallbackResult(
+        defaults.opts?.onBlockReply?.(payload),
+      );
+      visibleDelivery ||= settled.visible;
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const metadata = getReplyPayloadMetadata(payload);
       const result = await routeReply({
@@ -371,13 +376,16 @@ async function sendFollowupPayloads(params: {
         });
         const origin = resolveOriginMessageProvider({ originatingChannel });
         if (origin && origin === provider && defaults.opts?.onBlockReply) {
-          await defaults.opts.onBlockReply(payload);
+          visibleDelivery ||= (
+            await settleProgressVisibilityCallbackResult(defaults.opts.onBlockReply(payload))
+          ).visible;
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailure = true;
         } else {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
+        visibleDelivery = true;
         if (!result.ok) {
           logVerbose(
             `followup queue: route-reply partially failed after delivery: ${
@@ -394,13 +402,18 @@ async function sendFollowupPayloads(params: {
     }
   }
   if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
-    await defaults.opts.onBlockReply({
-      text:
-        "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
-        "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
-      isError: true,
-    });
+    visibleDelivery ||= (
+      await settleProgressVisibilityCallbackResult(
+        defaults.opts.onBlockReply({
+          text:
+            "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
+            "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
+          isError: true,
+        }),
+      )
+    ).visible;
   }
+  return visibleDelivery;
 }
 
 /** Performs the already-resolved follow-up delivery action. */
@@ -411,11 +424,11 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
-}): Promise<void> {
+}): Promise<boolean> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
-    return;
+    return false;
   }
   if (decision.kind === "retry-source-delivery") {
     warnPrivateMessageToolFinal({
@@ -443,7 +456,7 @@ export async function deliverFollowupDecision(params: {
         { position: "front" },
       );
     if (enqueued) {
-      return;
+      return false;
     }
     const diagnosticPayloads = resolveFollowupDeliveryPayloads({
       cfg: turn.config,
@@ -456,7 +469,7 @@ export async function deliverFollowupDecision(params: {
       originatingTo: turn.queued.originatingTo,
       originatingThreadId: turn.queued.originatingThreadId,
     });
-    await sendFollowupPayloads({
+    return await sendFollowupPayloads({
       payloads: diagnosticPayloads,
       turn,
       defaults,
@@ -464,9 +477,8 @@ export async function deliverFollowupDecision(params: {
       kind: params.kind ?? "final",
       resolved: decision.resolved,
     });
-    return;
   }
-  await sendFollowupPayloads({
+  return await sendFollowupPayloads({
     payloads: decision.kind === "deliver" ? decision.payloads : [decision.payload],
     turn,
     defaults,

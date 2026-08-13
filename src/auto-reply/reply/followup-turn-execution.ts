@@ -64,7 +64,7 @@ export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
   onExecutionStarted?: () => void;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<boolean | void>;
   onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
@@ -293,7 +293,7 @@ export async function executeFollowupTurn(params: {
           transientToolResultProgress && !verboseToolResult
             ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
                 .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
+            : (await params.onToolResult(payload, { runId: turn.runId })) !== false;
         if (visible && payload.isError === true) {
           visibleToolError = true;
         }

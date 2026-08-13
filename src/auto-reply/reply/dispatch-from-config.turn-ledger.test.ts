@@ -59,9 +59,7 @@ describe("createReplyTurnLedger", () => {
     await dispatcher.waitForIdle();
   });
 
-  it("conservatively counts a started-then-failed delivery as visible", async () => {
-    // Chunked transports may show partial content before rejecting; core cannot
-    // prove invisibility, so the fallback must stay quiet.
+  it("does not count a started-then-failed delivery as visible", async () => {
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw new Error("transport down mid-send");
@@ -70,7 +68,7 @@ describe("createReplyTurnLedger", () => {
     const ledger = createReplyTurnLedger(dispatcher);
     expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
     await ledger.settleQueued();
-    expect(ledger.hasVisibleDelivery()).toBe(true);
+    expect(ledger.hasVisibleDelivery()).toBe(false);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });

@@ -83,7 +83,7 @@ export function createFollowupRunner(
           executionStarted = true;
         },
         onToolResult: async (payload, identity) => {
-          await deliverFollowupDecision({
+          return await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
             turn,
             defaults,

@@ -828,7 +828,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
 
-  it("records a rejected source delivery after a runtime-derived fallback", async () => {
+  it.each([
+    {
+      label: "failed-before-deliver",
+      error: Object.assign(new Error("source transport unavailable"), {
+        code: "ECONNREFUSED",
+        syscall: "connect",
+      }),
+    },
+    { label: "failed-deliver", error: new Error("source transport rejected final") },
+  ])("delivers one fallback after $label", async ({ error }) => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
@@ -838,10 +847,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       runAttempt: vi.fn(async () => ({}) as never),
     });
     sessionStoreMocks.currentEntry = { ...codexEntry };
-    const deliveryError = new Error("source transport rejected final");
-    const deliver = vi.fn(async () => {
-      throw deliveryError;
-    });
+    const deliver = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onError });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -862,13 +868,45 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(result).toMatchObject({ queuedFinal: true });
-    expect(deliver).toHaveBeenCalledWith(
+    expect(deliver).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({ text: "Rejected fallback final" }),
       expect.objectContaining({ kind: "final" }),
     );
-    expect(onError).toHaveBeenCalledWith(deliveryError, expect.objectContaining({ kind: "final" }));
-    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(deliver).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: expect.stringContaining("No reply was generated") }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error, expect.objectContaining({ kind: "final" }));
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 2 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("does not duplicate a confirmed source delivery with a fallback", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Confirmed source final" }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Confirmed source final" }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {

@@ -897,7 +897,7 @@ describe("deliverFollowupDecision", () => {
     const turn = createTurn();
     turn.queued.run.messageProvider = "discord";
 
-    await deliverFollowupDecision({
+    const visible = await deliverFollowupDecision({
       decision: { kind: "deliver", payloads: [{ text: "already delivered" }] },
       turn,
       defaults: createDefaults(onBlockReply),
@@ -906,6 +906,7 @@ describe("deliverFollowupDecision", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
+    expect(visible).toBe(true);
   });
 
   it("does not retry a channel-transform-suppressed routed follow-up", async () => {
@@ -918,7 +919,7 @@ describe("deliverFollowupDecision", () => {
       reason: "channel_transform",
     });
 
-    await deliverFollowupDecision({
+    const visible = await deliverFollowupDecision({
       decision: { kind: "deliver", payloads: [{ text: "private reply" }] },
       turn: createTurn(),
       defaults: createDefaults(onBlockReply),
@@ -927,5 +928,6 @@ describe("deliverFollowupDecision", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
+    expect(visible).toBe(false);
   });
 });
