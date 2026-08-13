@@ -5,17 +5,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  createWrapperProof,
+  type WrapperProof,
+  writeWrapperProofReceipt,
+} from "./lib/check-proof-reuse.mts";
+import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   resolveLocalHeavyCheckEnv,
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mts";
-import {
-  createWrapperProof,
-  type WrapperProof,
-  writeWrapperProofReceipt,
-} from "./lib/check-proof-reuse.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 

@@ -57,8 +57,8 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
-import { createOxlintWrapperProofForArgs } from "./run-oxlint.mts";
 import { createOxlintShardsWrapperProof } from "./run-oxlint-shards.mts";
+import { createOxlintWrapperProofForArgs } from "./run-oxlint.mts";
 import { createTsgoWrapperProofForArgs } from "./run-tsgo.mts";
 
 type ChangedCheckCommand = {

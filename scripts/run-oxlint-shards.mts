@@ -4,6 +4,12 @@ import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  createWrapperProof,
+  readWrapperProofReceipt,
+  writeWrapperProofReceipt,
+  type WrapperProof,
+} from "./lib/check-proof-reuse.mts";
+import {
   acquireLocalHeavyCheckLockSync,
   ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
@@ -14,12 +20,6 @@ import {
   createOxlintWrapperProofForArgs,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "./run-oxlint.mts";
-import {
-  createWrapperProof,
-  readWrapperProofReceipt,
-  writeWrapperProofReceipt,
-  type WrapperProof,
-} from "./lib/check-proof-reuse.mts";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;

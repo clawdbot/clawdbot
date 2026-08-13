@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { readFlagValue } from "./lib/arg-utils.mts";
 import {
+  createWrapperProof,
+  type WrapperProof,
+  writeWrapperProofReceipt,
+} from "./lib/check-proof-reuse.mts";
+import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
   ensureRepoToolNodeModulesLink,
@@ -13,11 +18,6 @@ import {
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
-import {
-  createWrapperProof,
-  type WrapperProof,
-  writeWrapperProofReceipt,
-} from "./lib/check-proof-reuse.mts";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
