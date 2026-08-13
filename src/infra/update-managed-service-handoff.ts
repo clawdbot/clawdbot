@@ -109,6 +109,27 @@ function isPidAlive(pid) {
   return true;
 }
 
+function parseWindowsProcessStartTime(raw) {
+  const value = String(raw || "").trim().replace(/^CreationDate=/i, "");
+  const parsedIso = Date.parse(value);
+  if (Number.isFinite(parsedIso)) {
+    return parsedIso;
+  }
+  const dmtf = value.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/);
+  if (!dmtf) return null;
+  const localTimeMs = Date.UTC(
+    Number(dmtf[1]),
+    Number(dmtf[2]) - 1,
+    Number(dmtf[3]),
+    Number(dmtf[4]),
+    Number(dmtf[5]),
+    Number(dmtf[6]),
+    Math.floor(Number(dmtf[7]) / 1000),
+  );
+  const offsetMs = Number(dmtf[9]) * 60000 * (dmtf[8] === "+" ? 1 : -1);
+  return localTimeMs - offsetMs;
+}
+
 function readProcessStartIdentity(pid) {
   if (!isPidAlive(pid)) {
     return null;
@@ -137,6 +158,36 @@ function readProcessStartIdentity(pid) {
       return result.status === 0 && value ? value : null;
     } catch {
       return null;
+    }
+  }
+  if (process.platform === "win32") {
+    const powershell = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        '$process = Get-CimInstance Win32_Process -Filter "ProcessId = ' +
+          pid +
+          '" -ErrorAction Stop; [Console]::Out.Write($process.CreationDate.ToUniversalTime().ToString("o"))',
+      ],
+      { encoding: "utf8", timeout: 1500, windowsHide: true },
+    );
+    if (!powershell.error && powershell.status === 0) {
+      const startedAt = parseWindowsProcessStartTime(powershell.stdout);
+      if (startedAt !== null) return String(startedAt);
+    }
+    const wmic = spawnSync(
+      "wmic.exe",
+      ["process", "where", "ProcessId=" + pid, "get", "CreationDate", "/value"],
+      { encoding: "utf8", timeout: 1500, windowsHide: true },
+    );
+    if (!wmic.error && wmic.status === 0) {
+      const line = String(wmic.stdout || "")
+        .split(/\r?\n/)
+        .find((entry) => /^CreationDate=/i.test(entry.trim()));
+      const startedAt = parseWindowsProcessStartTime(line);
+      if (startedAt !== null) return String(startedAt);
     }
   }
   return null;

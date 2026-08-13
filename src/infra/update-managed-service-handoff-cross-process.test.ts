@@ -187,6 +187,64 @@ describe("managed service update handoff cross-process lease", () => {
     expect(result).not.toHaveProperty("pid");
   });
 
+  it.runIf(process.platform === "win32")(
+    "reclaims a reused Windows PID with a different creation identity",
+    async () => {
+      const { execFile } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const sqlite = await import("node:sqlite");
+      const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
+      const leaseDatabasePath = String(baseParams.updateLeaseDatabasePath);
+      const leaseKey = String(baseParams.updateLeaseKey);
+      const commandStartedPath = path.join(tmpDir, "windows-reused-pid-started");
+      await fs.mkdir(path.dirname(leaseDatabasePath), { recursive: true });
+      const db = new sqlite.DatabaseSync(leaseDatabasePath);
+      try {
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS managed_update_handoffs (install_root TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;",
+        );
+        db.prepare(
+          [
+            "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at)",
+            "VALUES (?, ?, ?, ?)",
+            "ON CONFLICT(install_root) DO UPDATE SET owner = excluded.owner, payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+          ].join(" "),
+        ).run(
+          leaseKey,
+          "stale-windows-owner",
+          JSON.stringify({ version: 1, pid: process.pid, startIdentity: "0" }),
+          Date.now(),
+        );
+      } finally {
+        db.close();
+      }
+      const paramsPath = await writeConcurrentHandoffParams({
+        tmpDir,
+        baseParams,
+        name: "windows-reused-pid",
+        owner: "replacement-windows-owner",
+        commandArgv: [
+          process.execPath,
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(commandStartedPath)},"started")`,
+        ],
+      });
+
+      const result = await runHelper({
+        execFile,
+        helperScriptPath,
+        paramsPath,
+        cwd: tmpDir,
+      });
+
+      expect(result, result.stderr).toMatchObject({
+        code: 0,
+        stdout: expect.stringContaining("OPENCLAW_UPDATE_HANDOFF_READY"),
+      });
+      await expect(pathExists(commandStartedPath)).resolves.toBe(true);
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked coordinator directory before running the updater",
     async () => {
