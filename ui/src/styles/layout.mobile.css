@@ -769,8 +769,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
-@media (max-width: 500px) {
+/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+@media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
   }

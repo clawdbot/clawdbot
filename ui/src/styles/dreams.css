@@ -1112,7 +1112,7 @@
 
 /* ---- Responsive ---- */
 
-@media (max-width: 880px) {
+@media (max-width: 900px) {
   .dreams {
     min-height: calc(100vh - 96px);
   }

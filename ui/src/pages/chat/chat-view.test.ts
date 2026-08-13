@@ -1095,6 +1095,70 @@ describe("cloud workspace conflict notice", () => {
   });
 });
 
+describe("cloud worker disk-space notice", () => {
+  it.each([
+    {
+      status: "warning" as const,
+      availableBytes: 400 * 1024 * 1024,
+      role: "status",
+      title: "Cloud session disk space is low",
+      copy: "96% used · 400 MB free. Delete unneeded files or stop the cloud worker before large writes.",
+    },
+    {
+      status: "critical" as const,
+      availableBytes: 50 * 1024 * 1024,
+      role: "alert",
+      title: "Cloud session disk space is critically low",
+      copy: "New writes may fail and stop the agent.",
+    },
+  ])("renders persistent $status action guidance above the workbench", (sample) => {
+    const container = renderChatView({
+      diskSpace: {
+        status: sample.status,
+        availableBytes: sample.availableBytes,
+        totalBytes: 10 * 1024 * 1024 * 1024,
+        observedAtMs: 1_000,
+      },
+    });
+    const notice = requireElement(container, ".chat-cloud-disk-space-notice", "disk-space notice");
+
+    expect(notice.getAttribute("role")).toBe(sample.role);
+    expect(notice.textContent).toContain(sample.title);
+    expect(notice.textContent).toContain(sample.copy);
+    expect(notice.querySelector("svg")).not.toBeNull();
+    expect(notice.querySelector("button")).toBeNull();
+    expect(notice.nextElementSibling?.classList.contains("chat-workbench")).toBe(true);
+  });
+
+  it.each(["ok" as const, undefined])("clears for %s disk-space projection", (status) => {
+    const container = document.createElement("div");
+    renderChatInto(container, {
+      diskSpace: {
+        status: "warning",
+        availableBytes: 400,
+        totalBytes: 1_000,
+        observedAtMs: 1,
+      },
+    });
+    expect(container.querySelector(".chat-cloud-disk-space-notice")).not.toBeNull();
+
+    renderChatInto(
+      container,
+      status
+        ? {
+            diskSpace: {
+              status,
+              availableBytes: 800,
+              totalBytes: 1_000,
+              observedAtMs: 2,
+            },
+          }
+        : {},
+    );
+    expect(container.querySelector(".chat-cloud-disk-space-notice")).toBeNull();
+  });
+});
+
 describe("chat conversation width", () => {
   it("applies a configured width once to the centered transcript frame", () => {
     const container = renderChatView({

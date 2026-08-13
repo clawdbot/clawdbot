@@ -78,10 +78,13 @@ openclaw-new-session-page {
   opacity: 1;
 }
 
-/* Active mode stays readable without hover; inactive revealed pills keep the
-   muted resting color until directly hovered. */
-.new-session-page__visibility--active {
-  color: var(--text);
+/* Active mode must read as toggled-on even while hovered: hover on an
+   inactive pill already shows a neutral fill, so active gets an accent
+   tint to stay distinguishable under the cursor. */
+.new-session-page__visibility--active,
+.new-session-page__visibility--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .new-session-page__visibility:disabled {

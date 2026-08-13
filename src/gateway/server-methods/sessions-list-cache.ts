@@ -14,6 +14,7 @@ type SessionListFence = {
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
   titleProjectionUnavailableVersion: number;
+  workerPlacementDiskSpaceVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -32,6 +33,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
 }
 
@@ -40,7 +42,8 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
-    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );
 }
 

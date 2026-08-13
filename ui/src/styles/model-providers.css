@@ -191,7 +191,7 @@
   grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .model-providers__head {
     align-items: flex-start;
     flex-wrap: wrap;

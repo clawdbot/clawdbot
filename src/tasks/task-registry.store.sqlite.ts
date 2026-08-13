@@ -258,6 +258,15 @@ function selectTaskRowsByRuntimeSourceId(
     .rows;
 }
 
+/** Reads task records from the caller's shared-state transaction. */
+export function listTaskRecordsByRuntimeSourceIdInDatabase(
+  db: DatabaseSync,
+  runtime: TaskRuntime,
+  sourceId: string,
+): TaskRecord[] {
+  return selectTaskRowsByRuntimeSourceId(db, runtime, sourceId).map(rowToTaskRecord);
+}
+
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_delivery_state")
