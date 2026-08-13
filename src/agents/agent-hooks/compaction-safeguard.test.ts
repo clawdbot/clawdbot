@@ -2858,6 +2858,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
       setCompactionSafeguardRuntime(sessionManager, {
         model: createAnthropicModelFixture(),
         recentTurnsPreserve: 12,
+        // Default safeguard runtime enables the quality guard; the audit must
+        // see the SAME capped structured body the stored summary uses.
+        qualityGuardEnabled: true,
+        qualityGuardMaxRetries: 1,
         postCompactionSections: ["Session Startup", "Red Lines"],
         workspaceDir: workspaceRoot,
       });

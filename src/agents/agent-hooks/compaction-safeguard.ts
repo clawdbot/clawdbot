@@ -570,6 +570,27 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   return `${truncateUtf16Safe(summary, budget)}${marker}`;
 }
 
+/**
+ * Structured-body budget for the final summary cap. One allocation shared by
+ * the stored summary, the quality audit's structuralSummary, and the retry
+ * budget instruction, so the default quality-guard path cannot disagree with
+ * what capCompactionSummaryPreservingSuffix actually stores.
+ */
+function resolveSummaryBodyBudget(summaryBody: string, suffix: string, maxChars: number): number {
+  if (!suffix) {
+    return maxChars;
+  }
+  if (maxChars <= 0) {
+    return 0;
+  }
+  if (suffix.length >= maxChars) {
+    // Suffix alone exceeds the cap (tool-heavy turns): reserve the structured
+    // body a floor share (up to half), matching the stored summary allocation.
+    return Math.min(summaryBody.length, Math.floor(maxChars / 2));
+  }
+  return Math.max(0, maxChars - suffix.length);
+}
+
 function capCompactionSummaryPreservingSuffix(
   summaryBody: string,
   suffix: string,
@@ -586,13 +607,13 @@ function capCompactionSummaryPreservingSuffix(
     // structured body entirely; instead reserve it a floor share (up to half)
     // and keep the suffix TAIL, where workspace rules and post-compaction
     // instructions live. Keep the suffix whole whenever it fits below.
-    const bodyBudget = Math.min(summaryBody.length, Math.floor(maxChars / 2));
+    const bodyBudget = resolveSummaryBodyBudget(summaryBody, suffix, maxChars);
     const suffixBudget = maxChars - bodyBudget;
     const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
     const cappedSuffix = sliceUtf16Safe(suffix, -suffixBudget);
     return `${cappedBody}${cappedSuffix}`;
   }
-  const bodyBudget = Math.max(0, maxChars - suffix.length);
+  const bodyBudget = resolveSummaryBodyBudget(summaryBody, suffix, maxChars);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
   return `${cappedBody}${suffix}`;
 }
@@ -951,13 +972,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const bodyBudget = Math.max(0, MAX_COMPACTION_SUMMARY_CHARS - suffix.length);
+      const bodyBudget = resolveSummaryBodyBudget(body, suffix, MAX_COMPACTION_SUMMARY_CHARS);
       return {
         summary: capCompactionSummaryPreservingSuffix(body, suffix),
-        structuralSummary:
-          suffix.length >= MAX_COMPACTION_SUMMARY_CHARS
-            ? ""
-            : capCompactionSummary(body, bodyBudget),
+        // Feed the SAME capped structured body to the quality audit: an empty
+        // structuralSummary (pre-fix) fails every heading check and the retry
+        // budget of 0 asks corrective generation to fit within zero characters,
+        // so default safeguard compaction cancels instead of storing anything.
+        structuralSummary: capCompactionSummary(body, bodyBudget),
         bodyBudget,
       };
     };
