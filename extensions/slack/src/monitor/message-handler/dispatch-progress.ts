@@ -191,6 +191,18 @@ export function createSlackProgressRuntime(runtimeParams: {
       snapshot.planExplanation,
     );
 
+  const normalizeProgressText = (text: string | undefined) =>
+    text?.replace(/\s+/gu, " ").trim() ?? "";
+
+  const isRenderedAsProgressTitle = (text: string | undefined): boolean => {
+    const candidate = normalizeProgressText(text);
+    if (!candidate) {
+      return false;
+    }
+    const title = normalizeProgressText(resolveNativeProgressTitle(progressDraft.getSnapshot()));
+    return title.length > 0 && title.includes(candidate);
+  };
+
   const resolveNarrationUpdate = (incoming: string | undefined) => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: incoming ?? "",
@@ -285,6 +297,12 @@ export function createSlackProgressRuntime(runtimeParams: {
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<boolean> => {
+    // The same preamble reaches us as a reply payload and as the compositor
+    // headline behind the card title. The card updates it in place, so
+    // streaming it as text too would print the line twice.
+    if (isRenderedAsProgressTitle(payload.text)) {
+      return false;
+    }
     const narrationUpdate = resolveNarrationUpdate(payload.text?.trimEnd());
     if (!narrationUpdate.delta) {
       return false;

@@ -58,17 +58,17 @@ export function resolveNativeProgressLines(
   return explanationLine ? [...lines, explanationLine] : lines;
 }
 
+// The card title already displays the status headline and plan explanation and
+// keeps updating them in place, so narration carries only authored commentary
+// and reasoning. Including them here streamed every headline a second time as
+// static text above the card.
 export function resolveNativeProgressNarration(
   snapshot: ChannelProgressDraftCompositorSnapshot,
 ): string | undefined {
-  const authoredLines = resolveStructuredProgressLines(snapshot.lines)
+  const paragraphs = resolveStructuredProgressLines(snapshot.lines)
     .filter((line) => line.id === "reasoning" || line.id?.startsWith("commentary:") === true)
     .map((line) => line.text.trim())
-    .filter(Boolean);
-  const paragraphs = [snapshot.statusHeadline, snapshot.planExplanation, ...authoredLines].filter(
-    (text, index, values): text is string =>
-      Boolean(text?.trim()) && values.indexOf(text) === index,
-  );
+    .filter((text, index, values) => Boolean(text) && values.indexOf(text) === index);
   return paragraphs.length > 0 ? paragraphs.join("\n\n") : undefined;
 }
 
