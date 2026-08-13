@@ -254,7 +254,7 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     }
   });
 
-  it("never exposes a missing or partial SKILL.md at an advertised location", async () => {
+  it("stages a replacement instead of overwriting the advertised location", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
