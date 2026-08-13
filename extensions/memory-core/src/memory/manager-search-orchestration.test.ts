@@ -827,7 +827,6 @@ describe("memory index", () => {
   });
 
   it("does not block querying on session reconciliation", async () => {
-    forceNoProvider = true;
     const manager = await getPersistentManager(
       createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
     );
