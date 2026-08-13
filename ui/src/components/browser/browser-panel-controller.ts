@@ -16,6 +16,7 @@ import {
   navigateBrowser,
   openBrowserTab,
   pressBrowserKey,
+  resizeBrowserViewport,
   scrollBrowserBy,
   startBrowser,
 } from "./browser-client.ts";
@@ -40,6 +41,9 @@ import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
+const VIEWPORT_RESIZE_DELAY_MS = 300;
+const MIN_VIEWPORT_DIMENSION = 100;
+const MAX_VIEWPORT_DIMENSION = 8192;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
@@ -69,6 +73,8 @@ export class BrowserPanelController implements ReactiveController {
   private drawingStroke: AnnotationStroke | null = null;
   private suppressStageClick = false;
   private urlDraftEditing = false;
+  private observedViewportSize: { width: number; height: number } | null = null;
+  private lastRequestedViewport: { targetId: string; width: number; height: number } | null = null;
 
   constructor(private readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
@@ -121,6 +127,7 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
     this.setState("pendingNewTab", false);
+    this.lastRequestedViewport = null;
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);
   }
@@ -226,6 +233,14 @@ export class BrowserPanelController implements ReactiveController {
       // identity aligned with the document this capture owns.
       this.setState("tabs", this.operations.capturedTabs(this.tabs, targetId, metrics, shot.url));
       this.setState("view", { targetId, dataUrl, image, url: shot.url, metrics });
+      if (
+        metrics &&
+        this.observedViewportSize &&
+        (Math.abs(metrics.cssWidth - this.observedViewportSize.width) > 1 ||
+          Math.abs(metrics.cssHeight - this.observedViewportSize.height) > 1)
+      ) {
+        this.scheduleViewportSync();
+      }
       if (!this.urlDraftEditing && shot.url) {
         this.setState("urlDraft", shot.url);
       }
@@ -275,6 +290,49 @@ export class BrowserPanelController implements ReactiveController {
       }
       return false;
     }
+  }
+
+  handleViewportResize(width: number, height: number): void {
+    this.observedViewportSize = { width, height };
+    this.scheduleViewportSync();
+  }
+
+  private scheduleViewportSync(): void {
+    this.pendingInput.scheduleViewportResize(VIEWPORT_RESIZE_DELAY_MS, () => this.syncViewport());
+  }
+
+  private syncViewport(): void {
+    const targetId = this.activeTargetId;
+    const observed = this.observedViewportSize;
+    if (!this.operations.captureClient() || !targetId || !observed) {
+      return;
+    }
+    const width = Math.min(
+      MAX_VIEWPORT_DIMENSION,
+      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),
+    );
+    const height = Math.min(
+      MAX_VIEWPORT_DIMENSION,
+      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.height)),
+    );
+    const metrics = this.view?.targetId === targetId ? this.view.metrics : null;
+    if (
+      metrics &&
+      Math.abs(metrics.cssWidth - width) <= 1 &&
+      Math.abs(metrics.cssHeight - height) <= 1
+    ) {
+      return;
+    }
+    // A remote that cannot honor the exact size is not re-asked until the panel size or tab changes.
+    if (
+      this.lastRequestedViewport?.targetId === targetId &&
+      this.lastRequestedViewport.width === width &&
+      this.lastRequestedViewport.height === height
+    ) {
+      return;
+    }
+    this.lastRequestedViewport = { targetId, width, height };
+    void this.runAction((client) => resizeBrowserViewport(client, { targetId, width, height }));
   }
 
   async startBrowserNow(): Promise<void> {
