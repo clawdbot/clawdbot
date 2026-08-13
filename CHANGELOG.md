@@ -68,7 +68,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Telegram legacy state migrations:** skip owner resolution when no legacy artifacts exist, honor explicit channel ownership for global caches, and fail closed only when persisted state spans multiple routed agents.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.
