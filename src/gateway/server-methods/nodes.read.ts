@@ -11,11 +11,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseNodeWorkerSupervisorProtocolFeatures } from "../../infra/node-worker-supervisor-dialect.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
+import { updateNodeWorkerSupervisorProtocolFeatures } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -353,5 +355,30 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       skills: updated.nodeSkills,
     });
     respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
+  },
+  "node.protocolFeatures.update": ({ params, respond, client, context }) => {
+    const protocolFeatures = parseNodeWorkerSupervisorProtocolFeatures(params);
+    if (!protocolFeatures) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid node protocol features"),
+      );
+      return;
+    }
+    const nodeId = normalizeOptionalString(client?.connect?.device?.id);
+    if (
+      !nodeId ||
+      !updateNodeWorkerSupervisorProtocolFeatures({
+        registry: context.nodeRegistry,
+        nodeId,
+        connId: client?.connId,
+        protocolFeatures,
+      })
+    ) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    respond(true, { nodeId }, undefined);
   },
 };

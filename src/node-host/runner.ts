@@ -11,6 +11,10 @@ import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../g
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-worker-supervisor-dialect.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -151,6 +155,7 @@ function classifyNodeMethodFailure(
 }
 
 type NodeOptionalPublicationMethod =
+  | typeof NODE_PROTOCOL_FEATURES_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
@@ -445,6 +450,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
+  const publishProtocolFeatures = () => {
+    queueOptionalPublication(
+      NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      "protocol feature",
+    );
+  };
+
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
     void configureNodeHost({
       nodeId,
@@ -516,6 +529,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void finish(0);
         return;
       }
+      publishProtocolFeatures();
       publishInventory();
     },
     onConnectError: (error) => {

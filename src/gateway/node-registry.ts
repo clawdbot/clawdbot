@@ -1,13 +1,10 @@
 // Gateway node registry.
 // Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
-import { randomUUID } from "node:crypto";
 import {
   addTimerTimeoutGraceMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-  resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
@@ -29,13 +26,19 @@ import {
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
 import {
+  forgetNodeWorkerSupervisorProtocolFeatures,
+  invokePublicNodeRegistry,
+  isNodeRegistryPendingInvokeConnectionActive,
+  registerNodeRegistryPrivateRuntime,
+  settleNodeRegistryPairingGenerationChange,
+} from "./node-registry-private.js";
+import {
   NodeInvokeStreamController,
   type NodeInvokeProgressParams,
   type NodeInvokeResultParams,
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
-import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -96,52 +99,6 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   connId: string;
   expiresAtMs: number | null;
 };
-
-/** Extract system.run event auth metadata from invoke params. */
-function resolvePendingSystemRunEvent(params: {
-  command: string;
-  params?: unknown;
-}): PendingSystemRunEvent | undefined {
-  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
-    return undefined;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const runId = normalizeOptionalString(obj.runId) ?? "";
-  if (!runId) {
-    return undefined;
-  }
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
-  return {
-    runId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  };
-}
-
-/** Keep node execution and Gateway authorization on the same canonical system.run fields. */
-function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
-  if (
-    params.command !== "system.run" ||
-    !params.params ||
-    typeof params.params !== "object" ||
-    Array.isArray(params.params)
-  ) {
-    return params.params;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = {
-    ...obj,
-    runId: normalizeOptionalString(obj.runId) || randomUUID(),
-  };
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  if (timeoutMs === undefined) {
-    delete normalized.timeoutMs;
-  } else {
-    normalized.timeoutMs = timeoutMs;
-  }
-  return normalized;
-}
 
 /** Result payload returned from node.invoke. */
 export type NodeInvokeResult = {
@@ -273,7 +230,14 @@ export class NodeRegistry {
         nodeId: pending.nodeId,
       });
     },
-    isConnectionActive: (pending) => this.nodesById.get(pending.nodeId)?.connId === pending.connId,
+    isConnectionActive: (pending) => {
+      const node = this.nodesById.get(pending.nodeId);
+      return isNodeRegistryPendingInvokeConnectionActive({
+        registry: this,
+        pending,
+        currentNode: node,
+      });
+    },
     sendInput: (invokeId, pending, seq, payloadJSON) => {
       const node = this.nodesById.get(pending.nodeId);
       return node
@@ -317,7 +281,37 @@ export class NodeRegistry {
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
 
-  constructor(private readonly options: NodeRegistryOptions = {}) {}
+  constructor(private readonly options: NodeRegistryOptions = {}) {
+    registerNodeRegistryPrivateRuntime(this, {
+      getNode: (nodeId) => this.nodesById.get(nodeId),
+      listCurrentConnected: () => this.listCurrentConnected(),
+      hasCurrentPairingStateResolver: Boolean(this.options.resolveCurrentPairingState),
+      resolvePairingLease: async (node) => {
+        const current = this.nodesById.get(node.nodeId);
+        if (
+          !current ||
+          current.connId !== node.connId ||
+          current.pairingIdentity !== node.pairingIdentity ||
+          current.pairingGeneration !== node.pairingGeneration
+        ) {
+          return { status: "stale", presenceInvalidated: false };
+        }
+        return await this.resolvePairingLease(this.capturePairingLease(current), {
+          invalidateStale: false,
+        });
+      },
+      pendingInvokes: this.pendingInvokes,
+      invokeStreams: this.invokeStreams,
+      sendEventToSession: (node, event, payload) => {
+        const current = this.nodesById.get(node.nodeId);
+        return current?.connId === node.connId
+          ? this.sendEventToSession(current, event, payload)
+          : false;
+      },
+      rememberAuthorizedSystemRunEvent: (event) => this.rememberAuthorizedSystemRunEvent(event),
+      publishActiveNodeContext: () => this.publishActiveNodeContext(),
+    });
+  }
 
   private listConnectedSessions(): PairingBoundNodeSession[] {
     return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
@@ -521,6 +515,7 @@ export class NodeRegistry {
       connectedAtMs: Date.now(),
     };
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
+    forgetNodeWorkerSupervisorProtocolFeatures(this, client.connId);
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
     if (previousSession && previousSession.connId !== client.connId) {
@@ -566,6 +561,7 @@ export class NodeRegistry {
     }
     this.nodesByConn.delete(connId);
     this.eventTransportsByConn.delete(connId);
+    forgetNodeWorkerSupervisorProtocolFeatures(this, connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
       const hadPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
@@ -663,6 +659,7 @@ export class NodeRegistry {
     }
     node.client.invalidated = true;
     node.client.invalidatedReason ??= reason;
+    forgetNodeWorkerSupervisorProtocolFeatures(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
     this.invokeStreams.handleDisconnect(node.connId);
     for (const [key, event] of this.authorizedSystemRunEvents) {
@@ -1037,6 +1034,14 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
+      // Protocol features describe this exact live process. Keep the connection
+      // declaration while private proof resolution binds the new generation.
+      settleNodeRegistryPairingGenerationChange({
+        registry: this,
+        nodeId,
+        connId: node.connId,
+        nextPairingGeneration: generationTransition.nextPairingGeneration,
+      });
       if (previousPairingGeneration) {
         this.options.onPairingGenerationChanged?.({
           nodeId,
@@ -1080,147 +1085,7 @@ export class NodeRegistry {
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
-    if (params.signal?.aborted) {
-      return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
-    }
-    let node = this.nodesById.get(params.nodeId);
-    if (!node) {
-      return {
-        ok: false,
-        error: { code: "NOT_CONNECTED", message: "node not connected" },
-      };
-    }
-    if (node.client.invalidated === true) {
-      return {
-        ok: false,
-        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-      };
-    }
-    const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
-    if (this.options.resolveCurrentPairingState && !expectedPairingGeneration) {
-      return {
-        ok: false,
-        error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
-      };
-    }
-    if (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration) {
-      return {
-        ok: false,
-        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-      };
-    }
-    if (params.expectedConnId && node.connId !== params.expectedConnId) {
-      return {
-        ok: false,
-        error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-      };
-    }
-    if (expectedPairingGeneration && this.options.resolveCurrentPairingState) {
-      const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
-        invalidateStale: false,
-      });
-      if (resolution.status === "unavailable") {
-        return {
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "node pairing state unavailable before dispatch",
-          },
-        };
-      }
-      if (resolution.status !== "current") {
-        return {
-          ok: false,
-          error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-        };
-      }
-      node = resolution.session;
-      if (params.expectedConnId && node.connId !== params.expectedConnId) {
-        return {
-          ok: false,
-          error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-        };
-      }
-    }
-    // Pairing resolution may yield after the caller's last authority check. The
-    // registry owns the raw send, so closure must win before pending state is armed.
-    if (params.isDispatchAuthorized?.() === false) {
-      return {
-        ok: false,
-        error: {
-          code: "APPROVAL_AUTHORITY_CLOSED",
-          message: "runtime authority closed before node dispatch",
-        },
-      };
-    }
-    const requestId = randomUUID();
-    const invokeParams = normalizeSystemRunInvokeParams({
-      command: params.command,
-      params: params.params,
-    });
-    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
-    const payload = {
-      id: requestId,
-      nodeId: params.nodeId,
-      command: params.command,
-      paramsJSON:
-        "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
-      timeoutMs,
-      idempotencyKey: params.idempotencyKey,
-      sessionKey: normalizeOptionalString(params.sessionKey),
-    };
-    const systemRunEvent = resolvePendingSystemRunEvent({
-      command: params.command,
-      params: invokeParams,
-    });
-    const result = new Promise<NodeInvokeResult>((resolve, reject) => {
-      const pending: PendingInvoke = {
-        nodeId: params.nodeId,
-        connId: node.connId,
-        command: params.command,
-        systemRunEvent,
-        resolve,
-        reject,
-        nextProgressSeq: 0,
-        progressChunks: new Map(),
-        nextInputSeq: 0,
-        ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-      };
-      const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
-      this.invokeStreams.armPending({
-        requestId,
-        pending,
-        timeoutMs,
-        idleTimeoutMs,
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-    });
-    if (!this.pendingInvokes.has(requestId)) {
-      return await result;
-    }
-    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
-    if (!ok) {
-      const pending = this.pendingInvokes.get(requestId);
-      if (pending) {
-        this.invokeStreams.clearTimers(pending);
-        this.pendingInvokes.delete(requestId);
-        pending.resolve({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-        });
-      }
-      return await result;
-    }
-    if (systemRunEvent) {
-      this.rememberAuthorizedSystemRunEvent({
-        nodeId: params.nodeId,
-        connId: node.connId,
-        ...systemRunEvent,
-      });
-    }
-    params.onDispatchReady?.(requestId);
-    return await result;
+    return await invokePublicNodeRegistry(this, params);
   }
 
   /** Send one ordered input frame to a pending streaming invoke. */
@@ -1577,4 +1442,5 @@ export class NodeRegistry {
     return true;
   }
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

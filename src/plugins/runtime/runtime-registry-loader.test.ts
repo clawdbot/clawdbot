@@ -19,8 +19,15 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
   isPluginMetadataSnapshotCompatible:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible>(),
+  rebasePluginMetadataSnapshotManifestRegistry: vi.fn<
+    typeof import("../plugin-metadata-snapshot.js").rebasePluginMetadataSnapshotManifestRegistry
+  >((snapshot) => snapshot),
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
   >(() => "/resolved-workspace"),
   resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
     () => "default",
@@ -63,11 +70,19 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: (
     ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
   ) => mocks.isPluginMetadataSnapshotCompatible(...args),
+  rebasePluginMetadataSnapshotManifestRegistry: (
+    ...args: Parameters<typeof mocks.rebasePluginMetadataSnapshotManifestRegistry>
+  ) => mocks.rebasePluginMetadataSnapshotManifestRegistry(...args),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: (...args: Parameters<typeof mocks.listAgentEntries>) =>
+    mocks.listAgentEntries(...args),
   resolveAgentWorkspaceDir: (...args: Parameters<typeof mocks.resolveAgentWorkspaceDir>) =>
     mocks.resolveAgentWorkspaceDir(...args),
+  tryResolveConfiguredAgentWorkspaceDir: (
+    ...args: Parameters<typeof mocks.tryResolveConfiguredAgentWorkspaceDir>
+  ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
   resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
     mocks.resolveDefaultAgentId(...args),
 }));
@@ -107,7 +122,10 @@ function requireLoadOptions(): Record<string, unknown> {
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolvePluginMetadataSnapshot.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
+      index: { installRecords: {}, plugins: [{ pluginId: "openai" }] },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
     mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},

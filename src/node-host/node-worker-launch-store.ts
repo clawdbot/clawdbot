@@ -15,6 +15,7 @@ import {
   inspectNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-identity.js";
 
 type NodeWorkerLaunchState =
   | "pending"
@@ -201,6 +202,21 @@ function sameObservedOwner(current: NodeWorkerLaunchRow, observed: NodeWorkerLau
   );
 }
 
+function rowMatchesImmutableIdentity(
+  row: NodeWorkerLaunchRow,
+  expected: NodeWorkerSupervisorIdentity,
+): boolean {
+  return (
+    row.launch_id === expected.launchId &&
+    row.plan_hash === expected.planHash &&
+    row.environment_id === expected.environmentId &&
+    row.session_id === expected.sessionId &&
+    row.owner_epoch === expected.ownerEpoch &&
+    row.placement_generation === expected.placementGeneration &&
+    row.run_id === expected.runId
+  );
+}
+
 /** Synchronous shared-state owner for durable node worker launch supervision. */
 export class NodeWorkerLaunchStore {
   private readonly databaseOptions: OpenClawStateDatabaseOptions;
@@ -335,6 +351,71 @@ export class NodeWorkerLaunchStore {
     return this.write("node-worker-launch.get", (database) => {
       const row = readRow(database, launchId);
       return row ? receiptFromRow(row) : undefined;
+    });
+  }
+
+  getMatching(expected: NodeWorkerSupervisorIdentity): NodeWorkerLaunchReceipt | undefined {
+    validateIdentifier(expected.launchId, "node worker launch id");
+    validatePlanHash(expected.planHash);
+    return this.write("node-worker-launch.get-matching", (database) => {
+      const row = readRow(database, expected.launchId);
+      return row && rowMatchesImmutableIdentity(row, expected) ? receiptFromRow(row) : undefined;
+    });
+  }
+
+  finishCancelled(params: {
+    expected: NodeWorkerSupervisorIdentity;
+    supervisor: NodeWorkerProcessIdentity;
+    worker: NodeWorkerProcessIdentity | null;
+    nowMs?: number;
+  }): NodeWorkerLaunchReceipt | undefined {
+    const nowMs = params.nowMs ?? Date.now();
+    validateTimestamp(nowMs);
+    validateProcessIdentity(params.supervisor);
+    if (params.worker) {
+      validateProcessIdentity(params.worker);
+    }
+    return this.write("node-worker-launch.finish-cancelled", (database) => {
+      const current = readRow(database, params.expected.launchId);
+      if (!current || !rowMatchesImmutableIdentity(current, params.expected)) {
+        return undefined;
+      }
+      if (TERMINAL_STATES.has(current.state)) {
+        return receiptFromRow(current);
+      }
+      if (!rowHasSupervisor(current, params.supervisor) || !rowHasWorker(current, params.worker)) {
+        return receiptFromRow(current);
+      }
+      const completedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
+      let update = query(database)
+        .updateTable("node_worker_launches")
+        .set({
+          state: "cancelled",
+          result_json: null,
+          error_text: "node worker launch cancelled",
+          completed_at_ms: completedAtMs,
+          updated_at_ms: completedAtMs,
+        })
+        .where("launch_id", "=", params.expected.launchId)
+        .where("plan_hash", "=", params.expected.planHash)
+        .where("environment_id", "=", params.expected.environmentId)
+        .where("session_id", "=", params.expected.sessionId)
+        .where("owner_epoch", "=", params.expected.ownerEpoch)
+        .where("placement_generation", "=", params.expected.placementGeneration)
+        .where("run_id", "=", params.expected.runId)
+        .where("state", "in", ["pending", "running"])
+        .where("supervisor_pid", "=", params.supervisor.pid)
+        .where("supervisor_start_time", "=", params.supervisor.startTime);
+      update = params.worker
+        ? update
+            .where("worker_pid", "=", params.worker.pid)
+            .where("worker_start_time", "=", params.worker.startTime)
+        : update.where("worker_pid", "is", null).where("worker_start_time", "is", null);
+      executeSqliteQuerySync(database, update);
+      const settled = readRow(database, params.expected.launchId);
+      return settled && rowMatchesImmutableIdentity(settled, params.expected)
+        ? receiptFromRow(settled)
+        : undefined;
     });
   }
 

@@ -10,7 +10,10 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider.js";
+import {
+  DEVICE_WORKER_PROVIDER_ID,
+  isDeviceWorkerAvailable,
+} from "../worker-environments/device-provider.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
@@ -80,13 +83,18 @@ async function resolveWorkerSessionTarget(params: {
   if (profileId) {
     dispatchTarget = { profileId };
   } else if (deviceId) {
-    const node = (await params.context.nodeRegistry.listCurrentConnected()).find(
-      (candidate) => candidate.nodeId === deviceId && candidate.commands.includes("system.run"),
+    const available = await isDeviceWorkerAvailable(
+      params.context.workerEnvironmentService,
+      deviceId,
     );
-    if (!node) {
-      respondInvalidWorkerSession(
-        params.respond,
-        `device is not a connected session-capable paired node: ${deviceId}`,
+    if (!available) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `device worker requires a connected current node host; reconnect or reprovision: ${deviceId}`,
+        ),
       );
       return undefined;
     }

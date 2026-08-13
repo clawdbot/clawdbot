@@ -317,17 +317,21 @@ export async function prepareNodeHostRuntime(params?: {
       let currentManifest = manifest;
       let gatewayConnection: { url: string; tlsFingerprint?: string } | undefined;
       let manager: NodeHostMcpManager | undefined;
+      let closing = false;
+      let closePromise: Promise<void> | undefined;
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
       }).then((resolved) => {
         manager = resolved;
-        onInventoryChanged?.(
-          createInventory({
-            skills,
-            pluginTools: currentPluginNodeHost.nodePluginTools,
-            mcpManager: manager,
-          }),
-        );
+        if (!closing) {
+          onInventoryChanged?.(
+            createInventory({
+              skills,
+              pluginTools: currentPluginNodeHost.nodePluginTools,
+              mcpManager: manager,
+            }),
+          );
+        }
         return resolved;
       });
       const refreshAvailability = () => {
@@ -420,6 +424,7 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              workerSupervisor,
             });
           } finally {
             progress?.stop();
@@ -447,13 +452,35 @@ export async function prepareNodeHostRuntime(params?: {
         updateGatewayConnection(connection) {
           gatewayConnection = connection;
         },
-        async close() {
+        close() {
+          if (closePromise) {
+            return closePromise;
+          }
+          closing = true;
           this.cancelAll();
-          stopAvailabilityWatch();
-          await workerSupervisor.close();
+          const preludeErrors: unknown[] = [];
+          try {
+            stopAvailabilityWatch();
+          } catch (error) {
+            preludeErrors.push(error);
+          }
+          // Startup observes this signal before either independent owner is joined.
           mcpAbort.abort();
-          const resolved = manager ?? (await startup.catch(() => undefined));
-          await resolved?.close();
+          const supervisorClose = Promise.resolve().then(() => workerSupervisor.close());
+          const mcpClose = startup.then((resolved) => resolved.close());
+          closePromise = Promise.allSettled([supervisorClose, mcpClose]).then((results) => {
+            const errors = [
+              ...preludeErrors,
+              ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+            ];
+            if (errors.length === 1) {
+              throw errors[0];
+            }
+            if (errors.length > 1) {
+              throw new AggregateError(errors, "node-host runtime close failed");
+            }
+          });
+          return closePromise;
         },
       };
     },

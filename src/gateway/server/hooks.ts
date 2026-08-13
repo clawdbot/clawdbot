@@ -13,7 +13,6 @@ import { getRuntimeConfig } from "../../config/io.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
-  resolveMainSessionKey,
   resolveMainSessionKeyFromConfig,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -62,7 +61,6 @@ type HookEventTarget = {
 function resolveHookEventTarget(params: {
   cfg: OpenClawConfig;
   resolvedAgentId: string;
-  explicitAgentId?: string;
   sessionKey?: string;
 }): HookEventTarget {
   if (params.cfg.session?.scope === "global") {
@@ -83,15 +81,10 @@ function resolveHookEventTarget(params: {
           mainKey: params.cfg.session?.mainKey,
         }),
       })
-    : params.explicitAgentId
-      ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.explicitAgentId })
-      : resolveMainSessionKey(params.cfg);
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.resolvedAgentId });
   return {
     eventSessionKey,
-    heartbeatTarget: {
-      ...(params.explicitAgentId ? { agentId: params.explicitAgentId } : {}),
-      sessionKey: eventSessionKey,
-    },
+    heartbeatTarget: { agentId: params.resolvedAgentId, sessionKey: eventSessionKey },
   };
 }
 
@@ -453,12 +446,11 @@ export function createGatewayHooksRequestHandler(params: {
             });
             return;
           }
-          // Keep an omitted agent omitted for event routing so global session scope
-          // stays global; runner identity is frozen separately via accepted agentId.
+          // The accepted agent is the stable owner. Global scope stays global;
+          // other events keep that owner in their agent-qualified session key.
           hookEventTarget = resolveHookEventTarget({
             cfg,
             resolvedAgentId: agentId,
-            explicitAgentId: acceptedValue.agentId,
           });
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           // Lazy module loading is the last Gateway-owned async boundary before

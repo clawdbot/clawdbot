@@ -6,18 +6,35 @@ import {
   type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
+import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export const DEVICE_WORKER_PROVIDER_ID = "device";
 
-type DeviceWorkerNode = {
-  nodeId: string;
-  commands: readonly string[];
+type DeviceWorkerRuntimeOptions = {
+  getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
 };
 
-type DeviceWorkerProviderOptions = {
-  getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
-  listConnectedNodes: () => Promise<readonly DeviceWorkerNode[]>;
-};
+type DeviceWorkerAvailability = (deviceId: string) => Promise<boolean>;
+const DEVICE_WORKER_AVAILABILITY = new WeakMap<object, DeviceWorkerAvailability>();
+
+export function bindDeviceWorkerAvailability(
+  service: WorkerEnvironmentServiceContract,
+  isAvailable: DeviceWorkerAvailability,
+): void {
+  DEVICE_WORKER_AVAILABILITY.set(service, isAvailable);
+}
+
+export async function isDeviceWorkerAvailable(
+  service: WorkerEnvironmentServiceContract | undefined,
+  deviceId: string,
+): Promise<boolean> {
+  const isAvailable = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
+  return isAvailable ? await isAvailable(deviceId) : false;
+}
 
 function requireDeviceId(profile: WorkerProfile): string {
   const deviceId = profile.device;
@@ -27,7 +44,7 @@ function requireDeviceId(profile: WorkerProfile): string {
   return deviceId.trim();
 }
 
-function isSessionCapableNode(node: DeviceWorkerNode): boolean {
+function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
   return node.commands.includes("system.run");
 }
 
@@ -41,23 +58,26 @@ function deviceLeaseId(deviceId: string, operationId: string): string {
   return `device:${deviceHash}:${operationHash.slice(0, 32)}`;
 }
 
-/** Core provider for already-paired node hosts; pairing remains the durable trust owner. */
-export function createDeviceWorkerProvider(options: DeviceWorkerProviderOptions): WorkerProvider {
+/** Core runtime for already-paired node hosts; pairing remains the durable trust owner. */
+export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
+  let nodeTransport: NodeWorkerSupervisorTransport | undefined;
   const findConnectedNode = async (deviceId: string) =>
-    (await options.listConnectedNodes()).find(
+    (await nodeTransport?.listCurrentNodes())?.find(
       (node) => node.nodeId === deviceId && isSessionCapableNode(node),
     );
-
-  return {
+  const isAvailable = async (deviceId: string) => {
+    const [paired, connected] = await Promise.all([
+      options.getPairedDevice(deviceId),
+      findConnectedNode(deviceId),
+    ]);
+    return hasPairedNodeRole(paired) && Boolean(connected);
+  };
+  const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);
-      const [paired, connected] = await Promise.all([
-        options.getPairedDevice(deviceId),
-        findConnectedNode(deviceId),
-      ]);
-      if (!hasPairedNodeRole(paired) || !connected) {
+      if (!(await isAvailable(deviceId))) {
         throw new WorkerProviderError(
           `device worker is not a connected session-capable paired node: ${deviceId}`,
         );
@@ -78,5 +98,13 @@ export function createDeviceWorkerProvider(options: DeviceWorkerProviderOptions)
       return connected ? { status: "active", sharedHost: true } : { status: "dormant" };
     },
     destroy: async () => {},
+  };
+
+  return {
+    provider,
+    isAvailable,
+    bindNodeTransport: (transport: NodeWorkerSupervisorTransport) => {
+      nodeTransport = transport;
+    },
   };
 }

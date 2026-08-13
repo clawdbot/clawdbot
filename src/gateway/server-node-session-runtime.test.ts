@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -23,7 +24,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -222,7 +223,6 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
     currentPairingGeneration = "generation-b";
     expect(
       runtime.nodeRegistry.updateSurface(

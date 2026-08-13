@@ -1,3 +1,4 @@
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
@@ -9,6 +10,30 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+function chatModelPicker(root: Locator) {
+  return root.locator("wa-select.chat-controls__model-picker").first();
+}
+
+function chatModelValue(root: Locator) {
+  return chatModelPicker(root).evaluate((element) =>
+    String((element as HTMLElement & { value?: string }).value),
+  );
+}
+
+async function selectChatModel(root: Locator, value: string) {
+  const picker = chatModelPicker(root);
+  await picker
+    .locator(`wa-option[value="${value}"]`)
+    .waitFor({ state: "attached", timeout: 10_000 });
+  await expect.poll(() => picker.isDisabled()).toBe(false);
+  await picker.evaluate(async (element, next) => {
+    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+    select.value = next;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
 
 suite.define(() => {
   it("routes runtime-aware model commands through the server directive path", async () => {
@@ -63,8 +88,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      const modelScroller = main.locator(".chat-controls__model-options");
+      await chatModelPicker(main).click();
+      const modelScroller = chatModelPicker(main).locator("wa-option").last();
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
@@ -105,23 +130,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      const openModelSelect = async () => {
-        const trigger = main.locator(
-          'openclaw-chat-pane[aria-hidden="false"] [data-chat-model-select="true"]',
-        );
-        await trigger.waitFor({ state: "visible", timeout: 10_000 });
-        return trigger;
-      };
+      const activePane = () => main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const selectModel = async (value: string) => {
-        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
-        await activePane.locator('[data-chat-model-select="true"]').click();
-        const option = activePane.locator(`[data-chat-model-option="${value}"]`);
-        await option.waitFor({ state: "visible", timeout: 10_000 });
-        await option.click();
+        await selectChatModel(activePane(), value);
       };
 
-      let modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("");
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
@@ -129,9 +144,7 @@ suite.define(() => {
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
       });
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-        "bedrock/claude-opus-4.5",
-      );
+      expect(await chatModelValue(activePane())).toBe("bedrock/claude-opus-4.5");
 
       await page
         .locator(
@@ -141,8 +154,8 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("");
 
       await page
         .locator(
@@ -153,10 +166,8 @@ suite.define(() => {
         timeout: 10_000,
       });
 
-      modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-        "bedrock/claude-opus-4.5",
-      );
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("bedrock/claude-opus-4.5");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -232,13 +243,12 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
+      const modelSelect = chatModelPicker(main);
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      expect(await chatModelValue(main)).toBe("");
 
-      await modelSelect.click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      await selectChatModel(main, "openai/gpt-5.5");
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -249,20 +259,16 @@ suite.define(() => {
       // Model selection closes immediately. Reopen and select the real default
       // catalog row to clear the session override.
       await modelSelect.click();
-      const defaultModel = main.locator(
-        '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
-      );
-      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
+      const defaultModel = modelSelect.locator('wa-option[value=""]');
       expect(await defaultModel.textContent()).toContain("Default");
-      expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
-      await defaultModel.click();
+      await selectChatModel(main, "");
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",
         model: null,
       });
       expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      expect(await chatModelValue(main)).toBe("");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -349,7 +355,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
       const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const modelSelect = activePane.locator('[data-chat-model-select="true"]');
+      const modelSelect = chatModelPicker(activePane);
       const effortSelect = activePane.locator('[data-chat-thinking-select="true"]');
       const thinkingSlider = activePane.locator('[data-chat-thinking-slider="true"]');
       const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
@@ -357,13 +363,10 @@ suite.define(() => {
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
       expect(await modelSelect.textContent()).not.toContain("@openai:");
-      await modelSelect.click();
-      await expect
-        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
-      expect(
-        (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
-      ).not.toContain("@openai:");
+      await expect.poll(() => modelSelect.locator('wa-option[value=""]').count()).toBe(1);
+      expect((await modelSelect.locator("wa-option").allTextContents()).join(" ")).not.toContain(
+        "@openai:",
+      );
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
@@ -381,10 +384,7 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Explicit Sol").waitFor({
         timeout: 10_000,
       });
-      await modelSelect.click();
-      await expect
-        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
+      await expect.poll(() => modelSelect.locator('wa-option[value=""]').count()).toBe(1);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
@@ -424,8 +424,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
+      await selectChatModel(main, "bedrock/claude-opus-4.5");
       await gateway.waitForRequest("sessions.patch");
 
       const prompt = "send while the model save is pending";
@@ -488,7 +487,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      const modelPicker = main.locator('[data-chat-model-select="true"]').first();
+      const modelPicker = chatModelPicker(main);
       const effortPicker = main.locator('[data-chat-thinking-select="true"]').first();
       await effortPicker.click();
       const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
@@ -527,29 +526,17 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelPicker.click();
-      const search = main.locator('[data-chat-model-search="true"]');
       await expect
-        .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(false);
-      await search.focus();
-      await search.fill("anthropic");
-      const anthropicModel = main.locator('[data-chat-model-option="anthropic/claude-fable-5"]');
-      await expect.poll(() => anthropicModel.isVisible()).toBe(true);
-      await expect
-        .poll(() =>
-          main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').getAttribute("hidden"),
-        )
-        .toBe("");
+        .poll(() => modelPicker.locator('wa-option[value="anthropic/claude-fable-5"]').count())
+        .toBe(1);
       await expectRequestCountStable(gateway, "sessions.patch", 1);
-      await search.press("Enter");
+      await selectChatModel(main, "anthropic/claude-fable-5");
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: sessionKey,
         model: "anthropic/claude-fable-5",
       });
-      await expect
-        .poll(() => main.locator(".chat-controls__model-picker").getAttribute("open"))
-        .toBe(null);
+      await expect.poll(() => chatModelValue(main)).toBe("anthropic/claude-fable-5");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -608,8 +595,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModel(main, "openai/gpt-5.6-sol");
 
       const modelPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(modelPatch.params)).toMatchObject({

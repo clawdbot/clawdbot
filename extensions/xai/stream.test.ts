@@ -117,7 +117,12 @@ async function captureXaiResponsesPayloadWithThinking(
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    cost: {
+      input: 2,
+      output: 6,
+      cacheRead: modelId === "grok-4.6" ? 0.5 : 0.3,
+      cacheWrite: 0,
+    },
     contextWindow: 500_000,
     maxTokens: 64_000,
   } as Model<"openai-responses">);
@@ -542,6 +547,13 @@ describe("xai stream wrappers", () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  }, 10_000);
+
+  it("preserves Grok 4.6 xhigh at the final xAI Responses payload boundary", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking("xhigh", "grok-4.6");
+
+    expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
     expect(payload.include).toEqual(["reasoning.encrypted_content"]);
   }, 10_000);
 

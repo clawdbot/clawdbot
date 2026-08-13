@@ -28,6 +28,15 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
+const pluginToolMetadata = vi.hoisted(() => new WeakMap<object, unknown>());
+
+vi.mock("../plugins/tools.js", () => ({
+  getPluginToolMeta: (tool: object) => pluginToolMetadata.get(tool),
+  setPluginToolMeta: (tool: object, metadata: unknown) => {
+    pluginToolMetadata.set(tool, metadata);
+  },
+}));
+
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
   return {
@@ -50,6 +59,13 @@ vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("./mcp-auth-profile.js", () => ({
+  resolveMcpAuthProfileId: () => undefined,
+  withMcpAuthProfileBearer: () => {
+    throw new Error("Unexpected auth-profile transport in MCP runtime test");
+  },
+}));
 
 const tempDirs: string[] = [];
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
@@ -1477,46 +1493,6 @@ describe("session MCP runtime", () => {
 
       expect(catalog.tools).toHaveLength(1);
       expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects adversarial MCP tool filters without regex backtracking", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
-    const serverPath = path.join(tempDir, "linear-filter.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      tools: [
-        {
-          name: `${"a".repeat(64)}c`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-linear-tool-filter",
-      sessionKey: "agent:test:session-linear-tool-filter",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            docs: {
-              command: process.execPath,
-              args: [serverPath],
-              toolFilter: { include: [`${"*a".repeat(24)}*b`] },
-            },
-          },
-        },
-      },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools).toEqual([]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

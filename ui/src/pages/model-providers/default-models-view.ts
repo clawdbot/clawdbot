@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
@@ -20,54 +20,24 @@ type DefaultModelsViewProps = {
   onReset: () => void;
 };
 
-type ModelOptionGroup = {
-  provider: string;
-  label: string;
-  models: Array<{ ref: string; label: string }>;
-};
-
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 
-function modelGroups(models: ModelPickerEntry[]): ModelOptionGroup[] {
-  const groups = new Map<string, ModelOptionGroup>();
+function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
   const seen = new Set<string>();
+  const options: ModelPickerOption[] = [];
   for (const model of models) {
     const ref = modelCatalogRef(model);
     if (seen.has(ref)) {
       continue;
     }
     seen.add(ref);
-    const groupKey = model.provider || "saved-selection";
-    const group = groups.get(groupKey) ?? {
-      provider: groupKey,
-      label: model.provider
-        ? providerDisplayLabel(model.provider)
-        : t("modelProviders.defaults.savedSelection"),
-      models: [],
-    };
-    group.models.push({ ref, label: model.name || ref });
-    groups.set(groupKey, group);
+    options.push({
+      value: ref,
+      label: model.name || ref,
+      ...(model.provider ? { provider: model.provider } : {}),
+    });
   }
-  const sortedGroups = [...groups.values()];
-  for (const group of sortedGroups) {
-    group.models = group.models.toSorted((a, b) => a.label.localeCompare(b.label));
-  }
-  return sortedGroups.toSorted((a, b) => a.label.localeCompare(b.label));
-}
-
-function renderModelOptions(models: ModelPickerEntry[], selected = "") {
-  return modelGroups(models).map(
-    (group) => html`
-      <optgroup label=${group.label}>
-        ${group.models.map(
-          (model) =>
-            html`<option value=${model.ref} ?selected=${model.ref === selected}>
-              ${model.label}
-            </option>`,
-        )}
-      </optgroup>
-    `,
-  );
+  return options.toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {
@@ -82,38 +52,40 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       <div class="model-providers__default-grid">
         <label class="field">
           <span>${t("modelProviders.defaults.primary")}</span>
-          <select
-            class="settings-select"
-            .value=${props.selection.primary}
-            ?disabled=${disabled || saving}
-            title=${title}
-            @change=${(event: Event) =>
-              props.onPrimaryChange((event.target as HTMLSelectElement).value)}
-          >
-            <option value="" ?disabled=${Boolean(props.selection.primary)}>
-              ${t("modelProviders.defaults.selectModel")}
-            </option>
-            ${renderModelOptions(props.models, props.selection.primary)}
-          </select>
+          ${renderModelPicker({
+            label: t("modelProviders.defaults.primary"),
+            value: props.selection.primary,
+            options: [
+              {
+                value: "",
+                label: t("modelProviders.defaults.selectModel"),
+                disabled: Boolean(props.selection.primary),
+              },
+              ...modelOptions(props.models),
+            ],
+            disabled: disabled || saving,
+            title,
+            onChange: props.onPrimaryChange,
+          })}
         </label>
         <label class="field">
           <span>${t("modelProviders.defaults.utility")}</span>
-          <select
-            class="settings-select"
-            .value=${props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE}
-            ?disabled=${disabled || saving}
-            title=${title}
-            @change=${(event: Event) => {
-              const value = (event.target as HTMLSelectElement).value;
-              props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value);
-            }}
-          >
-            <option value=${AUTOMATIC_UTILITY_VALUE}>
-              ${t("modelProviders.defaults.automatic")}
-            </option>
-            <option value="">${t("modelProviders.defaults.disabled")}</option>
-            ${renderModelOptions(props.models, props.selection.utilityModel ?? "")}
-          </select>
+          ${renderModelPicker({
+            label: t("modelProviders.defaults.utility"),
+            value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
+            options: [
+              {
+                value: AUTOMATIC_UTILITY_VALUE,
+                label: t("modelProviders.defaults.automatic"),
+              },
+              { value: "", label: t("modelProviders.defaults.disabled") },
+              ...modelOptions(props.models),
+            ],
+            disabled: disabled || saving,
+            title,
+            onChange: (value) =>
+              props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
+          })}
         </label>
       </div>
       <div class="model-providers__fallbacks">
@@ -140,27 +112,28 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             )}
         <label class="field model-providers__fallback-add">
           <span>${t("modelProviders.defaults.addFallback")}</span>
-          <select
-            class="settings-select"
-            .value=${""}
-            ?disabled=${disabled || saving || !props.selection.primary}
-            title=${title}
-            @change=${(event: Event) => {
-              const select = event.target as HTMLSelectElement;
-              if (select.value) {
-                props.onFallbackAdd(select.value);
-                select.value = "";
+          ${renderModelPicker({
+            label: t("modelProviders.defaults.addFallback"),
+            value: "",
+            options: [
+              { value: "", label: t("modelProviders.defaults.selectFallback") },
+              ...modelOptions(
+                props.models.filter((model) => {
+                  const ref = modelCatalogRef(model);
+                  return (
+                    ref !== props.selection.primary && !props.selection.fallbacks.includes(ref)
+                  );
+                }),
+              ),
+            ],
+            disabled: disabled || saving || !props.selection.primary,
+            title,
+            onChange: (value) => {
+              if (value) {
+                props.onFallbackAdd(value);
               }
-            }}
-          >
-            <option value="">${t("modelProviders.defaults.selectFallback")}</option>
-            ${renderModelOptions(
-              props.models.filter((model) => {
-                const ref = modelCatalogRef(model);
-                return ref !== props.selection.primary && !props.selection.fallbacks.includes(ref);
-              }),
-            )}
-          </select>
+            },
+          })}
         </label>
       </div>
       ${props.message

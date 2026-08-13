@@ -8,10 +8,11 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
-import type { NodeRegistry } from "./node-registry.js";
+import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
-  createDeviceWorkerProvider,
+  bindDeviceWorkerAvailability,
+  createDeviceWorkerRuntime,
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
@@ -43,7 +44,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
-  bindDeviceNodeRegistry?: (nodeRegistry: Pick<NodeRegistry, "listCurrentConnected">) => void;
+  bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
 };
 
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
@@ -96,11 +97,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
 }): Promise<GatewayWorkerEnvironmentRuntime> {
-  let deviceNodeRegistry: Pick<NodeRegistry, "listCurrentConnected"> | undefined;
-  const deviceProvider = createDeviceWorkerProvider({
-    getPairedDevice,
-    listConnectedNodes: async () => (await deviceNodeRegistry?.listCurrentConnected()) ?? [],
-  });
+  const deviceRuntime = createDeviceWorkerRuntime({ getPairedDevice });
   const [
     { createWorkerEnvironmentService },
     { createWorkerLiveEventReceiver },
@@ -174,13 +171,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
-  const workerEnvironmentService = createWorkerEnvironmentService({
+  const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     // Plugin reload replaces the registry object; resolve against the live binding.
     resolveProvider: (providerId) =>
       providerId === DEVICE_WORKER_PROVIDER_ID
-        ? deviceProvider
+        ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
     tunnelManager: workerTunnelManager,
@@ -231,6 +228,8 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     logger: params.log.child("worker-environments"),
   });
+  const workerEnvironmentService = workerEnvironmentServiceBase;
+  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
   executeSessionTool = createWorkerSessionToolExecutor({
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
@@ -243,8 +242,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },
-    bindDeviceNodeRegistry: (nodeRegistry) => {
-      deviceNodeRegistry = nodeRegistry;
-    },
+    bindDeviceNodeControl: deviceRuntime.bindNodeTransport,
   };
 }
