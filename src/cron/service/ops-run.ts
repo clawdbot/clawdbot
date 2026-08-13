@@ -23,12 +23,12 @@ import {
   releasePreparedManualReservationWithRetry,
 } from "./ops-run-preparation.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
-import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import {
-  assertServiceCronRunReceiptCurrent,
-  cronRunReceiptPersistHooks,
-  supersedeServiceCronRunReceipt,
-} from "./run-receipts.js";
+  releaseQueuedCronRun,
+  runWithCronAdmission,
+  supersedeActivatedCronRun,
+} from "./run-admission.js";
+import { assertServiceCronRunReceiptCurrent, cronRunReceiptPersistHooks } from "./run-receipts.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
@@ -66,6 +66,8 @@ async function finishPreparedManualRun(
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
   let finalized = false;
+  let supersedeReason: string | undefined;
+  let supersedeCleanupOwnsReceipt = false;
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -177,7 +179,7 @@ async function finishPreparedManualRun(
         assertServiceCronRunReceiptCurrent(state, prepared.runReceipt);
       } catch (error) {
         if (error instanceof CronRunReceiptRevisionError) {
-          supersedeServiceCronRunReceipt(prepared.runReceipt, state.deps.nowMs(), error.message);
+          supersedeReason = error.message;
           notifySetupTimeout = false;
           return;
         }
@@ -341,7 +343,7 @@ async function finishPreparedManualRun(
         });
       } catch (error) {
         if (error instanceof CronRunReceiptRevisionError) {
-          supersedeServiceCronRunReceipt(prepared.runReceipt, state.deps.nowMs(), error.message);
+          supersedeReason = error.message;
           notifySetupTimeout = false;
           return;
         }
@@ -353,6 +355,16 @@ async function finishPreparedManualRun(
       }
       finalized = true;
     });
+    if (supersedeReason) {
+      supersedeCleanupOwnsReceipt = true;
+      await supersedeActivatedCronRun({
+        state,
+        jobId,
+        reservationIdentity: prepared.reservationIdentity,
+        runReceipt: prepared.runReceipt,
+        reason: supersedeReason,
+      });
+    }
     if (notifySetupTimeout && isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       maybeNotifyManualIsolatedSetupTimeout(state, {
         jobId,
@@ -378,7 +390,7 @@ async function finishPreparedManualRun(
     // Terminal receipt persistence is fallible; local liveness and admission
     // ownership must still retire or this process permanently self-fences the job.
     try {
-      if (!finalized) {
+      if (!finalized && !supersedeCleanupOwnsReceipt) {
         finishCronRunReceipt({
           handle: prepared.runReceipt,
           status: "superseded",

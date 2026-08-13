@@ -4,17 +4,18 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
-  finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
-  claimServiceCronRunReceipt,
+  cronRunReceiptClaimHooks,
   cronRunReceiptPersistHooks,
-  supersedeServiceCronRunReceipt,
+  cronRunReceiptSupersedeHooks,
+  prepareServiceCronRunReceiptClaim,
 } from "./run-receipts.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
@@ -196,6 +197,7 @@ export async function cleanupQueuedCronRunReservations(params: {
   reservations: readonly QueuedCronRunReservation[];
   restoreLastError?: boolean;
   recompute?: "maintenance" | "startup-overflow";
+  transactionHooks?: CronStoreTransactionHooks;
 }): Promise<void> {
   const { state, reservations } = params;
   const attempt = async () => {
@@ -205,11 +207,11 @@ export async function cleanupQueuedCronRunReservations(params: {
       const pendingReleases = clearOwnedQueuedCronRunMarkers(state, reservations, {
         restoreLastError: params.restoreLastError,
       });
-      if (pendingReleases.length === 0) {
+      if (pendingReleases.length === 0 && !params.transactionHooks) {
         return;
       }
       const postPersistNotifications: DeferredCronNotifications = [];
-      if (params.recompute) {
+      if (params.recompute && pendingReleases.length > 0) {
         recomputeNextRunsForMaintenance(state, {
           ...(params.recompute === "startup-overflow"
             ? { repairFutureCronNextRunAtMs: false }
@@ -217,7 +219,10 @@ export async function cleanupQueuedCronRunReservations(params: {
           deferredNotifications: postPersistNotifications,
         });
       }
-      await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistNotifications,
+        transactionHooks: params.transactionHooks,
+      });
       for (const reservation of pendingReleases) {
         releaseQueuedCronRun(state, reservation.jobId, reservation.reservationIdentity);
       }
@@ -234,6 +239,32 @@ export async function cleanupQueuedCronRunReservations(params: {
       }
       throw error;
     }
+  }
+}
+
+/** Supersedes one activated run and releases only its exact durable marker.
+ * Receipt terminalization shares the marker transaction, so no successor can
+ * enter between dropping the fence and repairing scheduling state. */
+export async function supersedeActivatedCronRun(params: {
+  state: CronServiceState;
+  jobId: string;
+  reservationIdentity: object;
+  runReceipt: ReturnType<typeof prepareServiceCronRunReceiptClaim>["handle"];
+  reason: string;
+}): Promise<void> {
+  try {
+    await cleanupQueuedCronRunReservations({
+      state: params.state,
+      reservations: [params],
+      recompute: "maintenance",
+      transactionHooks: cronRunReceiptSupersedeHooks({
+        handle: params.runReceipt,
+        finishedAtMs: params.state.deps.nowMs(),
+        error: params.reason,
+      }),
+    });
+  } finally {
+    releaseLocalCronRunReceiptOwnership(params.runReceipt);
   }
 }
 
@@ -257,25 +288,19 @@ export async function activateQueuedCronRun(params: {
   | {
       kind: "activated";
       startedAt: number;
-      runReceipt: ReturnType<typeof claimServiceCronRunReceipt>;
+      runReceipt: ReturnType<typeof prepareServiceCronRunReceiptClaim>["handle"];
     }
   | { kind: "fenced" }
   | { kind: "unavailable"; reason: "stopped" | "restart-recovery-pending" }
 > {
   const { state, job, reservationIdentity } = params;
   const startedAt = state.deps.nowMs();
-  let runReceipt: ReturnType<typeof claimServiceCronRunReceipt>;
-  try {
-    runReceipt = claimServiceCronRunReceipt({ state, job, startedAtMs: startedAt });
-  } catch (error) {
-    if (
-      error instanceof CronRunReceiptConflictError ||
-      error instanceof CronRunReceiptRevisionError
-    ) {
-      return { kind: "fenced" };
-    }
-    throw error;
-  }
+  const preparedReceipt = prepareServiceCronRunReceiptClaim({
+    state,
+    job,
+    startedAtMs: startedAt,
+  });
+  const runReceipt = preparedReceipt.handle;
   const previousLastError = job.state.lastError;
   const activationRollbackSnapshot = snapshotStoreForRollback(state);
   delete job.state.queuedAtMs;
@@ -285,19 +310,18 @@ export async function activateQueuedCronRun(params: {
   // durable queued marker so the caller can release or recover that claim.
   try {
     await persistOrRestore(state, activationRollbackSnapshot, {
-      transactionHooks: cronRunReceiptPersistHooks({ state, handle: runReceipt }),
+      // The receipt and running marker are one admission fact. A crash can
+      // therefore leave both for startup recovery or neither, never one alone.
+      transactionHooks: cronRunReceiptClaimHooks({ state, prepared: preparedReceipt }),
     });
   } catch (error) {
-    if (error instanceof CronRunReceiptRevisionError) {
-      supersedeServiceCronRunReceipt(runReceipt, state.deps.nowMs(), error.message);
+    releaseLocalCronRunReceiptOwnership(runReceipt);
+    if (
+      error instanceof CronRunReceiptConflictError ||
+      error instanceof CronRunReceiptRevisionError
+    ) {
       return { kind: "fenced" };
     }
-    finishCronRunReceipt({
-      handle: runReceipt,
-      status: "error",
-      finishedAtMs: state.deps.nowMs(),
-      error: normalizeCronRunErrorText(error),
-    });
     throw error;
   }
   const reservation = state.queuedRunReservationsByJobId.get(job.id);

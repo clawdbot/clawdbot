@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
@@ -43,6 +44,7 @@ function createBatchState(params: {
   runIsolatedAgentJob: Parameters<typeof createCronServiceState>[0]["runIsolatedAgentJob"];
   concurrency?: number;
   onEvent?: Parameters<typeof createCronServiceState>[0]["onEvent"];
+  isAgentAvailable?: Parameters<typeof createCronServiceState>[0]["isAgentAvailable"];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
@@ -52,6 +54,7 @@ function createBatchState(params: {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
+    isAgentAvailable: params.isAgentAvailable,
     maxMissedJobsPerRestart: 40,
     onEvent: params.onEvent,
   });
@@ -75,6 +78,69 @@ function findCronTask(jobId: string) {
 }
 
 describe("cron batch outcome finalization", () => {
+  it.each([
+    { trigger: "scheduled", installSuccessor: false },
+    { trigger: "scheduled", installSuccessor: true },
+    { trigger: "startup", installSuccessor: false },
+    { trigger: "startup", installSuccessor: true },
+  ] as const)(
+    "supersedes a stale $trigger outcome (successor=$installSuccessor)",
+    async ({ trigger, installSuccessor }) => {
+      const store = fixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:04:59.750Z");
+      const successorAt = dueAt + 1;
+      const job = createDueIsolatedJob({
+        id: `${trigger}-supersede-preserves-successor`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const runStarted = createDeferred();
+      const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
+      let ownerAvailable = true;
+      const state = createBatchState({
+        storePath: store.storePath,
+        nowMs: dueAt,
+        isAgentAvailable: () => ownerAvailable,
+        runIsolatedAgentJob: vi.fn(async () => {
+          runStarted.resolve();
+          return await releaseRun.promise;
+        }),
+      });
+      const batch = startBatch(trigger, state);
+
+      try {
+        await runStarted.promise;
+        if (installSuccessor) {
+          const successorStore = await loadCronStore(store.storePath);
+          successorStore.jobs[0]!.state.runningAtMs = successorAt;
+          await saveCronStore(store.storePath, successorStore);
+        }
+        ownerAvailable = false;
+        releaseRun.resolve({ status: "ok", summary: "stale completion" });
+        await batch;
+
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBe(
+          installSuccessor ? successorAt : undefined,
+        );
+        const receipt = openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+          )
+          .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+        expect(receipt?.status).toBe("superseded");
+      } finally {
+        ownerAvailable = false;
+        releaseRun.resolve({ status: "ok", summary: "stale completion" });
+        await batch;
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+      }
+    },
+  );
+
   it.each(["scheduled", "startup"] as const)(
     "recovers one finalized %s run when admission advances its execution clock",
     async (trigger) => {

@@ -9,7 +9,7 @@ import {
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { releaseQueuedCronRun } from "./run-admission.js";
+import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import {
@@ -213,7 +213,17 @@ export async function finalizeCompletedCronRunOutcomes(
     if (error instanceof CronRunReceiptRevisionError) {
       const stale = outcomes.find((outcome) => outcome.runReceipt?.receiptId === error.receiptId);
       if (stale?.runReceipt) {
-        supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
+        if (stale.reservationIdentity) {
+          await supersedeActivatedCronRun({
+            state,
+            jobId: stale.jobId,
+            reservationIdentity: stale.reservationIdentity,
+            runReceipt: stale.runReceipt,
+            reason: error.message,
+          });
+        } else {
+          supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
+        }
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId: stale.taskRunId,
           status: "skipped",

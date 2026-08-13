@@ -14,8 +14,10 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -29,6 +31,48 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
+  it("clears the exact running marker when a manual run is superseded", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:01.500Z");
+    const job = createDueIsolatedJob({
+      id: "manual-supersede-clears-running-marker",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runnerStarted = createDeferred();
+    const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
+    let ownerAvailable = true;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      isAgentAvailable: () => ownerAvailable,
+      runIsolatedAgentJob: vi.fn(async () => {
+        runnerStarted.resolve();
+        return await releaseRun.promise;
+      }),
+    });
+
+    const activeRun = run(state, job.id, "force");
+    await runnerStarted.promise;
+    ownerAvailable = false;
+    releaseRun.resolve({ status: "ok", summary: "stale manual completion" });
+    await expect(activeRun).resolves.toEqual({ ok: true, ran: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("superseded");
+  });
+
   it("rejects queued manual reservation after caller authority closes", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

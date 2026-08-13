@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import {
   assertCronRunReceiptCurrent,
-  claimCronRunReceipt,
+  claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
+  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
 
 const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
@@ -31,13 +35,19 @@ function makeJob(id: string, agentId = "alpha"): CronJob {
 }
 
 function claim(storePath: string, job: CronJob, startedAtMs: number) {
-  return claimCronRunReceipt({
+  const prepared = prepareCronRunReceiptClaim({
     storePath,
     job,
     agentId: job.agentId!,
     startedAtMs,
-    resolveAgentId: (current) => current.agentId!,
   });
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    claimCronRunReceiptInDatabase({
+      database: db,
+      prepared,
+      resolveAgentId: (current) => current.agentId!,
+    }),
+  );
 }
 
 function receipts(storePath: string, jobId: string) {

@@ -1,11 +1,14 @@
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import {
+  assertNoActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
-  claimCronRunReceipt,
+  claimCronRunReceiptInDatabase,
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
+  prepareCronRunReceiptClaim,
+  type PreparedCronRunReceiptClaim,
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
 } from "../store/run-receipt-store.js";
@@ -25,20 +28,51 @@ function resolveAgentId(state: CronServiceState) {
   return (job: CronJob) => resolveCronRunReceiptAgentId(state, job);
 }
 
-export function claimServiceCronRunReceipt(params: {
+export function prepareServiceCronRunReceiptClaim(params: {
   state: CronServiceState;
   job: CronJob;
   startedAtMs: number;
   requestRunId?: string;
-}): CronRunReceiptHandle {
-  return claimCronRunReceipt({
+}): PreparedCronRunReceiptClaim {
+  return prepareCronRunReceiptClaim({
     storePath: params.state.deps.storePath,
     job: params.job,
     agentId: resolveCronRunReceiptAgentId(params.state, params.job),
     startedAtMs: params.startedAtMs,
     requestRunId: params.requestRunId,
-    resolveAgentId: resolveAgentId(params.state),
   });
+}
+
+export function cronRunReceiptClaimHooks(params: {
+  state: CronServiceState;
+  prepared: PreparedCronRunReceiptClaim;
+}): CronStoreTransactionHooks {
+  return {
+    beforeWrite: (database) => {
+      claimCronRunReceiptInDatabase({
+        database,
+        prepared: params.prepared,
+        resolveAgentId: resolveAgentId(params.state),
+      });
+    },
+  };
+}
+
+export function cronRunReceiptOwnerMutationHooks(params: {
+  state: CronServiceState;
+  jobId: string;
+}): CronStoreTransactionHooks {
+  return {
+    beforeWrite: (database) => {
+      // Admission and owner mutation share SQLite's write order: whichever
+      // commits first fences the other, closing the pre-dispatch side-effect gap.
+      assertNoActiveCronRunReceiptInDatabase({
+        database,
+        storePath: params.state.deps.storePath,
+        jobId: params.jobId,
+      });
+    },
+  };
 }
 
 export function assertServiceCronRunReceiptCurrent(
@@ -96,6 +130,24 @@ export function cronRunReceiptPersistHooks(params: {
           },
         }
       : {}),
+  };
+}
+
+export function cronRunReceiptSupersedeHooks(params: {
+  handle: CronRunReceiptHandle;
+  finishedAtMs: number;
+  error: string;
+}): CronStoreTransactionHooks {
+  return {
+    afterWrite: (database) => {
+      finishCronRunReceiptInDatabase({
+        database,
+        handle: params.handle,
+        status: "superseded",
+        finishedAtMs: params.finishedAtMs,
+        error: params.error,
+      });
+    },
   };
 }
 

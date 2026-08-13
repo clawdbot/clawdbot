@@ -26,11 +26,13 @@ beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
   runnerScript = path.join(scriptRoot, "runner.mts");
   const serviceUrl = pathToFileURL(path.resolve("src/cron/service.ts")).href;
+  const stateDatabaseUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts")).href;
   await fsPromises.writeFile(
     runnerScript,
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl)};
+      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -46,8 +48,8 @@ beforeEach(async () => {
           return { kind: "evaluated", fire: true };
         },
         runIsolatedAgentJob: async () => ({ status: "ok" }),
-        runCommandJob: async () => {
-          fs.appendFileSync(outputPath, process.pid + "\\n");
+        runCommandJob: async ({ job }) => {
+          fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block") await new Promise(() => {});
           await sleep(150);
@@ -55,6 +57,22 @@ beforeEach(async () => {
         },
       });
       await cron.start();
+      if (mode === "crash-activation") {
+        const database = openOpenClawStateDatabase().db;
+        database.function("crash_activation", () => {
+          process.kill(process.pid, "SIGKILL");
+          return 0;
+        });
+        database.exec(\`
+          CREATE TEMP TRIGGER crash_cron_activation
+          BEFORE UPDATE OF running_at_ms ON cron_jobs
+          WHEN OLD.running_at_ms IS NULL AND NEW.running_at_ms IS NOT NULL
+          BEGIN
+            SELECT crash_activation();
+          END;
+        \`);
+        await cron.run(jobId, "force");
+      }
       if (mode === "block") await cron.run(jobId, "force");
       if (mode === "due") await sleep(350);
       cron.stop();
@@ -91,7 +109,7 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode: "block" | "trigger" | "due";
+  mode: "block" | "trigger" | "due" | "crash-activation";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -215,6 +233,37 @@ describe("cron durable run ownership", () => {
     } finally {
       cron.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt");
+    }
+  });
+
+  it("rolls back the receipt with the running marker when activation crashes", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("atomic-activation-crash", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const outputPath = path.join(scriptRoot, `activation-output-${now}`);
+    const child = spawnRunner({
+      storePath,
+      jobId: job.id,
+      mode: "crash-activation",
+      releasePath: path.join(scriptRoot, `unused-release-${now}`),
+      outputPath,
+    });
+
+    await waitForExit(child);
+    expect(child.signalCode).toBe("SIGKILL");
+    expect(fs.existsSync(outputPath)).toBe(false);
+
+    const recovered = makeParentService(storePath);
+    try {
+      await recovered.start();
+      expect(receipts(storePath, job.id)).toEqual([]);
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted?.state.queuedAtMs).toBeUndefined();
+      expect(persisted?.state.runningAtMs).toBeUndefined();
+    } finally {
+      recovered.stop();
     }
   });
 
@@ -350,7 +399,7 @@ describe("cron durable run ownership", () => {
     expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
   });
 
-  it("supersedes a live run before payload effects after its owner changes", async () => {
+  it("fences an owner change for the full admitted-run lease", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -368,18 +417,21 @@ describe("cron durable run ownership", () => {
     await waitForLine(owner, "trigger");
 
     const editor = makeParentService(storePath);
-    await editor.update(job.id, { agentId: "beta" });
-    editor.stop();
-    await fsPromises.writeFile(releasePath, "release");
-    await waitForExit(owner);
+    try {
+      await expect(editor.update(job.id, { agentId: "beta" })).rejects.toThrow("already running");
+      await fsPromises.writeFile(releasePath, "release");
+      await waitForExit(owner);
 
-    expect(fs.existsSync(outputPath)).toBe(false);
-    expect(receipts(storePath, job.id)[0]).toMatchObject({
-      agentId: "alpha",
-      status: "superseded",
-    });
-    const current = (await loadCronStore(storePath)).jobs[0];
-    expect(current?.agentId).toBe("beta");
-    expect(current?.state.lastRunAtMs).toBeUndefined();
+      expect(fs.readFileSync(outputPath, "utf8")).toMatch(/^alpha:\d+\n$/);
+      expect(receipts(storePath, job.id)[0]).toMatchObject({
+        agentId: "alpha",
+        status: "ok",
+      });
+      await expect(editor.update(job.id, { agentId: "beta" })).resolves.toMatchObject({
+        agentId: "beta",
+      });
+    } finally {
+      editor.stop();
+    }
   });
 });
