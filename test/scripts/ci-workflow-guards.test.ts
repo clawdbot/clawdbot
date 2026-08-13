@@ -6435,6 +6435,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifyStep.run).toContain("Selected CI job did not succeed");
   });
 
+  it("runs Node 22 compatibility only from manual CI dispatches", () => {
+    const workflow = readCiWorkflow();
+    const compatibilityJob = workflow.jobs["checks-node-compat"];
+    const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
+    const fullReleaseDispatch = fullReleaseWorkflow.jobs.normal_ci.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor CI",
+    );
+
+    expect(compatibilityJob.name).toBe("checks-node-compat-node22");
+    expect(compatibilityJob.if).toBe(
+      "needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'",
+    );
+    expect(fullReleaseDispatch.env.CHILD_WORKFLOW_KIND).toBe("ci");
+    expect(fullReleaseDispatch.run).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
+  });
+
   it.skipIf(process.platform === "win32")(
     "accepts only successful required jobs and successful or skipped selected jobs",
     () => {
