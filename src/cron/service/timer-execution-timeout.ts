@@ -12,6 +12,7 @@ import type {
   CronJob,
   CronNextCheckProposal,
   CronRunOutcome,
+  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
@@ -95,6 +96,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
+  configRevision: string;
+  nextRunAtMs: number | undefined;
+  lastRunAtMs: number | undefined;
+  lastRunStatus: CronRunStatus | undefined;
 };
 
 export type StartupCatchupPlan = {

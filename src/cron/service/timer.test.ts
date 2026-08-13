@@ -364,7 +364,11 @@ describe("cron service timer seam coverage", () => {
       expect(finalizedAfterPersist).toBe(true);
       const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
       expect(task).toMatchObject({ status: "succeeded" });
-      expect(task?.detail).toEqual({ storeKey: cronStoreKey(storePath) });
+      expect(task?.detail).toEqual({
+        storeKey: cronStoreKey(storePath),
+        triggerFired: false,
+        triggerStateChanged: false,
+      });
     } finally {
       finalizeSpy.mockRestore();
     }

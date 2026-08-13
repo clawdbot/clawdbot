@@ -10,6 +10,7 @@ import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 import {
   applyJobResult,
   applyScriptRunResult,
+  applyTriggerNoFireResult,
   applyTriggerRunResult,
   type CronTriggerEvalOutcome,
 } from "./timer.js";
@@ -142,6 +143,18 @@ export function restoreFinalizedStartupRun(params: {
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const scheduleOwnership = replacementAtMs === undefined ? "current" : "stale";
+  if (params.triggerEval?.fired === false) {
+    applyTriggerNoFireResult(
+      state,
+      job,
+      { startedAt, endedAt, triggerEval: params.triggerEval },
+      { scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance" },
+    );
+    return {
+      shouldDelete: false,
+      ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
+    };
+  }
   const shouldDelete = applyJobResult(
     state,
     job,

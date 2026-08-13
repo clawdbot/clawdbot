@@ -165,6 +165,7 @@ export async function finalizeCompletedCronRunOutcomes(
             handle: outcome.runReceipt!,
             terminal: {
               status: outcome.status,
+              ...(outcome.triggerEval ? { triggerFired: outcome.triggerEval.fired } : {}),
               finishedAtMs: outcome.endedAt,
               error: outcome.error,
             },

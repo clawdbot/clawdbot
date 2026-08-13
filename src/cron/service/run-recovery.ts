@@ -17,12 +17,13 @@ import {
   isCronRunReceiptOwnerDefinitelyStale,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronJob } from "../types.js";
 import {
   type CronMaintenanceOptions,
   recomputeJobNextRunAtMs,
   recomputeSingleJobForMaintenance,
 } from "./jobs-scheduling.js";
+import { resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
 import {
   type InterruptedStartupRun,
   markInterruptedStartupRun,
@@ -47,10 +48,6 @@ export type CronRunRecoveryResult =
       notifications: DeferredCronNotifications;
       skipStartupCatchup?: boolean;
     };
-
-function terminalReceiptStatus(status: CronRunStatus): "ok" | "error" | "skipped" {
-  return status === "ok" || status === "skipped" ? status : "error";
-}
 
 function exactReceiptMatches(
   current: CronRunReceiptRecoveryCandidate | undefined,
@@ -82,11 +79,11 @@ function repairInDatabase(params: {
   if (proposal.receipt) {
     // Receipt identity is the recovery CAS. The millisecond marker is checked
     // only after this succeeds because successive runs may share a timestamp.
-    if (!exactReceiptMatches(currentReceipt, proposal.receipt)) {
-      return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
+    if (!exactReceiptMatches(currentReceipt, proposal.receipt) && currentReceipt) {
+      return { kind: "superseded", receipt: currentReceipt };
     }
-    if (!params.proposedReceiptIsStale) {
-      return { kind: "live", receipt: currentReceipt! };
+    if (currentReceipt && !params.proposedReceiptIsStale) {
+      return { kind: "live", receipt: currentReceipt };
     }
   } else if (currentReceipt) {
     return { kind: "superseded", receipt: currentReceipt };
@@ -98,7 +95,7 @@ function repairInDatabase(params: {
     ? loadedCronStoreFromRows([row]).store.jobs.find((entry) => entry.id === proposal.jobId)
     : undefined;
   if (!row || !job) {
-    if (proposal.receipt) {
+    if (proposal.receipt && currentReceipt) {
       finishCronRunReceiptInDatabase({
         database: database.db,
         handle: proposal.receipt,
@@ -120,7 +117,7 @@ function repairInDatabase(params: {
   const notifications: DeferredCronNotifications = [];
   if (proposal.runningAtMs !== undefined) {
     if (job.state.runningAtMs !== proposal.runningAtMs) {
-      if (proposal.receipt) {
+      if (proposal.receipt && currentReceipt) {
         finishCronRunReceiptInDatabase({
           database: database.db,
           handle: proposal.receipt,
@@ -176,7 +173,12 @@ function repairInDatabase(params: {
         database: database.db,
         handle: proposal.receipt,
         status:
-          restored && finalized ? terminalReceiptStatus(finalized.entry.status) : "interrupted",
+          restored && finalized
+            ? resolveCronRunReceiptTerminalStatus(
+                finalized.entry.status,
+                finalized.triggerEval?.fired,
+              )
+            : "interrupted",
         finishedAtMs: restored && finalized ? finalized.entry.ts : state.deps.nowMs(),
         error:
           restored && finalized

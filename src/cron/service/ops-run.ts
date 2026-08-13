@@ -386,6 +386,7 @@ async function finishPreparedManualRun(
           endedAt,
           summary: coreResult.summary,
           childSessionKey: coreResult.sessionKey,
+          triggerEval: coreResult.triggerEval,
         });
       }
       armTimer(state);

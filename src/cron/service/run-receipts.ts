@@ -88,14 +88,14 @@ export function assertServiceCronRunReceiptCurrent(
   });
 }
 
-function terminalReceiptStatus(status: CronRunStatus): Exclude<CronRunReceiptStatus, "running"> {
+export function resolveCronRunReceiptTerminalStatus(
+  status: CronRunStatus,
+  triggerFired?: boolean,
+): Exclude<CronRunReceiptStatus, "running"> {
   if (status === "ok") {
-    return "ok";
+    return triggerFired === false ? "skipped" : "ok";
   }
-  if (status === "skipped") {
-    return "skipped";
-  }
-  return "error";
+  return status === "skipped" ? "skipped" : "error";
 }
 
 function logReceiptFinishError(
@@ -135,12 +135,20 @@ export function trackServiceCronRunReceiptSettlement(params: {
 export function cronRunReceiptPersistHooks(params: {
   state: CronServiceState;
   handle: CronRunReceiptHandle;
-  terminal?: { status: CronRunStatus; finishedAtMs: number; error?: string };
+  terminal?: {
+    status: CronRunStatus;
+    triggerFired?: boolean;
+    finishedAtMs: number;
+    error?: string;
+  };
 }): CronStoreTransactionHooks {
   const terminal = params.terminal
     ? {
         handle: params.handle,
-        status: terminalReceiptStatus(params.terminal.status),
+        status: resolveCronRunReceiptTerminalStatus(
+          params.terminal.status,
+          params.terminal.triggerFired,
+        ),
         finishedAtMs: params.terminal.finishedAtMs,
         error: params.terminal.error,
       }

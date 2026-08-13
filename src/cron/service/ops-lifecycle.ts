@@ -146,6 +146,7 @@ export async function start(state: CronServiceState): Promise<void> {
     }
     const proposals: CronRunRecoveryProposal[] = [];
     for (const job of state.store?.jobs ?? []) {
+      job.state ??= {};
       if (typeof job.state.queuedAtMs === "number") {
         proposals.push(proposeCronRunRecovery(state, job.id, job.state.queuedAtMs, undefined));
       }

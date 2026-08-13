@@ -33,6 +33,7 @@ import { cronStoreKey } from "../store/key.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
+  cronQuietTriggerTaskDetail,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -179,7 +180,7 @@ function findLatestCronTaskRunForRecoveryFromRecords(
 type FinalizedCronTaskRun = {
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
-  triggerEval?: { fired: true; stateChanged: boolean; state?: JsonValue };
+  triggerEval?: { fired: boolean; stateChanged: boolean; state?: JsonValue };
 };
 
 function finalizedCronTaskRun(
@@ -189,11 +190,27 @@ function finalizedCronTaskRun(
   if (task?.runtime !== "cron" || task.sourceId !== jobId || task.endedAt === undefined) {
     return undefined;
   }
-  const entry = cronTaskRecordToRunLogEntry(task);
+  const triggerEval = cronTaskRecordToTriggerEval(task);
+  const storedEntry = cronTaskRecordToRunLogEntry(task);
+  const entry =
+    storedEntry ??
+    (task.status === "succeeded" && triggerEval?.fired === false
+      ? {
+          ts: task.endedAt,
+          jobId,
+          action: "finished" as const,
+          status: "ok" as const,
+          ...(task.startedAt === undefined
+            ? {}
+            : {
+                runAtMs: task.startedAt,
+                durationMs: Math.max(0, task.endedAt - task.startedAt),
+              }),
+        }
+      : undefined);
   if (!entry?.status) {
     return undefined;
   }
-  const triggerEval = cronTaskRecordToTriggerEval(task);
   const scriptResult = cronTaskRecordToScriptRunResult(task);
   return {
     entry: { ...entry, status: entry.status },
@@ -298,6 +315,7 @@ export function tryFinishCronTaskRunWithoutHistory(
     summary?: string;
     childSessionKey?: string;
     sessionKey?: string;
+    triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
   },
 ): void {
   if (!result.taskRunId) {
@@ -319,6 +337,14 @@ export function tryFinishCronTaskRunWithoutHistory(
       error,
       terminalSummary: result.summary,
       childSessionKey: result.childSessionKey ?? result.sessionKey ?? null,
+      ...(result.triggerEval?.fired === false
+        ? {
+            detail: cronQuietTriggerTaskDetail(
+              cronStoreKey(state.deps.storePath),
+              result.triggerEval,
+            ),
+          }
+        : {}),
     });
   } catch (cause) {
     state.deps.log.warn(

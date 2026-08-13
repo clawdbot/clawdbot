@@ -1,3 +1,5 @@
+import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { findActiveCronRunReceiptInDatabase } from "../store/run-receipt-store.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
@@ -94,7 +96,7 @@ function commitStartupCatchupRows(params: {
     state: params.state,
     jobIds: [...reservationByJobId.keys(), ...deferredByJobId.keys()],
     operationLabel: "cron.startup-catchup-state",
-    mutate: ({ jobs }) => {
+    mutate: ({ database, jobs }) => {
       const committed: CronJob[] = [];
       for (const [jobId, job] of jobs) {
         let changed = false;
@@ -118,7 +120,16 @@ function commitStartupCatchupRows(params: {
           deferred &&
           isJobEnabled(job) &&
           job.state.queuedAtMs === undefined &&
-          job.state.runningAtMs === undefined
+          job.state.runningAtMs === undefined &&
+          job.state.nextRunAtMs === deferred.nextRunAtMs &&
+          job.state.lastRunAtMs === deferred.lastRunAtMs &&
+          job.state.lastRunStatus === deferred.lastRunStatus &&
+          resolveCronJobConfigRevision(job) === deferred.configRevision &&
+          !findActiveCronRunReceiptInDatabase({
+            database,
+            storePath: params.state.deps.storePath,
+            jobId,
+          })
         ) {
           const candidate =
             typeof deferred.delayMs === "number"
@@ -260,9 +271,17 @@ async function planStartupCatchup(
     );
     // Agent-turn startup catch-up is deferred by default so gateway/channel
     // startup is not blocked by model/tool bootstrap work.
+    const deferredJob = (job: CronJob, delayMs?: number): StartupDeferredJob => ({
+      jobId: job.id,
+      ...(delayMs === undefined ? {} : { delayMs }),
+      configRevision: resolveCronJobConfigRevision(job),
+      nextRunAtMs: job.state.nextRunAtMs,
+      lastRunAtMs: job.state.lastRunAtMs,
+      lastRunStatus: job.state.lastRunStatus,
+    });
     const deferred: StartupDeferredJob[] = [
-      ...deferredOverflow.map((job) => ({ jobId: job.id })),
-      ...deferredAgentJobs.map((job) => ({ jobId: job.id, delayMs: deferredAgentDelayMs })),
+      ...deferredOverflow.map((job) => deferredJob(job)),
+      ...deferredAgentJobs.map((job) => deferredJob(job, deferredAgentDelayMs)),
     ];
     if (deferred.length > 0) {
       state.deps.log.info(
