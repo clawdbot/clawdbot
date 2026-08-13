@@ -10,6 +10,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export const DEVICE_WORKER_PROVIDER_ID = "device";
@@ -61,6 +62,7 @@ function deviceLeaseId(deviceId: string, operationId: string): string {
 /** Core runtime for already-paired node hosts; pairing remains the durable trust owner. */
 export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   let nodeTransport: NodeWorkerSupervisorTransport | undefined;
+  const launchAdapter = createNodeWorkerLaunchAdapter({ getTransport: () => nodeTransport });
   const findConnectedNode = async (deviceId: string) =>
     (await nodeTransport?.listCurrentNodes())?.find(
       (node) => node.nodeId === deviceId && isSessionCapableNode(node),
@@ -103,6 +105,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   return {
     provider,
     isAvailable,
+    launchNodeWorker: launchAdapter.launch,
     bindNodeTransport: (transport: NodeWorkerSupervisorTransport) => {
       nodeTransport = transport;
     },
