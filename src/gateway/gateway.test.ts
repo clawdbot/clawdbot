@@ -80,11 +80,13 @@ async function removeGatewayTempHome(tempHome: string): Promise<void> {
 
 async function startLoopbackTokenGateway(token: string) {
   const port = await getGatewayE2ePortBlock();
+  // Sidecars stay non-deferred: startup's own model-runtime publication loads the workspace
+  // plugin registry, and deferring it lets that load land after this resolves. Callers that
+  // measure per-request plugin loads would then sample a moving startup baseline.
   const server = await startGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
-    sidecarStartup: "defer",
   });
   return { port, server };
 }
