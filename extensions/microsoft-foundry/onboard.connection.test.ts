@@ -2,7 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as cli from "./cli.js";
 import { promptTenantId, testFoundryConnection } from "./onboard.js";
-import { ANTHROPIC_MESSAGES_API, DEFAULT_API, DEFAULT_GPT5_API } from "./shared.js";
+import {
+  ANTHROPIC_MESSAGES_API,
+  DEFAULT_API,
+  DEFAULT_GPT5_API,
+  type FoundryProviderApi,
+} from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -11,6 +16,59 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
 }));
+
+type FoundryConnectionRequestCase = {
+  name: string;
+  endpoint: string;
+  modelId: string;
+  modelNameHint: string;
+  api: FoundryProviderApi;
+  expectedUrl: string;
+  expectedBody: Record<string, unknown>;
+  expectedHeaders: Record<string, string>;
+};
+
+const foundryConnectionRequestCases: FoundryConnectionRequestCase[] = [
+  {
+    name: "Responses",
+    endpoint: "https://example.services.ai.azure.com",
+    modelId: "gpt-5.4",
+    modelNameHint: "gpt-5.4",
+    api: DEFAULT_GPT5_API,
+    expectedUrl: "https://example.services.ai.azure.com/openai/v1/responses",
+    expectedBody: { model: "gpt-5.4", input: "hi", max_output_tokens: 16 },
+    expectedHeaders: {},
+  },
+  {
+    name: "Chat Completions",
+    endpoint: "https://example.services.ai.azure.com",
+    modelId: "FW-GLM-5",
+    modelNameHint: "FW-GLM-5",
+    api: DEFAULT_API,
+    expectedUrl: "https://example.services.ai.azure.com/openai/v1/chat/completions",
+    expectedBody: {
+      model: "FW-GLM-5",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1,
+    },
+    expectedHeaders: {},
+  },
+  {
+    name: "Anthropic Messages",
+    endpoint: "https://example.services.ai.azure.com/openai/v1",
+    modelId: "prod-fable",
+    modelNameHint: "claude-fable-5",
+    api: ANTHROPIC_MESSAGES_API,
+    expectedUrl: "https://example.services.ai.azure.com/anthropic/v1/messages",
+    expectedBody: {
+      model: "prod-fable",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1,
+      thinking: { type: "adaptive" },
+    },
+    expectedHeaders: { "anthropic-version": "2023-06-01" },
+  },
+];
 
 function cancelTrackedResponse(
   text: string,
@@ -44,75 +102,38 @@ describe("testFoundryConnection", () => {
     hoisted.fetchWithSsrFGuard.mockReset();
   });
 
-  it.each([
-    {
-      name: "Responses",
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "gpt-5.4",
-      modelNameHint: "gpt-5.4",
-      api: DEFAULT_GPT5_API,
-      expectedUrl: "https://example.services.ai.azure.com/openai/v1/responses",
-      expectedBody: { model: "gpt-5.4", input: "hi", max_output_tokens: 16 },
-      expectedHeaders: {},
-    },
-    {
-      name: "Chat Completions",
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "FW-GLM-5",
-      modelNameHint: "FW-GLM-5",
-      api: DEFAULT_API,
-      expectedUrl: "https://example.services.ai.azure.com/openai/v1/chat/completions",
-      expectedBody: {
-        model: "FW-GLM-5",
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-      },
-      expectedHeaders: {},
-    },
-    {
-      name: "Anthropic Messages",
-      endpoint: "https://example.services.ai.azure.com/openai/v1",
-      modelId: "prod-fable",
-      modelNameHint: "claude-fable-5",
-      api: ANTHROPIC_MESSAGES_API,
-      expectedUrl: "https://example.services.ai.azure.com/anthropic/v1/messages",
-      expectedBody: {
-        model: "prod-fable",
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-        thinking: { type: "adaptive" },
-      },
-      expectedHeaders: { "anthropic-version": "2023-06-01" },
-    },
-  ])("sends the $name connection request through the guarded transport", async (testCase) => {
-    const release = vi.fn(async () => undefined);
-    hoisted.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(null, { status: 200 }),
-      release,
-    });
+  it.each(foundryConnectionRequestCases)(
+    "sends the $name connection request through the guarded transport",
+    async (testCase) => {
+      const release = vi.fn(async () => undefined);
+      hoisted.fetchWithSsrFGuard.mockResolvedValue({
+        response: new Response(null, { status: 200 }),
+        release,
+      });
 
-    await testFoundryConnection({
-      ctx: { prompter: { note: vi.fn() } } as never,
-      endpoint: testCase.endpoint,
-      modelId: testCase.modelId,
-      modelNameHint: testCase.modelNameHint,
-      api: testCase.api,
-    });
+      await testFoundryConnection({
+        ctx: { prompter: { note: vi.fn() } } as never,
+        endpoint: testCase.endpoint,
+        modelId: testCase.modelId,
+        modelNameHint: testCase.modelNameHint,
+        api: testCase.api,
+      });
 
-    const request = hoisted.fetchWithSsrFGuard.mock.calls[0]?.[0];
-    expect(request?.url).toBe(testCase.expectedUrl);
-    expect(request?.timeoutMs).toBe(15_000);
-    expect(request?.init?.method).toBe("POST");
-    expect(request?.init?.body).toBe(JSON.stringify(testCase.expectedBody));
-    expect(new Headers(request?.init?.headers)).toEqual(
-      new Headers({
-        Authorization: "Bearer token",
-        "Content-Type": "application/json",
-        ...testCase.expectedHeaders,
-      }),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
-  });
+      const request = hoisted.fetchWithSsrFGuard.mock.calls[0]?.[0];
+      expect(request?.url).toBe(testCase.expectedUrl);
+      expect(request?.timeoutMs).toBe(15_000);
+      expect(request?.init?.method).toBe("POST");
+      expect(request?.init?.body).toBe(JSON.stringify(testCase.expectedBody));
+      expect(new Headers(request?.init?.headers)).toEqual(
+        new Headers({
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+          ...testCase.expectedHeaders,
+        }),
+      );
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds connection-test error bodies without using response.text()", async () => {
     const note = vi.fn();

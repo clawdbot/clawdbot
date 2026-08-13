@@ -1,6 +1,7 @@
 // Microsoft Foundry tests cover index plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
@@ -934,7 +935,7 @@ describe("microsoft-foundry plugin", () => {
       throw new Error(`unexpected az command: ${azArgs.join(" ")}`);
     });
     const provider = registerProvider();
-    const authMethod = provider.auth.find((method) => method.id === "entra-id");
+    const authMethod = provider.auth.find((method: ProviderAuthMethod) => method.id === "entra-id");
     if (!authMethod) {
       throw new Error("expected Microsoft Foundry Entra auth method");
     }
