@@ -118,6 +118,42 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
   });
 
+  it("does not reuse cached private PRs after the GitHub token is removed", async () => {
+    vi.stubEnv("GH_TOKEN", "github-token-a");
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return authorization === "Bearer github-token-a"
+        ? githubJson([
+            pullListItem({
+              title: "private PR from token A",
+              merged_at: "2026-08-12T00:00:00Z",
+            }),
+          ])
+        : githubJson({ message: "Not Found" }, 404);
+    });
+
+    const first = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    vi.stubEnv("GH_TOKEN", "");
+    await expect(
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:main" },
+        { fetchImpl, resolveGitContext },
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(first.pullRequests[0]?.title).toBe("private PR from token A");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer github-token-a",
+    );
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+  });
+
   it("skips diff and check fetches for merged PRs", async () => {
     const fetchImpl = routedFetch([
       {
