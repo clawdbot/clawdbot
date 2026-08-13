@@ -1657,7 +1657,101 @@ describe("sqlite session normalization", () => {
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:newer", "agent:main:newest"]);
+    ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
+  });
+
+  it("keeps protected SQLite rows outside the write-triggered entry allowance", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const now = Date.now();
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const recentSessionId = "recent-dashboard-session-1";
+    const recentTranscriptEvent = {
+      id: "recent-dashboard-event",
+      timestamp: new Date().toISOString(),
+      type: "metadata",
+    };
+
+    for (const [sessionKey, sessionId, updatedAt] of [
+      ["agent:main:archived-1", "archived-session-1", now - 4],
+      ["agent:main:archived-2", "archived-session-2", now - 3],
+    ] as const) {
+      await patchSessionEntryCore(
+        scopeFor(sessionKey),
+        () => ({ archivedAt: updatedAt, sessionId, updatedAt }),
+        {
+          fallbackEntry: { archivedAt: updatedAt, sessionId, updatedAt },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+    }
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard-1"),
+      () => ({ sessionId: recentSessionId, updatedAt: now - 2 }),
+      {
+        fallbackEntry: { sessionId: recentSessionId, updatedAt: now - 2 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor("agent:main:recent-dashboard-1"), sessionId: recentSessionId },
+      recentTranscriptEvent,
+    );
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard-2"),
+      () => ({ sessionId: "recent-dashboard-session-2", updatedAt: now - 1 }),
+      {
+        fallbackEntry: { sessionId: "recent-dashboard-session-2", updatedAt: now - 1 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger-session", updatedAt: now }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: now },
+        replaceEntry: true,
+      },
+    );
+
+    expect(
+      listSessionEntryRows({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual([
+      "agent:main:archived-1",
+      "agent:main:archived-2",
+      "agent:main:maintenance-trigger",
+      "agent:main:recent-dashboard-1",
+      "agent:main:recent-dashboard-2",
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: recentSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([recentTranscriptEvent]);
   });
 
   it("preserves pinned SQLite entries and transcripts during write-triggered capping", async () => {
