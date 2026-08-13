@@ -139,6 +139,94 @@ function normalizeInstallE2eAgentOutput(output: string) {
   }
 }
 
+function runInstallE2eMigrationConvergenceFixture() {
+  const root = tempDirs.make("openclaw-install-e2e-migration-convergence-");
+  const binDir = join(root, "bin");
+  const installerPath = join(root, "installer.sh");
+  const statePath = join(root, "gateway-attempts");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(installerPath, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+
+  writeFileSync(
+    join(binDir, "npm"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "$*" == *"view openclaw@latest version"* ]]; then',
+      "  printf '2026.6.35\\n'",
+      'elif [[ "$*" == *"view openclaw versions --json"* ]]; then',
+      '  printf \'[\\"2026.6.34\\",\\"2026.6.35\\"]\\n\'',
+      "fi",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(binDir, "openclaw"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-}" == "--version" ]]; then',
+      "  printf '2026.6.35\\n'",
+      "  exit 0",
+      "fi",
+      'if [[ "$*" == *onboard* ]]; then',
+      '  previous=""',
+      '  for argument in "$@"; do',
+      '    if [[ "$previous" == "--workspace" ]]; then',
+      '      mkdir -p "$argument"',
+      '      touch "$argument/AGENTS.md" "$argument/IDENTITY.md" "$argument/USER.md" "$argument/SOUL.md" "$argument/TOOLS.md"',
+      "      exit 0",
+      "    fi",
+      '    previous="$argument"',
+      "  done",
+      "fi",
+      'if [[ "$*" == *gateway* ]]; then',
+      '  attempts="$(cat "$FAKE_GATEWAY_ATTEMPTS" 2>/dev/null || printf 0)"',
+      "  attempts=$((attempts + 1))",
+      '  printf "%s\\n" "$attempts" >"$FAKE_GATEWAY_ATTEMPTS"',
+      '  if [[ "$attempts" == "1" ]]; then',
+      '    echo "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready." >&2',
+      "    exit 1",
+      "  fi",
+      "  while :; do sleep 1; done",
+      "fi",
+      'if [[ "$*" == *health* ]]; then',
+      '  attempts="$(cat "$FAKE_GATEWAY_ATTEMPTS" 2>/dev/null || printf 0)"',
+      '  if [[ "$attempts" -ge 2 ]]; then',
+      "    printf '{\\\"ok\\\":true}\\n'",
+      "    exit 0",
+      "  fi",
+      "  exit 1",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const result = spawnSync("bash", [INSTALL_E2E_RUNNER_PATH], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 15_000,
+    env: {
+      ...process.env,
+      FAKE_GATEWAY_ATTEMPTS: statePath,
+      HOME: root,
+      OPENAI_API_KEY: "test-key",
+      OPENCLAW_E2E_MODELS: "openai",
+      OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE: "0",
+      OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS: "1",
+      OPENCLAW_INSTALL_URL: `file://${installerPath}`,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+  return {
+    attempts: existsSync(statePath) ? readFileSync(statePath, "utf8").trim() : undefined,
+    result,
+  };
+}
+
 function expectInstallDockerfileContract(
   dockerfilePath: string,
   runnerPath: string,
@@ -765,6 +853,14 @@ describe("install-sh E2E runner", () => {
     );
     expect(script).toContain('timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s"');
     expect(script).toContain('\\"timeoutSeconds\\":${OPENAI_PROVIDER_TIMEOUT_SECONDS}');
+  });
+
+  it("restarts an exited installer gateway once after migration convergence", () => {
+    const { attempts, result } = runInstallE2eMigrationConvergenceFixture();
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(attempts).toBe("2");
+    expect(result.stdout).toContain("Restart gateway after migration convergence (e2e-openai)");
   });
 
   it("normalizes agent JSON when structured lifecycle diagnostics follow the result", () => {

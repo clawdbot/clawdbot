@@ -896,14 +896,19 @@ run_profile() {
 
   phase_mark_start "Start gateway ($profile)"
   GATEWAY_LOG="$workspace/gateway.log"
-  openclaw --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
-  GATEWAY_PID="$!"
+  GATEWAY_MIGRATION_CONVERGENCE_REFUSAL_PREFIX="OpenClaw plugin migration inputs changed during startup convergence;"
+  start_gateway() {
+    openclaw --profile "$profile" gateway --port "$port" --bind loopback >>"$GATEWAY_LOG" 2>&1 &
+    GATEWAY_PID="$!"
+  }
   cleanup_profile() {
     if kill -0 "$GATEWAY_PID" 2>/dev/null; then
       kill "$GATEWAY_PID" 2>/dev/null || true
       wait "$GATEWAY_PID" 2>/dev/null || true
     fi
   }
+  : >"$GATEWAY_LOG"
+  start_gateway
   trap cleanup_profile EXIT
   phase_mark_passed "Start gateway ($profile)"
 
@@ -914,17 +919,38 @@ run_profile() {
   TURN4_JSON="/tmp/agent-${profile}-4.json"
   HEALTH_JSON="/tmp/health-${profile}.json"
 
+  wait_for_gateway_health() {
+    for _ in $(seq 1 240); do
+      if openclaw --profile "$profile" health --timeout 5000 --json >/dev/null 2>&1; then
+        return 0
+      fi
+      if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
+        return 1
+      fi
+      sleep 0.25
+    done
+    openclaw --profile "$profile" health --timeout 60000 --json >"$HEALTH_JSON" 2>&1
+  }
+
   phase_mark_start "Wait for health ($profile)"
-  for _ in $(seq 1 240); do
-    if openclaw --profile "$profile" health --timeout 5000 --json >/dev/null 2>&1; then
-      break
+  if ! wait_for_gateway_health; then
+    # Doctor exits once after plugin migration convergence so the final inventory can restart cleanly.
+    # Retry only that exact, already-exited launch; other health failures remain release blockers.
+    if ! kill -0 "$GATEWAY_PID" 2>/dev/null &&
+      grep -Fq "$GATEWAY_MIGRATION_CONVERGENCE_REFUSAL_PREFIX" "$GATEWAY_LOG"; then
+      wait "$GATEWAY_PID" 2>/dev/null || true
+      echo "Restart gateway after migration convergence ($profile)"
+      start_gateway
+      if ! wait_for_gateway_health; then
+        echo "ERROR: gateway health failed ($profile, output=$HEALTH_JSON)" >&2
+        dump_profile_debug "$profile" "$HEALTH_JSON" >&2 || true
+        return 1
+      fi
+    else
+      echo "ERROR: gateway health failed ($profile, output=$HEALTH_JSON)" >&2
+      dump_profile_debug "$profile" "$HEALTH_JSON" >&2 || true
+      return 1
     fi
-    sleep 0.25
-  done
-  if ! openclaw --profile "$profile" health --timeout 60000 --json >"$HEALTH_JSON" 2>&1; then
-    echo "ERROR: gateway health failed ($profile, output=$HEALTH_JSON)" >&2
-    dump_profile_debug "$profile" "$HEALTH_JSON" >&2 || true
-    return 1
   fi
   phase_mark_passed "Wait for health ($profile)"
 
