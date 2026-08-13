@@ -821,11 +821,8 @@ function createSessionWorkspace(
     activeId: null,
     dock: "right",
     narrowLayout: false,
-    dockDragging: false,
-    dockDragZone: null,
     onToggleCollapsed: () => undefined,
     onSetDock: () => undefined,
-    onDockDragStart: () => undefined,
     onRefresh: () => undefined,
     onBrowsePath: () => undefined,
     onCopyPath: () => undefined,
@@ -1111,7 +1108,7 @@ describe("cloud worker disk-space notice", () => {
       title: "Cloud session disk space is critically low",
       copy: "New writes may fail and stop the agent.",
     },
-  ])("renders persistent $status action guidance above the workbench", (sample) => {
+  ])("renders persistent $status action guidance above the conversation", (sample) => {
     const container = renderChatView({
       diskSpace: {
         status: sample.status,
@@ -1127,7 +1124,8 @@ describe("cloud worker disk-space notice", () => {
     expect(notice.textContent).toContain(sample.copy);
     expect(notice.querySelector("svg")).not.toBeNull();
     expect(notice.querySelector("button")).toBeNull();
-    expect(notice.nextElementSibling?.classList.contains("chat-workbench")).toBe(true);
+    expect(notice.parentElement?.classList.contains("chat-main__conversation-column")).toBe(true);
+    expect(notice.nextElementSibling?.classList.contains("chat-main__conversation")).toBe(true);
   });
 
   it.each(["ok" as const, undefined])("clears for %s disk-space projection", (status) => {
@@ -1841,8 +1839,8 @@ describe("chat composer workbench", () => {
     expect(main?.parentElement).toBe(workbench);
     expect(rail?.parentElement).toBe(workbench);
     expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
-      "chat-workspace-rail",
       "chat-workbench__main",
+      "chat-workspace-rail",
     ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
@@ -1910,7 +1908,7 @@ describe("chat composer workbench", () => {
     openSpy.mockRestore();
   });
 
-  it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
+  it("forces the workspace rail to the bottom dock on narrow panes", () => {
     const container = renderChatView({
       sessionWorkspace: createSessionWorkspace({
         narrowLayout: true,
@@ -1925,8 +1923,43 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
     expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__terminal")).toBeNull();
-    expect(container.querySelector(".chat-session-diff-toggle")).toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle terminal"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle browser panel"]')).not.toBeNull();
+    expect(container.querySelector(".chat-session-diff-toggle")).not.toBeNull();
+  });
+
+  it("keeps a preferred bottom workspace below a side-docked Tasks rail", () => {
+    const container = renderChatView({
+      sessionWorkspace: createSessionWorkspace({ dock: "bottom" }),
+      workspaceRail: [820, html`<div class="chat-workspace-rail-resizer"></div>`],
+      backgroundTasks: createBackgroundTasks(),
+      tasksRail: [330, html`<div class="chat-tasks-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector(".chat-workbench");
+    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
+    expect(workbench?.classList.contains("chat-workbench--workspace-open")).toBe(false);
+    expect(workbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).toBeNull();
+    expect(workbench?.querySelector(".chat-tasks-rail-resizer")).not.toBeNull();
+    expect(
+      (workbench as HTMLElement | null)?.style.getPropertyValue("--chat-workspace-rail-width"),
+    ).toBe("820px");
+  });
+
+  it("keeps the pane header in the conversation column while rails span the workbench", () => {
+    const container = renderChatView({
+      header: html`<header class="chat-pane__header">Session</header>`,
+      sessionWorkspace: createSessionWorkspace(),
+      workspaceRail: [344, html`<div class="chat-workspace-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector<HTMLElement>(".chat-workbench");
+    const column = container.querySelector(".chat-main__conversation-column");
+    expect(column?.firstElementChild?.classList.contains("chat-pane__header")).toBe(true);
+    expect(container.querySelector(".chat-workspace-rail")?.contains(column)).toBe(false);
+    expect(workbench?.style.getPropertyValue("--chat-workspace-rail-width")).toBe("344px");
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).not.toBeNull();
   });
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {

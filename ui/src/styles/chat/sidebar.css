@@ -2,7 +2,7 @@
 .chat-workbench {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -13,6 +13,12 @@
    thread. Reopen via the pane header or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-workbench--workspace-open {
+  grid-template-columns:
+    minmax(0, 1fr) var(--rail-resizer-size)
+    minmax(260px, var(--chat-workspace-rail-width));
 }
 
 /* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
@@ -39,17 +45,19 @@
    rules sit after the collapse/dock modifiers so the extra column wins at
    equal specificity. */
 .chat-workbench--tasks-open {
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
+  grid-template-columns:
+    minmax(0, 1fr) var(--rail-resizer-size)
+    minmax(270px, var(--chat-tasks-rail-width));
 }
 
-.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-  .chat-workbench--dock-bottom
-) {
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(270px, 330px);
+.chat-workbench--workspace-open.chat-workbench--tasks-open {
+  grid-template-columns:
+    minmax(0, 1fr) var(--rail-resizer-size)
+    minmax(260px, var(--chat-workspace-rail-width)) var(--rail-resizer-size)
+    minmax(270px, var(--chat-tasks-rail-width));
 }
 
-/* Compact icon button shared by the pane header actions. Sizing only — chrome
-   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
+/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
@@ -170,6 +178,15 @@
   flex: 1 1 0;
 }
 
+.chat-main__conversation-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .chat-main__conversation {
   position: relative;
   display: flex;
@@ -196,10 +213,48 @@
 
 .chat-main--rail-docked > openclaw-chat-session-rail {
   display: block;
-  width: 400px;
-  min-width: 400px;
+  width: var(--chat-companion-rail-width);
+  min-width: 300px;
   min-height: 0;
-  flex: 0 0 400px;
+  flex: 0 0 var(--chat-companion-rail-width);
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer) {
+  position: relative;
+  z-index: 2;
+  width: var(--rail-resizer-size);
+  min-width: var(--rail-resizer-size);
+  cursor: ew-resize;
+  background: transparent;
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer)::before {
+  position: absolute;
+  inset: 0 -4px;
+  content: "";
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer)::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: var(--rail-divider-size);
+  transform: translateX(-50%);
+  background: var(--rail-divider-color);
+  content: "";
+  transition:
+    background 150ms ease-out,
+    width 150ms ease-out;
+}
+
+:is(
+  .chat-workspace-rail-resizer,
+  .chat-tasks-rail-resizer,
+  .chat-companion-rail-resizer
+):hover::after {
+  width: var(--rail-divider-active-size);
+  background: var(--accent);
 }
 
 openclaw-chat-sidebar-region,
@@ -242,9 +297,115 @@ openclaw-chat-sidebar-region,
   flex: 0 0 auto;
   align-items: center;
   min-width: 0;
-  min-height: 42px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
+}
+
+/* Canonical rail header contract. The header owns geometry; actions are bare
+   glyphs with an invisible hit area so generic button chrome cannot leak in. */
+.rail-header {
+  box-sizing: border-box;
+  display: flex;
+  height: var(--rail-header-height);
+  min-height: var(--rail-header-height);
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+  background: var(--rail-header-background);
+}
+
+.rail-header__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--rail-header-copy-gap);
+}
+
+.rail-header__eyebrow {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--rail-header-eyebrow-size);
+  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rail-header__title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--rail-header-title-size);
+  font-weight: var(--rail-header-title-weight);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--rail-header-action-gap);
+}
+
+.rail-header__action {
+  display: inline-flex;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-color);
+  font: inherit;
+  opacity: 1;
+  transform: none;
+}
+
+.rail-header__action:hover,
+.rail-header__action:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-hover-color);
+  transform: none;
+}
+
+.rail-header__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.rail-header__action.is-active,
+.rail-header__action[aria-pressed="true"] {
+  background: transparent;
+  color: var(--rail-header-action-active-color);
+}
+
+.rail-header__action:disabled,
+.rail-header__action[aria-disabled="true"] {
+  opacity: var(--rail-header-action-disabled-opacity);
+}
+
+.rail-header__action svg,
+.rail-header__action .nav-collapse-toggle__icon,
+.rail-header__action .nav-collapse-toggle__icon svg {
+  display: block;
+  width: var(--rail-header-action-glyph-size);
+  height: var(--rail-header-action-glyph-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-column__tabs {
@@ -281,6 +442,10 @@ openclaw-chat-sidebar-region,
   white-space: nowrap;
 }
 
+.sidebar-column__tab:first-child::part(base) {
+  padding-left: 0;
+}
+
 .sidebar-column__tab[active]::part(base) {
   color: var(--text);
 }
@@ -298,17 +463,10 @@ openclaw-chat-sidebar-region,
 
 .sidebar-column__actions {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-  padding-right: 5px;
 }
 
-.sidebar-column__actions .btn {
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 6px;
+.sidebar-column__single-panel {
+  cursor: grab;
 }
 
 .sidebar-column__body,
@@ -328,7 +486,7 @@ openclaw-chat-sidebar-region,
 .sidebar-column__panel--wide {
   position: absolute;
   z-index: 1;
-  top: 42px;
+  top: var(--rail-header-height);
   bottom: 0;
 }
 
@@ -391,7 +549,7 @@ openclaw-chat-sidebar-region,
   grid-column: 1;
   grid-row: 2;
   min-height: 0;
-  margin-top: 42px;
+  margin-top: var(--rail-header-height);
 }
 
 .sidebar-column--collapsed {
@@ -405,92 +563,15 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-workspace-rail__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-workspace-rail__title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.chat-workspace-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chat-workspace-rail__title strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  line-height: 1.2;
-}
-
-.chat-workspace-rail__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chat-workspace-rail__refresh,
-.chat-workspace-rail__dock,
-.chat-workspace-rail__collapse-toggle {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0;
-}
-
-/* Grab affordance for drag-to-dock. */
-.chat-workspace-rail__grip {
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
-}
-
-.chat-workspace-rail__grip:active {
-  cursor: grabbing;
-}
-
-/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
-   background, inset highlight): rail header buttons only show chrome on
-   hover. */
-.chat-workspace-rail__collapse-toggle {
-  flex: 0 0 auto;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.chat-workspace-rail__collapse-toggle:hover {
-  border-color: transparent;
-  background: var(--bg-hover);
-  transform: none;
-}
-
-.chat-workspace-rail__refresh svg,
-.chat-workspace-rail__dock svg,
-.chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
@@ -799,58 +880,31 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-tasks-rail__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+.chat-workspace-rail-resizer {
+  grid-column: 2;
+  grid-row: 1;
 }
 
-.chat-tasks-rail__title {
+.chat-workbench--workspace-open.chat-workbench--tasks-open .chat-tasks-rail-resizer {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.chat-workbench--tasks-open:not(.chat-workbench--workspace-open) .chat-tasks-rail-resizer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.chat-pane-primary-column {
   display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
   min-width: 0;
-}
-
-.chat-tasks-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.1;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
   overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__title strong {
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-tasks-rail__refresh svg,
-.chat-tasks-rail__collapse-toggle svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
 }
 
 .chat-tasks-rail__state {

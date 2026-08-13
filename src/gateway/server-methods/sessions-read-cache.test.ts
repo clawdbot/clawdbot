@@ -17,6 +17,7 @@ import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -252,6 +253,36 @@ describe("sessions.list single-flight", () => {
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("invalidates a completed result after terminal lifecycle persistence lands", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // The terminal entry write (status/endedAt/runtimeMs) commits after the
+      // run-index fence bumped at lifecycle end. A list computed in that
+      // window cached the pre-terminal row; the persistence fence evicts it.
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:active",
+        agentId: "main",
+        event: {
+          ts: 60_500,
+          runId: "run-terminal-fence",
+          data: { phase: "end", startedAt: 60_000, endedAt: 60_450 },
+        },
+      });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -39,6 +39,29 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
+  /* Shared rail chrome. Light and dark themes inherit their actual colors
+     through --border/--accent while keeping one geometry contract. */
+  --rail-header-height: 48px;
+  --rail-header-padding-start: 12px;
+  --rail-header-padding-end: 8px;
+  --rail-header-action-size: 28px;
+  --rail-header-action-glyph-size: 16px;
+  --rail-header-action-color: var(--muted);
+  --rail-header-action-hover-color: var(--text);
+  --rail-header-action-active-color: var(--accent);
+  --rail-header-action-disabled-opacity: 0.4;
+  --rail-header-action-gap: 2px;
+  --rail-header-copy-gap: 2px;
+  --rail-header-background: var(--bg);
+  --rail-header-eyebrow-size: var(--control-ui-text-xs);
+  --rail-header-eyebrow-letter-spacing: 0.04em;
+  --rail-header-title-size: var(--control-ui-text-sm);
+  --rail-header-title-weight: 600;
+  --rail-divider-color: var(--border);
+  --rail-divider-size: 1px;
+  --rail-divider-active-size: 2px;
+  --rail-resizer-size: 4px;
+
   /*
    * Accent - Punchy signature red
    *
