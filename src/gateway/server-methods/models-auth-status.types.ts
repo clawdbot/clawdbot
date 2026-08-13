@@ -24,6 +24,16 @@ export type ModelAuthStatusProfile = {
   expiry?: ModelAuthExpiry;
   /** True only for saved OAuth/token profiles this gateway can remove. */
   logoutSupported?: boolean;
+  /** Non-secret account metadata supplied by the provider login flow. */
+  displayName?: string;
+  email?: string;
+  lastUsedAt?: number;
+  cooldownUntil?: number;
+  cooldownReason?: string;
+  disabledUntil?: number;
+  disabledReason?: string;
+  blockedUntil?: number;
+  blockedReason?: string;
 };
 
 export type ModelAuthStatusProvider = {
@@ -32,6 +42,8 @@ export type ModelAuthStatusProvider = {
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
+  /** Explicit per-agent priority override; omitted when selection is automatic. */
+  profileOrder?: string[];
   apiKey?: {
     source: "config" | "env";
     envVar?: string;
