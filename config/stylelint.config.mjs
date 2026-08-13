@@ -29,6 +29,14 @@ export default {
       files: ["**/*.css"],
       rules: {
         "color-no-hex": true,
+        // Control UI max-width breakpoints use one ladder: 400, 560, 640,
+        // 768, 900, 1100, and 1320px. Round thresholds up to the next rung
+        // so compact layouts engage before desktop layouts become cramped.
+        "media-feature-name-value-allowed-list": {
+          "max-width": ["400px", "560px", "640px", "768px", "900px", "1100px", "1320px", "932px"],
+          "max-height": ["500px"],
+          "min-width": ["769px", "933px", "1121px", "1400px", "1600px"],
+        },
       },
     },
     {

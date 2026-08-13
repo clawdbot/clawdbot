@@ -215,7 +215,7 @@ openclaw-activity-page {
   font-size: var(--control-ui-text-sm);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .activity-entry__meta {
     white-space: normal;
   }

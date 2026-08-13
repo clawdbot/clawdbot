@@ -1767,7 +1767,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
 }
 
-@media (max-width: 540px) {
+@media (max-width: 560px) {
   .lobsterdex-page__header {
     align-items: flex-start;
     flex-direction: column;

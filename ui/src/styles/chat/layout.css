@@ -3211,7 +3211,7 @@ button.chat-reply-preview--message:disabled {
   padding: 0;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .agent-chat__input-btn {
     width: 36px;
     min-width: 36px;

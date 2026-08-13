@@ -8,6 +8,7 @@ export const en: TranslationMap = {
     ok: "OK",
     yes: "Yes",
     no: "No",
+    default: "Default",
     assistant: "Assistant",
     active: "Active",
     loading: "Loading…",

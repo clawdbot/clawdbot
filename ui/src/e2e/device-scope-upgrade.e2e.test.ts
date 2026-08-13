@@ -308,10 +308,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     );
     await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
 
-    await page.goto(`${server.baseUrl}chat`);
-    await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
 
-    expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+    } finally {
+      await page.close({ runBeforeUnload: false });
+    }
   });
 
   it("shows manual repair guidance without a signed browser device", async () => {

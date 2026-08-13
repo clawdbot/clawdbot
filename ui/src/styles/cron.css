@@ -980,7 +980,7 @@
   margin-bottom: 0;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;

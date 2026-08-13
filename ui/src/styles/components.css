@@ -904,7 +904,7 @@ openclaw-github-link-hovercard-provider {
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .github-link-hovercard {
     padding: 14px;
   }
@@ -4265,7 +4265,7 @@ td.data-table-key-col {
   padding: clamp(24px, 3vw, 52px);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .md-preview-dialog__panel {
     width: 100%;
     min-height: calc(100vh - 12px);
@@ -4676,7 +4676,7 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .agent-tool-summary {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -4690,7 +4690,7 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .agent-tools-group__summary {
     flex-wrap: wrap;
     align-items: flex-start;
@@ -4791,13 +4791,13 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .agents-toolbar-row {
     flex-direction: column;
     align-items: stretch;

@@ -1937,7 +1937,7 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .usage-page {
     gap: 14px;
   }

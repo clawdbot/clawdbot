@@ -1744,7 +1744,7 @@ openclaw-session-discussion {
   margin-bottom: 0.95em;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .sidebar-markdown-shell__toolbar {
     flex-direction: column;
     align-items: stretch;

@@ -6,18 +6,20 @@ import {
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
+  gatewayServerExcludedTestFiles,
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
+import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
-import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
+import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 
 type NodeTestShardGroup = {
@@ -158,10 +160,10 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls. The 310s admission cap
-// bounds the compact matrix at 25 workers; expanded composite groups are then
-// striped evenly across those jobs.
-const COMPACT_NODE_TEST_JOB_SECONDS = 310;
+// The group hints below are loaded-fleet CI walls. After striping the three
+// former floor groups, the 276s admission cap bounds the compact matrix at the
+// workflow's 28-worker ceiling; composite groups then balance across those jobs.
+const COMPACT_NODE_TEST_JOB_SECONDS = 276;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -174,6 +176,9 @@ const COMPACT_8VCPU_CHECK_NAMES = new Set([
 ]);
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
 const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
+const AGENTIC_GATEWAY_CORE_STRIPES = 2;
+const CORE_RUNTIME_MEDIA_UI_STRIPES = 2;
+const CORE_UNIT_SRC_SECURITY_STRIPES = 2;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
 // Advisory runtime estimates (seconds) per split shard: median [shard:*]
 // begin->end wall across nine successful hosted compact runs (31684307744,
@@ -238,7 +243,8 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-control-plane-startup-core", 31],
   ["agentic-control-plane-startup-health-runtime", 11],
   ["agentic-control-plane-startup-restart-close", 10],
-  ["agentic-gateway-core", 223],
+  ["agentic-gateway-core-1", 149],
+  ["agentic-gateway-core-2", 148],
   ["agentic-gateway-methods", 157],
   ["agentic-plugin-sdk", 45],
   ["auto-reply-core-top-level", 27],
@@ -282,7 +288,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-repo-tooling", 4],
   ["core-runtime-infra-storage-state", 104],
   ["core-runtime-infra-system-runtime", 36],
-  ["core-runtime-media-ui", 227],
+  ["core-runtime-media-ui-1", 160],
+  ["core-runtime-media-ui-2", 121],
+  ["core-runtime-media-ui-support", 100],
   ["core-runtime-secrets", 61],
   ["core-runtime-shared", 67],
   // This dist-only group is outside the sampled nondist logs and retains its
@@ -296,7 +304,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-unit-fast-1", 66],
   ["core-unit-fast-2", 64],
   ["core-unit-fast-isolated", 116],
-  ["core-unit-src-security", 290],
+  ["core-unit-src-security-1", 152],
+  ["core-unit-src-security-2", 152],
+  ["core-unit-src-security-support", 12],
   ["core-unit-support", 20],
 ]);
 
@@ -323,17 +333,27 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-run", 47],
   ["agentic-agents-support", 165],
   ["agentic-control-plane-startup-core", 33],
-  ["agentic-gateway-core", 230],
+  // Run 31691151297 measured 296.68s for gateway-core, 241.66s for UI,
+  // 101.58s for its companion configs, 303.93s for unit-src, and 12.07s for
+  // security. Run 31694057974 measured the two UI envelopes at 159.50s and
+  // 120.55s while exposing cross-config bleed; keep those rounded upper
+  // bounds after isolating the companion whole-config groups.
+  ["agentic-gateway-core-1", 149],
+  ["agentic-gateway-core-2", 148],
   ["agentic-gateway-methods", 153],
   ["auto-reply-reply-commands-1", 34],
   ["auto-reply-reply-commands-2", 11],
   ["auto-reply-reply-commands-3", 28],
   ["auto-reply-reply-dispatch", 86],
-  ["core-runtime-media-ui", 238],
+  ["core-runtime-media-ui-1", 160],
+  ["core-runtime-media-ui-2", 121],
+  ["core-runtime-media-ui-support", 100],
   ["core-unit-fast-1", 68],
   ["core-unit-fast-2", 67],
   ["core-unit-fast-isolated", 117],
-  ["core-unit-src-security", 287],
+  ["core-unit-src-security-1", 152],
+  ["core-unit-src-security-2", 152],
+  ["core-unit-src-security-support", 12],
 ]);
 
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
@@ -348,13 +368,21 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
   ["src/agents/cli-runner.reliability.test.ts", 8],
   ["src/agents/cli-runner.spawn.test.ts", 45],
+  // The few CI-derived slow-file hints needed for the three new stripes are
+  // rounded checkmark durations from canonical-main run 31691151297.
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
   ["src/auto-reply/reply/commands-gating.test.ts", 6],
   ["src/auto-reply/reply/commands-learn.test.ts", 8],
   ["src/auto-reply/reply/commands-plugins.install.test.ts", 6],
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
+  ["src/gateway/dashboard-session-title.test.ts", 23],
+  ["src/gateway/managed-image-attachments.test.ts", 24],
+  ["src/gateway/session-message-events.test.ts", 26],
+  ["src/gateway/tool-resolution.test.ts", 43],
   ["src/scripts/test-projects.test.ts", 21],
+  ["ui/src/components/app-sidebar.test.ts", 28],
+  ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
@@ -392,7 +420,7 @@ function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-cli$|^agentic-gateway-(?:core|methods)$/u;
+  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group: NodeTestShardGroup): NodeTestShardGroup {
@@ -475,7 +503,8 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-runner-sessions",
   "agentic-agents-core-tools",
   "agentic-control-plane-startup-core",
-  "agentic-gateway-core",
+  "agentic-gateway-core-1",
+  "agentic-gateway-core-2",
   "agentic-gateway-methods",
   "auto-reply-reply-dispatch",
   // The commands stripes and security suite are import-bound (30-45s of
@@ -484,11 +513,15 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "auto-reply-reply-commands-1",
   "auto-reply-reply-commands-2",
   "auto-reply-reply-commands-3",
-  "core-runtime-media-ui",
+  "core-runtime-media-ui-1",
+  "core-runtime-media-ui-2",
+  "core-runtime-media-ui-support",
   "core-unit-fast-1",
   "core-unit-fast-2",
   "core-unit-fast-isolated",
-  "core-unit-src-security",
+  "core-unit-src-security-1",
+  "core-unit-src-security-2",
+  "core-unit-src-security-support",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir: string): string[] {
@@ -1254,23 +1287,110 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
   ];
 }
 
+function isStripeEligibleTestFile(file: string, unitFastFiles: ReadonlySet<string>): boolean {
+  return (
+    !unitFastFiles.has(file) && !file.endsWith(".e2e.test.ts") && !file.endsWith(".live.test.ts")
+  );
+}
+
+function createStripedSplitShards(params: {
+  configs: string[];
+  files: string[];
+  includeExternalConfigs?: boolean;
+  shardName: string;
+  stripeCount: number;
+}): NodeTestSplitShard[] {
+  return createStripedBatches(params.files, params.stripeCount, stripeFileWeight).map(
+    (includePatterns, index) => ({
+      configs: params.configs,
+      includeExternalConfigs: params.includeExternalConfigs,
+      includePatterns,
+      requiresDist: false,
+      shardName: `${params.shardName}-${index + 1}`,
+    }),
+  );
+}
+
+function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
+  const unitFastFiles = new Set(getUnitFastTestFiles());
+  const files = listTestFiles("src").filter(
+    (file) =>
+      isStripeEligibleTestFile(file, unitFastFiles) &&
+      !file.startsWith("src/acp/") &&
+      !file.startsWith("src/security/") &&
+      isUnitConfigTestFile(file),
+  );
+  return [
+    ...createStripedSplitShards({
+      configs: ["test/vitest/vitest.unit-src.config.ts"],
+      files,
+      shardName: "core-unit-src-security",
+      stripeCount: CORE_UNIT_SRC_SECURITY_STRIPES,
+    }),
+    {
+      configs: ["test/vitest/vitest.unit-security.config.ts"],
+      includeExternalConfigs: true,
+      requiresDist: false,
+      shardName: "core-unit-src-security-support",
+    },
+  ];
+}
+
+function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
+  const unitFastFiles = new Set(getUnitFastTestFiles());
+  const isolatedUiFiles = new Set(uiIsolatedTestFiles);
+  const files = listTestFiles("ui/src").filter(
+    (file) => isStripeEligibleTestFile(file, unitFastFiles) && !isolatedUiFiles.has(file),
+  );
+  return [
+    ...createStripedSplitShards({
+      configs: ["test/vitest/vitest.ui.config.ts"],
+      files,
+      shardName: "core-runtime-media-ui",
+      stripeCount: CORE_RUNTIME_MEDIA_UI_STRIPES,
+    }),
+    {
+      configs: [
+        "test/vitest/vitest.media.config.ts",
+        "test/vitest/vitest.media-understanding.config.ts",
+        "test/vitest/vitest.tui.config.ts",
+        "test/vitest/vitest.ui-isolated.config.ts",
+        "test/vitest/vitest.wizard.config.ts",
+      ],
+      requiresDist: false,
+      shardName: "core-runtime-media-ui-support",
+    },
+  ];
+}
+
+function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
+  const unitFastFiles = new Set(getUnitFastTestFiles());
+  const excludedGatewayFiles = new Set(gatewayServerExcludedTestFiles);
+  const gatewayFiles = listTestFiles("src/gateway").filter(
+    (file) =>
+      isStripeEligibleTestFile(file, unitFastFiles) &&
+      !file.startsWith("src/gateway/server-methods/") &&
+      !isGatewayServerTestFile(file) &&
+      !excludedGatewayFiles.has(file),
+  );
+  const packageFiles = ["packages/gateway-client/src", "packages/gateway-protocol/src"]
+    .flatMap((rootDir) => listTestFiles(rootDir))
+    .filter((file) => isStripeEligibleTestFile(file, unitFastFiles));
+  return createStripedSplitShards({
+    configs: [
+      "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.gateway-client.config.ts",
+    ],
+    files: [...gatewayFiles, ...packageFiles],
+    shardName: "agentic-gateway-core",
+    stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
+  });
+}
+
 const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
   ["core-unit-fast", createUnitFastSplitShards()],
   ["core-tooling", createToolingSplitShards()],
-  [
-    "core-unit-src",
-    [
-      {
-        shardName: "core-unit-src-security",
-        configs: [
-          "test/vitest/vitest.unit-src.config.ts",
-          "test/vitest/vitest.unit-security.config.ts",
-        ],
-        includeExternalConfigs: true,
-        requiresDist: false,
-      },
-    ],
-  ],
+  ["core-unit-src", createCoreUnitSrcSecuritySplitShards()],
   ["core-unit-security", []],
   [
     "core-unit-support",
@@ -1318,18 +1438,7 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
         requiresDist: true,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
-      {
-        shardName: "core-runtime-media-ui",
-        configs: [
-          "test/vitest/vitest.media.config.ts",
-          "test/vitest/vitest.media-understanding.config.ts",
-          "test/vitest/vitest.tui.config.ts",
-          "test/vitest/vitest.ui.config.ts",
-          "test/vitest/vitest.ui-isolated.config.ts",
-          "test/vitest/vitest.wizard.config.ts",
-        ],
-        requiresDist: false,
-      },
+      ...createCoreRuntimeMediaUiSplitShards(),
       {
         shardName: "core-runtime-shared",
         configs: [
@@ -1392,14 +1501,7 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
         configs: [agentVitestProjectOwners.tools.config],
         requiresDist: false,
       },
-      {
-        shardName: "agentic-gateway-core",
-        configs: [
-          "test/vitest/vitest.gateway-core.config.ts",
-          "test/vitest/vitest.gateway-client.config.ts",
-        ],
-        requiresDist: false,
-      },
+      ...createAgenticGatewayCoreSplitShards(),
       {
         shardName: "agentic-gateway-methods",
         configs: ["test/vitest/vitest.gateway-methods.config.ts"],
@@ -1783,29 +1885,18 @@ function createCompactNodeTestShardBundles(
       }
     }
 
-    // First-fit above determines the bounded worker count. Keep the
-    // high-variance source/security group isolated, then stripe every other
-    // regular group across the remaining workers. Re-striping the expanded
-    // embedded group avoids full early bins and nearly empty tail bins.
+    // First-fit above determines the bounded worker count. Re-striping the
+    // expanded embedded group avoids full early bins and nearly empty tails.
     const expandedGroups = groups.flatMap(expandCompactGroup);
     const regularGroups = expandedGroups
       .filter((group) => !isExclusiveCompactGroup(group))
       .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
     const regularBinCount = bins.filter((bin) => !bin.exclusive).length;
-    const isolatedGroups = regularGroups.filter(
-      (group) => group.shard_name === "core-unit-src-security",
+    const regularBatches = createStripedBatches(
+      regularGroups,
+      regularBinCount,
+      estimateCompactStripeSeconds,
     );
-    const stripedGroups = regularGroups.filter(
-      (group) => group.shard_name !== "core-unit-src-security",
-    );
-    const regularBatches = [
-      ...isolatedGroups.map((group) => [group]),
-      ...createStripedBatches(
-        stripedGroups,
-        regularBinCount - isolatedGroups.length,
-        estimateCompactStripeSeconds,
-      ),
-    ];
     if (regularBatches.some((batch) => batch.length > COMPACT_NODE_TEST_JOB_GROUPS)) {
       throw new Error("striped compact job exceeds its group capacity");
     }

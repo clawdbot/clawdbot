@@ -1493,7 +1493,7 @@ openclaw-workboard-card-dashboard {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .workboard-draft {
     width: 100%;
     height: 100dvh;

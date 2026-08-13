@@ -128,7 +128,7 @@ openclaw-custodian-panel {
   margin-left: 42px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .cp--right {
     top: var(--shell-topbar-height, 0);
     right: 0;

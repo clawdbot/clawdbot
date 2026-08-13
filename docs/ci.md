@@ -117,11 +117,11 @@ Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code pol
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners:
 
 - Plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback.
-- Core unit fast/support lanes run separately; core runtime infra splits into process, shared, hooks, secrets, and three cron domain shards.
+- Core unit fast/support lanes run separately; unit-src, Control UI, and gateway-core each use two deterministic file-weighted stripes, while the security and media/UI companion configs retain their scoped whole-config support groups; core runtime infra splits into process, shared, hooks, secrets, and three cron domain shards.
 - Auto-reply runs as balanced workers, with the reply subtree split into agent-runner, commands, dispatch, session, and state-routing shards.
 - Agentic gateway/server (control-plane) configs split across chat, auth, model, HTTP/plugin, runtime, and startup lanes instead of waiting on built artifacts.
 - Normal CI packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites. Heavy fixed suites stay on 8 vCPU while most bundled and lower-weight lanes use 4 vCPU. Compact-small bins 2, 5, and 8 use existing 8-vCPU capacity because recent hosted runs showed they repeatedly owned the critical path while the 4-vCPU queue was materially longer; routing happens after packing, so group ownership, coverage, and the existing registration count do not change.
-- Pull requests on the canonical repository reuse the changed-test resolver against the synthetic merged-tree diff. Precise changes run one targeted Node job; each selected test file gets its own process so stateful suite isolation remains intact. The planner combines sibling tests with import-graph dependents and falls back to the existing 25-job compact full-suite plan for workspace package, package/lockfile, shared harness, split-config, renamed, or deleted changes, public extension-contract changes, tests with special shard setup, partially resolved or empty targets, oversized path or target plans, and planner errors. Targeted plans always retain the full built-artifact boundary gate because its repository scanners cannot be derived from imports. `main` pushes run the same full compact suite: pending intermediate push events can be coalesced, so the newest surviving run must validate the complete integration tree rather than only its final single-push diff. Manual dispatches and release gates retain the full named per-shard matrix. Compact packing uses hosted means to tail-balance regular 8-vCPU bins while retaining median admission and 4-vCPU striping weights, so recurrent slow tails rebalance without changing the bounded job count or post-pack runner advisory; the high-variance source/security group remains isolated so its tail does not serialize unrelated groups.
+- Pull requests on the canonical repository reuse the changed-test resolver against the synthetic merged-tree diff. Precise changes run one targeted Node job; each selected test file gets its own process so stateful suite isolation remains intact. The planner combines sibling tests with import-graph dependents and falls back to the 28-descriptor compact full-suite plan for workspace package, package/lockfile, shared harness, split-config, renamed, or deleted changes, public extension-contract changes, tests with special shard setup, partially resolved or empty targets, oversized path or target plans, and planner errors. Twenty-six nondist descriptors run as Node jobs; two dist descriptors fold into the built-artifact boundary. Targeted plans always retain that full boundary gate because its repository scanners cannot be derived from imports. `main` pushes run the same full compact suite: pending intermediate push events can be coalesced, so the newest surviving run must validate the complete integration tree rather than only its final single-push diff. Manual dispatches and release gates retain the full named per-shard matrix. Compact packing uses hosted timings to stripe the former media/UI, gateway-core, and source/security floor groups, then tail-balances regular 8-vCPU bins while retaining the existing post-pack runner advisory.
 - The full Node matrix admits the consistently slow serial tooling, auto-reply command shards, and broad core-fast cache writer first. This keeps the 28-job cap while preventing critical-path work and the next run's transform seed from slipping into a later wave.
 - The three serial Control UI browser shards greedily pack discovered test files by source byte size. This zero-state duration proxy avoids Vitest's equal-file-count hash clustering, automatically accounts for new and changed files, and preserves the same complete test inventory without adding runners.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
@@ -202,6 +202,24 @@ for commands and recovery.
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                                                                |
 | `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                                               |
 
+### Blacksmith outage circuit breaker
+
+The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`. Leave it unset or set it to `blacksmith` for the normal Blacksmith-first routing. During a Blacksmith outage, set it to `github` to send every configurable CI job to that job's existing GitHub-hosted fallback label:
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
+```
+
+Degraded mode uses the same hosted paths exercised by manual dispatches and fork pull requests. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Expect slower builds and test lanes on standard 4-core hosted runners. Blacksmith's runner-registration budget is irrelevant while the breaker is active, but GitHub-hosted concurrency limits apply.
+
+Flip back after the outage by deleting the variable, which restores the default behavior:
+
+```bash
+gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
+```
+
+Scheduled health detection and automatic flipping are an explicit follow-up; `ci.yml` does not probe Blacksmith or mutate this variable.
+
 ## Runner registration budget
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
@@ -220,9 +238,9 @@ target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
 
-The changed-target PR plan reduces the common Node test burst from 14 Blacksmith registrations to one. Broad-risk PRs keep the 14-registration compact fallback, so the worst case does not increase.
+The changed-target PR plan reduces the common Node test burst from 26 Blacksmith registrations to one. Broad-risk PRs keep the 26-registration compact fallback.
 
-Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu; push retries stay on Blacksmith. All `workflow_dispatch` runs, including `release_gate`, and non-canonical repository runs use GitHub-hosted runners. Normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
+Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu; push retries stay on Blacksmith. All `workflow_dispatch` runs, including `release_gate`, and non-canonical repository runs use GitHub-hosted runners. The [Blacksmith outage circuit breaker](#blacksmith-outage-circuit-breaker) provides a manual repository-wide fallback; canonical runs do not probe Blacksmith queue health or flip it automatically.
 
 ## Surface ratchets
 
