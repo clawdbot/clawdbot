@@ -725,7 +725,7 @@ describe("renderSkills", () => {
           clawhubResults: [
             {
               score: 0.95,
-              slug: "github",
+              slug: "@openclaw/github",
               displayName: "GitHub",
               summary: "GitHub integration for OpenClaw",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
@@ -761,9 +761,9 @@ describe("renderSkills", () => {
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
-    expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@openclaw/github");
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github");
+    expect(onClawHubInstall).toHaveBeenCalledWith("@openclaw/github");
 
     onClawHubInstall.mockClear();
     showModal.mockClear();

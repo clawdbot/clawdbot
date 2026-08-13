@@ -34,6 +34,7 @@ import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   installSkillFromClawHub,
   readLocalSkillCardContentSync,
@@ -288,6 +289,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
         query: (params as { query?: string }).query,
         limit: (params as { limit?: number }).limit,
       });
+      for (const result of results) {
+        const ownerHandle = normalizeOptionalString(result.ownerHandle)?.replace(/^@+/, "");
+        const installRef = normalizeOptionalString(result.installRef);
+        // Existing clients use slug as the selected identity. Qualify registry results here so
+        // every detail/install caller preserves the publisher without a second protocol field.
+        if (ownerHandle && !installRef?.startsWith("skills-sh:") && !result.slug.startsWith("@")) {
+          result.slug = `@${ownerHandle}/${result.slug}`;
+        }
+      }
       respond(true, { results }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
@@ -298,8 +308,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
       const detail = await fetchClawHubSkillDetail({
-        slug: (params as { slug: string }).slug,
+        slug: requested.slug,
+        ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
       respond(true, detail, undefined);
     } catch (err) {

@@ -125,6 +125,34 @@ describe("skills.search handler", () => {
     expect(response).toEqual({ results: [] });
   });
 
+  it("returns publisher-qualified slugs without rewriting external sources", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        score: 2,
+        slug: "weather",
+        ownerHandle: "alice",
+        displayName: "Weather",
+      },
+      {
+        score: 1,
+        slug: "weather",
+        ownerHandle: "openclaw",
+        installRef: "skills-sh:openclaw/skills/weather",
+        displayName: "External Weather",
+      },
+    ]);
+
+    const { ok, response } = await callHandler("skills.search", { query: "weather" });
+
+    expect(ok).toBe(true);
+    expect(response).toMatchObject({
+      results: [
+        { slug: "@alice/weather", ownerHandle: "alice" },
+        { slug: "weather", installRef: "skills-sh:openclaw/skills/weather" },
+      ],
+    });
+  });
+
   it("returns error when ClawHub is unreachable", async () => {
     searchSkillsFromClawHubMock.mockRejectedValue(new Error("connection refused"));
 
@@ -191,6 +219,22 @@ describe("skills.detail handler", () => {
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(response).toEqual(detail);
+  });
+
+  it("resolves detail for the selected publisher-qualified reference", async () => {
+    fetchClawHubSkillDetailMock.mockResolvedValue({
+      skill: { slug: "weather", displayName: "Weather", createdAt: 1, updatedAt: 2 },
+      owner: { handle: "alice" },
+    });
+
+    const { ok, error } = await callHandler("skills.detail", { slug: "@alice/weather" });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "alice",
+    });
   });
 
   it("returns error when slug is not found", async () => {
