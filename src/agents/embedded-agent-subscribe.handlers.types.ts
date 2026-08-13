@@ -148,6 +148,9 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
+  nativeReasoningRaw?: string;
+  nativeReasoningTrimmedLen?: number;
+  nativeReasoningContentIndex?: number;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
@@ -259,7 +262,7 @@ export type EmbeddedAgentSubscribeContext = {
     assistantMessageIndex?: number;
     final?: boolean;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string) => void;
+  emitReasoningStream: (text: string, knownDelta?: string) => void;
   consumeReplyDirectives: (
     text: string,
     options?: { final?: boolean },

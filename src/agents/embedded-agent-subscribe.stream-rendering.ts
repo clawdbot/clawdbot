@@ -530,21 +530,39 @@ export function createStreamRendering({
     })();
   };
 
-  const emitReasoningStream = (text: string) => {
+  const emitReasoningStream = (text: string, knownDelta?: string) => {
     if (params.silentExpected) {
       return;
     }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return;
+    let trimmed: string;
+    let delta: string;
+    if (typeof knownDelta === "string") {
+      // Native-delta fast path: caller already accumulated an append-only
+      // buffer, so `prior` is guaranteed to be a prefix of `trimmed` — a
+      // cheap length-based slice replaces the startsWith(prior) scan below.
+      trimmed = text;
+      if (!trimmed) {
+        return;
+      }
+      if (trimmed === state.lastStreamedReasoning) {
+        return;
+      }
+      const priorLen = state.nativeReasoningTrimmedLen ?? 0;
+      delta = trimmed.slice(priorLen);
+      state.nativeReasoningTrimmedLen = trimmed.length;
+    } else {
+      trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (trimmed === state.lastStreamedReasoning) {
+        return;
+      }
+      // Compute delta: new text since the last emitted reasoning.
+      // Guard against non-prefix changes (e.g. trim altering earlier content).
+      const prior = state.lastStreamedReasoning ?? "";
+      delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     }
-    if (trimmed === state.lastStreamedReasoning) {
-      return;
-    }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim altering earlier content).
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     state.lastStreamedReasoning = trimmed;
 
     // Emit-always: the thinking stream always reaches the bus and session
@@ -613,6 +631,9 @@ export function createStreamRendering({
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
+    state.nativeReasoningRaw = undefined;
+    state.nativeReasoningTrimmedLen = undefined;
+    state.nativeReasoningContentIndex = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
