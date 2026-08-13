@@ -125,10 +125,7 @@ function resolveHighWaterBytes(
   }
   const defaultHighWaterBytes = Math.max(
     1,
-    Math.min(
-      maxDiskBytes,
-      Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO),
-    ),
+    Math.min(maxDiskBytes, Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO)),
   );
   const raw = maintenance?.highWaterBytes;
   const normalized = normalizeStringifiedOptionalString(raw);
