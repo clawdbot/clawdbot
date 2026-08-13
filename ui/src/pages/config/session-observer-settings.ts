@@ -117,7 +117,12 @@ export function renderSessionObserverSettings(props: {
                   },
                 ]
               : []),
-            ...options.map((option) => ({ ...option, disabled: props.modelsUnavailable })),
+            ...options.map(({ value, label, provider }) => ({
+              value,
+              label,
+              provider,
+              disabled: props.modelsUnavailable,
+            })),
           ],
           disabled: props.disabled,
           onChange: (value) =>

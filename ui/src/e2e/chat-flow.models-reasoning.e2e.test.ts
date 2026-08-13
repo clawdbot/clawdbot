@@ -130,22 +130,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      const openModelSelect = async () => {
-        const trigger = main.locator(
-          'openclaw-chat-pane[aria-hidden="false"] wa-select.chat-controls__model-picker',
-        );
-        await trigger.waitFor({ state: "visible", timeout: 10_000 });
-        return trigger;
-      };
+      const activePane = () => main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const selectModel = async (value: string) => {
-        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
-        await selectChatModel(activePane, value);
+        await selectChatModel(activePane(), value);
       };
 
-      let modelSelect = await openModelSelect();
-      expect(await chatModelValue(main.locator('openclaw-chat-pane[aria-hidden="false"]'))).toBe(
-        "",
-      );
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("");
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
@@ -153,9 +144,7 @@ suite.define(() => {
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
       });
-      expect(await chatModelValue(main.locator('openclaw-chat-pane[aria-hidden="false"]'))).toBe(
-        "bedrock/claude-opus-4.5",
-      );
+      expect(await chatModelValue(activePane())).toBe("bedrock/claude-opus-4.5");
 
       await page
         .locator(
@@ -165,10 +154,8 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      modelSelect = await openModelSelect();
-      expect(await chatModelValue(main.locator('openclaw-chat-pane[aria-hidden="false"]'))).toBe(
-        "",
-      );
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("");
 
       await page
         .locator(
@@ -179,10 +166,8 @@ suite.define(() => {
         timeout: 10_000,
       });
 
-      modelSelect = await openModelSelect();
-      expect(await chatModelValue(main.locator('openclaw-chat-pane[aria-hidden="false"]'))).toBe(
-        "bedrock/claude-opus-4.5",
-      );
+      await chatModelPicker(activePane()).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await chatModelValue(activePane())).toBe("bedrock/claude-opus-4.5");
     } finally {
       await suite.closeBrowserContext(context);
     }

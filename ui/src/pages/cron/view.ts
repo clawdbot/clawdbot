@@ -1242,7 +1242,7 @@ function renderPromptSection(
   const modelError = props.fieldErrors.payloadModel;
   const modelOptions = uniqueStrings(props.modelSuggestions).map((value) => {
     const provider = providerIdFromModelRef(value);
-    return { value, label: value, ...(provider ? { provider } : {}) };
+    return { value, label: value, provider: provider ?? undefined };
   });
   const agentTurnRows = ctx.isAgentTurn
     ? html`

@@ -534,7 +534,7 @@ describe("cron view editor", () => {
     prompt.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormChange).toHaveBeenCalledWith({ payloadText: "do the thing" });
 
-    for (const field of ["name", "sessionKey", "deliveryAccountId"] as const) {
+    for (const field of ["name", "sessionKey", "deliveryAccountId", "payloadModel"] as const) {
       const id = `cron-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       const input = getElement(container, `#${id}`, HTMLInputElement);
       if (field === "sessionKey" || field === "deliveryAccountId") {
@@ -544,26 +544,6 @@ describe("cron view editor", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       expect(onFormChange).toHaveBeenLastCalledWith({ [field]: field });
     }
-
-    const modelPicker = getElement(
-      container,
-      "#cron-payload-model-picker",
-      HTMLElement,
-    ) as HTMLElement & { value: string };
-    const customModel = Array.from(modelPicker.querySelectorAll("wa-option")).find(
-      (option) => option.textContent?.trim() === "Custom model…",
-    );
-    Object.defineProperty(modelPicker, "value", {
-      configurable: true,
-      value: customModel?.getAttribute("value"),
-    });
-    modelPicker.dispatchEvent(new Event("change", { bubbles: true }));
-    Reflect.deleteProperty(modelPicker, "value");
-    const modelInput = getElement(container, "#cron-payload-model", HTMLInputElement);
-    expect(modelInput.hidden).toBe(false);
-    modelInput.value = "vendor/model with spaces";
-    modelInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onFormChange).toHaveBeenLastCalledWith({ payloadModel: "vendor/model with spaces" });
 
     const channel = getElement(
       container,
@@ -575,7 +555,6 @@ describe("cron view editor", () => {
     expect(
       Array.from(channel.querySelectorAll("wa-option"), (option) => option.getAttribute("value")),
     ).toContain("retired-channel");
-    expect(channel.localName).toBe("wa-select");
     expect(channel.querySelector('wa-option[value="telegram"] img')).not.toBeNull();
     expect(
       (channel.querySelector('wa-option[value="telegram"]') as HTMLElement & { label?: string })

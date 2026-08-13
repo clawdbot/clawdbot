@@ -249,7 +249,7 @@ function renderModelRow(props: TalkViewProps) {
     control: renderModelPicker({
       label: t("talkPage.model.title"),
       value: model ?? TALK_PICKER_UNSET,
-      options: options.map((option) => ({ ...option, provider: provider.id })),
+      options: options.map(({ value, label }) => ({ value, label, provider: provider.id })),
       disabled: props.configBusy,
       onChange: (value) => props.onModelChange(value || null),
     }),

@@ -317,7 +317,6 @@ suite.define(() => {
       });
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("xhigh");
 
-      const modelSelect = newSessionModelPicker(page);
       await selectNewSessionModel(page, "openai/gpt-5.6-sol");
       await effortSelect.click();
 
@@ -369,7 +368,6 @@ suite.define(() => {
       await page.getByLabel("Worktree name").fill("remembered-task");
       await page.keyboard.press("Escape");
 
-      const modelSelect = newSessionModelPicker(page);
       await selectNewSessionModel(page, "anthropic/claude-sonnet-4-6");
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
@@ -595,7 +593,6 @@ suite.define(() => {
           .toBe(1);
 
         await gateway.deferNext("users.prefs.set");
-        const modelSelect = newSessionModelPicker(page);
         await selectNewSessionModel(page, "");
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
@@ -678,7 +675,6 @@ suite.define(() => {
       await placeTrigger.click();
       await page.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
-      const modelSelect = newSessionModelPicker(page);
       await selectNewSessionModel(page, "anthropic/claude-sonnet-4-6");
 
       await navigateInApp(page, "chat");
@@ -760,7 +756,6 @@ suite.define(() => {
         "openclaw-next",
       );
 
-      const modelSelect = newSessionModelPicker(page);
       await selectNewSessionModel(page, "anthropic/claude-sonnet-4-6");
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({

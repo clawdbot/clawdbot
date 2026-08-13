@@ -378,7 +378,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
             placeholder: spec.placeholderKey ? t(spec.placeholderKey) : "",
             commit: "change",
           },
-          onChange: (value) => props.onPatch(spec.path, value.trim() || undefined),
+          onChange: (model) => props.onPatch(spec.path, model.trim() || undefined),
         })}
       `,
     });
