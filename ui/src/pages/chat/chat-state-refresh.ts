@@ -280,7 +280,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
   try {
-    const result = await loadModelAuthStatus(client, opts);
+    const result = await loadModelAuthStatus(client, {
+      ...opts,
+      agentId: resolveChatAgentId(host),
+    });
     if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }

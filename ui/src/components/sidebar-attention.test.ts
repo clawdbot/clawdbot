@@ -179,7 +179,7 @@ describe("sidebar attention refresh ownership", () => {
       "cron.list": [firstCron, secondCron],
       "models.authStatus": [firstAuth, secondAuth],
     };
-    const request = vi.fn((method: keyof typeof responses) => {
+    const request = vi.fn((method: keyof typeof responses, _params?: unknown) => {
       const response = responses[method].shift();
       if (!response) {
         throw new Error(`Unexpected request: ${method}`);
@@ -226,6 +226,9 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     document.body.append(provider);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls.find(([method]) => method === "models.authStatus")?.[1]).toEqual({
+      agentId: "main",
+    });
 
     document.dispatchEvent(new Event("visibilitychange"));
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
