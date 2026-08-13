@@ -1,3 +1,4 @@
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import {
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
@@ -10,7 +11,6 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import { resolveEffectiveJobAgentId } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";
 
 function currentDefaultAgentId(state: CronServiceState): string | undefined {
@@ -18,7 +18,7 @@ function currentDefaultAgentId(state: CronServiceState): string | undefined {
 }
 
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
-  return resolveEffectiveJobAgentId(job, currentDefaultAgentId(state));
+  return resolveCronJobEffectiveAgentId(job, currentDefaultAgentId(state));
 }
 
 function resolveAgentId(state: CronServiceState) {
