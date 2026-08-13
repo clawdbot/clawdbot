@@ -710,19 +710,21 @@ suite.define(() => {
         await page.locator(".chat-group").first().waitFor();
         const custodian = page.locator("openclaw-custodian-panel");
         await custodian.locator(".cp-header").waitFor();
-        await custodian.getByRole("button", { name: "Close Ask OpenClaw" }).click();
         const reopenedWorkspace = page.locator(".chat-workspace-rail");
         if (!(await reopenedWorkspace.isVisible())) {
-          await page.getByRole("button", { name: "Show session files", exact: true }).click();
+          await page
+            .getByRole("button", { name: "Show session files", exact: true })
+            .press("Enter");
           await reopenedWorkspace.waitFor();
         }
         if (!(await changes.isVisible())) {
-          await reopenedWorkspace.getByRole("button", { name: "Show session changes" }).click();
+          await reopenedWorkspace
+            .getByRole("button", { name: "Show session changes" })
+            .press("Enter");
         }
         if (!(await companion.locator(".chat-session-rail__header").isVisible())) {
-          await page.getByRole("button", { name: "Show session companion" }).click();
+          await page.getByRole("button", { name: "Show session companion" }).press("Enter");
         }
-        await reopenedWorkspace.getByRole("button", { name: "Toggle Ask OpenClaw" }).click();
         await reopenedWorkspace
           .getByRole("button", { name: "Collapse session workspace" })
           .press("Enter");
