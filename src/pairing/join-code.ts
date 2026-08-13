@@ -10,13 +10,9 @@ export function isDevicePairingJoinCode(value: string): boolean {
 export function parseDevicePairingJoinRequestPath(pathname: string): string | null {
   // Public endpoints may include an advertised context path. The final /j namespace
   // is the stable route contract; preserving only root /j would mint unusable URLs.
-  const markerIndex = pathname.lastIndexOf("/j");
-  if (markerIndex < 0) {
-    return null;
+  const markerIndex = pathname.lastIndexOf("/j/");
+  if (markerIndex >= 0) {
+    return pathname.slice(markerIndex + 3);
   }
-  const routePath = pathname.slice(markerIndex);
-  if (routePath === "/j") {
-    return "";
-  }
-  return routePath.startsWith("/j/") ? routePath.slice(3) : null;
+  return pathname.endsWith("/j") ? "" : null;
 }
