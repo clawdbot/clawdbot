@@ -163,6 +163,9 @@ importers:
       kysely:
         specifier: 0.29.4
         version: 0.29.4
+      libopus-wasm:
+        specifier: 0.2.0
+        version: 0.2.0
       linkedom:
         specifier: 0.18.13
         version: 0.18.13
@@ -229,6 +232,9 @@ importers:
       web-tree-sitter:
         specifier: 0.26.11
         version: 0.26.11
+      werift:
+        specifier: 0.24.1
+        version: 0.24.1(supports-color@10.2.2)
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -317,9 +323,6 @@ importers:
       jsdom:
         specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
-      libopus-wasm:
-        specifier: 0.2.0
-        version: 0.2.0
       lit:
         specifier: 3.3.3
         version: 3.3.3
@@ -380,9 +383,6 @@ importers:
       vitest:
         specifier: 4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-      werift:
-        specifier: 0.24.1
-        version: 0.24.1(supports-color@10.2.2)
     optionalDependencies:
       sqlite-vec:
         specifier: 0.1.9
