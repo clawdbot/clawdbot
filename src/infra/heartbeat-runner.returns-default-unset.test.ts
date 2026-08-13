@@ -1747,7 +1747,9 @@ describe("runHeartbeatOnce", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          ...(params.unscheduled ? {} : { heartbeat: { every: "5m", target: "whatsapp" } }),
+          heartbeat: params.unscheduled
+            ? { every: "0m", target: "whatsapp" }
+            : { every: "5m", target: "whatsapp" },
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -2017,6 +2019,7 @@ tasks:
         fileState: "empty",
         source: "background-task",
         reason: "background-task",
+        unscheduled: true,
         queueSystemEvent: true,
         expectedStatus: "ran",
         expectedSendCalls: 1,
@@ -2029,6 +2032,7 @@ tasks:
         fileState: "empty",
         source: "background-task-blocked",
         reason: "background-task-blocked",
+        unscheduled: true,
         queueSystemEvent: true,
         expectedStatus: "ran",
         expectedSendCalls: 1,

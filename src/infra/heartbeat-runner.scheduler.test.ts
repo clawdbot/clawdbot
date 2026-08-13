@@ -986,12 +986,16 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  const unscheduledAgentConfig = {
+    agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+  } as OpenClawConfig;
+
   it.each([
     {
       name: "an agent without a heartbeat schedule",
-      cfg: {
-        agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
-      } as OpenClawConfig,
+      source: "notifications-event" as const,
+      reason: "wake",
+      cfg: unscheduledAgentConfig,
       agentId: "ops",
       sessionKey: "agent:ops:main",
       heartbeat: { target: "last" },
@@ -1002,30 +1006,52 @@ describe("startHeartbeatRunner", () => {
         agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
         session: { scope: "global" },
       } as OpenClawConfig,
+      source: "notifications-event" as const,
+      reason: "wake",
       agentId: "main",
       sessionKey: "global",
       heartbeat: { every: "0m", target: "last" },
     },
-  ])("runs one targeted notification wake for $name", async (testCase) => {
+    {
+      name: "an unscheduled agent after task completion",
+      source: "background-task" as const,
+      reason: "background-task",
+      cfg: unscheduledAgentConfig,
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      heartbeat: undefined,
+    },
+    {
+      name: "an unscheduled agent after a blocked task follow-up",
+      source: "background-task-blocked" as const,
+      reason: "background-task-blocked",
+      cfg: unscheduledAgentConfig,
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      heartbeat: undefined,
+    },
+  ])("runs one targeted $source wake for $name", async (testCase) => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = await expectWakeDispatch({
       cfg: testCase.cfg,
       runSpy,
       wake: {
-        source: "notifications-event",
+        source: testCase.source,
         intent: "immediate",
-        reason: "wake",
+        reason: testCase.reason,
         ...(testCase.sessionKey === "global" ? { agentId: testCase.agentId } : {}),
         sessionKey: testCase.sessionKey,
-        heartbeat: { target: "last" },
+        ...(testCase.heartbeat
+          ? { heartbeat: { ...testCase.heartbeat, target: "last" as const } }
+          : {}),
         coalesceMs: 0,
       },
       expectedCall: {
         agentId: testCase.agentId,
-        source: "notifications-event",
+        source: testCase.source,
         intent: "immediate",
-        reason: "wake",
+        reason: testCase.reason,
         sessionKey: testCase.sessionKey,
         heartbeat: testCase.heartbeat,
       },
