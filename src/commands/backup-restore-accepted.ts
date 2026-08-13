@@ -9,7 +9,7 @@ import {
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 
-export type RestoredRecoveryPointCommandResult =
+type RestoredRecoveryPointCommandResult =
   | RestoredRecoveryPointResult
   | {
       version: "openclaw-restored-recovery-point-result/v1";

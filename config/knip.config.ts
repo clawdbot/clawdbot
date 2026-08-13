@@ -442,6 +442,9 @@ const config = {
     // The hidden final-capture request contract is imported directly by its
     // focused tests before a production host adapter exists.
     "src/snapshot/final-recovery-point.ts": ["exports", "types"],
+    // Focused restore tests import request and receipt contracts directly;
+    // production reaches them through the accepted-restore command and startup loader.
+    "src/snapshot/restored-recovery-point.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

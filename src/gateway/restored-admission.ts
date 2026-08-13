@@ -14,8 +14,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
-export const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
-export const RESTORED_ADMISSION_READY_VERSION = "openclaw-restored-admission-ready/v1";
+const RESTORED_ADMISSION_READY_VERSION = "openclaw-restored-admission-ready/v1";
 const SCHEDULER_RECONCILIATION_EVIDENCE_VERSION =
   "openclaw-restored-scheduler-reconciliation-evidence/v1";
 const OWNER_READINESS_EVIDENCE_VERSION = "openclaw-restored-owner-readiness-evidence/v1";
@@ -38,7 +37,7 @@ const readyRecordSchema = z
   })
   .strict();
 
-export type RestoredAdmissionReadyRecord = z.infer<typeof readyRecordSchema>;
+type RestoredAdmissionReadyRecord = z.infer<typeof readyRecordSchema>;
 
 type RestoredAdmissionHeldReason = "scheduler-reconciliation" | "owner-readiness" | "ready-commit";
 
@@ -55,7 +54,7 @@ export type RestoredAdmissionStartup = {
   status: RestoredAdmissionStatus;
 };
 
-export class RestoredAdmissionCompletionError extends Error {
+class RestoredAdmissionCompletionError extends Error {
   constructor(
     public readonly code:
       | "restored-admission.target-conflict"
