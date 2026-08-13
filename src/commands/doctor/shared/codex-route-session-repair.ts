@@ -6,11 +6,11 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
+import { resolveSharedAuthStoreDir } from "../../../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
-import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
   applySessionEntryReplacements,
   listSessionEntriesForCanonicalRepair,
@@ -332,7 +332,7 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
   const agentDir = resolveAgentDir(params.cfg, params.agentId, params.env);
   const localProfiles = loadPersistedAuthProfileStore(agentDir)?.profiles ?? {};
   const mainProfiles =
-    loadPersistedAuthProfileStore(resolveSharedMainAuthAgentDir(params.env))?.profiles ?? {};
+    loadPersistedAuthProfileStore(resolveSharedAuthStoreDir(params.env))?.profiles ?? {};
   const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
   const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
   const localLegacySource = localLegacySourceExists

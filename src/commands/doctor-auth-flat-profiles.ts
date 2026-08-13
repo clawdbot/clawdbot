@@ -20,6 +20,10 @@ import {
 } from "../agents/auth-profiles/oauth-shared.js";
 import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
 import {
+  resolveSharedAuthStoreDir,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
+import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
   coercePersistedAuthProfileStore,
@@ -27,7 +31,6 @@ import {
   parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
@@ -79,6 +82,10 @@ type AuthProfileSqliteMigrationCandidate = AuthProfileRepairCandidate & {
   statePath: string;
   legacyPath: string;
 };
+
+function resolveMigrationTargetDatabasePath(agentDir?: string): string {
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
+}
 
 type AwsSdkProfileMarker = {
   profileId: string;
@@ -805,7 +812,7 @@ function migrateLockedLegacyOAuthFile(params: {
   now: () => number;
   result: LegacyFlatAuthProfileRepairResult;
 }): void {
-  const mainAgentDir = resolveSharedMainAuthAgentDir(params.env);
+  const mainAgentDir = resolveSharedAuthStoreDir(params.env);
   const targetDatabasePath = resolveAuthProfileDatabasePath(mainAgentDir);
   const receipt = prepareAuthProfileSourceReceipt({
     pathname: params.oauthPath,
@@ -997,7 +1004,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         fs.mkdirSync(path.dirname(pathname), { recursive: true });
       }
       releaseSources = acquireAuthProfileMigrationSourceLocks(candidateSourcePaths);
-      const targetDatabasePath = resolveAuthProfileDatabasePath(candidate.agentDir);
+      const targetDatabasePath = resolveMigrationTargetDatabasePath(candidate.agentDir);
       let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
         prepareAuthProfileSourceReceipt({
           pathname,
@@ -1181,14 +1188,14 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               database,
             );
             const loaded = loadMigratedStore(candidate.agentDir, { database });
-            const mainAgentDir = resolveSharedMainAuthAgentDir(params.env);
+            const mainAgentDir = resolveSharedAuthStoreDir(params.env);
             const persistedStores = {
               isMainStore:
-                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveMigrationTargetDatabasePath(candidate.agentDir) ===
                 resolveAuthProfileDatabasePath(mainAgentDir),
               localStore: loaded,
               mainStore:
-                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveMigrationTargetDatabasePath(candidate.agentDir) ===
                 resolveAuthProfileDatabasePath(mainAgentDir)
                   ? loaded
                   : loadPersistedAuthProfileStore(mainAgentDir),
@@ -1306,7 +1313,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       releaseSources?.();
     }
   }
-  const sharedMainAgentDir = resolveSharedMainAuthAgentDir(env);
+  const sharedMainAgentDir = resolveSharedAuthStoreDir(env);
   const sharedMainCredentialSourceRemains = [
     resolveAuthStorePath(sharedMainAgentDir),
     resolveLegacyAuthStorePath(sharedMainAgentDir),
@@ -1742,7 +1749,7 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
           path.resolve(report.archivePath) !== path.resolve(archive.path) ||
           typeof report.targetDatabasePath !== "string" ||
           path.resolve(report.targetDatabasePath) !==
-            path.resolve(resolveAuthProfileDatabasePath(candidate.agentDir)) ||
+            path.resolve(resolveMigrationTargetDatabasePath(candidate.agentDir)) ||
           !isRecord(report.expectedProfileSha256)
         ) {
           continue;

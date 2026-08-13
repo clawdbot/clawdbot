@@ -5,6 +5,7 @@ import path from "node:path";
  */
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import {
   clearAllRuntimeAuthMaterializations,
@@ -205,7 +206,7 @@ function recordChangedSnapshotRevisions(
 // Runtime snapshots are keyed by the canonical database path so default-agent
 // and per-agent stores do not overwrite each other.
 function resolveRuntimeStoreKey(agentDir?: string): string {
-  return resolveAuthProfileDatabasePath(agentDir);
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
 }
 
 function notifyRuntimeAuthStoreMutation(agentDir?: string): void {
