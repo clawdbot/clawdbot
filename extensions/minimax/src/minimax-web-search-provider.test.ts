@@ -134,6 +134,24 @@ describe("minimax web search provider", () => {
       expect(resolveMiniMaxRegion()).toBe("cn");
     });
 
+    it("infers cn from the apex CN domain", () => {
+      process.env.MINIMAX_API_HOST = "https://minimaxi.com";
+      expect(resolveMiniMaxRegion()).toBe("cn");
+    });
+
+    it("returns global for look-alike hosts sharing the minimaxi.com suffix", () => {
+      for (const host of [
+        "https://notminimaxi.com",
+        "https://evilnotminimaxi.com/v1",
+        "notminimaxi.com",
+        "https://minimaxi.com.evil.com",
+        "https://example.com/redir?u=minimaxi.com",
+      ]) {
+        process.env.MINIMAX_API_HOST = host;
+        expect(resolveMiniMaxRegion()).toBe("global");
+      }
+    });
+
     it("infers cn from model provider base URL", () => {
       const cnConfig = {
         models: {
