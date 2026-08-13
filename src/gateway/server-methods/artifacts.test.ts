@@ -424,48 +424,28 @@ describe("artifacts RPC handlers", () => {
     },
     { data: "", sizeBytes: 0, title: "untyped.bin" },
   ])("lists, gets, and downloads the zero-byte $title artifact", async (block) => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [block],
-        __openclaw: { seq: 2 },
-      },
-    ]);
-
-    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifact = expectFirstArtifact(listed.calls);
+    mockedMessages([{ role: "assistant", content: [block], __openclaw: { seq: 2 } }]);
+    const artifact = expectFirstArtifact(
+      (await listArtifacts({ sessionKey: "agent:main:main" })).calls,
+    );
     const artifactId = requireNonEmptyString(artifact?.id, "expected zero-byte artifact id");
-    expect(artifact).toMatchObject({ sizeBytes: 0, download: { mode: "bytes" } });
+    const expected = { id: artifactId, sizeBytes: 0, download: { mode: "bytes" } };
+    expect(artifact).toMatchObject(expected);
     expect(artifact).not.toHaveProperty("data");
-
     const get = await getArtifact({ sessionKey: "agent:main:main", artifactId });
     const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
-    expectFields(getPayload.artifact, { id: artifactId, sizeBytes: 0 });
-    expectFields(getPayload.artifact?.download, { mode: "bytes" });
+    expect(getPayload.artifact).toMatchObject(expected);
     expect(getPayload.artifact).not.toHaveProperty("data");
-
     const download = await downloadArtifact({ sessionKey: "agent:main:main", artifactId });
-    const downloadPayload = expectOkPayload(download.calls) as {
-      artifact?: Record<string, unknown>;
-    };
-    expectFields(downloadPayload, { encoding: "base64", data: "" });
-    expectFields(downloadPayload.artifact, { id: artifactId, sizeBytes: 0 });
-    expectFields(downloadPayload.artifact?.download, { mode: "bytes" });
+    const payload = expectOkPayload(download.calls) as { artifact?: Record<string, unknown> };
+    expectFields(payload, { encoding: "base64", data: "" });
+    expect(payload.artifact).toMatchObject(expected);
   });
-
   it.each([null, 0, false, {}])(
     "does not discover untyped non-string data as an artifact: %j",
     async (data) => {
-      mockedMessages([
-        {
-          role: "assistant",
-          content: [{ data }],
-          __openclaw: { seq: 2 },
-        },
-      ]);
-
+      mockedMessages([{ role: "assistant", content: [{ data }], __openclaw: { seq: 2 } }]);
       const listed = await listArtifacts({ sessionKey: "agent:main:main" });
-
       expect(expectArtifactList(listed.calls)).toEqual({ artifacts: [] });
     },
   );
