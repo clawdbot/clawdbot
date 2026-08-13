@@ -2596,6 +2596,8 @@ NODE
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs["checks-windows"].env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(workflow.jobs["checks-windows"].env.OPENCLAW_VITEST_MAX_WORKERS).toBe(1);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 

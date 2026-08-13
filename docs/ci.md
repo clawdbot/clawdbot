@@ -133,9 +133,10 @@ The slowest Node test families are split or balanced so each job stays small wit
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs and
 12 for the smaller fast/check lanes; Windows and Android stay at two because
-those runner pools are narrower. Compact whole-config batches run with a
-120-minute batch timeout, while include-pattern groups share the same bounded
-job budget.
+those runner pools are narrower. The Windows job overlaps up to two independent
+Vitest config groups on its 8-vCPU runner while keeping each group at one worker
+for process/path isolation. Compact whole-config batches run with a 120-minute
+batch timeout, while include-pattern groups share the same bounded job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push. Each current Gradle task has one protected sticky disk; PR jobs use disposable clones, while protected runs refresh content-addressed Gradle entries in place.
 
