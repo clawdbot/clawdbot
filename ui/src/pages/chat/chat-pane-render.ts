@@ -10,6 +10,7 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -160,6 +161,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelUnavailable = isChatModelUnavailable(
+      selectedSession?.model ?? agentDefaultModel,
+      selectedSession?.modelProvider,
+      state.chatModelCatalog,
+    );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
       connected: state.connected,
@@ -187,8 +193,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
-    const disabledReason =
-      sessionParticipationBlocked && !suggestionViewer
+    const disabledReason = modelUnavailable
+      ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+      : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
         : null;
     const typingEnabled =
@@ -369,6 +376,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
+          !modelUnavailable &&
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
@@ -431,6 +439,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             agentDefaultModel,
             modelAccess: mutationAccess.model,
             effortAccess: mutationAccess.effort,
+            onModelSetup: () => this.context.navigate("model-setup"),
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
