@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw GitHub Copilot provider plugin",
   "type": "module",
-  "dependencies": {
-    "@clack/prompts": "1.7.0"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

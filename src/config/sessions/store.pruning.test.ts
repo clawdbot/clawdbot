@@ -142,6 +142,20 @@ describe("pruneStaleEntries", () => {
     expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
     expect(store.archived).toBeUndefined();
   });
+
+  it("preserves pinned entries until they are unpinned", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 31 * DAY_MS), pinnedAt: now - DAY_MS }],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store).toHaveProperty("pinned");
+
+    delete store.pinned?.pinnedAt;
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store.pinned).toBeUndefined();
+  });
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {
@@ -706,6 +720,20 @@ describe("capEntryCount", () => {
 
     expect(capEntryCount(store, 2)).toBe(1);
     expect(store).toHaveProperty("archived");
+    expect(store).toHaveProperty("recent");
+    expect(store.old).toBeUndefined();
+  });
+
+  it("preserves pinned sessions when capping", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 10 * DAY_MS), pinnedAt: now - 5 * DAY_MS }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    expect(capEntryCount(store, 2)).toBe(1);
+    expect(store).toHaveProperty("pinned");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });

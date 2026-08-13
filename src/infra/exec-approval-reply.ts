@@ -475,6 +475,11 @@ export function buildExecApprovalUnavailableReplyPayload(
   params: ExecApprovalUnavailableReplyParams,
 ): ReplyPayload {
   const lines: string[] = [];
+  const channelData = {
+    execApprovalUnavailable: {
+      reason: params.reason,
+    },
+  };
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText);
@@ -484,6 +489,7 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(getExecApprovalApproverDmNoticeText());
     return {
       text: lines.join("\n\n"),
+      channelData,
     };
   }
 
@@ -535,5 +541,6 @@ export function buildExecApprovalUnavailableReplyPayload(
 
   return {
     text: lines.join("\n\n"),
+    channelData,
   };
 }

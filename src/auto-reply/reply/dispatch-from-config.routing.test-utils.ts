@@ -427,6 +427,31 @@ describe("dispatchReplyFromConfig", () => {
     ).toBe(true);
   });
 
+  it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
+    setNoAbort();
+    const payload = {
+      text: "Exec approval is unavailable.",
+      channelData: {
+        execApprovalUnavailable: { reason: "no-approval-route" },
+      },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
     setNoAbort();
     askUserMocks.isAskUserPromptPending.mockResolvedValue(false);

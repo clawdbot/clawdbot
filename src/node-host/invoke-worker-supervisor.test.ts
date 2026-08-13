@@ -161,13 +161,17 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("errorText");
   });
 
-  it("omits completed worker output from the durable wire receipt", async () => {
+  it("returns completed worker output without internal process fields", async () => {
     const input = launchInput();
-    const privatePath = "/private/workspaces/session-1/secret.txt";
+    const resultJson = JSON.stringify({
+      status: "completed",
+      transcriptLeafId: "leaf-1",
+      transcriptNextSeq: 2,
+    });
     const receipt: NodeWorkerLaunchReceipt = {
       ...fullReceipt(input),
       state: "completed",
-      resultJson: JSON.stringify({ argv: ["worker", "--internal-worker-ipc"], privatePath }),
+      resultJson,
       completedAtMs: 12,
     };
 
@@ -177,10 +181,7 @@ describe("node-host worker supervisor commands", () => {
       supervisor: supervisorWith(receipt),
     });
 
-    const raw = result?.payloadJSON ?? "";
-    expect(raw).not.toContain("argv");
-    expect(raw).not.toContain(privatePath);
-    expect(JSON.parse(raw)).toEqual({
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
       launchId: input.launchId,
       planHash: receipt.planHash,
       environmentId: input.descriptor.admission.environmentId,
@@ -189,6 +190,42 @@ describe("node-host worker supervisor commands", () => {
       placementGeneration: input.placementGeneration,
       runId: input.descriptor.assignment.runId,
       state: "completed",
+      resultJson,
+    });
+    const payload = JSON.parse(result?.payloadJSON ?? "{}") as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("supervisor");
+    expect(payload).not.toHaveProperty("worker");
+    expect(payload).not.toHaveProperty("gatewayNamespace");
+    expect(payload).not.toHaveProperty("descriptor");
+    expect(payload).not.toHaveProperty("errorText");
+  });
+
+  it("returns failed worker diagnostics without completed output", async () => {
+    const input = launchInput();
+    const receipt: NodeWorkerLaunchReceipt = {
+      ...fullReceipt(input),
+      state: "failed",
+      worker: null,
+      errorText: "worker exited before completion",
+      completedAtMs: 12,
+    };
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: input.launchId }),
+      supervisor: supervisorWith(receipt),
+    });
+
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      launchId: input.launchId,
+      planHash: receipt.planHash,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+      ownerEpoch: input.descriptor.admission.ownerEpoch,
+      placementGeneration: input.placementGeneration,
+      runId: input.descriptor.assignment.runId,
+      state: "failed",
+      errorText: receipt.errorText,
     });
   });
 
@@ -224,6 +261,27 @@ describe("node-host worker supervisor commands", () => {
     expect(mocks.launch.mock.calls).toHaveLength(0);
     expect(mocks.status.mock.calls).toHaveLength(0);
     expect(mocks.cancel.mock.calls).toHaveLength(0);
+  });
+
+  it("fails closed when a durable terminal receipt is inconsistent", async () => {
+    const input = launchInput();
+    const receipt: NodeWorkerLaunchReceipt = {
+      ...fullReceipt(input),
+      state: "completed",
+      resultJson: null,
+      completedAtMs: 12,
+    };
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: input.launchId }),
+      supervisor: supervisorWith(receipt),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
+    });
   });
 
   it("returns a bounded generic error without leaking supervisor details", async () => {
