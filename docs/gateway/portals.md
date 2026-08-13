@@ -65,19 +65,19 @@ Out of the box:
 - Sandboxed sessions never receive it, because opening a portal starts a listener on the Gateway host.
 - It is blocked for HTTP `POST /tools/invoke` and restricted to the session owner, the same treatment `terminal` gets.
 
-To turn portals off for every agent, deny the tool by name:
+To turn portals off everywhere, deny the tool in the global policy:
 
-```json validate=false
+```json5
 {
-  "agents": { "defaults": { "tools": { "deny": ["portal"] } } }
+  tools: { deny: ["portal"] },
 }
 ```
 
 To turn them off for a single agent, leaving the others unchanged:
 
-```json validate=false
+```json5
 {
-  "agents": { "entries": { "<agentId>": { "tools": { "deny": ["portal"] } } } }
+  agents: { entries: { "<agentId>": { tools: { deny: ["portal"] } } } },
 }
 ```
 
