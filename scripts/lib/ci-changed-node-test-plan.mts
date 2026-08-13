@@ -14,11 +14,16 @@ import {
   isPolicyTestOwnedPath,
   resolvePolicyTestTargets,
 } from "./ci-node-test-plan.mts";
+import {
+  createExtensionTestProcessTargetChunks,
+  resolveExtensionTestConfig,
+} from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  includePatterns?: string[];
   planConcurrency?: number;
   requiresDist: boolean;
   runner: string;
@@ -212,6 +217,166 @@ function createBoundaryShard() {
   };
 }
 
+function resolvePreciseChangedTargets(
+  changedPaths: string[],
+  cwd: string,
+  additionalTargets: string[] = [],
+) {
+  const resolveTargetPlan = (paths: string[]) =>
+    resolveChangedTestTargetPlan(paths, {
+      broad: true,
+      combineSiblingWithImportGraph: true,
+      cwd,
+      forceFullImportGraph: true,
+      includeExtensionImpact: false,
+    });
+  const plan =
+    changedPaths.length > 0
+      ? resolveTargetPlan(changedPaths)
+      : { mode: "targets" as const, targets: [] };
+  // Aggregate resolution must not let one precise path hide another path that
+  // contributes no tests. Partial plans silently drop coverage.
+  if (
+    changedPaths.some((changedPath) => {
+      const changedPathPlan = resolveTargetPlan([changedPath]);
+      return changedPathPlan.mode !== "targets" || changedPathPlan.targets.length === 0;
+    }) ||
+    plan.mode !== "targets"
+  ) {
+    return null;
+  }
+  const targets = [...new Set([...plan.targets, ...additionalTargets])];
+  if (
+    targets.length > MAX_CHANGED_NODE_TEST_TARGETS ||
+    targets.some(
+      (target) =>
+        /^test\/vitest\/vitest\.full-.*\.config\.ts$/u.test(target) ||
+        splitNodeTestConfigs.has(target),
+    ) ||
+    targets.some(
+      (target) =>
+        !isTestFileTarget(target) || findUnmatchedExplicitTestTargets([target], cwd).length > 0,
+    )
+  ) {
+    return null;
+  }
+
+  const targetPlans = targets.map((target) => ({
+    plans: buildVitestRunPlans([target], cwd),
+    target,
+  }));
+  if (
+    targetPlans.some(
+      ({ plans }) => plans.length === 0 || plans.some((targetPlan) => !targetPlan.includePatterns),
+    )
+  ) {
+    return null;
+  }
+  // Preserve special shard setup (for example Go and TUI PTY coverage) by using
+  // the compact plan until targeted jobs can carry per-config prerequisites.
+  if (
+    targetPlans.some(({ plans }) =>
+      plans.some(({ config }) => configsRequiringFullSuiteMetadata.has(config)),
+    )
+  ) {
+    return null;
+  }
+  return targetPlans.map(({ target }) => target);
+}
+
+function createChangedTargetShards(
+  targets: string[],
+  names: { checkName: string; shardName: string },
+) {
+  const targetChunks: string[][] = [];
+  for (let offset = 0; offset < targets.length; offset += CHANGED_NODE_TEST_TARGETS_PER_JOB) {
+    targetChunks.push(targets.slice(offset, offset + CHANGED_NODE_TEST_TARGETS_PER_JOB));
+  }
+  return targetChunks.map((chunk, index) => {
+    const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
+    const shard: ChangedNodeTestShard = {
+      checkName: `${names.checkName}${suffix}`,
+      configs: [],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      shardName: `${names.shardName}${suffix}`,
+      targets: chunk,
+    };
+    if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+      shard.planConcurrency = 1;
+    }
+    return shard;
+  });
+}
+
+function resolveChangedExtensionRoots(changedPaths: string[]) {
+  return [
+    ...new Set(
+      changedPaths.flatMap((changedPath) => {
+        const [, extensionId] = changedPath.split("/");
+        return extensionId ? [`extensions/${extensionId}`] : [];
+      }),
+    ),
+  ];
+}
+
+function createChangedExtensionConfigShards(extensionRoots: string[]) {
+  const rootsByConfig = new Map<string, string[]>();
+  for (const root of extensionRoots) {
+    const config = resolveExtensionTestConfig(root);
+    rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
+  }
+  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
+    ...rootsByConfig,
+  ].flatMap(([config, roots]) => {
+    const chunks = createExtensionTestProcessTargetChunks(config, roots);
+    return chunks.length > 1
+      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
+      : [{ config, roots }];
+  });
+  return plans.map(({ config, includePatterns, roots }, index) => {
+    const suffix = plans.length === 1 ? "" : `-${index + 1}`;
+    const shard: ChangedNodeTestShard = {
+      checkName: `checks-node-changed-extensions-config${suffix}`,
+      configs: [config],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      shardName: `changed-extensions-config${suffix}`,
+    };
+    if (includePatterns) {
+      shard.includePatterns = includePatterns;
+    }
+    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
+      shard.planConcurrency = 1;
+    }
+    return shard;
+  });
+}
+
+/**
+ * The fail-safe cause leaves the non-extension diff's extension impact unbounded,
+ * so whole extension configs are required; precise targets would under-cover.
+ */
+export function createChangedExtensionFallbackShards(
+  changedPaths: string[],
+  options: CwdOptions = {},
+): ChangedNodeTestShard[] {
+  const cwd = options.cwd ?? process.cwd();
+  const extensionPaths = changedPaths.filter((changedPath) =>
+    changedPath.startsWith("extensions/"),
+  );
+  if (extensionPaths.length === 0) {
+    return [];
+  }
+  const relevantPaths = extensionPaths.filter(
+    (changedPath) => existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath),
+  );
+  if (relevantPaths.length === 0) {
+    return [];
+  }
+  return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
+}
+
 /**
  * Builds bounded PR jobs from precise changed-test targets.
  * Null means the caller must fail safe to the compact full-suite plan.
@@ -259,99 +424,21 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const resolveTargetPlan = (paths: string[]) =>
-    resolveChangedTestTargetPlan(paths, {
-      broad: true,
-      combineSiblingWithImportGraph: true,
-      cwd,
-      forceFullImportGraph: true,
-      includeExtensionImpact: false,
-    });
-  const plan =
-    regularLivePaths.length > 0
-      ? resolveTargetPlan(regularLivePaths)
-      : { mode: "targets" as const, targets: [] };
-  // Aggregate resolution must not let one precise path hide another path that
-  // contributes no tests. Partial plans silently drop coverage.
-  if (
-    regularLivePaths.some((changedPath) => {
-      const changedPathPlan = resolveTargetPlan([changedPath]);
-      return changedPathPlan.mode !== "targets" || changedPathPlan.targets.length === 0;
-    })
-  ) {
-    return null;
-  }
-  if (plan.mode !== "targets") {
-    return null;
-  }
-  const targets = [...new Set([...plan.targets, ...[...policyTargetsByPath.values()].flat()])];
-  if (
-    targets.length > MAX_CHANGED_NODE_TEST_TARGETS ||
-    targets.some(
-      (target) =>
-        /^test\/vitest\/vitest\.full-.*\.config\.ts$/u.test(target) ||
-        splitNodeTestConfigs.has(target),
-    )
-  ) {
-    return null;
-  }
-
-  if (
-    targets.some(
-      (target) =>
-        !isTestFileTarget(target) || findUnmatchedExplicitTestTargets([target], cwd).length > 0,
-    )
-  ) {
-    return null;
-  }
-
-  const targetPlans = targets.map((target) => ({
-    plans: buildVitestRunPlans([target], cwd),
-    target,
-  }));
-  if (
-    targetPlans.some(
-      ({ plans }) => plans.length === 0 || plans.some((targetPlan) => !targetPlan.includePatterns),
-    )
-  ) {
-    return null;
-  }
-  // Preserve special shard setup (for example Go and TUI PTY coverage) by using
-  // the compact plan until targeted jobs can carry per-config prerequisites.
-  if (
-    targetPlans.some(({ plans }) =>
-      plans.some(({ config }) => configsRequiringFullSuiteMetadata.has(config)),
-    )
-  ) {
+  const targets = resolvePreciseChangedTargets(
+    regularLivePaths,
+    cwd,
+    [...policyTargetsByPath.values()].flat(),
+  );
+  if (targets === null) {
     return null;
   }
 
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
-  const orderedTargets = targetPlans.map(({ target }) => target);
-  const targetChunks: string[][] = [];
-  for (
-    let offset = 0;
-    offset < orderedTargets.length;
-    offset += CHANGED_NODE_TEST_TARGETS_PER_JOB
-  ) {
-    targetChunks.push(orderedTargets.slice(offset, offset + CHANGED_NODE_TEST_TARGETS_PER_JOB));
-  }
   const shards = [
-    ...targetChunks.map((chunk, index) => {
-      const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
-      const shard: ChangedNodeTestShard = {
-        checkName: `checks-node-changed${suffix}`,
-        configs: [],
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: `changed${suffix}`,
-        targets: chunk,
-      };
-      if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
-        shard.planConcurrency = 1;
-      }
-      return shard;
+    ...createChangedTargetShards(targets, {
+      checkName: "checks-node-changed",
+      shardName: "changed",
     }),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
