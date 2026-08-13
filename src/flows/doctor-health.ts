@@ -43,7 +43,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 }
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.

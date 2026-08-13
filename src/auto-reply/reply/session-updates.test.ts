@@ -65,17 +65,17 @@ vi.mock("../../skills/runtime/refresh-state.js", () => ({
 
 vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
-  resolveSessionFilePath: vi.fn(),
+  resolveSessionFilePathCore: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   updateSessionEntry: updateSessionEntryMock,
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: (id: string) => id,
+  normalizeAgentId: vi.fn((id: string) => id),
   normalizeMainKey: (key?: string) => key ?? "main",
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));

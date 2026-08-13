@@ -273,8 +273,6 @@ vi.mock("./one-shot-exit.js", () => ({
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 
@@ -311,7 +309,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
+  closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("../plugins/memory-state.js", () => ({

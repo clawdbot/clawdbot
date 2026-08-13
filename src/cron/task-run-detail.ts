@@ -5,13 +5,14 @@ import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   FAILOVER_REASONS,
   type FailoverReason,
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
-import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
+import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
@@ -29,7 +30,7 @@ function toJsonValue(value: unknown): JsonValue | undefined {
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeTimestamp(value: unknown): number | undefined {
@@ -105,7 +106,7 @@ export function parseCronRunLogEntryObject(
     errorReason: normalizeCronRunLogErrorReason(entryObj.errorReason) ?? undefined,
     summary: typeof entryObj.summary === "string" ? entryObj.summary : undefined,
     runId: typeof entryObj.runId === "string" && entryObj.runId.trim() ? entryObj.runId : undefined,
-    diagnostics: normalizeCronRunDiagnostics(entryObj.diagnostics),
+    diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
     runAtMs: normalizeTimestamp(entryObj.runAtMs),
     durationMs: asSafeIntegerInRange(entryObj.durationMs, { min: 0 }),
     nextRunAtMs: normalizeTimestamp(entryObj.nextRunAtMs),

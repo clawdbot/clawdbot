@@ -103,7 +103,7 @@ describe("worker session placement gate", () => {
     expect(gate.validateWorkerTurn({ ...binding, ownerEpoch: OWNER_EPOCH + 1 })).toBe(false);
   });
 
-  it("updates exact-owner cursors and rejects stale descriptor replay", () => {
+  it("atomically retains the finishing cursor and workspace-result fence", () => {
     const runId = "run-worker-ack";
     const claim = preclaim(runId);
     const gate = createWorkerSessionPlacementGate(store);
@@ -114,13 +114,19 @@ describe("worker session placement gate", () => {
       runId,
     };
 
-    gate.updateAckCursors({ ...binding, transcriptSeq: 4, liveSeq: 9 });
+    gate.updateAckCursors({ ...binding, transcriptSeq: 4 });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    gate.updateAckCursors({ ...binding, liveSeq: 9 });
     expect(store.get(SESSION.sessionId)).toMatchObject({
       generation: claim.placementGeneration,
       lastTranscriptAckCursor: 4,
       lastLiveEventAckCursor: 9,
     });
-    store.releaseTurn(claim);
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: SESSION.sessionId, runId },
+    ]);
+    store.acceptWorkspaceResult(claim);
+    store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(store.get(SESSION.sessionId)?.turnClaim).toBeNull();
     expect(gate.validateWorkerTurn(binding)).toBe(false);
   });

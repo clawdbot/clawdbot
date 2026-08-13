@@ -30,7 +30,7 @@ export {
   resolveIdentityNamePrefix,
 } from "../agents/identity.js";
 
-export { resolveApiKeyForProvider } from "../agents/model-auth.js";
+export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };

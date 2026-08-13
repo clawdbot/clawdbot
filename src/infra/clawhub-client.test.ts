@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   fetchClawHubSkillInstallResolution,
@@ -80,7 +80,7 @@ describe("clawhub client", () => {
   });
 
   it("loads ClawHub request auth from config.json", async () => {
-    await withTempDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
+    await withTestDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "clawhub", "config.json");
       process.env.CLAWHUB_CONFIG_PATH = configPath;
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -95,7 +95,7 @@ describe("clawhub client", () => {
   });
 
   it("loads ClawHub request auth from the legacy config path override", async () => {
-    await withTempDir({ prefix: "openclaw-clawdhub-config-" }, async (configRoot) => {
+    await withTestDir({ prefix: "openclaw-clawdhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "config.json");
       process.env.CLAWDHUB_CONFIG_PATH = configPath;
       await fs.writeFile(configPath, JSON.stringify({ token: "fixture-legacy-token" }), "utf8");
@@ -107,7 +107,7 @@ describe("clawhub client", () => {
   it.runIf(process.platform === "darwin")(
     "loads ClawHub request auth from the macOS Application Support path",
     async () => {
-      await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
+      await withTestDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
         const configPath = path.join(
           fakeHome,
           "Library",
@@ -131,8 +131,8 @@ describe("clawhub client", () => {
   it.runIf(process.platform === "darwin")(
     "falls back to XDG_CONFIG_HOME for ClawHub request auth on macOS",
     async () => {
-      await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
-        await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
+      await withTestDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
+        await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
           const configPath = path.join(xdgRoot, "clawhub", "config.json");
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
           setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);

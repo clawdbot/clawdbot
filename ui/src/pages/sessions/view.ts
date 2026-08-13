@@ -1,6 +1,12 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
+import "../../styles/sessions.css";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -10,15 +16,14 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import "../../styles/sessions.css";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
@@ -53,11 +58,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { parseFilterInteger } from "./page-state.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -638,7 +638,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseFilterInteger(props.activeMinutes) !== undefined ||
+    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
     !props.includeGlobal
   );
 }
@@ -1286,7 +1286,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             ${sortHeader("updated", t("sessionsView.updated"))}
             ${sortHeader("tokens", t("sessionsView.tokens"))}
             <th class="session-actions-col">
-              <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+              <span class="sr-only">${t("sessionsView.actions")}</span>
             </th>
           </tr>
         </thead>

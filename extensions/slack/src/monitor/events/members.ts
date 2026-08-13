@@ -3,6 +3,7 @@ import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { SlackSystemEventAuthRetryError } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMemberChannelEvent } from "../types.js";
 import {
@@ -66,6 +67,9 @@ export function registerSlackMemberEvents(params: {
       ctx.runtime.error?.(
         danger(`slack ${paramsLocal.verb} handler failed: ${formatErrorMessage(err)}`),
       );
+      if (err instanceof SlackSystemEventAuthRetryError) {
+        throw err;
+      }
     }
   };
 

@@ -174,7 +174,7 @@ describe("new-session model runtime", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("restores a browser preference only after the model and thinking level validate", async () => {
+  it("preserves a browser preference when an older server omits thinking profiles", async () => {
     const { context } = contextWith([
       {
         id: "gpt-5.6-sol",
@@ -256,12 +256,22 @@ describe("new-session model runtime", () => {
       model: { primary: "openai/gpt-5.6-sol" },
       thinkingDefault: "high",
     });
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="openai/gpt-5.6-sol"][data-chat-model-default="true"]',
+      )?.textContent,
+    ).toContain("GPT-5.6 Sol");
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Sol",
     );
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "High",
-    );
+    const thinkingPicker = container.querySelector('[data-chat-thinking-select="true"]');
+    expect(thinkingPicker).not.toBeNull();
+    expect(thinkingPicker?.textContent).toContain("High");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-slider="true"]')
+        ?.getAttribute("data-chat-thinking-values"),
+    ).toContain("high");
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
   });
@@ -631,7 +641,17 @@ describe("new-session model runtime", () => {
 
   it("drops a stored reasoning override when its option is no longer available", async () => {
     const { context, request } = contextWith([
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "high", label: "high" },
+        ],
+        thinkingDefault: "high",
+      },
     ]);
     const onSelectionChange = vi.fn();
     const control = new NewSessionModelControl(() => undefined, onSelectionChange);
@@ -650,6 +670,50 @@ describe("new-session model runtime", () => {
     expect(control.selected).toBe("openai/gpt-5.6-sol");
     expect(onSelectionChange).toHaveBeenLastCalledWith({
       model: "openai/gpt-5.6-sol",
+      thinkingLevel: "",
+    });
+  });
+
+  it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
+    const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+    const { context, request } = contextWith([
+      {
+        id: "k3",
+        name: "Kimi K3",
+        provider: "kimi",
+        reasoning: true,
+        thinkingLevels: levels(["off", "low", "medium", "high", "xhigh"]),
+        thinkingDefault: "high",
+      },
+      {
+        id: "limited",
+        name: "Limited",
+        provider: "demo",
+        reasoning: true,
+        thinkingLevels: levels(["off", "low", "medium", "high"]),
+        thinkingDefault: "medium",
+      },
+    ]);
+    const onSelectionChange = vi.fn();
+    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
+    control.load(context, "main", true);
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="demo/limited"]'),
+      ).not.toBeNull();
+    });
+    control.selected = "kimi/k3";
+    control.thinkingLevel = "xhigh";
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="demo/limited"]')
+      ?.click();
+
+    expect(control.selected).toBe("demo/limited");
+    expect(control.thinkingLevel).toBe("");
+    expect(onSelectionChange).toHaveBeenLastCalledWith({
+      model: "demo/limited",
       thinkingLevel: "",
     });
   });

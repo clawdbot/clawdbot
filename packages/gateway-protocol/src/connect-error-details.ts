@@ -6,7 +6,7 @@
  */
 import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
 
-function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
+function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -266,7 +266,7 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeArrayBackedTrimmedStringList(value);
+  return normalizeOptionalConnectDetailStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {

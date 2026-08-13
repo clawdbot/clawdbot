@@ -30,10 +30,11 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { isKnownCoreToolId } from "../tool-catalog.js";
 import {
   expandToolGroups,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
@@ -575,7 +576,7 @@ async function runSelectedAgentHarnessAttempt(
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
         const preparedParams = selection.builtIn
           ? pluginAttempt.params
-          : preparePluginHarnessParams(pluginAttempt.params);
+          : preparePluginHarnessParams(pluginAttempt.params, harness);
         const effectiveAttemptParams =
           hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
             ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
@@ -681,7 +682,7 @@ async function runAgentHarnessOperation<T>(
 }
 
 function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "openclaw";
+  return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function withoutHarnessSetupAuthority(
@@ -773,6 +774,7 @@ function withoutPluginHarnessPrivateState(
 
 function preparePluginHarnessParams(
   params: import("./types.js").AgentHarnessAttemptParamsV2,
+  harness: AgentHarness,
 ): import("./types.js").AgentHarnessAttemptParamsV2 {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
@@ -783,7 +785,12 @@ function preparePluginHarnessParams(
     model === params.model && resolvedApiKey === params.resolvedApiKey
       ? params
       : { ...params, model, resolvedApiKey };
-  const policies = resolvePluginHarnessToolPolicies(preparedParams);
+  const policies = resolvePluginHarnessToolPolicies(
+    preparedParams,
+    harness.conversationToolPolicySupport === "exact"
+      ? harness.conversationToolPolicySafeDenyTools
+      : undefined,
+  );
   return applyPluginHarnessDenyAllToolPolicy(
     {
       ...preparedParams,
@@ -816,7 +823,7 @@ function applyPluginHarnessDenyAllToolPolicy(
   if (
     isHostScopedAgentToolActive("openclaw") &&
     params.toolsAllow?.length === 1 &&
-    normalizeToolName(params.toolsAllow[0] ?? "") === "openclaw"
+    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "openclaw"
   ) {
     return params;
   }
@@ -861,6 +868,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
 
 function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
+  safeDenyToolNames?: readonly string[],
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -924,6 +932,9 @@ function resolvePluginHarnessToolPolicies(
     policy.inheritedToolPolicy,
     policy.runtimeToolPolicyForInheritance,
   ];
+  const safeDenyToolNameSet = safeDenyToolNames
+    ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
+    : undefined;
   return {
     senderPolicy: policy.senderPolicy,
     senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
@@ -943,8 +954,26 @@ function resolvePluginHarnessToolPolicies(
       policy.subagentPolicy,
       policy.inheritedToolPolicy,
     ],
-    toolPolicyRestricted: explicitPolicies.some(toolPolicyRestrictsTools),
+    toolPolicyRestricted: explicitPolicies.some((explicitPolicy) =>
+      toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
+    ),
   };
+}
+
+function toolPolicyRestrictsHarnessNativeTools(
+  policy: PluginHarnessToolPolicy | undefined,
+  safeDenyToolNames: ReadonlySet<string> | undefined,
+): boolean {
+  if (!safeDenyToolNames) {
+    return toolPolicyRestrictsTools(policy);
+  }
+  if (!policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
+    return toolPolicyRestrictsTools(policy);
+  }
+  return expandToolGroups(policy.deny ?? []).some((deniedName) => {
+    const normalized = normalizeToolPolicyName(deniedName);
+    return !isKnownCoreToolId(normalized) || !safeDenyToolNames.has(normalized);
+  });
 }
 
 function resolveSenderScopedGroupToolPolicy(
@@ -983,7 +1012,9 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
 }
 
 function policyDeniesAllTools(policy?: { deny?: string[] }): boolean {
-  return expandToolGroups(policy?.deny ?? []).some((entry) => normalizeToolName(entry) === "*");
+  return expandToolGroups(policy?.deny ?? []).some(
+    (entry) => normalizeToolPolicyName(entry) === "*",
+  );
 }
 
 function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelectionCandidate[] {

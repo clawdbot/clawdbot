@@ -110,7 +110,7 @@ import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
-import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
+import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -1693,6 +1693,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       messaging: {
         targetPrefixes: ["feishu", "lark"],
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        inferTargetChatType: ({ to }) =>
+          resolveReceiveIdType(to) === "chat_id" ? "group" : "direct",
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
           const directId = parseFeishuDirectConversationId(conversationId);
           if (directId) {

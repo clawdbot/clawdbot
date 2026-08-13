@@ -928,19 +928,15 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.map((item) => item.type)).toEqual(["compaction", "message"]);
   });
 
-  it("replays when session and auth identities match", () => {
-    const assistant = createOutput();
-    assistant.providerReplay = compactionState(model, { replayIndex: 0 });
+  it.each(responseConverters)(
+    "$name replays an empty checkpoint owner when request identities match",
+    ({ convert }) => {
+      const assistant = createOutput();
+      assistant.providerReplay = compactionState(model, { replayIndex: 0 });
 
-    const input = convertResponsesMessages(
-      model,
-      { messages: [assistant] },
-      new Set(["openai"]),
-      replayIdentity,
-    );
-
-    expect(input.some((item) => item.type === "compaction")).toBe(true);
-  });
+      expect(convert({ messages: [assistant] }).map((item) => item.type)).toEqual(["compaction"]);
+    },
+  );
 
   it.each(responseConverters)(
     "$name does not replay or prune across a different or missing request identity",

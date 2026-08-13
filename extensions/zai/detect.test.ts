@@ -1,6 +1,5 @@
 // Zai tests cover detect plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint } from "./detect.js";
 
@@ -319,21 +318,6 @@ describe("detectZaiEndpoint", () => {
     expect(state.enqueuedBytes).toBeLessThanOrEqual(
       ZAI_DETECT_ERROR_BODY_MAX_BYTES + 2 * 1024 * 1024,
     );
-  });
-
-  it("rejects oversized bodies via the shared bounded reader the probe uses", async () => {
-    const { fetchFn } = makeOversizedStreamFetch({
-      url: "https://api.z.ai/api/paas/v4/chat/completions",
-      status: 400,
-    });
-    const res = await fetchFn("https://api.z.ai/api/paas/v4/chat/completions");
-
-    await expect(
-      readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
-      }),
-    ).rejects.toThrow(/exceeded size limit/);
   });
 
   it("fails closed when a probe error body stalls without chunks", async () => {

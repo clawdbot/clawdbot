@@ -9,6 +9,7 @@ import { captureNodePairingGeneration } from "../../infra/device-pairing-node-st
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
+  isPrivateNodeInvokeCommand,
 } from "../../infra/node-commands.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -30,7 +31,7 @@ import {
   respondInvalidParams,
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
-  safeParseJson,
+  parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
   isForwardedNodeInvokeApprovalAuthorityActive,
@@ -85,6 +86,16 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
+      );
+      return;
+    }
+    if (isPrivateNodeInvokeCommand(command)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node.invoke does not allow private node controls", {
+          details: { command },
+        }),
       );
       return;
     }
@@ -473,7 +484,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
           const payload = policyResult.payloadJSON
-            ? safeParseJson(policyResult.payloadJSON)
+            ? parseGatewayPayload(policyResult.payloadJSON)
             : policyResult.payload;
           emitTalkPttNodeEvent({
             context,
@@ -660,7 +671,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           }
           return;
         }
-        const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+        const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;
         emitTalkPttNodeEvent({
           context,
           nodeId,

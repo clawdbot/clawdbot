@@ -373,6 +373,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   }>("sessions.patch", {
     key: "agent:main:subagent:one",
     archived: true,
+    expectedSessionId: "sess-subagent",
   });
   expect(archived.ok).toBe(true);
   expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
@@ -435,6 +436,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   }>("sessions.patch", {
     key: "agent:main:subagent:one",
     archived: false,
+    expectedSessionId: "sess-subagent",
   });
   expect(restored.ok).toBe(true);
   expect(restored.payload?.entry.archivedAt).toBeUndefined();
@@ -879,7 +881,7 @@ test("write-scoped operators manage chat organization but not admin session sett
     const archived = await rpcReq<{ ok: true; entry: { archivedAt?: number } }>(
       ws,
       "sessions.patch",
-      { key: "agent:main:topic-b", archived: true },
+      { key: "agent:main:topic-b", archived: true, expectedSessionId: "sess-topic-b" },
     );
     expect(archived.ok).toBe(true);
     expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
@@ -1021,7 +1023,11 @@ test("archiving a session disables cron jobs bound to it", async () => {
 
   const archived = await directSessionHandlerReq(
     "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: true },
+    {
+      key: "agent:main:subagent:cronbound",
+      archived: true,
+      expectedSessionId: "sess-bound",
+    },
     { context: { cron } },
   );
   expect(archived.ok).toBe(true);
@@ -1033,7 +1039,11 @@ test("archiving a session disables cron jobs bound to it", async () => {
   update.mockClear();
   const restored = await directSessionHandlerReq(
     "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: false },
+    {
+      key: "agent:main:subagent:cronbound",
+      archived: false,
+      expectedSessionId: "sess-bound",
+    },
     { context: { cron } },
   );
   expect(restored.ok).toBe(true);
@@ -1046,7 +1056,11 @@ test("archiving a session disables cron jobs bound to it", async () => {
   } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
   const writeScopedArchive = await directSessionHandlerReq(
     "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: true },
+    {
+      key: "agent:main:subagent:cronbound",
+      archived: true,
+      expectedSessionId: "sess-bound",
+    },
     { context: { cron }, client: writeScopedClient },
   );
   expect(writeScopedArchive.ok).toBe(true);

@@ -22,7 +22,7 @@ import {
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -58,7 +58,7 @@ async function createSiblingSession(params: {
   sessionKey: string;
 }) {
   const scope = { agentId, ...params };
-  await upsertSessionEntry(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
+  await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
   await appendTranscriptEvent(scope, {
     type: "session",
     id: params.sessionId,
@@ -101,7 +101,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     sessionId,
     updatedAt: Date.now(),
   };
-  await upsertSessionEntry(scope, entry);
+  await upsertSessionEntryCore(scope, entry);
   for (const event of [
     { type: "session", id: sessionId, version: 3, timestamp: "2026-07-18T00:00:00.000Z" },
     {
@@ -229,7 +229,7 @@ describe("SQLite session message cuts", () => {
       if (!sourceEntry) {
         throw new Error("expected source session entry");
       }
-      await upsertSessionEntry({ agentId, env, sessionKey: aliasKey }, sourceEntry);
+      await upsertSessionEntryCore({ agentId, env, sessionKey: aliasKey }, sourceEntry);
       const fullTranscriptLoads = trackFullTranscriptLoads(env);
       await listSessionBranches({ agentId, env, sessionKey });
 

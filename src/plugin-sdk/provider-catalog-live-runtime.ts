@@ -1,3 +1,4 @@
+import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
@@ -8,7 +9,10 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
+  readLiveModelCatalogStringField,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
@@ -32,6 +36,11 @@ export type LiveModelCatalogHeaderContext = {
 };
 
 export { clearLiveCatalogCacheForTests };
+export {
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
+};
 
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;
@@ -207,10 +216,6 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-}
-
-function readLiveModelCatalogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {

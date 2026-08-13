@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
-  defaultRuntime,
+  lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
   lifecycleRuntimeLogs,
@@ -38,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: lifecycleTestRuntime,
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
@@ -266,6 +266,33 @@ describe("runServiceRestart token drift", () => {
     expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
       service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("restarts an installed system-scope service when its loaded-state probe is unavailable", async () => {
+    service.isLoaded.mockRejectedValue(
+      new Error(
+        "systemctl is-enabled unavailable: Command failed during launch or output capture (EACCES)",
+      ),
+    );
+    service.readCommand.mockResolvedValue(null);
+    const hasInstalledDefinition = vi.fn(async () => true);
+    const postRestartCheck = vi.fn(async () => {});
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        service: { ...service, hasInstalledDefinition } as GatewayService,
+        postRestartCheck,
+      }),
+    ).resolves.toBe(true);
+
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(readJsonLog<{ ok?: boolean; result?: string }>()).toMatchObject({
+      ok: true,
+      result: "restarted",
+    });
   });
 
   it("aborts loaded-service mutation when the service guard rejects", async () => {

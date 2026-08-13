@@ -18,7 +18,7 @@ import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
-  agentCommand,
+  agentCommandMock,
   connectOk,
   connectWebchatClient,
   installGatewayTestHooks,
@@ -190,7 +190,7 @@ afterAll(() => {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    vi.mocked(agentCommand).mockClear();
+    vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
   });
@@ -432,7 +432,7 @@ describe("gateway server agent", () => {
       expect(directReset.ok).toBe(false);
       expect(directReset.error?.message).toContain("missing scope: operator.admin");
 
-      vi.mocked(agentCommand).mockClear();
+      vi.mocked(agentCommandMock).mockClear();
       const viaAgent = await rpcReq(writeWs, "agent", {
         message: "/reset",
         sessionKey: "main",
@@ -451,7 +451,7 @@ describe("gateway server agent", () => {
 
       const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(stored?.sessionId).toBe("sess-main-before-write-reset");
-      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
 
       writeWs.close();
     });
@@ -487,7 +487,7 @@ describe("gateway server agent", () => {
 
   test("agent final response surfaces redacted ACP runtime cause details", async () => {
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-    vi.mocked(agentCommand).mockRejectedValueOnce(
+    vi.mocked(agentCommandMock).mockRejectedValueOnce(
       new AcpRuntimeError("ACP_TURN_FAILED", "Internal error", {
         cause: new Error(`upstream rejected token=${token}`),
       }),

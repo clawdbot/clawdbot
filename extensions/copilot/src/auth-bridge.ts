@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { homedir as osHomedir } from "node:os";
 import { join, resolve } from "node:path";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Pure functional auth resolver for the copilot agent runtime.
@@ -330,8 +331,4 @@ function readEnvTokenFallback(
 export function tokenFingerprint(token: string): string {
   const hex = createHash("sha256").update(token).digest("hex").slice(0, 12);
   return `sha256:${hex}`;
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

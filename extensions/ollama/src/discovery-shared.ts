@@ -40,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readStringValue(value: unknown): string | undefined {
+function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -247,7 +247,7 @@ function hasMeaningfulExplicitOllamaConfig(
   if (baseUrl) {
     return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readStringValue(providerConfig.apiKey)) {
+  if (readOllamaStringValue(providerConfig.apiKey)) {
     return true;
   }
   if (providerConfig.auth) {
@@ -308,8 +308,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKeyRef = coerceSecretRef(explicit?.apiKey);
   const explicitApiKey = explicitApiKeyRef
-    ? readStringValue(ollamaDiscoveryKey)
-    : readStringValue(explicit?.apiKey);
+    ? readOllamaStringValue(ollamaDiscoveryKey)
+    : readOllamaStringValue(explicit?.apiKey);
   // apiKey can be an env-name or managed marker; only discoveryApiKey proves
   // an explicit SecretRef resolved. Never replace its owner with local auth.
   if (explicitApiKeyRef && !explicitApiKey) {

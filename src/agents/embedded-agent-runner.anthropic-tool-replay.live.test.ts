@@ -1,7 +1,7 @@
 // Live checks for Anthropic replay transcript sanitization and tool-call history.
 import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt.tool-call-normalization.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { completeSimpleWithLiveTimeout, logLiveCache } from "./live-cache-test-support.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";

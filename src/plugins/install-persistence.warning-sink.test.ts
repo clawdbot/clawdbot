@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyExclusiveSlotSelection,
-  applyPluginUninstallDirectoryRemoval,
-  buildPluginSnapshotReport,
-  loadPluginManifestRegistry,
-  planPluginUninstall,
-  refreshPluginRegistry,
+  applyExclusiveSlotSelectionMock,
+  applyPluginUninstallDirectoryRemovalMock,
+  buildPluginSnapshotReportMock,
+  loadPluginManifestRegistryMock,
+  planPluginUninstallMock,
+  refreshPluginRegistryMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const snapshot = {
   config: {},
@@ -31,17 +32,20 @@ describe("plugin install persistence warning audiences", () => {
   it("reports missing required configuration without forwarding informational logs", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const warn = vi.fn();
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        {
-          id: "workboard",
-          manifestPath: "/tmp/workboard/openclaw.plugin.json",
-          configSchema: {
-            type: "object",
-            required: ["token"],
-            properties: { token: { type: "string" } },
+        recordPluginManifestInstallOwner(
+          {
+            id: "workboard",
+            manifestPath: `${install.installPath}/openclaw.plugin.json`,
+            configSchema: {
+              type: "object",
+              required: ["token"],
+              properties: { token: { type: "string" } },
+            },
           },
-        },
+          "workboard",
+        ),
       ],
       diagnostics: [],
     });
@@ -67,25 +71,32 @@ describe("plugin install persistence warning audiences", () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const warn = vi.fn();
     const warning = 'Exclusive slot "memory" switched from "memory-core" to "workboard".';
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
-        {
-          id: "workboard",
-          kind: "memory",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "config",
-          rootDir: "/tmp/workboard",
-          source: "/tmp/workboard/index.js",
-          manifestPath: "/tmp/workboard/openclaw.plugin.json",
-        },
+        recordPluginManifestInstallOwner(
+          {
+            id: "workboard",
+            kind: "memory",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config",
+            rootDir: install.installPath,
+            source: `${install.installPath}/index.js`,
+            manifestPath: `${install.installPath}/openclaw.plugin.json`,
+          },
+          "workboard",
+        ),
       ],
       diagnostics: [],
     });
-    applyExclusiveSlotSelection.mockReturnValue({ config: {}, warnings: [warning], changed: true });
+    applyExclusiveSlotSelectionMock.mockReturnValue({
+      config: {},
+      warnings: [warning],
+      changed: true,
+    });
 
     await persistPluginInstall({
       snapshot,
@@ -112,19 +123,19 @@ describe("plugin install persistence warning audiences", () => {
           installPath: "/private/previous-source/workboard",
         },
       });
-      planPluginUninstall.mockReturnValueOnce({
+      planPluginUninstallMock.mockReturnValueOnce({
         ok: true,
         config: {},
         pluginId: "workboard",
         actions: {},
         directoryRemoval: { target: "/private/previous-source/workboard" },
       });
-      applyPluginUninstallDirectoryRemoval.mockResolvedValueOnce({
+      applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
         directoryRemoved: false,
         warnings: [cleanupDetail],
       });
-      refreshPluginRegistry.mockRejectedValueOnce(new Error(refreshDetail));
-      buildPluginSnapshotReport.mockReturnValue({
+      refreshPluginRegistryMock.mockRejectedValueOnce(new Error(refreshDetail));
+      buildPluginSnapshotReportMock.mockReturnValue({
         plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
         diagnostics: [],
       });

@@ -13,6 +13,7 @@ import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -102,6 +103,7 @@ export type PreparedModelRuntimeCatalogFacts = {
 export type PreparedModelRuntimeCatalogSource = Readonly<{
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
+  providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;
 
 type PreparedConfiguredRegistryGroup = {
@@ -462,7 +464,12 @@ export async function prepareFullCatalogFacts(
     }
   }
   const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
-  const completeModelCatalog = { ...modelCatalog, staticEntries };
+  const providerOutcomes = catalogSource?.providerOutcomes ?? [];
+  const completeModelCatalog = {
+    ...modelCatalog,
+    staticEntries,
+    ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
+  };
   if (catalogMode === "live") {
     fullModelCatalogSnapshots.add(completeModelCatalog);
   }
@@ -641,6 +648,19 @@ export async function prepareAgentCatalogSource(
   sourceOptions: { providerDiscoveryProviderIds?: readonly string[] } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
+  const providerOutcomes = new Map<string, ProviderCatalogOutcome>();
+  const recordProviderOutcome = (outcome: ProviderCatalogOutcome) => {
+    const provider = normalizeProviderId(outcome.provider);
+    if (provider) {
+      providerOutcomes.set(`${provider}\0${outcome.profileId ?? ""}`, { ...outcome, provider });
+    }
+  };
+  const resultOutcomes = () =>
+    [...providerOutcomes.values()].toSorted(
+      (left, right) =>
+        left.provider.localeCompare(right.provider) ||
+        (left.profileId ?? "").localeCompare(right.profileId ?? ""),
+    );
   const options = {
     pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
     ...(pluginGeneration.preparedStaticProviderCatalog
@@ -661,19 +681,27 @@ export async function prepareAgentCatalogSource(
         }),
   };
   if (!persist) {
-    const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, options);
+    const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
+      ...options,
+      ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
+    });
     return {
       modelsJsonContents: source.modelsJsonContents,
       pluginCatalogs: source.pluginCatalogs,
+      providerOutcomes: resultOutcomes(),
     };
   }
   if (!input.readOnly) {
-    await ensureOpenClawModelsJson(input.config, input.agentDir, options);
+    await ensureOpenClawModelsJson(input.config, input.agentDir, {
+      ...options,
+      ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
+    });
   }
   // Capture immediately after the serialized write. Another owner may share this directory and
   // publish a different workspace generation before full-catalog parsing begins.
   return {
     modelsJsonContents: captureModelsJsonContents(input.agentDir),
     pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
+    providerOutcomes: resultOutcomes(),
   };
 }

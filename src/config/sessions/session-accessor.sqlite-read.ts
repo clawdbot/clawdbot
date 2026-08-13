@@ -5,7 +5,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   openOpenClawAgentDatabase,
@@ -323,7 +323,7 @@ function parseLatestAssistantText(
   latest: LatestTranscriptAssistantMessage,
 ): LatestTranscriptAssistantText | undefined {
   const message = latest.message as { timestamp?: unknown };
-  const text = extractAssistantVisibleText(latest.message)?.trim();
+  const text = extractAssistantPhaseText(latest.message)?.trim();
   if (!text) {
     return undefined;
   }

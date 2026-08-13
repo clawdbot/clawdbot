@@ -1,5 +1,4 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -66,10 +65,7 @@ export function createAgentAdmissionController(params: {
   const admissionAgentId = () => {
     const resolvedSessionKey = params.getResolvedSessionKey();
     return (
-      params.getResolvedSessionAgentId() ??
-      (resolvedSessionKey === "global"
-        ? (params.getAgentId() ?? resolveDefaultAgentId(params.getCfgForAgent() ?? params.cfg))
-        : undefined)
+      params.getResolvedSessionAgentId() ?? (resolvedSessionKey ? params.getAgentId() : undefined)
     );
   };
 
@@ -86,6 +82,7 @@ export function createAgentAdmissionController(params: {
         runId: params.runId,
         sessionKey: resolvedSessionKey,
         alternateSessionKeys: [params.preAcceptedReservedSessionKey, requestedSessionKey],
+        agentId: admissionAgentId(),
       })
     ) {
       if (commitOutcome) {

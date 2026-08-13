@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
@@ -102,6 +103,7 @@ export function bindSessionNode(params: {
     created_actor_type:
       normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
     created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),
     spawned_by: normalizeText(params.entry.spawnedBy),
@@ -163,7 +165,7 @@ function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): 
 }
 
 function finiteSqliteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function resolveSqliteSessionChannel(entry: SessionEntry): string | null {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
@@ -129,7 +129,7 @@ export async function sweepCronRunSessions(params: {
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
     // store's physical database owner internally through its SQLite scope.
-    for (const { sessionKey, entry } of listSessionEntries({
+    for (const { sessionKey, entry } of listSessionEntriesCore({
       agentId: params.agentId,
       storePath,
     })) {

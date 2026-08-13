@@ -5,7 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
@@ -41,7 +44,7 @@ async function seedSessionStore(params: {
   entry: SessionEntry | Record<string, unknown>;
 }) {
   await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     params.entry as Partial<SessionEntry>,
   );

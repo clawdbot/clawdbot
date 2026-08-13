@@ -58,7 +58,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
       taskIds: new Set<string>(),
       nextExpiryAt: null,
     },
-    view: { kind: "list" },
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),
@@ -68,9 +67,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onSelectTask: () => {},
-    onBack: () => {},
-    onOpenTranscript: () => {},
   };
 }
 
@@ -217,14 +213,18 @@ describe("ChatSessionCompanionThreads", () => {
     });
     const client = { request: request as GatewayBrowserClient["request"] };
 
-    await requestSessionCompanionAnswer(client, "one", "Question");
-    await requestSessionCompanionState(client, "one");
-    await resetSessionCompanion(client, "one");
+    await requestSessionCompanionAnswer(client, "one", "Question", "work");
+    await requestSessionCompanionState(client, "one", "work");
+    await resetSessionCompanion(client, "one", "work");
 
     expect(request.mock.calls).toEqual([
-      ["sessions.companion.ask", { sessionKey: "one", question: "Question" }],
-      ["sessions.companion.state", { sessionKey: "one" }],
-      ["sessions.companion.reset", { sessionKey: "one" }],
+      [
+        "sessions.companion.ask",
+        { sessionKey: "one", agentId: "work", question: "Question" },
+        { timeoutMs: 70_000 },
+      ],
+      ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
+      ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
     ]);
   });
 
@@ -245,6 +245,15 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one").exchanges[0]?.answer).toBe("Answer for one");
     expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
+  });
+
+  it("keeps matching bare session keys isolated by agent", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("global", "main draft", "main");
+    threads.setDraft("global", "work draft", "work");
+
+    expect(threads.view("global", "main").draft).toBe("main draft");
+    expect(threads.view("global", "work").draft).toBe("work draft");
   });
 
   it("moves a composer submission through pending to a timestamped answer", async () => {
@@ -282,12 +291,97 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.submit("one", "Is it stuck?", async () => {
       throw Object.assign(new Error("busy"), {
         details: { code: "SESSION_COMPANION_BUSY" },
+        retryable: true,
       });
     });
 
     expect(threads.view("one")).toMatchObject({
       failedQuestion: "Is it stuck?",
       hint: "busy",
+      retryable: true,
+    });
+  });
+
+  it("preserves a context failure for an explicit retry", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "What changed?", async () => {
+      throw Object.assign(new Error("history unavailable"), {
+        details: { reason: "context-unavailable" },
+        retryable: true,
+      });
+    });
+
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "history-unavailable",
+      pendingQuestion: null,
+      retryable: true,
+    });
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "history-unavailable",
+      retryable: true,
+    });
+  });
+
+  it.each([
+    { reason: "rate-limited", retryable: true, hint: "rate-limited" },
+    { reason: "utility-model-unavailable", retryable: false, hint: "model-unavailable" },
+    { reason: "unavailable", retryable: false, hint: "unavailable" },
+  ] as const)("maps $reason to its specific retry state", async (expected) => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "What changed?", async () => {
+      throw Object.assign(new Error(expected.reason), {
+        details: { reason: expected.reason },
+        retryable: expected.retryable,
+      });
+    });
+
+    expect(threads.view("one")).toMatchObject({
+      hint: expected.hint,
+      retryable: expected.retryable,
+    });
+  });
+
+  it("hydrates only a newly committed repeated question after a lost response", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
+    }));
+    await threads.submit("one", "What changed?", async () => {
+      throw new Error("socket closed");
+    });
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "unavailable",
+      retryable: true,
+    });
+
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
+    }));
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "unavailable",
+      retryable: true,
+    });
+
+    await threads.hydrate("one", async () => ({
+      exchanges: [
+        { question: "What changed?", answer: "Earlier answer.", ts: 1 },
+        { question: "What changed?", answer: "The fix committed.", ts: 4 },
+      ],
+    }));
+
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: null,
+      hint: null,
+      retryable: false,
+      exchanges: [
+        { question: "What changed?", answer: "Earlier answer.", ts: 1 },
+        { question: "What changed?", answer: "The fix committed.", ts: 4 },
+      ],
     });
   });
 
@@ -306,6 +400,38 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.reset("one", async () => ({ ok: true as const }));
     expect(threads.view("one").exchanges).toEqual([]);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "does not resurrect a reset request after a late $outcome",
+    async (outcome) => {
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      const threads = new ChatSessionCompanionThreads();
+      const pending = threads.submit(
+        "one",
+        "Will reset keep this?",
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+
+      await threads.reset("one", async () => ({ ok: true as const }));
+      if (outcome === "resolve") {
+        resolveAnswer({ answer: "late answer", ts: 5 });
+      } else {
+        rejectAnswer(new Error("late error"));
+      }
+      await pending;
+
+      expect(threads.view("one")).toMatchObject({
+        exchanges: [],
+        failedQuestion: null,
+        pendingQuestion: null,
+      });
+    },
+  );
 });
 
 describe("ChatSessionRailElement", () => {
@@ -365,6 +491,34 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("renders one pending state and retries a retryable failure", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: {
+        exchanges: [],
+        pendingQuestion: "What changed?",
+        failedQuestion: null,
+        hint: null,
+        draft: "",
+      },
+    });
+    expect(element.textContent).toContain("Answering from this session…");
+
+    element.companion = {
+      exchanges: [],
+      pendingQuestion: null,
+      failedQuestion: "What changed?",
+      hint: "history-unavailable",
+      retryable: true,
+      draft: "",
+    };
+    await element.updateComplete;
+    expect(element.textContent).toContain("Couldn't load this session's history.");
+    (element.querySelector(".chat-session-rail__retry") as HTMLButtonElement).click();
+    expect(onSubmit).toHaveBeenCalledWith("What changed?");
   });
 
   it("freezes terminal relative time from digest.updatedAt", async () => {

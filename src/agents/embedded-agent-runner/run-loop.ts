@@ -17,7 +17,6 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -33,6 +32,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
+import { createMcpAttemptCarryover } from "./run/attempt-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -44,7 +44,7 @@ import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-} from "./run/incomplete-turn.js";
+} from "./run/incomplete-turn-recovery.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import {
   beginRunAttempt,
@@ -57,7 +57,10 @@ import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
-import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
+import {
+  createTerminalToolPresentationTracker,
+  resolveEmbeddedRunTerminal,
+} from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
@@ -216,22 +219,11 @@ export async function runPreparedEmbeddedLoop(
   });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-  const attemptTerminalToolPresentation = {
-    ordinal: -1,
-    value: undefined as string | undefined,
-  };
-  let nextToolOutcomeOrdinal = 0;
-  const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
-  const readAttemptTerminalToolPresentation = (): string | undefined =>
-    attemptTerminalToolPresentation.value;
+  // Presentation survives retry attempts, but a newer tool result must clear stale text.
+  const terminalToolPresentation = createTerminalToolPresentationTracker();
   const turnTaintState = createAgentTurnTaintState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
-    const observationOrdinal =
-      observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
-    if (observationOrdinal >= attemptTerminalToolPresentation.ordinal) {
-      attemptTerminalToolPresentation.ordinal = observationOrdinal;
-      attemptTerminalToolPresentation.value = observation.terminalPresentation;
-    }
+    terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);
     if (observation.presentationOnly) {
       return;
@@ -318,7 +310,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
-    let latestMcpAppChannelView: McpAppChannelView | undefined;
+    const mcpAttemptCarryover = createMcpAttemptCarryover();
     while (true) {
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
@@ -378,7 +370,7 @@ export async function runPreparedEmbeddedLoop(
         resolveRuntimeFallbackReason,
         observeToolOutcome,
         isTurnTainted: turnTaintState.isTainted,
-        allocateToolOutcomeOrdinal,
+        allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
         getPostCompactionAbortError: () => postCompactionAbortError,
         setPostCompactionAbortController: (controller) => {
           postCompactionAbortController = controller;
@@ -391,10 +383,7 @@ export async function runPreparedEmbeddedLoop(
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      // Preserve the newest launch target before normalization can request an early retry.
-      latestMcpAppChannelView =
-        dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
-      dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: admittedRunInput,
         preparedRuntime,
@@ -523,7 +512,7 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
-      const terminalToolPresentation = readAttemptTerminalToolPresentation();
+      const terminalToolPresentationText = terminalToolPresentation.read();
       const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
         initial: {
           attempt,
@@ -553,7 +542,7 @@ export async function runPreparedEmbeddedLoop(
           harness: agentHarness,
           modelApi: effectiveModel.api,
           executionContract,
-          hasTerminalToolPresentation: Boolean(terminalToolPresentation),
+          hasTerminalToolPresentation: Boolean(terminalToolPresentationText),
           noteLaneTaskProgress: input.laneController.noteLaneTaskProgress,
         },
       });
@@ -641,7 +630,7 @@ export async function runPreparedEmbeddedLoop(
           sessionPromptState.suppressNextUserMessagePersistence = value;
         },
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
-        readTerminalToolPresentation: () => terminalToolPresentation,
+        readTerminalToolPresentation: () => terminalToolPresentationText,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,

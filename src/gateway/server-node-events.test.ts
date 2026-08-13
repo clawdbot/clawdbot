@@ -40,6 +40,7 @@ const buildSessionLookup = (
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  agentId: "main",
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
@@ -102,7 +103,7 @@ const runtimeMocks = vi.hoisted(() => ({
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  upsertSessionEntry: vi.fn(),
+  upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -150,7 +151,10 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
+vi.mock("./server-node-events.runtime.js", () => ({
+  ...runtimeMocks,
+  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
+}));
 vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
@@ -170,7 +174,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const upsertSessionEntryMock = runtimeMocks.upsertSessionEntry;
+const upsertSessionEntryMock = runtimeMocks.upsertSessionEntryCore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;

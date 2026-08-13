@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  applyPromptToolsAllow: vi.fn(),
   beforeAgentRun: vi.fn(),
-  dispatchPrompt: vi.fn(),
   handlePromptError: vi.fn(),
   handleMidTurnPrecheck: vi.fn(),
+  observePrompt: vi.fn(),
   prepareGooglePromptCache: vi.fn(),
   preparePromptAssembly: vi.fn(),
   preparePromptContext: vi.fn(),
+  preparePromptExecution: vi.fn(),
+  preparePromptPreflight: vi.fn(),
   releasePendingSteering: vi.fn(),
   removeTrailingPrecheckError: vi.fn(),
   resolveApiKey: vi.fn(),
+  submitPrompt: vi.fn(),
   debug: vi.fn(),
   warn: vi.fn(),
 }));
@@ -36,35 +40,34 @@ vi.mock("./attempt-prompt-build.js", () => ({
   prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
   prepareEmbeddedAttemptPromptContext: mocks.preparePromptContext,
 }));
-vi.mock("./attempt-prompt-dispatch.js", () => ({
-  dispatchEmbeddedAttemptPrompt: mocks.dispatchPrompt,
-}));
 vi.mock("./attempt-prompt-submit.js", () => ({
   handleEmbeddedAttemptPromptError: mocks.handlePromptError,
+  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
+  submitEmbeddedAttemptPrompt: mocks.submitPrompt,
 }));
 vi.mock("./attempt-prompt-preflight.js", () => ({
   handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
+  prepareEmbeddedAttemptPromptPreflight: mocks.preparePromptPreflight,
+}));
+vi.mock("./attempt-prompt-support.js", () => ({
+  applyPromptBuildToolsAllow: mocks.applyPromptToolsAllow,
+  observeEmbeddedAttemptPrompt: mocks.observePrompt,
 }));
 vi.mock("./attempt-transcript-helpers.js", () => ({
   removeTrailingMidTurnPrecheckAssistantError: mocks.removeTrailingPrecheckError,
 }));
 
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
+import type { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
+import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 
 type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
 type PromptPhaseState = ReturnType<PromptPhaseInput["lifecycle"]["readState"]>;
 type AssemblyCall = {
   setLeasedSteering: (lease: { leaseId: string; runIds: string[] }) => void;
 };
-type DispatchCall = {
-  getCompactionReserveTokens: () => number;
-  publishState: (state: PromptPhaseState & { skipPromptSubmission: boolean }) => void;
-  state: PromptPhaseState & { skipPromptSubmission: boolean };
-  submission: {
-    onFinalPromptText: (prompt: string) => void;
-    onSteeringAcknowledged: () => void;
-  };
-};
+type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
+type PromptSubmissionCall = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
 type PromptErrorCall = {
   error: unknown;
   markYieldAborted: () => void;
@@ -128,7 +131,7 @@ function createFixture() {
       promptSubmission: { prompt: "hello", runtimeOnly: false },
       promptToolResultAggregateMaxChars: 2_000,
       promptToolResultMaxChars: 1_000,
-      runtimeContextMessageForCurrentTurn: undefined,
+      runtimeContextMessageForCurrentTurn: { role: "custom", content: "runtime" },
       systemPromptForHook: "system",
     };
   });
@@ -141,15 +144,31 @@ function createFixture() {
     order.push("google-cache");
     return undefined;
   });
-  mocks.dispatchPrompt.mockImplementation(async (input: DispatchCall) => {
-    order.push("dispatch");
-    expect(input.getCompactionReserveTokens()).toBe(77);
-    input.submission.onFinalPromptText("hello");
-    input.submission.onSteeringAcknowledged();
-    const nextState = { ...input.state, skipPromptSubmission: false };
-    input.publishState(nextState);
-    return nextState;
+  mocks.preparePromptExecution.mockImplementation(async () => {
+    order.push("images");
+    return {
+      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageFactIndexes: [null],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 1,
+      skippedCount: 0,
+    };
   });
+  mocks.observePrompt.mockImplementation(() => {
+    order.push("observe");
+    return { skipPromptSubmission: false };
+  });
+  mocks.preparePromptPreflight.mockImplementation(async (preflightInput: PromptPreflightCall) => {
+    order.push("preflight");
+    return preflightInput.state;
+  });
+  mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
+    order.push("submit");
+    submissionInput.onFinalPromptText("hello");
+    submissionInput.onSteeringAcknowledged();
+  });
+  mocks.handlePromptError.mockResolvedValue({});
 
   const activeSession = {
     messages: [],
@@ -231,7 +250,10 @@ function createFixture() {
     },
     lifecycle: {
       readState: () => state,
-      writeState: (nextState: PromptPhaseState) => Object.assign(state, nextState),
+      writeState: (nextState: PromptPhaseState) => {
+        order.push("publish");
+        Object.assign(state, nextState);
+      },
       getPrePromptMessageCount: () => prePromptMessageCount,
       setPrePromptMessageCount,
       setCurrentUserTimestampOverride: vi.fn(),
@@ -274,19 +296,39 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       "context",
       "before-agent-run",
       "google-cache",
-      "dispatch",
+      "images",
+      "observe",
+      "publish",
+      "preflight",
+      "publish",
+      "submit",
+      "publish",
       "stop-steering",
     ]);
     expect(fixture.setPrePromptMessageCount).toHaveBeenCalledWith(2);
     expect(fixture.setPromptCacheChangesForTurn).toHaveBeenCalledWith([]);
     expect(fixture.setFinalPromptText).toHaveBeenCalledWith("hello");
-    expect(mocks.dispatchPrompt).toHaveBeenCalledWith(
+    expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        observation: expect.objectContaining({ transcriptLeafId: "leaf-1" }),
-        submission: expect.objectContaining({
-          leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
-          transcriptLeafId: "leaf-1",
-        }),
+        prompt: "hello",
+        skipPromptSubmission: false,
+      }),
+    );
+    expect(mocks.observePrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageCount: 1,
+        reserveTokens: 77,
+        transcriptLeafId: "leaf-1",
+      }),
+    );
+    expect(mocks.submitPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        images: [expect.objectContaining({ type: "image" })],
+        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
+        modelPrompt: "hello",
+        runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
+        transcriptLeafId: "leaf-1",
+        transcriptPrompt: "hello",
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
@@ -303,7 +345,13 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       "assembly",
       "context",
       "google-cache",
-      "dispatch",
+      "images",
+      "observe",
+      "publish",
+      "preflight",
+      "publish",
+      "submit",
+      "publish",
       "stop-steering",
     ]);
   });
@@ -318,23 +366,18 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     await runEmbeddedAttemptPromptPhase(fixture.input);
 
-    expect(mocks.dispatchPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        state: expect.objectContaining({
-          skipPromptSubmission: false,
-          promptError: null,
-          promptErrorSource: null,
-        }),
-      }),
+    expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPromptSubmission: false }),
     );
+    expect(mocks.submitPrompt).toHaveBeenCalledOnce();
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {
     const fixture = createFixture();
     const submissionError = new Error("submission failed");
     const yieldAbortSettled = Promise.resolve();
-    mocks.dispatchPrompt.mockImplementation(async () => {
-      fixture.order.push("dispatch");
+    mocks.submitPrompt.mockImplementation(async () => {
+      fixture.order.push("submit");
       fixture.yieldState.yieldDetected = true;
       fixture.yieldState.yieldAbortSettled = yieldAbortSettled;
       fixture.yieldState.yieldMessage = "yield context";
@@ -355,7 +398,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     });
 
     expect(fixture.order.slice(-4)).toEqual([
-      "dispatch",
+      "submit",
       "prompt-error",
       "yield-aborted",
       "stop-steering",
@@ -364,5 +407,72 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
       expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
     );
+  });
+
+  it("releases steering when preflight skips provider submission", async () => {
+    const fixture = createFixture();
+    const promptError = new Error("preflight rejected");
+    mocks.observePrompt.mockImplementationOnce(() => {
+      fixture.order.push("observe");
+      return { skipPromptSubmission: true };
+    });
+    mocks.preparePromptPreflight.mockImplementationOnce(
+      async (preflightInput: PromptPreflightCall) => {
+        fixture.order.push("preflight");
+        return {
+          ...preflightInput.state,
+          promptError,
+          promptErrorSource: "precheck",
+        };
+      },
+    );
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBe(promptError);
+    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "preflight rejected",
+        leaseId: "lease-1",
+        runIds: ["run-1"],
+      }),
+    );
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it("publishes preflight state before a submission failure", async () => {
+    const fixture = createFixture();
+    const promptError = new Error("admission warning");
+    const submitError = new Error("provider failed");
+    mocks.preparePromptPreflight.mockImplementationOnce(
+      async (preflightInput: PromptPreflightCall) => {
+        fixture.order.push("preflight");
+        return {
+          ...preflightInput.state,
+          promptError,
+          promptErrorSource: "precheck",
+        };
+      },
+    );
+    mocks.submitPrompt.mockImplementationOnce(async () => {
+      fixture.order.push("submit");
+      expect(fixture.state.promptError).toBe(promptError);
+      throw submitError;
+    });
+    mocks.handlePromptError.mockImplementationOnce(async (errorInput: PromptErrorCall) => {
+      fixture.order.push("prompt-error");
+      expect(errorInput.error).toBe(submitError);
+      return {};
+    });
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.order.slice(-5)).toEqual([
+      "preflight",
+      "publish",
+      "submit",
+      "prompt-error",
+      "stop-steering",
+    ]);
   });
 });

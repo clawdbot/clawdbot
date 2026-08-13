@@ -11,7 +11,7 @@ import {
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
-  getCoreCliCommandNames as getCoreDescriptorNames,
+  getCoreCliCommandNamesCore,
 } from "./core-command-descriptors.js";
 import {
   registerCommandGroupByName,
@@ -157,7 +157,7 @@ function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandG
 }
 
 export function getCoreCliCommandNames(): string[] {
-  return getCoreDescriptorNames();
+  return getCoreCliCommandNamesCore();
 }
 
 export async function registerCoreCliByName(

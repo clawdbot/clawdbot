@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { pluginRegistrationContractRegistry } from "../../plugins/contracts/registry.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 
 type PluginRegistrationContractParams = {
   pluginId: string;
@@ -144,7 +144,7 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
     const manifestAuthChoice = params.manifestAuthChoice;
     if (manifestAuthChoice) {
       it("keeps onboarding auth grouping explicit", () => {
-        const plugin = loadPluginManifestRegistry({}).plugins.find(
+        const plugin = loadPluginManifestRegistryCore({}).plugins.find(
           (entry) => entry.origin === "bundled" && entry.id === manifestAuthChoice.pluginId,
         );
 

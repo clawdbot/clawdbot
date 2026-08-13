@@ -2,7 +2,9 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { cronStoreKey } from "./store/key.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
@@ -140,9 +142,18 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("routes restart exhaustion through normal failure alerts", async () => {
+  it("records restart exhaustion before routing its normal failure alert", async () => {
     const { storePath } = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
+    let jobId = "";
+    const historyAtAlert: unknown[][] = [];
+    const enqueueSystemEvent = vi.fn(() => {
+      historyAtAlert.push(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(storePath),
+          jobId,
+        }).entries,
+      );
+    });
     const cron = new CronService({
       storePath,
       cronEnabled: true,
@@ -158,6 +169,7 @@ describe("cron stream schedule validation", () => {
     await cron.start();
     try {
       const created = await cron.add(streamJob());
+      jobId = created.id;
       await cron.recordExternalFailure(created.id, "stream source exhausted restarts", {
         streamStatus: "error",
         streamRestartExhausted: true,
@@ -174,6 +186,16 @@ describe("cron stream schedule validation", () => {
         'Automation "stream" failed 5 times\nCheck automation history for details.',
         expect.any(Object),
       );
+      expect(historyAtAlert).toEqual([
+        [
+          expect.objectContaining({
+            jobId: created.id,
+            status: "error",
+            error: "stream source exhausted restarts",
+            durationMs: 0,
+          }),
+        ],
+      ]);
     } finally {
       cron.stop();
     }

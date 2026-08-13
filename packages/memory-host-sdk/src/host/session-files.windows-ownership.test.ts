@@ -6,7 +6,7 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -124,7 +124,7 @@ describe("memory session directory ownership", () => {
       const storePath = path.join(sessionsDir, "sessions.json");
       const sessionKey = "agent:main:chat:windows-transcript";
       fsSync.mkdirSync(sessionsDir, { recursive: true });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId: "active", updatedAt: 1 },
       );

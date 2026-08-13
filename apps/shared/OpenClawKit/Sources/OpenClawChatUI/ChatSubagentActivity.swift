@@ -25,11 +25,8 @@ struct ChatSubagentActivity: Identifiable, Equatable, Sendable {
     let status: ChatSubagentActivityStatus
     let snippet: String?
     let diffStat: ChatToolDiffStat?
-    let startedAt: Double
     let updatedAt: Double
-    let endedAt: Double?
     let terminalObservedAt: Double?
-    let childSessionKey: String?
     let terminalSummary: String?
 }
 
@@ -55,7 +52,7 @@ struct ChatSubagentActivityState: Equatable, Sendable {
         } else {
             fallbackSnippet ?? previous?.snippet
         }
-        let endedAt = Self.timestampMilliseconds(task.endedat) ?? previous?.endedAt
+        let endedAt = Self.timestampMilliseconds(task.endedat)
         let updatedAt = Self.timestampMilliseconds(task.updatedat)
             ?? previous?.updatedAt
             ?? endedAt
@@ -72,14 +69,8 @@ struct ChatSubagentActivityState: Equatable, Sendable {
             status: status,
             snippet: snippet,
             diffStat: Self.diffStat(task.diffstat) ?? previous?.diffStat,
-            startedAt: Self.timestampMilliseconds(task.startedat)
-                ?? previous?.startedAt
-                ?? Self.timestampMilliseconds(task.createdat)
-                ?? nowMilliseconds,
             updatedAt: updatedAt,
-            endedAt: endedAt,
             terminalObservedAt: terminalObservedAt,
-            childSessionKey: Self.nonBlank(task.childsessionkey) ?? previous?.childSessionKey,
             terminalSummary: Self.nonBlank(task.terminalsummary) ?? previous?.terminalSummary)
     }
 

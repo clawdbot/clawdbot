@@ -219,6 +219,32 @@ describe("GatewayChatClient", () => {
     });
   });
 
+  it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.resolveSession({
+        key: "Agent:Main:ALPHA",
+        agentId: "main",
+        includeGlobal: true,
+        allowMissing: true,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+      key: "Agent:Main:ALPHA",
+      agentId: "main",
+      includeGlobal: true,
+      allowMissing: true,
+    });
+  });
+
   it("preserves side runs for session-scoped TUI aborts", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

@@ -128,50 +128,51 @@ chat and dashboard session paths.
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Canonical path              | Aliases                   | Parameters or dynamic forms                      |
-| ------------------- | --------------------------- | ------------------------- | ------------------------------------------------ |
-| Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`  |
-| Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`  |
-| Dashboards          | `/dashboards`               | -                         | -                                                |
-| Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`             |
-| New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
-| Activity            | `/activity`                 | -                         | -                                                |
-| Apps                | `/apps`                     | -                         | -                                                |
-| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
-| Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
-| Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
-| Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
-| Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
-| Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
-| Notifications       | `/settings/notifications`   | -                         | Shared settings parameters below                 |
-| Security            | `/settings/security`        | -                         | Shared settings parameters below                 |
-| Secrets             | `/settings/secrets`         | -                         | Shared settings parameters below                 |
-| Advanced            | `/settings/advanced`        | -                         | Shared settings parameters below                 |
-| Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
-| Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |
-| MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                 |
-| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`    |
-| Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                 |
-| Labs                | `/settings/labs`            | -                         | Shared settings parameters below                 |
-| About               | `/settings/about`           | -                         | Shared settings parameters below                 |
-| AI and agents       | `/settings/ai-agents`       | `/ai-agents`              | Shared settings parameters below                 |
-| Model setup         | `/settings/model-setup`     | `/model-setup`            | `?firstRun=1`                                    |
-| Model providers     | `/settings/model-providers` | `/model-providers`        | Shared settings parameters below                 |
-| Import memory       | `/memory-import`            | `/settings/memory-import` | -                                                |
-| Workboard           | `/workboard`                | -                         | `/workboard/<boardId>`                           |
-| Worktrees           | `/worktrees`                | `/settings/worktrees`     | -                                                |
-| Sessions            | `/sessions`                 | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all` |
-| Usage               | `/usage`                    | -                         | -                                                |
-| Debug               | `/debug`                    | -                         | -                                                |
-| Logs                | `/logs`                     | -                         | -                                                |
-| Skill Workshop      | `/skills/workshop`          | -                         | -                                                |
-| Skills              | `/skills`                   | -                         | -                                                |
-| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                     |
-| Automations         | `/cron`                     | -                         | -                                                |
-| Tasks               | `/tasks`                    | -                         | -                                                |
-| Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                 |
-| Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                  |
+| Page                | Canonical path              | Aliases                   | Parameters or dynamic forms                                    |
+| ------------------- | --------------------------- | ------------------------- | -------------------------------------------------------------- |
+| Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`                |
+| Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`                |
+| Dashboards          | `/dashboards`               | -                         | -                                                              |
+| Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`                           |
+| New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                     |
+| Activity            | `/activity`                 | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>` |
+| Apps                | `/apps`                     | -                         | -                                                              |
+| Portals             | `/portals`                  | -                         | -                                                              |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                         |
+| Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                               |
+| Connection          | `/settings/connection`      | -                         | Shared settings parameters below                               |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language                             |
+| Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                               |
+| Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                               |
+| Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                               |
+| Notifications       | `/settings/notifications`   | -                         | Shared settings parameters below                               |
+| Security            | `/settings/security`        | -                         | Shared settings parameters below                               |
+| Secrets             | `/settings/secrets`         | -                         | Shared settings parameters below                               |
+| Advanced            | `/settings/advanced`        | -                         | Shared settings parameters below                               |
+| Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                               |
+| Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                               |
+| MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                               |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`                  |
+| Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                               |
+| Labs                | `/settings/labs`            | -                         | Shared settings parameters below                               |
+| About               | `/settings/about`           | -                         | Shared settings parameters below                               |
+| AI and agents       | `/settings/ai-agents`       | `/ai-agents`              | Shared settings parameters below                               |
+| Model setup         | `/settings/model-setup`     | `/model-setup`            | `?firstRun=1`                                                  |
+| Model providers     | `/settings/model-providers` | `/model-providers`        | Shared settings parameters below                               |
+| Import memory       | `/memory-import`            | `/settings/memory-import` | -                                                              |
+| Workboard           | `/workboard`                | -                         | `/workboard/<boardId>`                                         |
+| Worktrees           | `/worktrees`                | `/settings/worktrees`     | -                                                              |
+| Sessions            | `/sessions`                 | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`               |
+| Usage               | `/usage`                    | -                         | -                                                              |
+| Debug               | `/debug`                    | -                         | -                                                              |
+| Logs                | `/logs`                     | -                         | -                                                              |
+| Skill Workshop      | `/skills/workshop`          | -                         | -                                                              |
+| Skills              | `/skills`                   | -                         | -                                                              |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                                   |
+| Automations         | `/cron`                     | -                         | -                                                              |
+| Tasks               | `/tasks`                    | -                         | -                                                              |
+| Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                               |
+| Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                                |
 
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;

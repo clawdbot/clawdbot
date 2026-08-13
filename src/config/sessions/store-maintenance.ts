@@ -120,34 +120,25 @@ function resolveHighWaterBytes(
   maintenance: SessionMaintenanceConfig | undefined,
   maxDiskBytes: number | null,
 ): number | null {
-  const computeDefault = () => {
-    if (maxDiskBytes == null) {
-      return null;
-    }
-    if (maxDiskBytes <= 0) {
-      return 0;
-    }
-    return Math.max(
-      1,
-      Math.min(
-        maxDiskBytes,
-        Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO),
-      ),
-    );
-  };
   if (maxDiskBytes == null) {
     return null;
   }
+  const defaultHighWaterBytes = Math.max(
+    1,
+    Math.min(maxDiskBytes, Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO)),
+  );
   const raw = maintenance?.highWaterBytes;
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return computeDefault();
+    return defaultHighWaterBytes;
   }
   try {
     const parsed = parseByteSize(normalized, { defaultUnit: "b" });
-    return Math.min(parsed, maxDiskBytes);
+    // A zero target cannot stop cleanup while any bytes remain, so use the
+    // default instead of evicting every unprotected session and archive.
+    return parsed > 0 ? Math.min(parsed, maxDiskBytes) : defaultHighWaterBytes;
   } catch {
-    return computeDefault();
+    return defaultHighWaterBytes;
   }
 }
 
@@ -330,8 +321,6 @@ const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted o
 type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
-  /** Present when the entry transitioned from suspended to resuming. */
-  resumed?: { laneId?: string };
   /** True when the quota-suspension marker should be removed. */
   cleared: boolean;
 };
@@ -360,7 +349,6 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
   if (suspension.state === "suspended" && params.now >= resumeAtMs) {
     return {
       patch: { quotaSuspension: { ...suspension, state: "resuming" } },
-      resumed: { laneId: suspension.laneId },
       cleared: false,
     };
   }
@@ -440,8 +428,8 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
-  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
-  if (params.entry?.archivedAt !== undefined) {
+  // Archived and pinned sessions are user-retained; only an explicit user action may release them.
+  if (params.entry?.archivedAt !== undefined || params.entry?.pinnedAt !== undefined) {
     return true;
   }
   // A model lock is durable harness ownership, not merely a UI restriction.
@@ -452,6 +440,17 @@ export function shouldPreserveMaintenanceEntry(params: {
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
+}
+
+function getSessionEntryMaintenanceEligibleKeys(
+  store: Record<string, SessionEntry>,
+  preserveKeys?: ReadonlySet<string>,
+): string[] {
+  // Maintenance triggers and eviction must share this eligibility boundary.
+  // Preserved sessions remain outside the ordinary-session allowance.
+  return Object.keys(store).filter(
+    (key) => !shouldPreserveMaintenanceEntry({ key, entry: store[key], preserveKeys }),
   );
 }
 
@@ -507,39 +506,28 @@ function wouldCapActiveSession(params: {
   activeSessionKey: string;
   maxEntries: number;
 }): boolean {
-  if (params.keys.length <= params.maxEntries) {
+  const eligibleKeys = params.keys.filter(
+    (key) => !shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
+  );
+  if (eligibleKeys.length <= params.maxEntries) {
     return false;
   }
   if (params.maxEntries <= 0) {
     return true;
   }
 
-  const protectedCount = params.keys.filter(
-    (key) =>
-      key !== params.activeSessionKey &&
-      shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
-  ).length;
-  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
-  // If protected entries fill the cap, the active unprotected session would be the one removed.
-  if (maxRemovableEntries <= 0) {
-    return true;
-  }
-
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
   let newerOrTieBeforeActive = 0;
   let seenActive = false;
-  for (const key of params.keys) {
+  for (const key of eligibleKeys) {
     if (key === params.activeSessionKey) {
       seenActive = true;
-      continue;
-    }
-    if (shouldPreserveMaintenanceEntry({ key, entry: params.store[key] })) {
       continue;
     }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
     if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
       newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= maxRemovableEntries) {
+      if (newerOrTieBeforeActive >= params.maxEntries) {
         return true;
       }
     }
@@ -549,7 +537,8 @@ function wouldCapActiveSession(params: {
 }
 
 /**
- * Cap the store to the N most recently updated entries.
+ * Cap eviction-eligible sessions to the N most recently updated entries.
+ * Preserved sessions remain outside the quota.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
  * Mutates `store` in-place.
  */
@@ -562,20 +551,9 @@ export function capEntryCount(
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const preservedCount = Object.entries(store).filter(([key, entry]) =>
-    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
-  ).length;
-  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
-  // Protected entries reduce the removable budget instead of being counted as deletion targets.
-  const keys = Object.keys(store).filter(
-    (key) =>
-      !shouldPreserveMaintenanceEntry({
-        key,
-        entry: store[key],
-        preserveKeys: opts.preserveKeys,
-      }),
-  );
-  if (keys.length <= maxRemovableEntries) {
+  const keys = getSessionEntryMaintenanceEligibleKeys(store, opts.preserveKeys);
+  const retainedEligibleEntries = Math.max(0, maxEntries);
+  if (keys.length <= retainedEligibleEntries) {
     return 0;
   }
 
@@ -586,7 +564,7 @@ export function capEntryCount(
     return bTime - aTime;
   });
 
-  const toRemove = sorted.slice(maxRemovableEntries);
+  const toRemove = sorted.slice(retainedEligibleEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {

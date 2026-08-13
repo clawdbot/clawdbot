@@ -1,4 +1,5 @@
 /** Persists usage, cost, model, and CLI session metadata after reply runs. */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   clearCliSession,
   setCliSessionBinding,
@@ -19,7 +20,6 @@ import {
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -70,7 +70,7 @@ function applyCliSessionIdToSessionPatch(
 }
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
-  const resolved = resolveNonNegativeNumber(value);
+  const resolved = asNonNegativeFiniteNumber(value);
   return resolved === undefined ? undefined : Math.floor(resolved);
 }
 
@@ -88,7 +88,7 @@ function estimateSessionRunCostUsd(params: {
     model: params.modelUsed,
     config: params.cfg,
   });
-  return resolveNonNegativeNumber(estimateUsageCost({ usage: params.usage, cost }));
+  return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */

@@ -56,6 +56,21 @@ describe("buildModelProviderCards", () => {
     expect(cards[1]).toMatchObject({ modelCount: 1, availableModelCount: 0 });
   });
 
+  it("keeps provider-owned catalog failures when no model rows are usable", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "openai",
+      catalogStatus: "auth-rejected",
+      modelCount: 0,
+      availableModelCount: 0,
+    });
+  });
+
   it("propagates explicit API-key capability onto provider cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -107,6 +107,50 @@ describe("printDaemonStatus", () => {
     isWSLEnvMock.mockClear();
   });
 
+  it("prints host desktop state and auth type", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: { enabled: true, state: "attached", port: 5900, security: "VncAuth" },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(
+      runtime.log,
+      "Host desktop: attached · 127.0.0.1:5900 · security VncAuth",
+    );
+  });
+
+  it("prints a managed host desktop failure without a fake listener address", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "failed",
+          port: 46_001,
+          display: 99,
+          error: "startxfce4 not installed",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
+  });
+
   it("prints the applied Gateway heap limit and derivation", () => {
     printDaemonStatus(
       {
@@ -138,7 +182,7 @@ describe("printDaemonStatus", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases in human status",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const logFile = path.join(home, "logs", "gateway.log");
         await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
         await fs.promises.writeFile(logFile, "ready", "utf8");

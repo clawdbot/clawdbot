@@ -41,14 +41,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
-vi.mock("./run/plugin-harness-prompt-images.js", () => ({
-  preparePluginHarnessPromptImages: vi.fn(async () => ({
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-  })),
-}));
-
 vi.mock("./run/skill-workshop-attempt-params.js", () => ({
   resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));
@@ -179,6 +171,7 @@ describe("embedded run retry dispatch", () => {
       await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(postCompactionAbortError);
 
       expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+        requesterAgentId: "main",
         requesterSessionKey: "agent:main:session-1",
         requesterTurnRunId: "run-1",
         requesterYielded: yieldDetected,

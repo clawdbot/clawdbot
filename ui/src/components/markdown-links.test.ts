@@ -478,10 +478,11 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
+      ["bare autolink", "https://github.com/openclaw/openclaw/pull/3434", "openclaw/openclaw#3434"],
       [
-        "bare autolink",
-        "https://github.com/openclaw/openclaw/pull/3434",
-        "https://github.com/openclaw/openclaw/pull/3434",
+        "bare issue autolink",
+        "https://github.com/openclaw/openclaw/issues/3435",
+        "openclaw/openclaw#3435",
       ],
       ["issue shorthand", "[#3434](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
       ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
@@ -492,9 +493,20 @@ describe("toSanitizedMarkdownHtml links", () => {
       const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
       const link = fragment.querySelector<HTMLAnchorElement>("a");
       expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      // The mark is CSS-only: the anchor keeps its authored text so copied text
-      // and screen-reader output stay unchanged.
       expect(link?.textContent).toBe(expectedText);
+    });
+
+    it("keeps long generated item references breakable after compaction", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/3434",
+        ),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.textContent).toBe(
+        "a-very-long-organization-name/a-very-long-repository-name#3434",
+      );
+      expect(link?.classList.contains("markdown-bare-url")).toBe(true);
     });
 
     it.each([

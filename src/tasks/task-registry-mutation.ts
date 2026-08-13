@@ -24,7 +24,7 @@ import {
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
-  log,
+  taskRegistryLog,
   rebuildRunIdIndex,
   taskDeliveryStates,
   taskFlowSyncRetryTimers,
@@ -92,7 +92,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
   }
   const delayMs = TASK_FLOW_SYNC_RETRY_DELAYS_MS[attempt];
   if (delayMs == null) {
-    log.warn("Exhausted parent flow sync retries from task", {
+    taskRegistryLog.warn("Exhausted parent flow sync retries from task", {
       operation,
       taskId,
       flowId: task.parentFlowId,
@@ -115,7 +115,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
       }
       const result = syncFlowFromTaskResult(current);
       if (!result.ok) {
-        log.warn("Failed to retry parent flow sync from task", {
+        taskRegistryLog.warn("Failed to retry parent flow sync from task", {
           operation,
           taskId,
           flowId: current.parentFlowId,
@@ -124,7 +124,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
         scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
       }
     }).catch((error: unknown) => {
-      log.warn("Failed to admit parent flow sync retry from task", {
+      taskRegistryLog.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,
         flowId: task.parentFlowId,
@@ -141,7 +141,7 @@ export function syncFlowFromTaskAfterTaskMutation(task: TaskRecord, operation: s
   if (result.ok) {
     return;
   }
-  log.warn("Failed to sync parent flow from task mutation", {
+  taskRegistryLog.warn("Failed to sync parent flow from task mutation", {
     operation,
     taskId: task.taskId,
     flowId: task.parentFlowId,
@@ -209,7 +209,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   try {
     syncManagedFlowCancellationFromTask(next);
   } catch (error) {
-    log.warn("Failed to finalize managed flow cancellation from task update", {
+    taskRegistryLog.warn("Failed to finalize managed flow cancellation from task update", {
       taskId,
       flowId: next.parentFlowId,
       error,

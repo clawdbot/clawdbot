@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -373,7 +373,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("rotates, rebinds, and optionally notifies when memory flush is exhausted", async () => {
-    await withTempDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
       const { replyParams, followupRun } = createDirectRuntimeReplyParams({
         shouldFollowup: false,
         isActive: false,

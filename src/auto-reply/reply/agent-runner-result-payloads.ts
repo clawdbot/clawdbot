@@ -38,6 +38,7 @@ import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
+import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -412,6 +413,10 @@ export async function prepareReplyAgentPayloads(state: {
     channel: replyToChannel,
     sessionKey,
     view: runResult.latestMcpAppChannelView,
+  });
+  replyPayloads = attachMcpConnectChannelAction({
+    payloads: replyPayloads,
+    action: runResult.latestMcpConnectAction,
   });
 
   const hasVisibleReplyPayload = replyPayloads.some(

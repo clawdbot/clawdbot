@@ -1,4 +1,6 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
@@ -60,10 +62,8 @@ async function runWebchatTranscriptWait(
         }
         throw new Error("test condition was not met");
       },
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
-      formatErrorMessage: (error: unknown) =>
-        error instanceof Error ? error.message : String(error),
+      normalizeLowercaseStringOrEmpty,
+      formatErrorMessage: coerceErrorMessage,
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
@@ -284,8 +284,7 @@ function runPlanningEvidenceFixture(
         return summary;
       },
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       runAgentPrompt: async () => ({ started: { runId: "current-run" }, waited: { status: "ok" } }),
     },
   });
@@ -397,8 +396,7 @@ describe("scenario-flow-runner", () => {
             throw new Error("goal artifact has not been written");
           },
         },
-        normalizeLowercaseStringOrEmpty: (value: unknown) =>
-          typeof value === "string" ? value.trim().toLowerCase() : "",
+        normalizeLowercaseStringOrEmpty,
       },
       onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
         const currentInbound = currentState
@@ -562,8 +560,7 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow(id, {
         state,
         api: {
-          normalizeLowercaseStringOrEmpty: (value: unknown) =>
-            typeof value === "string" ? value.trim().toLowerCase() : "",
+          normalizeLowercaseStringOrEmpty,
           runAgentPrompt: async () => {
             turnCount += 1;
             state.addOutboundMessage({

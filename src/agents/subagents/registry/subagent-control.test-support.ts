@@ -3,7 +3,7 @@ export * from "./subagent-control.js";
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 type ControlDeps = {
   callGateway: typeof import("../../../gateway/call.js").callGateway;
-  patchSessionEntry: typeof import("../../../config/sessions/session-accessor.js").patchSessionEntry;
+  patchSessionEntryCore: typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore;
   abortEmbeddedAgentRun: ControlRuntime["abortEmbeddedAgentRun"];
   isEmbeddedAgentRunActive: ControlRuntime["isEmbeddedAgentRunActive"];
   clearSessionQueues: ControlRuntime["clearSessionQueues"];

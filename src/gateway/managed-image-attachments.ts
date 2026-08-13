@@ -9,6 +9,7 @@ import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
+  asNonNegativeFiniteNumber,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import pLimit from "p-limit";
@@ -38,7 +39,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -67,7 +68,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveSessionHistoryTranscriptPathAsync,
 } from "./session-utils.js";
 
@@ -314,10 +315,6 @@ function maxBytesForManagedMediaKind(
   imageLimits: ManagedImageAttachmentLimits,
 ): number {
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
-}
-
-function asNonNegativeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function createManagedMediaByteLimitError(params: {
@@ -977,7 +974,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
   const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
-  type SessionEntry = ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
   for (const target of discovery.targets) {
     const exact = loadExactSessionEntryReadOnlyResult({
@@ -1017,7 +1014,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   let entry: SessionEntry = matched?.entry;
   let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
   if (!entry && usesRuntimeState) {
-    const loaded = loadSessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
     const exact = loadExactSessionEntryReadOnlyResult({
       agentId: ownerAgentId,
       clone: false,
@@ -1203,6 +1200,8 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
 /** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
 export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   sessionKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
   artifactId: string;
   stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
@@ -1212,6 +1211,15 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   }
   const record = readManagedImageRecord(parsed.attachmentId, params.stateDir);
   if (!record || record.sessionKey !== params.sessionKey) {
+    return null;
+  }
+  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const recordAgentId = record.agentId
+    ? normalizeAgentId(record.agentId)
+    : params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  if (requestedAgentId && recordAgentId !== requestedAgentId) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);

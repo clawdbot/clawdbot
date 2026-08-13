@@ -1,4 +1,5 @@
 // Control UI helpers shared by config form node renderers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
@@ -111,7 +112,7 @@ export function isSecretRefObject(value: unknown): value is {
   id: string;
   provider?: string;
 } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;

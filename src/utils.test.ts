@@ -1,10 +1,10 @@
 // Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./infra/abort-signal.js";
-import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
-import { withTempDir } from "./test-helpers/temp-dir.js";
+import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
@@ -21,7 +21,7 @@ import {
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    await withTempDir({ prefix: "openclaw-test-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-test-" }, async (tmp) => {
       const target = path.join(tmp, "nested", "dir");
       await ensureDir(target);
       expect(fs.existsSync(target)).toBe(true);
@@ -135,7 +135,7 @@ describe("normalizeE164", () => {
 
 describe("resolveConfigDir", () => {
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    await withTempDir({ prefix: "openclaw-config-dir-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
       const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
@@ -213,7 +213,7 @@ describe("shortenHomePath", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real extended-length Windows home aliases without exposing the absolute path",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const workspace = path.join(home, "workspace");
         await fs.promises.mkdir(workspace);
         const extendedAlias = `\\\\?\\${workspace.toUpperCase()}`;
@@ -254,7 +254,7 @@ describe("shortenHomeInString", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases inside diagnostic text",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const homeAlias = home.toUpperCase();
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
 

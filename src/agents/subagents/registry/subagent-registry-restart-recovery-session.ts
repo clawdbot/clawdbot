@@ -1,4 +1,4 @@
-import { patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 
 export async function settleAcceptedRecoverySession(params: {
   attempts: number;
@@ -11,7 +11,7 @@ export async function settleAcceptedRecoverySession(params: {
   storePath: string;
 }): Promise<boolean> {
   let settled = false;
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.childSessionKey },
     (current) => {
       if (

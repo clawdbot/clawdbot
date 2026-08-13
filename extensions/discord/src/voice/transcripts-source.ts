@@ -3,7 +3,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "openclaw/plugin-sdk/transcripts";
-import type { DiscordVoiceManager } from "./manager.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
 const managerWaiters = new Set<{

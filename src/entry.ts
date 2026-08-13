@@ -16,7 +16,7 @@ import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
-  createGatewayStartupTrace,
+  createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -95,7 +95,7 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
-const gatewayEntryStartupTrace = createGatewayStartupTrace(process.argv, "entry");
+const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "./exec-authorization-render.js";
 
@@ -256,7 +260,7 @@ describe("exec authorization renderer", () => {
   });
 
   it("fails closed when shell-wrapper safe-bin rewrites would need outer quote escaping", async () => {
-    const dir = path.join(makeTempDir(), "safe bin dir");
+    const dir = path.join(makeExecApprovalsTempDir(), "safe bin dir");
     fs.mkdirSync(dir);
     makeExecutable(dir, "head");
     const plan = await planShellAuthorization({

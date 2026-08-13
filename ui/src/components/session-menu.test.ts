@@ -11,6 +11,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  categoryClearReturnsToGroups: boolean;
 };
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
@@ -54,6 +55,7 @@ async function mountMenu(
     unread: false,
     archived: false,
     category: null,
+    categoryClearReturnsToGroups: false,
     ...options.session,
   };
   render(
@@ -285,6 +287,22 @@ describe("session menu", () => {
     const submenu = menuItem(menu, "Move to group");
 
     expect(menuItemLabels(submenu)).not.toContain("Remove from group");
+  });
+
+  it("names Groups as the destination when clearing the category returns there", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      session: { category: "Done", categoryClearReturnsToGroups: true },
+      groups: ["Done"],
+      onAction,
+    });
+    const submenu = menuItem(menu, "Move to group");
+
+    expect(menuItemLabels(submenu)).toContain("Move back to Groups");
+    expect(menuItemLabels(submenu)).not.toContain("Remove from group");
+
+    menuItem(submenu, "Move back to Groups").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
   });
 
   it("uses Web Awesome submenu slots when New group is the only entry", async () => {

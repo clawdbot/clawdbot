@@ -23,9 +23,23 @@ function activeModalToastLayer() {
   );
 }
 
+// Outcomes reported during startup (a restored post-update result, for example)
+// race the shell that owns the host element. Hold the latest one instead of
+// dropping it, so no caller's message disappears because it arrived too early.
+let queuedToast: ToastOptions | null = null;
+
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    const pending = queuedToast;
+    queuedToast = null;
+    if (pending) {
+      this.show(pending);
+    }
+  }
 
   override disconnectedCallback() {
     const target = activeModalToastLayer() ?? document.querySelector(".shell");
@@ -101,6 +115,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 export function showToast(options: ToastOptions): boolean {
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
+    queuedToast = options;
     return false;
   }
   const modal = activeModalToastLayer();

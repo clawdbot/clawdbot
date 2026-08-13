@@ -1,5 +1,4 @@
-// API baseline helpers render public SDK exports for contract drift checks.
-import fs from "node:fs/promises";
+// API baseline helpers render public SDK exports for contract drift reports.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -8,17 +7,14 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
-import {
-  diffPluginSdkApiBaselineContract,
-  type PluginSdkApiBaselineContractDiff,
-} from "./api-baseline-contract.js";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createDeclarationClosureRenderer,
   formatPluginSdkDiagnostics,
+  type PluginSdkApiDeclarationSection,
 } from "./api-baseline-declaration-closure.js";
 import { printPluginSdkExportDeclaration } from "./api-baseline-declaration-print.js";
 import { normalizePluginSdkApiSourcePath as relativePath } from "./api-baseline-normalization.js";
-import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
 
 export {
   normalizePluginSdkApiDeclarationText,
@@ -47,6 +43,8 @@ export type PluginSdkApiSourceLink = {
 export type PluginSdkApiExport = {
   /** Hash of repo-owned declarations reachable from this export. */
   closureHash: string | null;
+  /** References into the baseline's deduplicated declaration section pool. */
+  closureSectionIds: number[] | null;
   /** Normalized TypeScript declaration text, or null when TypeScript cannot print it. */
   declaration: string | null;
   /** Exported symbol name as plugin authors import it. */
@@ -71,41 +69,19 @@ export type PluginSdkApiModule = {
   source: PluginSdkApiSourceLink;
 };
 
-/** Full generated SDK API baseline payload. */
+/** Full SDK API surface payload. */
 export type PluginSdkApiBaseline = {
-  /** Generator identifier used to reject hand-authored baseline files. */
-  generatedBy: "scripts/generate-plugin-sdk-api-baseline.ts";
+  /** Deduplicated repo-owned declarations reachable from public exports. */
+  declarationSections: PluginSdkApiDeclarationSection[];
   /** Public SDK modules included in the baseline. */
   modules: PluginSdkApiModule[];
 };
-
-/** Rendered baseline variants written to JSON and statefile outputs. */
-export type PluginSdkApiBaselineRender = {
-  /** Structured baseline data before serialization. */
-  baseline: PluginSdkApiBaseline;
-  /** Pretty JSON artifact for humans and docs tooling. */
-  json: string;
-  /** Line-delimited export records used by lightweight contract checks. */
-  jsonl: string;
+type RenderedPluginSdkApiExport = Omit<PluginSdkApiExport, "closureSectionIds"> & {
+  closureSections: PluginSdkApiDeclarationSection[] | null;
 };
-
-/** Result returned when writing SDK API baseline artifacts. */
-export type PluginSdkApiBaselineWriteResult = {
-  /** True when the generated JSONL contract differs from disk. */
-  changed: boolean;
-  /** Bounded record-level diff when a check finds contract drift. */
-  contractDiff: PluginSdkApiBaselineContractDiff | null;
-  /** Committed JSONL contract path. */
-  contractPath: string;
-  /** True when generated artifacts were actually written. */
-  wrote: boolean;
-  /** JSON baseline artifact path. */
-  jsonPath: string;
+type RenderedPluginSdkApiModule = Omit<PluginSdkApiModule, "exports"> & {
+  exports: RenderedPluginSdkApiExport[];
 };
-
-const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
-const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
-const DEFAULT_CONTRACT_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
 type DeclarationClosureRenderer = ReturnType<typeof createDeclarationClosureRenderer>;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -264,7 +240,7 @@ function buildExportSurface(params: {
   printer: ts.Printer;
   repoRoot: string;
   symbol: ts.Symbol;
-}): PluginSdkApiExport {
+}): RenderedPluginSdkApiExport {
   const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   const exportName = symbol.getName();
@@ -275,11 +251,13 @@ function buildExportSurface(params: {
     ? printPluginSdkExportDeclaration(repoRoot, checker, printer, declaration, exportName)
     : null;
   const declarationSource = declaration?.getSourceFile();
+  const closure =
+    declarationSource && declarationText
+      ? declarationClosure(declarationSource, closureName)
+      : null;
   return {
-    closureHash:
-      declarationSource && declarationText
-        ? (declarationClosure(declarationSource, closureName)?.hash ?? null)
-        : null,
+    closureHash: closure?.hash ?? null,
+    closureSections: closure?.sections ?? null,
     declaration: declarationText,
     exportName,
     kind: inferExportKind(resolvedSymbol, declaration),
@@ -299,7 +277,7 @@ const EXPORT_KIND_SORT_RANK: Record<PluginSdkApiExportKind, number> = {
   unknown: 8,
 };
 
-function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): number {
+function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkApiExport): number {
   return (
     EXPORT_KIND_SORT_RANK[left.kind] - EXPORT_KIND_SORT_RANK[right.kind] ||
     compareText(left.exportName, right.exportName)
@@ -313,7 +291,7 @@ function buildModuleSurface(params: {
   program: ts.Program;
   repoRoot: string;
   entrypoint: string;
-}): PluginSdkApiModule {
+}): RenderedPluginSdkApiModule {
   const { checker, declarationClosure, printer, program, repoRoot, entrypoint } = params;
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
@@ -349,45 +327,16 @@ function buildModuleSurface(params: {
   };
 }
 
-function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
-  const lines: string[] = [];
-
-  for (const moduleSurface of baseline.modules) {
-    lines.push(
-      JSON.stringify({
-        category: moduleSurface.category,
-        entrypoint: moduleSurface.entrypoint,
-        importSpecifier: moduleSurface.importSpecifier,
-        recordType: "module",
-      }),
-    );
-
-    for (const exportSurface of moduleSurface.exports) {
-      lines.push(
-        JSON.stringify({
-          closureHash: exportSurface.closureHash,
-          declaration: exportSurface.declaration,
-          entrypoint: moduleSurface.entrypoint,
-          exportName: exportSurface.exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-          kind: exportSurface.kind,
-          recordType: "export",
-        }),
-      );
-    }
-  }
-
-  return lines;
-}
-
-/** Render the current public SDK API baseline without writing generated artifacts. */
+/** Render a public SDK API surface without writing generated artifacts. */
 export async function renderPluginSdkApiBaseline(params?: {
   repoRoot?: string;
   entrypoints?: readonly string[];
-}): Promise<PluginSdkApiBaselineRender> {
+}): Promise<PluginSdkApiBaseline> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
-  validateMetadata();
+  if (params?.entrypoints === undefined) {
+    validateMetadata();
+  }
   const { checker, declarationClosure, printer, program } = createCompilerContext(
     repoRoot,
     entrypoints,
@@ -403,36 +352,47 @@ export async function renderPluginSdkApiBaseline(params?: {
     }),
   );
 
-  return renderPluginSdkApiBaselineModules(modules);
-}
-
-/** Serialize discovered SDK modules in canonical order without rebuilding declarations. */
-export function renderPluginSdkApiBaselineModules(
-  modules: readonly PluginSdkApiModule[],
-): PluginSdkApiBaselineRender {
-  const baseline: PluginSdkApiBaseline = {
-    generatedBy: GENERATED_BY,
-    modules: [...modules].toSorted((left, right) =>
-      compareText(left.importSpecifier, right.importSpecifier),
-    ),
-  };
-
+  const declarationSections = [
+    ...new Map(
+      modules.flatMap((moduleSurface) =>
+        moduleSurface.exports.flatMap((exportSurface) =>
+          (exportSurface.closureSections ?? []).map((section) => [
+            `${section.name}\0${section.text}`,
+            section,
+          ]),
+        ),
+      ),
+    ).values(),
+  ].toSorted(
+    (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
+  );
+  const sectionIds = new Map(
+    declarationSections.map((section, index) => [`${section.name}\0${section.text}`, index]),
+  );
   return {
-    baseline,
-    json: `${JSON.stringify(baseline, null, 2)}\n`,
-    jsonl: `${buildJsonlLines(baseline).join("\n")}\n`,
+    declarationSections,
+    modules: modules
+      .map((moduleSurface) => ({
+        category: moduleSurface.category,
+        entrypoint: moduleSurface.entrypoint,
+        exports: moduleSurface.exports.map((exportSurface) => ({
+          closureHash: exportSurface.closureHash,
+          closureSectionIds:
+            exportSurface.closureSections?.map((section) => {
+              const id = sectionIds.get(`${section.name}\0${section.text}`);
+              assert(id !== undefined, "Missing Plugin SDK declaration section");
+              return id;
+            }) ?? null,
+          declaration: exportSurface.declaration,
+          exportName: exportSurface.exportName,
+          kind: exportSurface.kind,
+          source: exportSurface.source,
+        })),
+        importSpecifier: moduleSurface.importSpecifier,
+        source: moduleSurface.source,
+      }))
+      .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
   };
-}
-
-async function loadCurrentFile(filePath: string): Promise<string | null> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
 }
 
 function validateMetadata(): void {
@@ -445,56 +405,4 @@ function validateMetadata(): void {
       `Metadata entrypoint ${entrypoint} is not exported in the Plugin SDK.`,
     );
   }
-}
-
-/** Compare or write an already-rendered SDK API contract. */
-export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
-  check?: boolean;
-  contractPath: string;
-  jsonPath: string;
-  rendered: PluginSdkApiBaselineRender;
-}): Promise<PluginSdkApiBaselineWriteResult> {
-  const currentContract = await loadCurrentFile(params.contractPath);
-  const changed = currentContract !== params.rendered.jsonl;
-
-  if (params.check) {
-    return {
-      changed,
-      contractDiff: changed
-        ? diffPluginSdkApiBaselineContract(currentContract, params.rendered.jsonl)
-        : null,
-      contractPath: params.contractPath,
-      wrote: false,
-      jsonPath: params.jsonPath,
-    };
-  }
-
-  await fs.mkdir(path.dirname(params.contractPath), { recursive: true });
-  await fs.writeFile(params.contractPath, params.rendered.jsonl, "utf8");
-  await fs.mkdir(path.dirname(params.jsonPath), { recursive: true });
-  await fs.writeFile(params.jsonPath, params.rendered.json, "utf8");
-
-  return {
-    changed,
-    contractDiff: null,
-    contractPath: params.contractPath,
-    wrote: true,
-    jsonPath: params.jsonPath,
-  };
-}
-
-/** Render, then write or check SDK API contract artifacts used by CI and release checks. */
-export async function writePluginSdkApiBaselineArtifacts(params?: {
-  repoRoot?: string;
-  check?: boolean;
-  contractPath?: string;
-  jsonPath?: string;
-}): Promise<PluginSdkApiBaselineWriteResult> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  return writeRenderedPluginSdkApiBaselineArtifacts({
-    check: params?.check,
-    contractPath: path.resolve(repoRoot, params?.contractPath ?? DEFAULT_CONTRACT_OUTPUT),
-    jsonPath: path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT),
-    rendered: await renderPluginSdkApiBaseline({ repoRoot }),
-  });
 }

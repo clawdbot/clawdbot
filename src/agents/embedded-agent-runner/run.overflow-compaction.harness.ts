@@ -1004,7 +1004,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureAuthProfileStore: mockedEnsureAuthProfileStore,
     ensureAuthProfileStoreWithoutExternalProfiles:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
-    getApiKeyForModel: mockedGetApiKeyForModel,
+    getApiKeyForModelCore: mockedGetApiKeyForModel,
     hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,

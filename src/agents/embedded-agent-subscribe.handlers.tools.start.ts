@@ -5,11 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
-import type { AgentItemEventData } from "../infra/agent-activity-events.js";
-import { emitAgentItemEvent } from "../infra/agent-activity-events.js";
+import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
+import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
   isMessagingToolSendAction,
@@ -24,18 +24,14 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import {
-  collectMessagingMediaUrlsFromRecord,
-  extractMessagingToolSend,
-  sanitizeToolArgs,
-} from "./embedded-agent-subscribe.tools.js";
-import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
+import { collectMessagingMediaUrlsFromRecord } from "./embedded-agent-tool-media.js";
+import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { isCommandBearingToolCall } from "./tool-display.js";
+import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   cancelAskUserPromptDelivery,
   normalizeAskUserParams,
@@ -54,6 +50,7 @@ function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
+  agentId: string | undefined,
   args: unknown,
 ) {
   try {
@@ -62,6 +59,7 @@ function buildAskUserPromptPayload(
       toolCallId,
       sessionKey,
       runId,
+      agentId,
       questions,
       timeoutSeconds,
     });
@@ -256,9 +254,10 @@ export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentIte
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  emitAgentItemEvent({
+  emitAgentActivityEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    stream: "item",
     data: itemData,
   });
   emitAgentEventCallbackBestEffort(ctx, {
@@ -323,15 +322,26 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
-  const startToolName = normalizeToolName(evt.toolName);
+  const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      ? buildAskUserPromptPayload(
+          evt.toolCallId,
+          ctx.params.sessionKey,
+          ctx.params.runId,
+          ctx.params.agentId,
+          evt.args,
+        )
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
+      cancelAskUserPromptDelivery(
+        evt.toolCallId,
+        ctx.params.sessionKey,
+        ctx.params.runId,
+        ctx.params.agentId,
+      );
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
@@ -359,7 +369,7 @@ export function handleToolExecutionStart(
 
   const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
-    const toolName = normalizeToolName(rawToolName);
+    const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
@@ -439,7 +449,7 @@ export function handleToolExecutionStart(
     const meta = extendExecMeta(
       toolName,
       args,
-      inferToolMetaFromArgs(toolName, args, {
+      inferToolMetaFromArgsCore(toolName, args, {
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );

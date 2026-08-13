@@ -75,7 +75,7 @@ vi.mock("./session-utils.js", () => {
   }));
   return {
     loadSessionEntry,
-    loadSessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -121,6 +121,7 @@ describe("agent event handler", () => {
       .mockReset()
       .mockReturnValue({
         cfg: {},
+        agentId: "main",
         storePath: "/tmp/sessions.json",
         store: {},
         entry: undefined,
@@ -226,6 +227,7 @@ describe("agent event handler", () => {
   ) {
     vi.mocked(loadSessionEntry).mockReturnValue({
       cfg: {},
+      agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},
       entry,
@@ -720,14 +722,14 @@ describe("agent event handler", () => {
     expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
   });
 
-  it("coalesces assistant agent events under the chat delta throttle", () => {
+  it("coalesces assistant agent events inside one live-text pacing window", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "agent-throttle");
 
     for (let i = 0; i < 5; i += 1) {
-      now = 10_000 + i * 20;
+      now = 10_000 + i * 10;
       emitAgentEvent(
         handler,
         "run-agent-throttle",
@@ -752,6 +754,53 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("flushes trailing assistant agent text at the fixed pacing deadline", () => {
+    vi.useFakeTimers();
+    let now = 15_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "agent-trailing");
+
+    emitAgentEvent(handler, "run-agent-trailing", "assistant", {
+      text: "Hello",
+      delta: "Hello",
+    });
+    now = 15_020;
+    emitAgentEvent(
+      handler,
+      "run-agent-trailing",
+      "assistant",
+      { text: "Hello world", delta: " world" },
+      { seq: 2 },
+    );
+
+    expect(
+      agentBroadcastCalls(broadcast).map(([, payload]) => ({
+        seq: (payload as { seq?: number }).seq,
+        text: (payload as { data?: { text?: string } }).data?.text,
+      })),
+    ).toEqual([{ seq: 1, text: "Hello" }]);
+
+    now = 15_074;
+    vi.advanceTimersByTime(54);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
+
+    now = 15_075;
+    vi.advanceTimersByTime(1);
+    expect(
+      agentBroadcastCalls(broadcast).map(([, payload]) => ({
+        seq: (payload as { seq?: number }).seq,
+        text: (payload as { data?: { text?: string } }).data?.text,
+        delta: (payload as { data?: { delta?: string } }).data?.delta,
+      })),
+    ).toEqual([
+      { seq: 1, text: "Hello", delta: "Hello" },
+      { seq: 2, text: "Hello world", delta: " world" },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+    nowSpy.mockRestore();
+  });
+
   it("flushes coalesced assistant agent text before lifecycle end", () => {
     let now = 20_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -759,7 +808,7 @@ describe("agent event handler", () => {
     registerNamedChatRun(chatRunState, "agent-flush");
 
     emitAgentEvent(handler, "run-agent-flush", "assistant", { text: "Hello", delta: "Hello" });
-    now = 20_050;
+    now = 20_020;
     emitAgentEvent(
       handler,
       "run-agent-flush",
@@ -767,7 +816,7 @@ describe("agent event handler", () => {
       { text: "Hello world", delta: " world" },
       { seq: 2 },
     );
-    now = 20_090;
+    now = 20_040;
     emitAgentEvent(
       handler,
       "run-agent-flush",
@@ -957,14 +1006,14 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("coalesces thinking agent events under the chat delta throttle", () => {
+  it("coalesces thinking agent events inside one live-text pacing window", () => {
     let now = 27_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "agent-thinking");
 
     for (let i = 0; i < 5; i += 1) {
-      now = 27_000 + i * 20;
+      now = 27_000 + i * 10;
       emitAgentEvent(
         handler,
         "run-agent-thinking",
@@ -1459,8 +1508,12 @@ describe("agent event handler", () => {
     emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello world" });
 
     expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
-    now = 12_150;
-    vi.advanceTimersByTime(130);
+    now = 12_074;
+    vi.advanceTimersByTime(54);
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+
+    now = 12_075;
+    vi.advanceTimersByTime(1);
 
     expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
     expect(vi.getTimerCount()).toBe(0);
@@ -1474,12 +1527,21 @@ describe("agent event handler", () => {
     const { broadcast, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "terminal-trailing");
 
-    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello" });
+    emitAgentEvent(handler, "run-terminal-trailing", "assistant", {
+      text: "Hello",
+      delta: "Hello",
+    });
     now = 13_020;
-    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello world" });
-    expect(vi.getTimerCount()).toBe(1);
+    emitAgentEvent(
+      handler,
+      "run-terminal-trailing",
+      "assistant",
+      { text: "Hello world", delta: " world" },
+      { seq: 2 },
+    );
+    expect(vi.getTimerCount()).toBe(2);
 
-    emitLifecycleEnd(handler, "run-terminal-trailing");
+    emitLifecycleEnd(handler, "run-terminal-trailing", 3);
     expect(vi.getTimerCount()).toBe(0);
     const statesAtTerminal = chatBroadcastCalls(broadcast).map(
       ([, payload]) => (payload as { state?: string }).state,
@@ -1491,6 +1553,7 @@ describe("agent event handler", () => {
     expect(
       chatBroadcastCalls(broadcast).map(([, payload]) => (payload as { state?: string }).state),
     ).toEqual(statesAtTerminal);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(3);
     nowSpy.mockRestore();
   });
 
@@ -1501,16 +1564,26 @@ describe("agent event handler", () => {
     const { broadcast, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "shutdown-trailing");
 
-    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello" });
+    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", {
+      text: "Hello",
+      delta: "Hello",
+    });
     now = 14_020;
-    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello world" });
-    expect(vi.getTimerCount()).toBe(1);
+    emitAgentEvent(
+      handler,
+      "run-shutdown-trailing",
+      "assistant",
+      { text: "Hello world", delta: " world" },
+      { seq: 2 },
+    );
+    expect(vi.getTimerCount()).toBe(2);
 
     chatRunState.clear();
     expect(vi.getTimerCount()).toBe(0);
     now = 14_500;
     vi.advanceTimersByTime(1_000);
     expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
     nowSpy.mockRestore();
   });
 
@@ -3365,6 +3438,79 @@ describe("agent event handler", () => {
     );
     expect(payload).not.toHaveProperty("goal");
     expect(requireRecord(payload.session, "nested session")).not.toHaveProperty("goal");
+  });
+
+  it("omits non-authoritative model, thinking, and usage from lifecycle snapshots", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-lightweight",
+      kind: "direct",
+      updatedAt: 1_650,
+      sessionId: "session-lightweight",
+      status: "running",
+      modelProvider: "custom-provider",
+      model: "custom-legacy-model",
+      agentRuntime: { id: "openclaw", source: "default" },
+      thinkingLevel: "high",
+      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingOptions: ["off"],
+      thinkingDefault: "off",
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      contextTokens: 200_000,
+      estimatedCostUsd: undefined,
+      verboseLevel: "full",
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-lightweight",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    emitAgentEvent(
+      handler,
+      "run-lightweight",
+      "lifecycle",
+      { phase: "end", endedAt: 1_700 },
+      { seq: 2, ts: 1_800 },
+    );
+
+    await waitForFast(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    const payload = requireRecord(
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
+      JSON.parse(
+        JSON.stringify(requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload")),
+      ),
+      "serialized sessions changed payload",
+    );
+    const session = requireRecord(payload.session, "nested session");
+    for (const field of [
+      "modelProvider",
+      "model",
+      "agentRuntime",
+      "thinkingLevels",
+      "thinkingOptions",
+      "thinkingDefault",
+      "totalTokens",
+      "totalTokensFresh",
+      "contextTokens",
+      "estimatedCostUsd",
+    ]) {
+      expect(payload).not.toHaveProperty(field);
+      expect(session).not.toHaveProperty(field);
+    }
+    expectPayloadFields(payload, {
+      sessionKey: "session-lightweight",
+      status: "running",
+    });
+    expectPayloadFields(session, {
+      thinkingLevel: "high",
+      verboseLevel: "full",
+      status: "running",
+    });
   });
 
   it.each([

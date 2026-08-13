@@ -51,9 +51,9 @@ import {
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
-import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry,
 } from "../../plugins/setup-registry.js";
 import type {
@@ -248,7 +248,7 @@ function preferSetupAuthProviders(params: {
     ? normalizeManualAuthProvider(params.requestedProvider)
     : undefined;
   if (requestedProvider) {
-    const setupProvider = resolvePluginSetupProvider({
+    const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -279,7 +279,7 @@ async function resolveModelsAuthContext(params?: {
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
-  const providers = resolvePluginProviders({
+  const providers = resolvePluginProvidersCore({
     config,
     workspaceDir,
     mode: "setup",
@@ -985,7 +985,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
   );
 }
 
-export async function runModelsAuthLoginFlow(
+export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -1100,7 +1100,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlow({
+  await runModelsAuthLoginFlowCore({
     ...opts,
     runtime,
     prompter: createClackPrompter(),

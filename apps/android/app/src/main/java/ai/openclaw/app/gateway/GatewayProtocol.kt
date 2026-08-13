@@ -167,6 +167,13 @@ data class WorkerDesktopLaunchResult(
 )
 
 @Serializable
+data class ProjectsListResult(
+  val projects: List<ProjectsListResultProjectsItem>,
+  val recents: List<JsonElement>? = null,
+  val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -176,6 +183,30 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultProjectsItem(
+  val id: String,
+  val displayName: String,
+  val repoRoot: String? = null,
+  val originUrl: String? = null,
+  val source: String,
+  val agentId: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItem(
+  val name: String,
+  val originUrl: String? = null,
+  val checkouts: List<ProjectsListResultObservedProjectsItemCheckoutsItem>,
+  val lastUsedAt: Double,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItemCheckoutsItem(
+  val runnerId: String,
+  val path: String,
 )
 
 enum class GatewayMethod(
@@ -365,6 +396,7 @@ enum class GatewayMethod(
   SessionsRewind("sessions.rewind"),
   SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
+  SessionsRecover("sessions.recover"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
@@ -398,6 +430,7 @@ enum class GatewayMethod(
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
   NodeSkillsUpdate("node.skills.update"),
+  NodeRunnerInventoryUpdate("node.runnerInventory.update"),
   NodePendingDrain("node.pending.drain"),
   NodePendingEnqueue("node.pending.enqueue"),
   NodeInvoke("node.invoke"),
@@ -537,6 +570,17 @@ enum class GatewayMethod(
   SecretsStoreList("secrets.store.list"),
   SecretsStoreSet("secrets.store.set"),
   SecretsStoreDelete("secrets.store.delete"),
+  UsersPrefsGet("users.prefs.get"),
+  UsersPrefsSet("users.prefs.set"),
+  ProjectsAdd("projects.add"),
+  ProjectsSearchRemote("projects.searchRemote"),
+  DesktopObserve("desktop.observe"),
+  DesktopLaunch("desktop.launch"),
+  DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
+  DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
+  PortalList("portal.list"),
+  PortalOpen("portal.open"),
+  PortalClose("portal.close"),
 }
 
 enum class GatewayEvent(
@@ -569,6 +613,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),
   NodeInvokeRequest("node.invoke.request"),
@@ -588,4 +633,5 @@ enum class GatewayEvent(
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
+  PortalChanged("portal.changed"),
 }

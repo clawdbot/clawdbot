@@ -13,7 +13,9 @@ type RestartSentinel = NonNullable<
   Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
 >;
 
-type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+type LoadedSessionEntry = Omit<LoadedSessionEntryBase, "agentId"> &
+  Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
   typeof import("../channels/turn/lifecycle.js").dispatchAssembledChannelTurn
 >[0] & {
@@ -83,6 +85,7 @@ const mocks = vi.hoisted(() => {
     loadSessionEntry: vi.fn(
       (): LoadedSessionEntry => ({
         cfg: {},
+        agentId: "main",
         entry: {
           sessionId: "agent:main:main",
           updatedAt: 0,
@@ -230,7 +233,7 @@ vi.mock("../config/sessions/transcript.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({
@@ -309,7 +312,7 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
   failDelivery: mocks.failDelivery,
   failDeliveryAfterPlatformSend: mocks.failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend: mocks.failDeliveryBeforePlatformSend,
-  drainPendingDeliveries: mocks.drainPendingDeliveries,
+  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
   withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 
@@ -364,7 +367,7 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: vi.fn(async (params: Record<string, unknown>) => {
+  sendDurableMessageBatchCore: vi.fn(async (params: Record<string, unknown>) => {
     try {
       const results = await mocks.deliverOutboundPayloads(params);
       return { status: "sent", results };

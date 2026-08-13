@@ -1,5 +1,8 @@
 /** Resolves and emits cron failure-alert notifications. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
@@ -62,14 +65,6 @@ function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string)
   }
 }
 
-function normalizeTo(input: unknown): string | undefined {
-  if (typeof input !== "string") {
-    return undefined;
-  }
-  const to = input.trim();
-  return to ? to : undefined;
-}
-
 function clampPositiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -104,9 +99,11 @@ export function resolveFailureAlert(
   const mode = jobConfig?.mode ?? globalConfig?.mode;
   const inheritsGlobalMode =
     !jobConfig?.mode || jobConfig.mode === (globalConfig?.mode ?? "announce");
-  const jobTo = normalizeTo(jobConfig?.to);
+  const jobTo = normalizeOptionalString(jobConfig?.to);
   const jobChannel = resolveFailureAlertChannel(jobConfig?.channel, jobTo);
-  const configuredGlobalTo = inheritsGlobalMode ? normalizeTo(globalConfig?.to) : undefined;
+  const configuredGlobalTo = inheritsGlobalMode
+    ? normalizeOptionalString(globalConfig?.to)
+    : undefined;
   const globalChannel = inheritsGlobalMode
     ? resolveFailureAlertChannel(globalConfig?.channel, configuredGlobalTo)
     : undefined;
@@ -115,7 +112,7 @@ export function resolveFailureAlert(
   const inheritsGlobalRoute =
     inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
   const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
-  const deliveryTo = normalizeTo(job.delivery?.to);
+  const deliveryTo = normalizeOptionalString(job.delivery?.to);
   const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
   const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
   const inheritsDeliveryChannel =

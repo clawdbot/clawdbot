@@ -5,6 +5,7 @@ import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolvePnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 
@@ -91,11 +92,6 @@ export function resolvePlaywrightInstallRunner(options: PlaywrightRunnerOptions 
   });
 }
 
-function isTruthyEnvFlag(value: unknown) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 /**
  * Reports whether Linux system dependencies should be installed with Chromium.
  */
@@ -112,9 +108,9 @@ export function shouldInstallPlaywrightSystemDependencies(
     return true;
   }
   return (
-    isTruthyEnvFlag(env.CI) ||
-    isTruthyEnvFlag(env.GITHUB_ACTIONS) ||
-    isTruthyEnvFlag(env.OPENCLAW_TESTBOX)
+    parsePermissiveBooleanToken(env.CI) === true ||
+    parsePermissiveBooleanToken(env.GITHUB_ACTIONS) === true ||
+    parsePermissiveBooleanToken(env.OPENCLAW_TESTBOX) === true
   );
 }
 

@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
@@ -117,14 +118,7 @@ export async function trimSessionTranscriptForManualCompact(
 }
 
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(line) ?? null;
 }
 
 function normalizeManualCompactTranscriptLines(

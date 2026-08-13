@@ -3,7 +3,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
@@ -46,7 +46,7 @@ export function resolveConversationRegistryScope(params: {
   return {
     agentId: params.agentId,
     ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
+      ? { storePath: resolveSessionStorePathCore(configuredStore, { agentId: params.agentId }) }
       : {}),
   };
 }

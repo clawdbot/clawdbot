@@ -5,15 +5,19 @@ import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feed
 const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAt = vi.hoisted(() => vi.fn());
+const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
+const resolveSessionTranscriptRuntimeTarget = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
-vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath }));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: resolveStorePath,
+}));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   appendTranscriptEvent,
   loadSessionEntry,
   loadSessionEntryReadOnly: loadSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
+  resolveSessionTranscriptRuntimeTarget,
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
@@ -112,8 +116,14 @@ describe("channel feedback reflection", () => {
     ).resolves.toMatchObject({ status: "complete", followUp: false });
   });
 
-  it("records feedback through the canonical transcript accessor", async () => {
+  it("records feedback through the persisted transcript owner", async () => {
     loadSessionEntry.mockReturnValue({ sessionId: "session-1" });
+    resolveSessionTranscriptRuntimeTarget.mockResolvedValue({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/state/main/sessions.json",
+    });
     const event = { type: "custom", event: "feedback", ts: 1 };
 
     await expect(
@@ -128,7 +138,7 @@ describe("channel feedback reflection", () => {
       {
         agentId: "main",
         sessionId: "session-1",
-        sessionKey: "agent:main:msteams:feedback-2",
+        sessionKey: "agent:main:main",
         storePath: "/state/main/sessions.json",
       },
       event,

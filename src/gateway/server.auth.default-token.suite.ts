@@ -12,7 +12,7 @@ import {
   ConnectErrorDetailCodes,
   createSignedDevice,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -38,7 +38,7 @@ export function registerDefaultAuthTokenSuite(): void {
     let port: number;
 
     beforeAll(async () => {
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 

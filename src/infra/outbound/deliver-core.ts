@@ -4,7 +4,11 @@ import { payloadRequiresDurablePayloadTransport } from "../../channels/message/c
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
-import type { DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
+import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
+import {
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  type DiagnosticMessageDeliveryKind,
+} from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
@@ -13,15 +17,11 @@ import { suppressedPayloadOutcome, toOutboundDeliveryError } from "./deliver-hoo
 import {
   buildPayloadSummary,
   deliveryKindForPayload,
-  emitMessageDeliveryCompleted,
-  emitMessageDeliveryError,
-  emitMessageDeliveryStarted,
   maybeNotifyAfterDeliveredPayload,
   maybePinDeliveredMessage,
   normalizeEmptyPayloadForDelivery,
   renderPresentationForDelivery,
   resolveOutboundMediaAccessForSend,
-  sessionKeyForDeliveryDiagnostics,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { createDeliveryResultRecorder } from "./deliver-results.js";
@@ -211,7 +211,9 @@ export async function deliverOutboundPayloadsCore(
       deliveredMirrorPayloads.push(payloadSummary);
     }
   };
-  const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
+  // `policyKey` is a diagnostics-only fallback; never use it for hook correlation.
+  const diagnosticSessionKey =
+    params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
   for (const [deliveryPayloadIndex, preparedEntry] of acceptedEntries.entries()) {
     const payloadIndex = preparedEntry.sourceIndex;
     const payload = preparedEntry.payload;
@@ -237,10 +239,11 @@ export async function deliverOutboundPayloadsCore(
       deliveryStartedAt = Date.now();
       deliveryStarted = true;
       deliveryFinished = false;
-      emitMessageDeliveryStarted({
+      emitDiagnosticEvent({
+        type: "message.delivery.started",
         channel,
         deliveryKind,
-        sessionKey: diagnosticSessionKey,
+        ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
       });
     };
     const completeDeliveryDiagnostics = (resultCount: number) => {
@@ -248,12 +251,13 @@ export async function deliverOutboundPayloadsCore(
         return;
       }
       deliveryFinished = true;
-      emitMessageDeliveryCompleted({
+      emitDiagnosticEvent({
+        type: "message.delivery.completed",
         channel,
         deliveryKind,
         durationMs: Date.now() - deliveryStartedAt,
         resultCount,
-        sessionKey: diagnosticSessionKey,
+        ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
       });
     };
     const errorDeliveryDiagnostics = (err: unknown) => {
@@ -261,12 +265,13 @@ export async function deliverOutboundPayloadsCore(
         return;
       }
       deliveryFinished = true;
-      emitMessageDeliveryError({
+      emitDiagnosticEvent({
+        type: "message.delivery.error",
         channel,
         deliveryKind,
         durationMs: Date.now() - deliveryStartedAt,
-        error: err,
-        sessionKey: diagnosticSessionKey,
+        errorCategory: diagnosticErrorCategory(err),
+        ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
       });
     };
     try {

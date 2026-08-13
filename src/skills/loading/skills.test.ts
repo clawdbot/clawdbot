@@ -16,7 +16,7 @@ import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  getActiveSkillEnvKeys,
+  getActiveSkillEnvKeysCore,
 } from "../runtime/env-overrides.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
@@ -645,11 +645,11 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(false);
       }
     });
   });
@@ -667,15 +667,15 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
 
         restoreFirst();
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
       } finally {
         restoreSecond();
         expect(process.env.ENV_KEY).toBeUndefined();
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(false);
       }
     });
   });

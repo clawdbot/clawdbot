@@ -58,7 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 
-const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
+const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
 
 function provider(
@@ -206,20 +206,24 @@ describe("session catalog Gateway methods", () => {
     const followerBroadcast = vi.fn();
     const leader = startCall(
       "sessions.catalog.list",
-      { progressId: "leader-progress" },
+      { progressId: "leader-progress", agentId: "main" },
       config,
       { connId: "leader" },
       { broadcastToConnIds: leaderBroadcast },
     );
     const follower = startCall(
       "sessions.catalog.list",
-      { progressId: "follower-progress" },
+      { progressId: "follower-progress", agentId: "main" },
       config,
       { connId: "follower" },
       { broadcastToConnIds: followerBroadcast },
     );
     const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
-    const otherParams = startCall("sessions.catalog.list", { search: "other" }, config);
+    const otherParams = startCall(
+      "sessions.catalog.list",
+      { search: "other", agentId: "main" },
+      config,
+    );
 
     await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
     release();
@@ -781,7 +785,7 @@ describe("session catalog Gateway methods", () => {
       },
     ];
 
-    expect(resolveSessionCatalogCreateTarget("claude", "research", {})).toEqual({
+    expect(resolveRegisteredCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
       target: {
         model: "anthropic/claude-opus-4-8",
@@ -789,7 +793,7 @@ describe("session catalog Gateway methods", () => {
         pluginOwnerId: "anthropic",
       },
     });
-    expect(resolveSessionCatalogCreateTarget("missing", "research", {})).toEqual({
+    expect(resolveRegisteredCatalogCreateTarget("missing", "research", {})).toEqual({
       ok: false,
       message: "unknown session catalog: missing",
       unknownCatalog: true,
@@ -810,6 +814,7 @@ describe("session catalog Gateway methods", () => {
       { connect: { scopes: ["operator.write", "operator.admin"] } },
     );
     expect(continueSession).toHaveBeenCalledWith({
+      allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",
       clientScopes: ["operator.write", "operator.admin"],
@@ -826,6 +831,7 @@ describe("session catalog Gateway methods", () => {
       threadId: "thread-1",
     });
     expect(continueSession).toHaveBeenCalledWith({
+      allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",
       clientScopes: [],

@@ -585,6 +585,18 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const telegramUpdate = primaryCtx.update;
+  const providerUpdateKind = telegramUpdate
+    ? "edited_message" in telegramUpdate
+      ? "edited_message"
+      : "message" in telegramUpdate
+        ? "message"
+        : "edited_channel_post" in telegramUpdate
+          ? "edited_channel_post"
+          : "channel_post" in telegramUpdate
+            ? "channel_post"
+            : undefined
+    : undefined;
   const inboundHistory =
     hasGroupHistoryContext && historyKey && historyLimit > 0
       ? groupHistoryPromptEntries.length > 0
@@ -734,6 +746,18 @@ export async function buildTelegramInboundContextPayload(params: {
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
+      ProviderUpdateId:
+        typeof telegramUpdate?.update_id === "number"
+          ? String(telegramUpdate.update_id)
+          : undefined,
+      ProviderUpdateKind: providerUpdateKind,
+      ProviderMessageTimestamp: primaryCtx.message?.date
+        ? primaryCtx.message.date * 1000
+        : undefined,
+      ProviderEditTimestamp: primaryCtx.message?.edit_date
+        ? primaryCtx.message.edit_date * 1000
+        : undefined,
+      LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

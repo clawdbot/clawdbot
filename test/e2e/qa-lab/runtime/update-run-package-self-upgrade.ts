@@ -7,6 +7,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts";
@@ -43,10 +44,6 @@ type UpdateRunSelfUpgradeSummary = {
     };
   };
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function parseUpdateRunSelfUpgradeOptions(args: string[]): ProducerOptions {
   let artifactBase: string | undefined;

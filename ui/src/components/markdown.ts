@@ -5,7 +5,6 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
@@ -318,7 +317,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs-language-pack"],
 ];
 const markdownCache = new Map<string, string>();
-const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -469,9 +467,6 @@ function installHooks() {
 
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
-    if (normalizeLowercaseStringOrEmpty(href).includes("tail")) {
-      node.classList.add(TAIL_LINK_BLUR_CLASS);
-    }
   });
 }
 

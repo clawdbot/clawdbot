@@ -23,7 +23,7 @@ import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
@@ -150,7 +150,9 @@ export function createWorkerSessionToolExecutor(params: {
       }
       throwIfAborted(operation.signal);
       exactSource({ identity: operation.identity, placements: params.placements });
-      let loaded = loadSessionEntryReadOnly(operation.childSessionKey, { agentId: targetAgentId });
+      let loaded = loadGatewaySessionEntryReadOnly(operation.childSessionKey, {
+        agentId: targetAgentId,
+      });
       let createResponse: Record<string, unknown>;
       let creationAttempted = false;
       if (loaded.entry?.sessionId) {
@@ -192,7 +194,7 @@ export function createWorkerSessionToolExecutor(params: {
             },
           );
         } catch (error) {
-          loaded = loadSessionEntryReadOnly(operation.childSessionKey, {
+          loaded = loadGatewaySessionEntryReadOnly(operation.childSessionKey, {
             agentId: targetAgentId,
           });
           if (!loaded.entry?.sessionId) {
@@ -205,7 +207,9 @@ export function createWorkerSessionToolExecutor(params: {
             entry: loaded.entry,
           };
         }
-        loaded = loadSessionEntryReadOnly(operation.childSessionKey, { agentId: targetAgentId });
+        loaded = loadGatewaySessionEntryReadOnly(operation.childSessionKey, {
+          agentId: targetAgentId,
+        });
       }
       const childSessionId = loaded.entry?.sessionId;
       if (!childSessionId) {

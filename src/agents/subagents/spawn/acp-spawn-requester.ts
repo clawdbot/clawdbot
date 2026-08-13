@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
@@ -126,6 +126,7 @@ export function resolveAcpSpawnRequesterState(params: {
     hasThreadContext,
     heartbeatEnabled: isHeartbeatEnabledForSessionAgent({
       cfg: params.cfg,
+      requesterAgentId: params.requesterAgentId,
       sessionKey: params.parentSessionKey,
     }),
     heartbeatRelayRouteUsable:
@@ -220,7 +221,9 @@ export function validateAcpResumeSessionOwnership(params: {
     };
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.targetAgentId,
+  });
   for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {

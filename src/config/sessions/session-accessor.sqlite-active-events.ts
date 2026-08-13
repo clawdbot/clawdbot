@@ -14,6 +14,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
@@ -58,6 +59,10 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
   scannedMessages: number;
   serializedBytes: number;
+  snapshot: {
+    generation?: string;
+    indexedSeq: number;
+  };
 };
 
 function parseMessageEventRow(row: {
@@ -178,7 +183,7 @@ export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadSco
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */
-export function readSessionTranscriptVisibleMessageDelta(
+export function readSessionTranscriptVisibleMessageDeltaCore(
   scope: SessionTranscriptReadScope,
   limits: SessionTranscriptVisibleMessageDeltaLimits = {},
 ): SessionTranscriptVisibleMessageDeltaResult {
@@ -446,6 +451,10 @@ export function readSessionTranscriptBoundedMessageTailPage(
 ): SessionTranscriptBoundedMessageTailPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
+    const snapshot = {
+      generation: readTranscriptProjectionGeneration(projection),
+      indexedSeq: projection.state.indexedSeq,
+    };
     const totalMessages = visible.total;
     const offset = Math.min(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
@@ -468,6 +477,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
         events: [],
         scannedMessages: positions.length,
         serializedBytes: 0,
+        snapshot,
         totalMessages,
       };
     }
@@ -521,6 +531,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
       events,
       scannedMessages: positions.length,
       serializedBytes,
+      snapshot,
       totalMessages,
     };
   });

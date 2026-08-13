@@ -13,16 +13,20 @@ declare global {
 export const CONTROL_UI_BUILD_INFO =
   globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO ?? normalizeControlUiBuildInfo(undefined);
 
+/** Reports whether the reload was started, so callers can tell an outcome they
+ * still have to present from one the reloaded document will present instead. */
 export function reloadControlUiIfStale(identity: {
   version: string | null;
   sha: string | null;
-}): void {
+}): boolean {
   if (
     typeof window !== "undefined" &&
     controlUiVersionDiffersFrom(identity.version ?? undefined, identity.sha ?? undefined)
   ) {
     window.location.reload();
+    return true;
   }
+  return false;
 }
 
 export function controlUiVersionDiffersFrom(

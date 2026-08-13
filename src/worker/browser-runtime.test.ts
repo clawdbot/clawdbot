@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
-  loadBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -10,7 +10,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../plugin-sdk/facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
@@ -26,7 +26,7 @@ describe("worker Browser runtime", () => {
       tool: { name: "browser" },
       dispose,
     });
-    mocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       createAttachedBrowserToolRuntime,
     });
     mocks.execFile.mockImplementation(
@@ -51,7 +51,7 @@ describe("worker Browser runtime", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "runtime-api.js",
       trackedPluginId: "browser",
@@ -87,7 +87,7 @@ describe("worker Browser runtime", () => {
       tool: { name: "browser" },
       dispose: vi.fn().mockResolvedValue(undefined),
     });
-    mocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       createAttachedBrowserToolRuntime,
     });
     mocks.execFile.mockImplementation(
@@ -117,6 +117,6 @@ describe("worker Browser runtime", () => {
     await expect(ensureAttachTarget()).rejects.toThrow(
       "Worker Browser launcher failed: launcher timed out",
     );
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledOnce();
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledOnce();
   });
 });

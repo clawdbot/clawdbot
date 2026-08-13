@@ -11,7 +11,7 @@ import {
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
@@ -45,7 +45,7 @@ describe("SessionManager persistence compatibility", () => {
     const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionFile: marker, sessionId, updatedAt: 10 },
     );

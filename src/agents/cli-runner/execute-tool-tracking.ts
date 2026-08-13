@@ -14,6 +14,10 @@ import {
   resolveMessageToolSourceReplyFinal,
 } from "../embedded-agent-message-tool-source-reply.js";
 import {
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+} from "../embedded-agent-messaging-extraction.js";
+import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
@@ -22,10 +26,6 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
-import {
-  extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
-} from "../embedded-agent-subscribe.tools.js";
 import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {

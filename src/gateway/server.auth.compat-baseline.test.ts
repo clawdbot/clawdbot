@@ -10,7 +10,7 @@ import {
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   createSignedDevice,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
@@ -145,7 +145,7 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 
@@ -307,7 +307,7 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "password", password: "secret" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 
@@ -364,7 +364,7 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { controlUiEnabled: true });
     });
 

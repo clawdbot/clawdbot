@@ -27,7 +27,7 @@ import {
   stepIdleTimeoutBreaker,
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
-import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
+import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";

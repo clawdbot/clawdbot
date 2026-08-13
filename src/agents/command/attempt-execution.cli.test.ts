@@ -12,7 +12,7 @@ import {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -710,7 +710,7 @@ describe("CLI attempt execution", () => {
 
   function readSessionStore(): Record<string, SessionEntry> {
     return Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
     );
   }
 

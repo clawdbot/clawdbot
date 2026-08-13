@@ -763,12 +763,16 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.gateway.request("sessions.patch", {
         key: reservedKey,
         archived: true,
+        expectedSessionId: reservedEntry.sessionId,
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     const gatewayRequestCountBeforeBatch = gatewayRequest.mock.calls.length;
     await expect(
       otherApi.runtime.gateway.request("sessions.patchMany", {
-        targets: [{ key: ordinaryKey }, { key: reservedKey }],
+        targets: [
+          { key: ordinaryKey, expectedSessionId: ordinaryEntry.sessionId },
+          { key: reservedKey, expectedSessionId: reservedEntry.sessionId },
+        ],
         patch: { archived: true },
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
@@ -865,6 +869,7 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.gateway.request("sessions.patch", {
         key: legacyPrefixedKey,
         archived: true,
+        expectedSessionId: legacyPrefixedEntry.sessionId,
       }),
     ).resolves.toEqual({ ok: true });
 

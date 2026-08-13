@@ -1575,7 +1575,7 @@ describe("createTelegramDraftStream", () => {
       // Plain-fallback parity: each page must carry the durable funnel's plainText
       // projection so an HTML-parse 400 degrades both funnels to identical text.
       expect([...retainedPageTexts, stream.currentMessageSnapshot?.()?.text]).toEqual(
-        expectedChunks.map((chunk) => chunk.text),
+        expectedChunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk.html)),
       );
     },
   );

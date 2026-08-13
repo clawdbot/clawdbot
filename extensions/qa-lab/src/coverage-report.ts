@@ -1,5 +1,8 @@
 // Qa Lab plugin module implements coverage report behavior.
-import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString as stringifyConfigValue,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
@@ -132,10 +135,6 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
       ]),
     ].join("\n"),
   );
-}
-
-function stringifyConfigValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaScenarioSearchMatch {

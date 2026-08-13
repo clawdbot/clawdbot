@@ -5,7 +5,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
-import { toPosixPath } from "./output.js";
+import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import type {
   GatewayServiceCommandConfig,
@@ -18,7 +18,7 @@ const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
-  const home = toPosixPath(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
@@ -148,7 +148,7 @@ export function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
   // Support the common unit-specifier used in user services.
-  return input.replaceAll("%h", toPosixPath(resolveDaemonHomeDir(env)));
+  return input.replaceAll("%h", normalizeWindowsPathSeparators(resolveDaemonHomeDir(env)));
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {

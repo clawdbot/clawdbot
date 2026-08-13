@@ -4,7 +4,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
-import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
 
 export { getTailnetHostname };
 
@@ -21,7 +21,7 @@ export async function getMemorySearchManager(params: {
   agentId: string;
   purpose: "status";
 }): Promise<{ manager: StatusMemoryManager | null }> {
-  const { manager } = await getActiveMemorySearchManager(params);
+  const { manager } = await getActiveMemorySearchManagerCore(params);
   if (!manager) {
     return { manager: null };
   }

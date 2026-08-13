@@ -2,6 +2,7 @@
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
+import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -215,6 +216,13 @@ describe("unit-fast vitest lane", () => {
       "vitest-mock-api",
       "dynamic-import",
     ]);
+  });
+
+  it("keeps process-launching CLI files in their owner lane", () => {
+    for (const file of cliProcessTestFiles) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(unitFastTestFiles, file).not.toContain(file);
+    }
   });
 
   it("routes unit-fast source files to their unit-fast sibling tests", () => {

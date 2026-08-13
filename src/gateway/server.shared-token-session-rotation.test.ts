@@ -10,7 +10,7 @@ import {
   waitForGatewayWsClose,
 } from "./shared-auth.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -35,7 +35,7 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getFreePort();
+  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   await fs.writeFile(
     configPath,

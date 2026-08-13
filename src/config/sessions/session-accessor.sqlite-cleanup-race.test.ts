@@ -7,7 +7,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -71,7 +71,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         sessionKeySegmentPrefix: "cleanup-race-",
         transcriptContentMarker: "cleanup-race-marker",
@@ -100,7 +100,7 @@ describe("SQLite lifecycle cleanup races", () => {
     ]);
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         sessionKeySegmentPrefix: "cleanup-race-",
         transcriptContentMarker: "cleanup-race-marker",
@@ -132,7 +132,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -190,7 +190,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         agentId: "main",
         storePath: sharedStorePath,
         pluginOwnerId: "memory-core",
@@ -245,7 +245,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -283,7 +283,7 @@ describe("SQLite lifecycle cleanup races", () => {
       .run("{}", -1, sessionKey);
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -333,7 +333,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -390,7 +390,7 @@ describe("SQLite lifecycle cleanup races", () => {
 
     try {
       await expect(
-        cleanupSessionLifecycleArtifacts({
+        cleanupSessionLifecycleArtifactsCore({
           storePath,
           sessionKeySegmentPrefix: "cleanup-race",
           transcriptContentMarker: "cleanup-race-marker",
@@ -567,7 +567,7 @@ describe("SQLite lifecycle cleanup races", () => {
       await materializationGate;
     };
 
-    const cleanup = cleanupSessionLifecycleArtifacts({
+    const cleanup = cleanupSessionLifecycleArtifactsCore({
       storePath,
       sessionKeySegmentPrefix: "cleanup-race-",
       transcriptContentMarker: "cleanup-race-marker",

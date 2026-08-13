@@ -9,12 +9,17 @@ import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
   resolveAgentRoute,
+  resolveThreadSessionKeys,
 } from "openclaw/plugin-sdk/routing";
 import { buildAgentMainSessionKey, sanitizeAgentId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
-import { buildTelegramGroupPeerId, buildTelegramParentPeer } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
+  shouldUseTelegramDmThreadSession,
+} from "./bot/helpers.js";
 import {
   resolveTelegramDirectPeerId,
   resolveTelegramNamedAccountBaseSessionKey,
@@ -161,4 +166,27 @@ export function resolveTelegramConversationBaseSessionKey(
     resolveDefaultTelegramAccountId(params.cfg),
     params,
   );
+}
+
+export function resolveTelegramTargetSession(params: {
+  cfg: OpenClawConfig;
+  route: TelegramResolvedRoute;
+  chatId: number | string;
+  isGroup: boolean;
+  senderId?: string | number | null;
+  dmThreadId?: number;
+  botHasTopicsEnabled?: boolean;
+}): string {
+  const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
+  const threadKeys =
+    shouldUseTelegramDmThreadSession({
+      dmThreadId: params.dmThreadId,
+      botHasTopicsEnabled: params.botHasTopicsEnabled,
+    }) && params.dmThreadId != null
+      ? resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: `${params.chatId}:${params.dmThreadId}`,
+        })
+      : null;
+  return threadKeys?.sessionKey ?? baseSessionKey;
 }

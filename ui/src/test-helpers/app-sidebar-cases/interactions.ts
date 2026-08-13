@@ -139,8 +139,16 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          expectedSessionId: "session:agent:main:b",
+        },
       ],
       { archived: true },
     );
@@ -190,13 +198,21 @@ describe("AppSidebar multi-select", () => {
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:a",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:b",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
@@ -227,13 +243,21 @@ describe("AppSidebar multi-select", () => {
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:a",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:b",
+        deferListRefresh: true,
+      },
     );
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
       1,

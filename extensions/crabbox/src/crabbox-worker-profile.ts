@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { WorkerProviderError, type WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export { nonEmptyString };
 
 const PROFILE_KEYS = new Set([
   "binary",
@@ -38,14 +41,6 @@ type CrabboxProfile = {
 };
 
 type IsExecutable = (candidate: string) => boolean;
-
-export function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);

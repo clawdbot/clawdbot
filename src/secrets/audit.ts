@@ -23,6 +23,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { findSecretStorePlaintextResidueFindings } from "./audit-store.js";
 import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
@@ -41,7 +42,6 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
-  listAuthProfileStoreAgentDirs,
   listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -194,9 +194,10 @@ function collectConfigSecrets(params: {
   config: OpenClawConfig;
   configPath: string;
   collector: AuditCollector;
+  env: NodeJS.ProcessEnv;
 }): void {
   const defaults = params.config.secrets?.defaults;
-  for (const target of discoverConfigSecretTargets(params.config)) {
+  for (const target of discoverConfigSecretTargets(params.config, { env: params.env })) {
     if (!target.entry.includeInAudit) {
       continue;
     }
@@ -236,14 +237,7 @@ function collectConfigSecrets(params: {
       }
       continue;
     }
-
-    if (isNonSecretHeader) {
-      continue;
-    }
-    if (isModelMarker) {
-      continue;
-    }
-    if (!hasPlaintext) {
+    if (isNonSecretHeader || isModelMarker || !hasPlaintext) {
       continue;
     }
     addFinding(params.collector, {
@@ -670,6 +664,7 @@ export async function runSecretsAudit(
       config,
       configPath,
       collector,
+      env,
     });
     for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({

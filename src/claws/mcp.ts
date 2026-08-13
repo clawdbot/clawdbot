@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
-import { listConfiguredMcpServers, setConfiguredMcpServer } from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -256,7 +257,7 @@ export async function installClawMcpServers(
         recordIndependentOwner: false,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       throw new ClawMcpInstallError("mcp_install_uncertain", message, refs);
     }
     if (!result.ok) {
@@ -270,7 +271,7 @@ export async function installClawMcpServers(
     try {
       refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       throw new ClawMcpInstallError(
         "mcp_provenance_failed",
         `MCP server was configured, but ownership could not be persisted: ${message}`,

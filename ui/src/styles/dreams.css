@@ -248,7 +248,7 @@
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #fef3c7, #fbbf24);
+  background: radial-gradient(circle at 35% 35%, var(--moon-highlight), var(--moon-base));
   box-shadow:
     0 0 40px rgba(251, 191, 36, 0.2),
     0 0 80px rgba(251, 191, 36, 0.08);

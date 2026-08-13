@@ -1,4 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -373,14 +376,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(value) ?? null;
 }
 
 function textField(record: Record<string, unknown>, key: string): string | null {
@@ -389,15 +385,11 @@ function textField(record: Record<string, unknown>, key: string): string | null 
 }
 
 function numberField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(record[key]) ?? null;
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return asNullableRecord(record[key]);
 }
 
 function jsonField(value: unknown): string | null {

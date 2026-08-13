@@ -18,6 +18,7 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
@@ -115,7 +116,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
       ? createToolSearchCatalogRef()
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
-  const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
+  const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
+    ? []
+    : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];

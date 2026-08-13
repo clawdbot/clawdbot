@@ -564,7 +564,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      trailingFinalStatusText,
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
     expect(
       requireInvocationOrder(answerDraftStream.forceNewMessage, 1, "second answer draft rotation"),

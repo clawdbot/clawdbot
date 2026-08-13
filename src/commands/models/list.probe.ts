@@ -42,7 +42,7 @@ import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   coerceSecretRef,
@@ -57,7 +57,7 @@ import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gatewa
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import { redactSecrets } from "../status-all/format.js";
+import { redactStatusSecrets } from "../status-all/format.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
 
@@ -65,7 +65,7 @@ const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 /** Scrubs credential-shaped text before probe failures cross a UI or CLI boundary. */
 export function redactAuthProbeError(error: string): string {
-  return redactSecrets(error);
+  return redactStatusSecrets(error);
 }
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(
@@ -891,7 +891,7 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
 

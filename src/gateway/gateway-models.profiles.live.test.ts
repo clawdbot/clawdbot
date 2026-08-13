@@ -54,9 +54,9 @@ import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
 } from "../agents/live-test-provider-drift.test-support.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
+import { getApiKeyForModelCore, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { appendPrioritizedDynamicLiveModels } from "../agents/test-helpers/live-model-dynamic-candidates.js";
@@ -72,8 +72,8 @@ import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../confi
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { redactSecrets } from "../logging/redact.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
+import { resolveRuntimeThinkingProfile } from "../plugins/provider-runtime.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -723,7 +723,7 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -752,7 +752,7 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -2456,7 +2456,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -4223,7 +4223,7 @@ function parseExplicitLiveModelRef(
     const rawModelId = trimmed.slice(slash + 1).trim();
     const modelId =
       provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGoogleModelId(rawModelId)
+        ? normalizeGooglePreviewModelId(rawModelId)
         : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
@@ -4278,7 +4278,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveProviderThinkingProfile({
+  const profile = resolveRuntimeThinkingProfile({
     provider: model.provider,
     config: params.cfg,
     context: {
@@ -4392,7 +4392,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
   return selected.modelRef;
 }
 
@@ -5617,7 +5617,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const candidates: Array<Model> = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {
@@ -5626,7 +5626,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           const modelRef = `${model.provider}/${model.id}`;
           try {
             const apiKeyInfo = await withGatewayLiveSetupTimeout(
-              getApiKeyForModel({
+              getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
@@ -5763,12 +5763,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         return;
       }
       try {
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: anthropic,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
         });
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: zai,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,

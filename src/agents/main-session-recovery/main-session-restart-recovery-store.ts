@@ -17,8 +17,10 @@ import { readSessionMessagesAsync } from "../../gateway/session-transcript-reade
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -45,7 +47,7 @@ import {
   type ExhaustedRestartRecoveryTarget,
   type ExpectedRestartRecoveryTarget,
   hasCurrentProcessOwner,
-  log,
+  mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
 } from "./main-session-restart-recovery-shared.js";
@@ -181,13 +183,16 @@ export function loadExpectedRestartRecoveryTarget(params: {
     : undefined;
 }
 
-function resolveRecoveryDispatchSessionKey(params: {
+function resolveRestartRecoveryDispatchTarget(params: {
   cfg?: OpenClawConfig;
   sessionKey: string;
   storePath: string;
-}): string | undefined {
+}): { agentId: string; sessionKey: string } | undefined {
   if (!params.cfg) {
-    return params.sessionKey;
+    return {
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey, LEGACY_IMPLICIT_AGENT_ID),
+      sessionKey: params.sessionKey,
+    };
   }
   try {
     const target = resolveGatewaySessionStoreTarget({
@@ -196,10 +201,12 @@ function resolveRecoveryDispatchSessionKey(params: {
     });
     return !params.cfg.session?.store ||
       path.resolve(target.storePath) === path.resolve(params.storePath)
-      ? target.canonicalKey
+      ? { agentId: target.agentId, sessionKey: target.canonicalKey }
       : undefined;
   } catch (err) {
-    log.warn(`failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`);
+    mainSessionRecoveryLog.warn(
+      `failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`,
+    );
     return undefined;
   }
 }
@@ -267,7 +274,7 @@ export async function recoverStore(params: {
       entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
     }
   } catch (err) {
-    log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
+    mainSessionRecoveryLog.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;
     return result;
   }
@@ -279,10 +286,6 @@ export async function recoverStore(params: {
       return result;
     }
     let entry = loadedEntry;
-    const agentId = resolveAgentIdFromSessionKey(
-      sessionKey,
-      params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
-    );
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
@@ -294,19 +297,20 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    const resolvedDispatchSessionKey = resolveRecoveryDispatchSessionKey({
+    const dispatchTarget = resolveRestartRecoveryDispatchTarget({
       cfg: params.cfg,
       sessionKey,
       storePath: params.storePath,
     });
-    if (!resolvedDispatchSessionKey) {
+    if (!dispatchTarget) {
       result.skipped++;
       continue;
     }
+    const agentId = dispatchTarget.agentId;
     const dispatchSessionKey =
       params.expectedClaim?.canonicalSessionKey ??
       params.expectedTarget?.canonicalSessionKey ??
-      resolvedDispatchSessionKey;
+      dispatchTarget.sessionKey;
     if (
       hasCurrentProcessOwner({
         activeSessionIds: resolveActiveSessionIds(),
@@ -360,6 +364,7 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        agentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
@@ -412,6 +417,7 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        agentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
@@ -439,6 +445,7 @@ export async function recoverStore(params: {
     ) => {
       recordResumeResult(
         await resumeIfCurrent({
+          agentId,
           canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
@@ -531,7 +538,7 @@ export async function recoverStore(params: {
         return result;
       }
       if (entry.pendingFinalDelivery?.kind === "replayable") {
-        log.warn(
+        mainSessionRecoveryLog.warn(
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
         await resumeCurrent({
@@ -539,7 +546,7 @@ export async function recoverStore(params: {
         });
         continue;
       }
-      log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
+      mainSessionRecoveryLog.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;
       continue;
     }

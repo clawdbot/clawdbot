@@ -1,10 +1,10 @@
 // Shared fetch and parsing helpers for provider usage endpoints.
 import {
-  asDateTimestampMs,
+  parseDateStringTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
-import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import { providerUsageLabel } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
@@ -23,16 +23,11 @@ export async function fetchJson(
   return await fetchFn(url, { ...init, signal });
 }
 
-export function parseFiniteNumber(value: unknown): number | undefined {
-  return parseFiniteNumberish(value);
-}
+export { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
 /** Parses a provider reset-time string without leaking an invalid Date timestamp. */
 export function parseUsageResetAt(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return asDateTimestampMs(Date.parse(value));
+  return parseDateStringTimestampMs(value);
 }
 
 type BuildUsageHttpErrorSnapshotOptions = {
@@ -40,6 +35,16 @@ type BuildUsageHttpErrorSnapshotOptions = {
   status: number;
   message?: string;
   tokenExpiredStatuses?: readonly number[];
+};
+
+type FetchUsageJsonOptions = {
+  provider: UsageProviderId;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  tokenExpiredStatuses?: readonly number[];
+  malformedResponseError?: string;
 };
 
 /** Builds a provider usage snapshot for non-HTTP fetch or parse failures. */
@@ -69,6 +74,7 @@ export function buildUsageHttpErrorSnapshot(
 export async function readUsageJson(
   provider: UsageProviderId,
   response: Response,
+  malformedResponseError = "Malformed usage response",
 ): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
   try {
     const data = await readProviderJsonResponse<unknown>(response, `${provider} usage`);
@@ -76,7 +82,25 @@ export async function readUsageJson(
   } catch {
     return {
       ok: false,
-      snapshot: buildUsageErrorSnapshot(provider, "Malformed usage response"),
+      snapshot: buildUsageErrorSnapshot(provider, malformedResponseError),
     };
   }
+}
+
+export async function fetchUsageJson(
+  options: FetchUsageJsonOptions,
+): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
+  const response = await fetchJson(options.url, options.init, options.timeoutMs, options.fetchFn);
+  if (!response.ok) {
+    await cancelUnreadResponseBody(response);
+    return {
+      ok: false,
+      snapshot: buildUsageHttpErrorSnapshot({
+        provider: options.provider,
+        status: response.status,
+        tokenExpiredStatuses: options.tokenExpiredStatuses,
+      }),
+    };
+  }
+  return await readUsageJson(options.provider, response, options.malformedResponseError);
 }

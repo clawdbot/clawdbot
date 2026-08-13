@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
@@ -62,7 +62,7 @@ function inferAgentIdFromDir(agentDir: string): string {
       return parent;
     }
   }
-  return `custom-${sha256HexPrefix(normalized, 12)}`;
+  return `custom-${sha256HexPrefixCore(normalized, 12)}`;
 }
 
 // The auth database lives in the agent dir and shares the openclaw-agent schema

@@ -1,10 +1,16 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry, patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import {
   extractMessageRole,
-  extractMessageText,
+  extractSessionTranscriptText,
   readSessionMessagesAsync,
 } from "../../../gateway/session-transcript-readers.js";
 import * as agentEvents from "../../../infra/agent-events.js";
@@ -296,7 +302,7 @@ export async function recoverInterruptedSubagentRow(
   }
   try {
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-    const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
     const sessionEntry = loadSessionEntry({
       storePath,
       sessionKey: childSessionKey,
@@ -406,7 +412,7 @@ export async function recoverInterruptedSubagentRow(
     if (blockedReason) {
       if (!alreadyWedged) {
         try {
-          await patchSessionEntry(
+          await patchSessionEntryCore(
             { storePath, sessionKey: childSessionKey },
             (current) => {
               current.abortedLastRun = false;
@@ -473,14 +479,14 @@ export async function recoverInterruptedSubagentRow(
     if (!isRecoverySourceCurrent()) {
       return { status: "handled" };
     }
-    const lastHumanMessage = extractMessageText(
+    const lastHumanMessage = extractSessionTranscriptText(
       [...messages].toReversed().find((message) => extractMessageRole(message) === "user"),
     );
     const configChanged = messages.some(
       (message) =>
         extractMessageRole(message) === "assistant" &&
         /openclaw\.json|openclaw gateway restart|config\.patch/i.test(
-          extractMessageText(message) ?? "",
+          extractSessionTranscriptText(message) ?? "",
         ),
     );
     const sessionId = sessionEntry.sessionId;

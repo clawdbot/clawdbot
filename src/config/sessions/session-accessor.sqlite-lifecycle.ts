@@ -105,7 +105,7 @@ function deleteSessionBoardRows(
   executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
 }
 
-export async function cleanupSessionLifecycleArtifacts(
+export async function cleanupSessionLifecycleArtifactsCore(
   params: SessionLifecycleArtifactCleanupParams,
 ): Promise<SessionLifecycleArtifactCleanupResult> {
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();

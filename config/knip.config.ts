@@ -15,14 +15,15 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/actions/setup-node-env/verify-importers.mjs!",
-  ".github/actions/register-bind-mount-cleanup/main.cjs!",
-  ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  // Cloudflare deployment template: wrangler bundles the Worker from this entry.
+  "scripts/cloudflare/src/index.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
@@ -190,10 +191,6 @@ const rootEntries = [
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
   // Mintlify executes every JavaScript file in the docs content directory on each page.
   "docs/nav-tabs-underline.js!",
-  // Knip loads these audit configurations by command-line path.
-  "config/knip.config.ts!",
-  "config/knip.all-exports.config.ts!",
-  "config/knip.scripts-exports.config.ts!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -211,6 +208,8 @@ const rootEntries = [
 const bundledPluginEntries = [
   "index.ts!",
   "setup-entry.ts!",
+  // Setup APIs may lazy-load this top-level package artifact by string specifier.
+  "setup-surface.ts!",
   // Core resolves these public plugin artifacts by basename rather than by a
   // static import from the plugin entry module.
   "*-api.ts!",
@@ -419,8 +418,6 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
-    // Collection reconcile behavior is asserted by the focused review tests;
-    // production wires only the scheduled review loop.
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
@@ -438,6 +435,9 @@ const config = {
     ".": {
       ignoreDependencies: [
         "@openclaw/*",
+        // Cloudflare template dependency: declared in scripts/cloudflare/package.json
+        // (isolated deploy tooling), not in the root manifest.
+        "@cloudflare/containers",
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
@@ -575,6 +575,7 @@ const config = {
         "src/boolean-coercion.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
+        "src/json-coercion.ts!",
         "src/number-coercion.ts!",
         "src/phone-presentation.ts!",
         "src/record-coerce.ts!",
@@ -606,6 +607,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",
@@ -667,10 +669,7 @@ const config = {
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace([
-      // The plugin-SDK anthropic-cli facade resolves this shipped artifact by basename.
-      "cli-api.ts!",
-    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
       // Copied as executable runtime internals by the package artifact manifest.
@@ -683,7 +682,6 @@ const config = {
       "browser-control-auth.ts!",
       "browser-config.ts!",
       "browser-doctor.ts!",
-      "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.

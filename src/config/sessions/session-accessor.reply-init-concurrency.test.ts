@@ -11,7 +11,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -462,7 +462,7 @@ describe("session accessor cross-process concurrency", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-init-"));
     const storePath = path.join(tempDir, "sessions.json");
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { sessionKey: SESSION_KEY, storePath },
         {
           sessionId: "existing-session",
@@ -524,7 +524,7 @@ describe("session accessor cross-process concurrency", () => {
       storePath,
     };
     try {
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId,
         updatedAt: Date.now(),
       });
@@ -604,7 +604,7 @@ describe("session accessor cross-process concurrency", () => {
     ];
 
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
       await withTranscriptWriteLock(scope, async (transcript) => {
         await transcript.replaceEvents(replacement);
       });
@@ -635,7 +635,7 @@ describe("session accessor cross-process concurrency", () => {
       },
     ];
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
       const result = await runConcurrencyScenario(
         {
           kind: "transcript-rewrite",
@@ -687,7 +687,7 @@ describe("session accessor cross-process concurrency", () => {
     };
 
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
         {

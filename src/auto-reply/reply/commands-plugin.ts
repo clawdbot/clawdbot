@@ -8,7 +8,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   createPluginCommandRuntime,
@@ -46,7 +46,8 @@ export const handlePluginCommand: CommandHandler = async (
           agentId: targetAgentId,
           sessionKey: params.sessionKey,
           storePath:
-            params.storePath ?? resolveStorePath(cfg.session?.store, { agentId: targetAgentId }),
+            params.storePath ??
+            resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         }),
       }
     : undefined;

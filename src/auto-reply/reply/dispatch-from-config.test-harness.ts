@@ -501,12 +501,6 @@ export const describe0BeforeEach0 = () => {
   diagnosticMocks.logMessageProcessed.mockClear();
   diagnosticMocks.logSessionStateChange.mockClear();
   diagnosticMocks.markDiagnosticSessionProgress.mockClear();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
-    status: "skipped",
-    action: "keep_lane",
-    reason: "active_reply_work",
-  });
   diagnosticMocks.logMessageDispatchStarted.mockClear();
   diagnosticMocks.logMessageDispatchCompleted.mockClear();
   hookMocks.runner.hasHooks.mockClear();
@@ -564,8 +558,8 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStore.mockReturnValue({});
   sessionStoreMocks.readSessionEntry.mockReset();
   sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveStorePath.mockReset();
-  sessionStoreMocks.resolveStorePath.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset();
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
   sessionStoreMocks.resolveSessionStoreEntry.mockReset();
   sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
     (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({

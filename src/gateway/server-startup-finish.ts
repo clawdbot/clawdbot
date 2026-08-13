@@ -110,7 +110,6 @@ export async function finishGatewayStartup(params: {
     workerLiveEvents,
     earlyRuntime,
     cfgAtStart,
-    resolvedAuth,
     preauthConnectionBudget,
     releaseStartupAccountStarts,
     cronReconciliation,
@@ -151,7 +150,6 @@ export async function finishGatewayStartup(params: {
           listPluginNodeCapabilities(pluginRuntime.registry),
           isCoreCanvasHostEnabled(getRuntimeConfig()),
         ),
-      resolvedAuth,
       getResolvedAuth,
       getRequiredSharedGatewaySessionGeneration: () =>
         getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
@@ -276,7 +274,7 @@ export async function finishGatewayStartup(params: {
             return loadGatewayStartupPluginRuntime({
               cfg: gatewayPluginConfigAtStart,
               activationSourceConfig: startupActivationSourceConfig,
-              workspaceDir: defaultWorkspaceDir,
+              workspaceDir: runtime.pluginWorkspaceDir,
               log,
               baseMethods,
               coreGatewayMethodNames,

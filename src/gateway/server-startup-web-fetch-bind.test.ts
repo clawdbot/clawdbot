@@ -4,7 +4,11 @@
 import http from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
@@ -121,7 +125,7 @@ describe("gateway startup web fetch config", () => {
       },
     } as OpenClawConfig);
 
-    port = await getFreePort();
+    port = await getGatewayTestPort();
     server = await startTestGatewayServer(port, {
       auth: { mode: "none" },
     });

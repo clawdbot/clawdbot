@@ -11,7 +11,7 @@ import {
   markConversationDeliveryRejected,
   markConversationDeliverySuppressed,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -313,7 +313,7 @@ describe("delivery-queue recovery", () => {
       kind: "direct",
       peerId: "peer-agent",
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
       {
         sessionId: "reef-session",

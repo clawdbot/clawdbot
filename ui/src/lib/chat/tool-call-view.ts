@@ -7,6 +7,7 @@
  */
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -18,7 +19,7 @@ import {
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
-import { parsePatchView } from "./tool-call-patch.ts";
+import { parsePatchView, type PatchFileOperation } from "./tool-call-patch.ts";
 
 export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
 
@@ -39,6 +40,8 @@ export type ToolCallView = {
   /** Inline diff rows for edit/write calls. */
   diff?: DiffLine[];
   stat?: DiffStat;
+  /** Producer-recorded operations for patch rows. */
+  fileOperations?: PatchFileOperation[];
 };
 
 const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
@@ -56,10 +59,6 @@ const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
 const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   if (!args) {
@@ -223,6 +222,7 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
     return {
       kind: "edit",
       target: `${patch.paths.length} files`,
+      fileOperations: patch.fileOperations,
       diff: patch.lines,
       stat: patch.stat,
     };
@@ -235,6 +235,7 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
       kind: "edit",
       target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
       targetDetail: commonDir,
+      fileOperations: patch.fileOperations,
       diff: patch.lines,
       stat: patch.stat,
     };
@@ -244,6 +245,7 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
     kind: "edit",
     target: pathParts?.base,
     targetDetail: pathParts?.dir,
+    fileOperations: patch.fileOperations,
     diff: patch.lines,
     stat: patch.stat,
   };
@@ -276,6 +278,16 @@ export function resolveToolCallTargetPaths(name: string, args?: unknown): string
   }
   const path = resolvePathArg(record);
   return path ? [path] : [];
+}
+
+export function resolveToolCallFileOperations(
+  name: string,
+  args?: unknown,
+): PatchFileOperation[] | undefined {
+  if (!PATCH_TOOL_NAMES.has(normalizeKey(name))) {
+    return undefined;
+  }
+  return resolvePatchData(asRecord(args))?.fileOperations;
 }
 
 export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {

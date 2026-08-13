@@ -100,7 +100,9 @@ export class AgentSelect extends OpenClawLightDomElement {
     const agentId = option.agent?.id;
     const identity = agentId ? (this.identityById[agentId] ?? null) : null;
     const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-    const imageUrl = url ? this.avatarLoader.resolve(url, this.authToken) : null;
+    const imageUrl = url
+      ? this.avatarLoader.resolve(url, this.authToken ? [this.authToken] : [])
+      : null;
     return renderAgentSelectAvatar(option, identity, imageUrl);
   }
 

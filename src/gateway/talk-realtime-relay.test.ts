@@ -78,6 +78,113 @@ function stopTalkRealtimeRelaySession(
 }
 
 describe("talk realtime gateway relay", () => {
+  it.each([
+    [
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      "turn.ended",
+    ],
+    [
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      "turn.ended",
+    ],
+    [
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+      "turn.cancelled",
+    ],
+  ])("keeps a relay reusable after each terminal response", async (outcome, terminalType) => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const close = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport({ close });
+      },
+    };
+    const events: Array<{ payload: unknown }> = [];
+    const context = {
+      broadcastToConnIds: (_event: string, payload: unknown) => events.push({ payload }),
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "be brief",
+      tools: [],
+    });
+    await Promise.resolve();
+    if (!bridgeRequest) {
+      throw new Error("expected realtime bridge request");
+    }
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("first").toString("base64"),
+      timestamp: 1,
+    });
+    bridgeRequest.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: outcome.responseId,
+    });
+    bridgeRequest.onResponseDone?.(outcome);
+    bridgeRequest.onEvent?.({
+      direction: "server",
+      responseId: outcome.responseId,
+      type: "response.done",
+    });
+
+    const firstPayloads = events.map(({ payload }) => payload as Record<string, unknown>);
+    const firstTalkEvents = firstPayloads
+      .map((payload) => payload.talkEvent)
+      .filter((event): event is Record<string, unknown> => Boolean(event));
+    expect(firstTalkEvents.filter((event) => event.type === terminalType)).toHaveLength(1);
+    expect(firstPayloads.filter((payload) => payload.type === "error")).toHaveLength(
+      outcome.status === "cancelled" ? 0 : 1,
+    );
+    expect(firstPayloads.filter((payload) => payload.type === "audioDone")).toHaveLength(1);
+    expect(relaySessions.has(session.relaySessionId)).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("later").toString("base64"),
+      timestamp: 2,
+    });
+    bridgeRequest.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "response-2",
+    });
+    bridgeRequest.onResponseDone?.({ status: "completed", responseId: "response-2" });
+    bridgeRequest.onEvent?.({
+      direction: "server",
+      responseId: "response-2",
+      type: "response.done",
+    });
+
+    expect(
+      events.filter(
+        ({ payload }) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "audioDone",
+      ),
+    ).toHaveLength(2);
+    expect(relaySessions.has(session.relaySessionId)).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   afterEach(async () => {
     for (const [relaySessionId, connId] of activeRelaySessions) {
       try {

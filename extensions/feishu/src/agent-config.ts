@@ -1,14 +1,8 @@
 // Feishu helper module supports agent config behavior.
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 
 type ReasoningDefault = "on" | "stream" | "off";
-
-const DEFAULT_AGENT_ID = "main";
-
-function normalizeAgentId(value: string | undefined | null): string {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized || DEFAULT_AGENT_ID;
-}
 
 export function resolveFeishuConfigReasoningDefault(
   cfg: ClawdbotConfig,

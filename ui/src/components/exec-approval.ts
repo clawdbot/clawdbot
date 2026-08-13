@@ -5,12 +5,12 @@ import { property, query, state } from "lit/decorators.js";
 import { modalApprovalQueue } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
+import { formatCountdown } from "../lib/format.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
-  formatApprovalCountdown,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -47,7 +47,7 @@ function renderApprovalQueueList(params: {
       ${others.map((entry) => {
         const command = compactCommand(entry.request.command);
         const agent = entry.request.agentId?.trim() || "—";
-        const countdown = formatApprovalCountdown(entry.expiresAtMs, params.nowMs);
+        const countdown = formatCountdown(entry.expiresAtMs, params.nowMs, true);
         return html`
           <button
             class="exec-approval-list__item"

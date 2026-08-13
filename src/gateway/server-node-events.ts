@@ -51,8 +51,8 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
-  sendDurableMessageBatch,
-  upsertSessionEntry,
+  sendDurableMessageBatchCore,
+  upsertSessionEntryCore,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -386,7 +386,7 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       sessionKey: params.canonicalKey,
       storePath,
@@ -515,7 +515,7 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,

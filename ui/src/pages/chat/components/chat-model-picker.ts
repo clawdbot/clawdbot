@@ -91,8 +91,8 @@ function pickerMenu(target: EventTarget | null): HTMLElement | null {
     : null;
 }
 
-function visibleModelRows(menu: HTMLElement): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
+function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
+  return [...root.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
     .filter((row) => !row.hidden)
     .toSorted(
       (left, right) =>
@@ -234,11 +234,6 @@ function handleModelSearchKeydown(event: KeyboardEvent): void {
   if (rows.length === 0) {
     return;
   }
-  if (/^[1-9]$/u.test(event.key) && input.value === "") {
-    event.preventDefault();
-    rows[Number(event.key) - 1]?.click();
-    return;
-  }
   if (event.key === "Enter") {
     const highlighted = rows.find((row) => row.hasAttribute("data-chat-model-highlighted"));
     if (highlighted) {
@@ -256,6 +251,16 @@ function handleModelSearchKeydown(event: KeyboardEvent): void {
   const nextIndex = currentIndex < 0 ? 0 : (currentIndex + offset) % rows.length;
   highlightModelRow(menu, rows[nextIndex]);
   rows[nextIndex]?.scrollIntoView?.({ block: "nearest" });
+}
+
+function handleModelPickerKeydown(event: KeyboardEvent): void {
+  const details = event.currentTarget as HTMLDetailsElement;
+  if (!details.open || event.target instanceof HTMLInputElement || !/^[1-9]$/u.test(event.key)) {
+    return;
+  }
+  const row = visibleModelRows(details)[Number(event.key) - 1];
+  event.preventDefault();
+  row?.click();
 }
 
 function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions: boolean) {
@@ -382,6 +387,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
         if (!details.open) {
@@ -392,7 +398,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
           if (input) {
             updateModelSearch(input);
-            input.focus({ preventScroll: true });
           }
         });
       }}
@@ -411,7 +416,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
+            return;
           }
+          (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
         ${modelToolsUnavailable

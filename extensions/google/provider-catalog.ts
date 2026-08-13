@@ -59,7 +59,10 @@ export function buildGoogleStaticCatalogProvider(): ModelProviderConfig {
   return {
     baseUrl: GOOGLE_GEMINI_BASE_URL,
     api: "google-generative-ai",
-    models: GOOGLE_GEMINI_TEXT_MODELS,
+    models: GOOGLE_GEMINI_TEXT_MODELS.map((model) => ({
+      ...model,
+      input: [...model.input, "video"],
+    })),
   };
 }
 
@@ -73,7 +76,7 @@ function readGoogleLiveModels(body: unknown): readonly unknown[] {
 
 function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
   if (!id.startsWith("gemma-")) {
-    return ["text", "image"];
+    return ["text", "image", "video"];
   }
   const isMultimodalGemma =
     /^gemma-3-(?:4b|12b|27b)(?:-|$)/.test(id) ||

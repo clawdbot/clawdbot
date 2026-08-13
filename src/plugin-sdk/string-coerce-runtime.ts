@@ -5,6 +5,7 @@ export {
   localeLowercasePreservingWhitespace,
   lowercasePreservingWhitespace,
   normalizeFastMode,
+  normalizeBoundedOptionalString,
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
   normalizeOptionalLowercaseString,
@@ -12,6 +13,8 @@ export {
   normalizeOptionalStringifiedId,
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
+  readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
 export {
@@ -19,7 +22,6 @@ export {
   asFiniteNumber,
   asPositiveSafeInteger,
   asSafeIntegerInRange,
-  parseDateTimestampMs,
   parseFiniteNumber,
   parseStrictFiniteNumber,
   parseStrictInteger,
@@ -29,14 +31,17 @@ export {
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
-  asNullableRecord,
+  asNonArrayRecord,
   asNullableObjectRecord,
-  asOptionalRecord,
+  asNullableRecord,
   asOptionalObjectRecord,
+  asOptionalRecord,
+  filterStringRecord,
   isRecord,
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
 export {
+  filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,

@@ -31,7 +31,7 @@ import {
 } from "./install.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
   createBundleInstallFixtureFactory,
   createDualFormatInstallFixtureFactory,
@@ -77,7 +77,7 @@ const archiveFixturePathCache = new Map<string, string>();
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install");
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );

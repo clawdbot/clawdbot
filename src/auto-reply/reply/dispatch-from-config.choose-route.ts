@@ -32,6 +32,7 @@ import {
   hasExecApprovalPayload,
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
+import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
@@ -41,8 +42,10 @@ import {
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
   attachReplyDispatchUndeliveredFallback,
+  prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
 
@@ -278,7 +281,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     return delivered;
   };
   const sendFinalPayload = async (
-    payload: ReplyPayload,
+    inputPayload: ReplyPayload,
     options: {
       abortSignal?: AbortSignal | false;
       deliveryId?: string;
@@ -289,6 +292,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     dedupedAgainstBlock?: boolean;
     queuedFinal: boolean;
     routedFinalCount: number;
+    suppressionReason?: NormalizeReplySkipReason;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
   }> => {
     const abortSignal =
@@ -304,6 +308,16 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     // Trailing commentary must land ahead of the final answer.
     await flushPendingCommentaryProgress();
     throwIfFinalDeliveryAborted();
+    const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
+    if (preparation.kind === "suppress") {
+      await suppressPendingFinalDelivery(inputPayload);
+      return {
+        queuedFinal: false,
+        routedFinalCount: 0,
+        suppressionReason: preparation.reason,
+      };
+    }
+    const payload = preparation.payload;
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;

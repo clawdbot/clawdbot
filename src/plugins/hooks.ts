@@ -13,7 +13,7 @@ import {
   attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -418,7 +418,7 @@ export function createHookRunner(
     }
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
       (name) => {
-        const normalized = normalizeToolName(name);
+        const normalized = normalizeToolPolicyName(name);
         return (
           isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
           isToolAllowedByPolicyName(normalized, { allow: normalizedRight })

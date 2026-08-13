@@ -1,6 +1,7 @@
 // Model probe RPC tests cover validation, normalization, bounded execution, and redacted mapping.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { AuthProbeSummary } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -85,6 +86,28 @@ describe("models.probe", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+  });
+
+  it("returns typed selection-required when agentId is omitted", async () => {
+    mocks.resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["main", "writer"], {
+        surface: "model auth",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+    const { options, respond } = createOptions({ provider: "openai" });
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
     );
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
   });

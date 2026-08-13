@@ -27,4 +27,18 @@ describe("node agent-runs config", () => {
       ).toBe(true);
     }
   });
+
+  it.each([true, false])("accepts worker session hosting enabled=%s", (enabled) => {
+    expect(validateConfigObject({ nodeHost: { workerRuns: { enabled } } }).ok).toBe(true);
+  });
+
+  it("rejects non-boolean worker session hosting enablement", () => {
+    const result = validateConfigObject({ nodeHost: { workerRuns: { enabled: "yes" } } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path === "nodeHost.workerRuns.enabled")).toBe(
+        true,
+      );
+    }
+  });
 });

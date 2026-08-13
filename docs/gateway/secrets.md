@@ -278,7 +278,9 @@ The shared secret store is a Gateway-wide, team-scoped place for secrets and env
 Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
 
 - `secret` values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC.
-- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to agent exec environments, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning.
+- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to the environment of commands run by OpenClaw's own exec tool, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning. This covers direct tool calls, Code Mode (whose guest reaches shell through the same `openclaw:core:exec` tool), sandboxed exec, and `node` -hosted exec.
+
+It does not cover commands executed inside a provider-native harness — the Codex app-server and its sandbox exec-server, or ACP children such as Claude Code. Those harnesses assemble their own child environment and never pass through OpenClaw's exec preparation, so store entries are absent there. The store snapshot is also read once per agent run, so entries added mid-run apply from the next run onward.
 
 `secret` entries are never injected into subprocess environments. They remain available only through `store` SecretRefs because plaintext env injection would bypass the store disclosure boundary; safe secret injection requires a future egress-substitution mechanism.
 

@@ -36,7 +36,7 @@ describe("worker placement dispatch reclaim", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("orders the migration barrier, provisioning, sync, attachment, and activation", async () => {
+  it("attaches before opening one tunnel for workspace sync and activation", async () => {
     const harness = createHarness(placementStore);
 
     await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
@@ -55,14 +55,14 @@ describe("worker placement dispatch reclaim", () => {
       "placement:provisioning",
       "create",
       "placement:syncing",
-      "tunnel:ready",
-      "sync",
-      "placement:starting",
       "attach",
       "tunnel:attached",
+      "sync",
+      "placement:starting",
       "activation",
       "placement:active",
     ]);
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
   });
 
   it("reclaims an unchanged active placement through the fenced teardown lifecycle", async () => {

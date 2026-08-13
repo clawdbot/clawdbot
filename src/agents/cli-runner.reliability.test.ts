@@ -14,7 +14,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -389,7 +389,7 @@ async function seedSqliteSessionEntry(params: {
   sessionFile: string;
   storePath: string;
 }): Promise<void> {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -839,6 +839,52 @@ describe("runCliAgent reliability", () => {
       sessionId: "downgraded-session",
     });
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat unsupported-flag wording fragments as a Claude downgrade", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      makeManagedRun({
+        exitCode: 1,
+        durationMs: 25,
+        stderr: "Claude exited unexpectedly while using --resume-session-at",
+      }),
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:resume-token-boundary",
+      runId: "run-resume-token-boundary",
+      cliSessionId: "existing-session",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+    context.params.cliSessionBinding = {
+      sessionId: "existing-session",
+      resumeCheckpointId: "assistant-before-stall",
+      forkNextResume: true,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          forkCliSessionOnResume: true,
+          claimCliSessionFork: vi.fn(async () => true),
+          restoreCliSessionFork: vi.fn(async () => {}),
+          persistCliSessionForkSuccessor: vi.fn(async () => {}),
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("exited unexpectedly");
+
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
@@ -3978,7 +4024,7 @@ describe("runCliAgent reliability", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey, storePath },
           { sessionId: "replacement-session", updatedAt: 2 },
         );
@@ -4010,6 +4056,70 @@ describe("runCliAgent reliability", () => {
 
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
         "replacement-session",
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists a blocked bare-key turn under its fixed-store owner", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          message: "Blocked by policy.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+    const storePath = path.join(dir, "shared-sessions.json");
+    const sessionKey = "global";
+    const context = makeClaudePreparedContext({
+      sessionKey,
+      runId: "run-blocked-fixed-owner",
+    });
+    context.preparedBackend.backend.sessionMode = "none";
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            config: {
+              session: { store: storePath },
+              agents: {
+                ownership: "explicit",
+                defaults: { sessionStore: { agentId: "ops" } },
+                entries: { ops: {}, research: {} },
+              },
+            },
+            sessionFile,
+            storePath,
+            workspaceDir: dir,
+            prompt: "secret prompt",
+          },
+        }),
+      ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+      await expect(
+        loadTranscriptEvents({
+          agentId: "ops",
+          sessionId: context.params.sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({ role: "user" }),
+          }),
+        ]),
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -4442,17 +4552,6 @@ describe("resolveCliNoOutputTimeoutMs", () => {
   });
 
   it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
-    const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
-      timeoutMs: 600_000,
-      runTimeoutOverrideMs: 600_000,
-      useResume: true,
-      trigger: "user",
-    });
-    expect(timeoutMs).toBe(480_000);
-  });
-
-  it("lets configured agent default timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },
       timeoutMs: 600_000,

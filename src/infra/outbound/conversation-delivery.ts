@@ -12,7 +12,7 @@ import {
   type ConversationDeliveryStoreScope,
 } from "../../config/sessions/conversation-delivery-store.js";
 import type { ConversationRecord } from "../../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageActionResult } from "./message-action-contracts.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -73,7 +73,9 @@ function resolveConversationDeliveryStoreScope(
     agentId: context.agentId,
     // Recovery cannot serialize process.env. Persist the resolved marker path
     // so it reopens the same per-agent SQLite database after restart.
-    storePath: resolveStorePath(context.config.session?.store, { agentId: context.agentId }),
+    storePath: resolveSessionStorePathCore(context.config.session?.store, {
+      agentId: context.agentId,
+    }),
   };
 }
 

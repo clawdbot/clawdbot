@@ -12,7 +12,10 @@ import {
 } from "../../inherited-tool-deny.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
-import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
+import {
+  resolveGatewaySessionStoreTarget,
+  upsertSessionEntryCore,
+} from "./subagent-spawn.runtime.js";
 
 function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
   const entry: Partial<SessionEntry> = {};
@@ -154,7 +157,7 @@ export async function createInitialSubagentSession(params: {
           cfg: params.cfg,
           key: params.childSessionKey,
         });
-    const entry = await upsertSessionEntry(
+    const entry = await upsertSessionEntryCore(
       {
         storePath: target.storePath,
         sessionKey: target.canonicalKey,
@@ -189,7 +192,7 @@ export async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         storePath: target.storePath,
         sessionKey: target.canonicalKey,

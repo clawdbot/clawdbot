@@ -7,13 +7,17 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
-import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
+import {
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolPolicyName,
+} from "./tool-policy-shared.js";
 export {
   attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
@@ -60,7 +64,7 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   if (!Array.isArray(policy?.allow)) {
     return false;
   }
-  const normalizedAllow = policy.allow.map((entry) => normalizeToolName(entry));
+  const normalizedAllow = policy.allow.map((entry) => normalizeToolPolicyName(entry));
   // A wildcard remains allow-all when additive entries are present. Treating
   // those extras as restrictive would unnecessarily cap delegated sessions.
   if (normalizedAllow.includes("*")) {
@@ -76,13 +80,15 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   if (!policy) {
     return false;
   }
-  if (expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolName(entry)))) {
+  if (
+    expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolPolicyName(entry)))
+  ) {
     return true;
   }
   return (
     Array.isArray(policy.allow) &&
     policy.allow.length > 0 &&
-    !expandToolGroups(policy.allow).some((entry) => normalizeToolName(entry) === "*")
+    !expandToolGroups(policy.allow).some((entry) => normalizeToolPolicyName(entry) === "*")
   );
 }
 
@@ -94,7 +100,7 @@ export function replaceWithEffectiveToolAllowlist(
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
-    const normalized = normalizeToolName(tool.name);
+    const normalized = normalizeToolPolicyName(tool.name);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -163,7 +169,7 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     if (!meta) {
       continue;
     }
-    const name = normalizeToolName(tool.name);
+    const name = normalizeToolPolicyName(tool.name);
     all.push(name);
     const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
     if (!pluginId) {
@@ -186,7 +192,7 @@ function expandPluginGroups(
   }
   const expanded: string[] = [];
   for (const entry of list) {
-    const normalized = normalizeToolName(entry);
+    const normalized = normalizeToolPolicyName(entry);
     if (normalized === "group:plugins") {
       if (groups.all.length > 0) {
         expanded.push(...groups.all);
@@ -228,7 +234,7 @@ function buildDeclaredMcpToolPrefixes(serverNames?: Iterable<string>): Set<strin
   const usedNames = new Set<string>();
   for (const serverName of serverNames ?? []) {
     const safeName = sanitizeServerName(serverName, usedNames);
-    const prefix = normalizeToolName(safeName + TOOL_NAME_SEPARATOR);
+    const prefix = normalizeToolPolicyName(safeName + TOOL_NAME_SEPARATOR);
     if (prefix) {
       prefixes.add(prefix);
     }
@@ -246,8 +252,8 @@ function normalizeDeclaredPluginIds(values?: Iterable<string>): Set<string> {
 
 function normalizeDeclaredToolNames(values?: Iterable<string>): Set<string> {
   return new Set(
-    Array.from(values ?? [], (value) => normalizeToolName(value)).filter((value): value is string =>
-      Boolean(value),
+    Array.from(values ?? [], (value) => normalizeToolPolicyName(value)).filter(
+      (value): value is string => Boolean(value),
     ),
   );
 }

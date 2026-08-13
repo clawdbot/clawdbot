@@ -13,7 +13,7 @@ import {
 } from "./shared-auth.test-helpers.js";
 import {
   connectOk,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -257,7 +257,7 @@ describe("gateway shared auth rotation", () => {
   };
 
   beforeAll(async () => {
-    port = await getFreePort();
+    port = await getGatewayTestPort();
     testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
     server = await startTestGatewayServer(port, { controlUiEnabled: true });
 
@@ -338,7 +338,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
     }
-    secretRefPort = await getFreePort();
+    secretRefPort = await getGatewayTestPort();
     testState.gatewayAuth = undefined;
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
     await fs.mkdir(path.dirname(configPath), { recursive: true });

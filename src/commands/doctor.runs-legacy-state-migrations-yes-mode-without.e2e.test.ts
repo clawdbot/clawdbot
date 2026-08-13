@@ -14,7 +14,7 @@ import {
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   useMockProviders: false,
-  resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),
+  resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
 vi.mock("../plugins/providers.runtime.js", async () => {
@@ -23,12 +23,12 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
-    resolvePluginProviders: (
-      params: Parameters<typeof actual.resolvePluginProviders>[0],
+    resolvePluginProvidersCore: (
+      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
     ): ProviderPlugin[] =>
       providerRuntimeMocks.useMockProviders
-        ? providerRuntimeMocks.resolvePluginProviders(params)
-        : actual.resolvePluginProviders(params),
+        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
+        : actual.resolvePluginProvidersCore(params),
   };
 });
 
@@ -43,7 +43,7 @@ describe("doctor command", () => {
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();
     providerRuntimeMocks.useMockProviders = false;
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([]);
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {
@@ -154,7 +154,7 @@ describe("doctor command", () => {
       },
     });
     providerRuntimeMocks.useMockProviders = true;
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "anthropic",
         label: "Anthropic",

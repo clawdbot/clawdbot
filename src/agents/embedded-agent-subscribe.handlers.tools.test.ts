@@ -1275,6 +1275,31 @@ describe("handleToolExecutionEnd MCP App channel view tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd MCP connect action tracking", () => {
+  it("retains only a successful HTTP(S) connect action", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "mcp_connect",
+      toolCallId: "mcp-connect",
+      isError: false,
+      result: {
+        details: {
+          mcpConnect: {
+            serverName: "calendar",
+            authorizationUrl: "https://auth.example/authorize?state=opaque",
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.latestMcpConnectAction).toEqual({
+      serverName: "calendar",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+    });
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();

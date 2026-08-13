@@ -10,7 +10,7 @@ import { spawnCommand } from "../../../process/exec.js";
  *
  * Searches files by glob through fd/local operations and returns bounded, renderable results.
  */
-import { toPosixPath } from "../../../shared/ignore-rules.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -77,7 +77,7 @@ export interface FindToolOptions {
 
 function formatFindCall(
   args: { pattern: string; path?: string; limit?: number } | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
@@ -101,7 +101,7 @@ function formatFindResult(
     details?: FindToolDetails;
   },
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
 ): string {
   const resultLimit = result.details?.resultLimitReached;
@@ -233,9 +233,9 @@ export function createFindToolDefinition(
               // Relativize paths against the search root for stable output.
               const relativized = results.slice(0, observationLimit).map((p) => {
                 if (p.startsWith(searchPath)) {
-                  return toPosixPath(p.slice(searchPath.length + 1));
+                  return normalizeNativePathSeparators(p.slice(searchPath.length + 1));
                 }
-                return toPosixPath(path.relative(searchPath, p));
+                return normalizeNativePathSeparators(path.relative(searchPath, p));
               });
               settle(() =>
                 resolve(
@@ -367,7 +367,7 @@ export function createFindToolDefinition(
                 if (hadTrailingSlash && !relativePath.endsWith("/")) {
                   relativePath += "/";
                 }
-                relativized.push(toPosixPath(relativePath));
+                relativized.push(normalizeNativePathSeparators(relativePath));
               }
 
               settle(() =>

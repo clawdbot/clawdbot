@@ -1,3 +1,4 @@
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
@@ -149,20 +150,16 @@ function findQueuedSendMessageIndex(
     return -1;
   }
   return (Array.isArray(messages) ? messages : []).findIndex((message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    if (!isRecord(message)) {
       return false;
     }
     // Render retirement requires a user-role entry: an assistant entry can
     // carry the same run key without proving the queued turn is visible.
-    const record = message as Record<string, unknown>;
+    const record = message;
     if (userRoleOnly && record.role !== "user") {
       return false;
     }
-    const marker = record["__openclaw"];
-    const markerIdempotencyKey =
-      marker && typeof marker === "object" && !Array.isArray(marker)
-        ? (marker as { idempotencyKey?: unknown }).idempotencyKey
-        : undefined;
+    const markerIdempotencyKey = asOptionalRecord(record["__openclaw"])?.idempotencyKey;
     const idempotencyKey = markerIdempotencyKey ?? record.idempotencyKey;
     return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
   });

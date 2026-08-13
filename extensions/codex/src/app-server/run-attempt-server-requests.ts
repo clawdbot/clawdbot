@@ -269,6 +269,9 @@ export function createCodexAttemptServerRequestController(
           contentItems: protocolResponse.contentItems,
         });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
+        if (protocolResponse.success && call.tool === "update_plan") {
+          projector?.recordDynamicPlanUpdate(response.executedArguments ?? call.arguments);
+        }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
           void emitCodexAppServerEvent(params, {

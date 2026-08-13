@@ -35,7 +35,7 @@ describe("status.command-sections", () => {
         },
       }),
     ).toBe(
-      "30m (main; waiting for delivery route — message your bot once, or set heartbeat.target)",
+      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
     );
   });
 

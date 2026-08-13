@@ -25,7 +25,7 @@ vi.mock("../secrets/store/secret-store.js", () => {
 });
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -750,7 +750,7 @@ describe("gateway aux handlers", () => {
       required: "gen-old",
     });
     expect(
-      getRuntimeAuthProfileStoreSnapshot(authAgentDir)?.profiles["openai:default"],
+      getRuntimeAuthProfileStoreSnapshotCore(authAgentDir)?.profiles["openai:default"],
     ).toMatchObject({ access: "access-new", refresh: "refresh-new" });
   });
 

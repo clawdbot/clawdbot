@@ -221,7 +221,6 @@ const explicitNeverBundleDependencies = [
   "jimp",
   "matrix-js-sdk",
   "prism-media",
-  "qrcode-terminal",
   "sharp",
   "typescript",
   "vitest",

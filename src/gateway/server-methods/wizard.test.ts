@@ -12,6 +12,35 @@ import {
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
+
+const setupTargetLock = vi.hoisted(() => ({
+  beforeRelease: undefined as Promise<void> | undefined,
+  releaseReached: undefined as (() => void) | undefined,
+}));
+
+vi.mock("../../infra/file-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/file-lock.js")>(
+    "../../infra/file-lock.js",
+  );
+  return {
+    ...actual,
+    withFileLock: async <T>(
+      filePath: string,
+      options: Parameters<typeof actual.acquireFileLock>[1],
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const lock = await actual.acquireFileLock(filePath, options);
+      try {
+        return await run();
+      } finally {
+        setupTargetLock.releaseReached?.();
+        await setupTargetLock.beforeRelease;
+        await lock.release();
+      }
+    },
+  };
+});
+
 import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
@@ -428,6 +457,87 @@ describe("wizard setup ownership", () => {
     expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
 
     await cancelWizardSessions(tracker.wizardSessions);
+  });
+
+  it("settles setup admission before returning a terminal wizard status", async () => {
+    const runnerSettled = createDeferred();
+    const releaseSetupTargetLock = createDeferred();
+    const setupTargetLockReleaseReached = createDeferred();
+    setupTargetLock.beforeRelease = releaseSetupTargetLock.promise;
+    setupTargetLock.releaseReached = setupTargetLockReleaseReached.resolve;
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+    let admittedSession: import("../../wizard/session.js").WizardSession | undefined;
+
+    try {
+      const startRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({ params: { mode: "local" }, respond: startRespond, context } as never);
+      const [, start] = startRespond.mock.calls[0] ?? [];
+      expect(start).toMatchObject({ status: "running" });
+      admittedSession = expectDefined(
+        tracker.wizardSessions.get(start.sessionId),
+        "admitted classic setup session",
+      );
+
+      runnerSettled.resolve();
+      await setupTargetLockReleaseReached.promise;
+      expect(admittedSession.getStatus()).toBe("done");
+      await expect(runExclusiveSystemAgentSetupActivation(async () => undefined)).rejects.toThrow(
+        "setup is already in progress",
+      );
+
+      const replacementRespond = vi.fn();
+      let replacementStart: Promise<void> | undefined;
+      const statusRespond = vi.fn(() => {
+        replacementStart = Promise.resolve(
+          expectDefined(
+            wizardHandlers["wizard.start"],
+            "wizard.start test invariant",
+          )({ params: { mode: "local" }, respond: replacementRespond, context } as never),
+        );
+      });
+      const statusTask = Promise.resolve(
+        expectDefined(
+          wizardHandlers["wizard.status"],
+          "wizard.status test invariant",
+        )({ params: { sessionId: start.sessionId }, respond: statusRespond, context } as never),
+      );
+
+      await Promise.resolve();
+      releaseSetupTargetLock.resolve();
+      await statusTask;
+      await vi.waitFor(() => expect(replacementStart).toBeDefined());
+      await replacementStart;
+
+      expect(statusRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "done" }),
+        undefined,
+      );
+      expect(replacementRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "running" }),
+        undefined,
+      );
+    } finally {
+      runnerSettled.resolve();
+      releaseSetupTargetLock.resolve();
+      if (admittedSession) {
+        await whenAdmittedWizardSessionSettled(admittedSession);
+      }
+      await cancelWizardSessions(tracker.wizardSessions);
+      setupTargetLock.beforeRelease = undefined;
+      setupTargetLock.releaseReached = undefined;
+    }
   });
 
   it.each([

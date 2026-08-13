@@ -116,7 +116,7 @@ const installRunEmbeddedMocks = () => {
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
     return {
       ...actual,
-      resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
       resolveStoredSessionKeyForSessionId: (opts: unknown) =>
         resolveStoredSessionKeyForSessionIdMock(opts),
     };
@@ -176,7 +176,7 @@ type TestRunEmbeddedAgent = (
 let runEmbeddedAgent: TestRunEmbeddedAgent;
 let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
 let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
-let upsertSessionEntry: typeof import("../config/sessions/session-accessor.js").upsertSessionEntry;
+let upsertSessionEntryCore: typeof import("../config/sessions/session-accessor.js").upsertSessionEntryCore;
 let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
 let agentDir: string;
@@ -200,7 +200,7 @@ beforeAll(async () => {
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
-  ({ loadTranscriptEvents, upsertSessionEntry } =
+  ({ loadTranscriptEvents, upsertSessionEntryCore } =
     await import("../config/sessions/session-accessor.js"));
   ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
@@ -258,7 +258,7 @@ const createPersistedTestSessionManager = async (params: {
   sessionKey: string;
 }) => {
   const target = await resolveTestSessionTarget(params);
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
     { sessionId: target.sessionId, updatedAt: Date.now() },
   );

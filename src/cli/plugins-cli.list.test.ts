@@ -8,16 +8,16 @@ import type {
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  buildPluginDiagnosticsReport,
-  buildPluginInspectReport,
-  buildPluginRegistrySnapshotReport,
-  buildPluginSnapshotReport,
-  inspectPluginRegistry,
-  loadConfig,
-  loadPluginManifestRegistry,
-  readConfigFileSnapshot,
+  buildPluginDiagnosticsReportMock,
+  buildPluginInspectReportMock,
+  buildPluginRegistrySnapshotReportMock,
+  buildPluginSnapshotReportMock,
+  inspectPluginRegistryMock,
+  pluginCliConfigMock,
+  loadPluginManifestRegistryMock,
+  readConfigFileSnapshotMock,
   resetPluginsCliTestState,
-  refreshPluginRegistry,
+  refreshPluginRegistryMock,
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
@@ -39,10 +39,10 @@ async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssu
       entries: { google: { config: { apiKey: "test-google-key" } } },
     },
   };
-  loadConfig.mockReturnValue(config);
-  const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
-  readConfigFileSnapshot.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
-  loadPluginManifestRegistry.mockReturnValue({
+  pluginCliConfigMock.mockReturnValue(config);
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigFileSnapshot;
+  readConfigFileSnapshotMock.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
+  loadPluginManifestRegistryMock.mockReturnValue({
     plugins: ["google", "imessage", "memory-core"].map((id) => ({
       id,
       channels: [],
@@ -57,7 +57,7 @@ async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssu
     })),
     diagnostics: [],
   });
-  buildPluginDiagnosticsReport.mockReturnValue({
+  buildPluginDiagnosticsReportMock.mockReturnValue({
     plugins: [createPluginRecord({ id: "google", enabled: false, status: "disabled" })],
     diagnostics: [],
   });
@@ -74,7 +74,7 @@ describe("plugins cli list", () => {
   });
 
   it("includes imported state in JSON output", async () => {
-    buildPluginRegistrySnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       registrySource: "persisted",
       registryDiagnostics: [],
@@ -91,8 +91,8 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(1);
-    const [reportOptions] = buildPluginRegistrySnapshotReport.mock.calls[0] as [
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
+    const [reportOptions] = buildPluginRegistrySnapshotReportMock.mock.calls[0] as [
       {
         config?: unknown;
         logger?: { info?: unknown; warn?: unknown; error?: unknown };
@@ -126,14 +126,17 @@ describe("plugins cli list", () => {
   });
 
   it("keeps doctor on a module-loading snapshot", async () => {
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith({
+      config: {},
+      effectiveOnly: true,
+    });
     expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
   });
 
@@ -243,7 +246,7 @@ describe("plugins cli list", () => {
 
   it("emits one sanitized JSON doctor report without human decoration", async () => {
     const homeDir = "/tmp/openclaw-plugin-doctor-home";
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [
         createPluginRecord({
           id: "broken",
@@ -340,7 +343,7 @@ describe("plugins cli list", () => {
   ])(
     "reports actionable discovery warnings when $description",
     async ({ diagnostic, expected }) => {
-      buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
+      buildPluginDiagnosticsReportMock.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
 
       await runPluginsCommand(["plugins", "doctor"]);
 
@@ -352,7 +355,7 @@ describe("plugins cli list", () => {
   );
 
   it("keeps actionable discovery warnings alongside existing errors", async () => {
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [
         { level: "error", pluginId: "broken", message: "plugin manifest invalid" },
@@ -380,8 +383,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue({});
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    pluginCliConfigMock.mockReturnValue({});
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
       path: "/tmp/openclaw-config.json5",
       exists: true,
       raw: "{}",
@@ -396,7 +399,7 @@ describe("plugins cli list", () => {
       warnings: [],
       legacyIssues: [],
     });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -432,8 +435,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
       path: "/tmp/openclaw-config.json5",
       exists: true,
       raw: "{}",
@@ -448,7 +451,7 @@ describe("plugins cli list", () => {
       warnings: [],
       legacyIssues: [],
     });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -472,8 +475,8 @@ describe("plugins cli list", () => {
         backend: "acpx",
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -499,8 +502,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -522,8 +525,8 @@ describe("plugins cli list", () => {
         backend: "acpx",
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "acpx", enabled: false, status: "disabled" })],
       diagnostics: [],
     });
@@ -547,8 +550,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -572,8 +575,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "codex" })],
       diagnostics: [],
     });
@@ -595,8 +598,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "codex", enabled: false, status: "disabled" })],
       diagnostics: [],
     });
@@ -626,8 +629,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -660,8 +663,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -678,7 +681,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports config-selected plugin source shadowing in doctor output", async () => {
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [
         createPluginRecord({
           id: "discord",
@@ -712,7 +715,7 @@ describe("plugins cli list", () => {
   });
 
   it("does not report healthy config-selected plugin source shadowing as doctor issue", async () => {
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [
         createPluginRecord({
           id: "discord",
@@ -738,7 +741,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {
-    inspectPluginRegistry.mockResolvedValue({
+    inspectPluginRegistryMock.mockResolvedValue({
       state: "stale",
       refreshReasons: ["stale-manifest"],
       persisted: {
@@ -754,8 +757,8 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry"]);
 
-    expect(inspectPluginRegistry).toHaveBeenCalledWith({ config: {} });
-    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
+    expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("State:");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
@@ -763,7 +766,7 @@ describe("plugins cli list", () => {
   });
 
   it("refreshes the persisted plugin registry on request", async () => {
-    refreshPluginRegistry.mockResolvedValue({
+    refreshPluginRegistryMock.mockResolvedValue({
       plugins: [
         { pluginId: "demo", enabled: true },
         { pluginId: "off", enabled: false },
@@ -772,11 +775,11 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
-    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: {},
       reason: "manual",
     });
-    expect(inspectPluginRegistry).not.toHaveBeenCalled();
+    expect(inspectPluginRegistryMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
 
@@ -800,11 +803,11 @@ describe("plugins cli list", () => {
         clawpackSize: 4096,
       },
     });
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
       diagnostics: [],
     });
-    buildPluginInspectReport.mockReturnValue({
+    buildPluginInspectReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
       shape: "hook-only",
@@ -838,7 +841,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
-    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
@@ -855,11 +858,11 @@ describe("plugins cli list", () => {
   });
 
   it("runtime-inspects without repairing deps", async () => {
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
       diagnostics: [],
     });
-    buildPluginInspectReport.mockReturnValue({
+    buildPluginInspectReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
       shape: "hook-only",
@@ -888,14 +891,14 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0", "--runtime"]);
 
-    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith({
       config: {},
       onlyPluginIds: ["openclaw-mem0"],
     });
   });
 
   it("does not runtime-load plugins when inspect target is missing", async () => {
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -904,8 +907,8 @@ describe("plugins cli list", () => {
       "__exit__:1",
     );
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalledWith({ config: {} });
-    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
+    expect(buildPluginSnapshotReportMock).toHaveBeenCalledWith({ config: {} });
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
   });
 
@@ -913,7 +916,7 @@ describe("plugins cli list", () => {
     const config: OpenClawConfig = {
       tools: { profile: "messaging" },
     };
-    loadConfig.mockReturnValue(config);
+    pluginCliConfigMock.mockReturnValue(config);
     workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
       agentId: "main",
       source: "tools.profile",
@@ -922,7 +925,7 @@ describe("plugins cli list", () => {
       message:
         'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
     });
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });

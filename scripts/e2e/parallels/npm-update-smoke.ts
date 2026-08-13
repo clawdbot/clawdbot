@@ -14,6 +14,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import prettyMilliseconds from "pretty-ms";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import {
   die,
   ensureValue,
@@ -523,10 +524,6 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     throw new Error("--registry-package-tarball requires --target-tarball");
   }
   return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function platformRecord<T>(value: T): Record<Platform, T> {

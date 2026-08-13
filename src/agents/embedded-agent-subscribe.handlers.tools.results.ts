@@ -21,10 +21,9 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractToolResultMediaArtifact,
-  extractToolResultText,
   filterToolResultMediaUrls,
-  truncateLiveExecOutput,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-media.js";
+import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
 import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";

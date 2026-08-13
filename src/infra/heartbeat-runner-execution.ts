@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
+  type HeartbeatTerminalToolFailure,
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
@@ -14,6 +14,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -25,7 +26,7 @@ import {
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
@@ -57,6 +58,7 @@ import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
+  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
@@ -154,7 +156,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
   const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
+    explicitAgentId || forcedSessionAgentId || resolveAmbientHeartbeatAgentId(cfg),
   );
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
@@ -432,12 +434,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
-      target: heartbeat?.target ?? "last",
+      target: heartbeat?.target ?? "owner",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "last",
+      target: heartbeat?.target ?? "owner",
       channel: delivery.channel,
     });
   }
@@ -507,7 +509,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
+    const isolatedStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
@@ -676,9 +678,11 @@ export async function invokeHeartbeatAgentRun(
   );
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
-  const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
+  const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
+    resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
+  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&
@@ -714,6 +718,7 @@ export async function invokeHeartbeatAgentRun(
     kind: "completed",
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
+    agentRunFailed,
     replyPayload,
   } as const;
 }

@@ -1,4 +1,5 @@
 // Control UI controller manages skill workshop gateway state.
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -142,11 +143,7 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
 }
 
 function parseDateMs(value: string | undefined): number {
-  if (!value) {
-    return Date.now();
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
 function startOfLocalDay(ms: number): number {

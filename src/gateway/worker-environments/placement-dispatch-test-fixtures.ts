@@ -9,7 +9,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
@@ -21,7 +21,6 @@ export type DispatchStage =
   | "workspace"
   | "preflight"
   | "create"
-  | "tunnel:ready"
   | "sync"
   | "attach"
   | "tunnel:attached"
@@ -36,7 +35,7 @@ export const REQUEST: WorkerDispatchRequest = {
   profileId: "development",
 };
 
-export function seedStartingPlacement(
+export function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
 ): WorkerSessionPlacementRecord {
@@ -55,6 +54,14 @@ export function seedStartingPlacement(
     expectedGeneration: current.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
+  return current;
+}
+
+export function seedStartingPlacement(
+  store: PlacementStore,
+  environmentId: string,
+): WorkerSessionPlacementRecord {
+  let current = seedSyncingPlacement(store, environmentId);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
@@ -83,9 +90,9 @@ export function seedActivePlacement(
 }
 
 export function createDispatchEnvironmentFixtures(generation = 1) {
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
+  const environmentId = deriveEnvironmentIntent(
     `session-dispatch:${REQUEST.sessionId}:${generation}`,
-  );
+  ).environmentId;
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,

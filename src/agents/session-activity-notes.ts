@@ -1,3 +1,5 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
@@ -240,7 +242,7 @@ export function noteSessionActivityEvent(
         return;
       }
       const title = readNonBlankString(data.title) ?? readNonBlankString(data.name) ?? "command";
-      const exitCode = readFiniteNumber(data.exitCode);
+      const exitCode = asFiniteNumber(data.exitCode);
       const status = readNonBlankString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
       addActivityNote(
         state,
@@ -325,14 +327,6 @@ export function noteSessionActivityEvent(
     default:
       break;
   }
-}
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {

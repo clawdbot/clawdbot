@@ -7,7 +7,7 @@ import type {
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscribe.tools.js";
+import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-tool-results.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";

@@ -603,6 +603,8 @@ describe("ConfigPage Updates integration", () => {
             features: { methods: ["update.run"] },
           },
         },
+        // The update dialog watches both stores for the life of the install.
+        subscribe: () => () => undefined,
       },
       overlays: {
         snapshot: {
@@ -612,6 +614,7 @@ describe("ConfigPage Updates integration", () => {
           updateReconciliationPending: false,
           updateStatusBanner: null,
         },
+        subscribe: () => () => undefined,
         runUpdate,
       },
     } as unknown as ApplicationContext;

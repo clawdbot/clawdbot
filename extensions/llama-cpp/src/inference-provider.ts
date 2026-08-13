@@ -82,9 +82,7 @@ function extractText(content: unknown): string {
 }
 
 function normalizeArguments(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(value);
 }
 
 async function resolveLlamaCppResponseGrammar(params: {
@@ -710,3 +708,4 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     mapToolsToLlamaFunctions,
   });
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

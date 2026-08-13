@@ -1,6 +1,6 @@
 // Tests private message-tool final delivery and visibility suppression.
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it } from "vitest";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 
 const base = {

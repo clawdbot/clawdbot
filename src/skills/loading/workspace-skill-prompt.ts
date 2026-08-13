@@ -9,7 +9,7 @@ import { resolveSkillKey } from "./frontmatter.js";
 import {
   escapeSkillXml,
   formatSkillsCompactForPrompt,
-  formatSkillsForPrompt,
+  formatSkillsForPromptCore,
   type Skill,
 } from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
@@ -87,7 +87,7 @@ function buildRenderedSkillsPrompt(params: {
       ? formatSkillsCompactForPrompt(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
         })
-      : formatSkillsForPrompt(params.skills);
+      : formatSkillsForPromptCore(params.skills);
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 

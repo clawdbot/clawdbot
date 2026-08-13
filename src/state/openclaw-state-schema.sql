@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (
+  state TEXT NOT NULL PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  create_time INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
@@ -210,6 +216,32 @@ CREATE TABLE IF NOT EXISTS execution_identity_contexts (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
   ON execution_identity_contexts (run_id, created_at, execution_id);
+
+CREATE TABLE IF NOT EXISTS execution_decision_facts (
+  receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
+  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  action_id TEXT CHECK (action_id IS NULL OR length(action_id) BETWEEN 1 AND 256),
+  action_family TEXT NOT NULL CHECK (length(action_family) BETWEEN 1 AND 256),
+  decision_outcome TEXT NOT NULL CHECK (
+    decision_outcome IN ('allowed', 'denied', 'not-applicable', 'unknown')
+  ),
+  coverage_state TEXT NOT NULL CHECK (
+    coverage_state IN ('enforced', 'attribution-only', 'unattributed', 'unknown', 'unsupported')
+  ),
+  reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 256),
+  owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
+  source_ref TEXT NOT NULL CHECK (length(source_ref) BETWEEN 1 AND 256),
+  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+  receipt_bytes INTEGER NOT NULL CHECK (receipt_bytes BETWEEN 1 AND 16384),
+  receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
+  UNIQUE (occurred_at, receipt_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
+  ON execution_decision_facts (context_id, occurred_at, receipt_id);
+CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
+  ON execution_decision_facts (run_id, occurred_at, receipt_id);
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -439,6 +471,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_session_created
   ON operator_approvals(source_session_key, created_at_ms DESC, approval_id);
 
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_run_resolved
+  ON operator_approvals(source_run_id, resolved_at_ms, approval_id)
+  WHERE source_run_id IS NOT NULL AND resolved_at_ms IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_resolved
   ON operator_approvals(resolved_at_ms, approval_id)
   WHERE resolved_at_ms IS NOT NULL;
@@ -540,6 +576,13 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
+  shortcode TEXT,
+  payload_json TEXT,
+  created_at_ms INTEGER,
+  expires_at_ms INTEGER
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
@@ -809,6 +852,81 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_context_path TEXT,
   installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+-- Node-host-owned launch journal. The descriptor and its credential remain
+-- process memory only; this table records bounded supervision facts.
+CREATE TABLE IF NOT EXISTS node_worker_launches (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    CHECK (length(launch_id) BETWEEN 1 AND 256 AND instr(launch_id, char(0)) = 0),
+  plan_hash TEXT NOT NULL
+    CHECK (length(plan_hash) = 64 AND plan_hash NOT GLOB '*[^0-9a-f]*'),
+  gateway_namespace TEXT NOT NULL
+    CHECK (
+      length(gateway_namespace) BETWEEN 1 AND 128
+      AND gateway_namespace NOT GLOB '*[^A-Za-z0-9._-]*'
+      AND gateway_namespace GLOB '[A-Za-z0-9]*'
+    ),
+  environment_id TEXT NOT NULL
+    CHECK (length(environment_id) BETWEEN 1 AND 256 AND instr(environment_id, char(0)) = 0),
+  session_id TEXT NOT NULL
+    CHECK (length(session_id) BETWEEN 1 AND 256 AND instr(session_id, char(0)) = 0),
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch BETWEEN 1 AND 9007199254740991),
+  placement_generation INTEGER NOT NULL
+    CHECK (placement_generation BETWEEN 0 AND 9007199254740991),
+  run_id TEXT NOT NULL
+    CHECK (length(run_id) BETWEEN 1 AND 256 AND instr(run_id, char(0)) = 0),
+  state TEXT NOT NULL
+    CHECK (state IN ('pending', 'running', 'completed', 'failed', 'interrupted', 'cancelled')),
+  supervisor_pid INTEGER NOT NULL CHECK (supervisor_pid BETWEEN 1 AND 2147483647),
+  supervisor_start_time INTEGER NOT NULL
+    CHECK (supervisor_start_time BETWEEN 0 AND 9007199254740991),
+  worker_pid INTEGER CHECK (worker_pid IS NULL OR worker_pid BETWEEN 1 AND 2147483647),
+  worker_start_time INTEGER CHECK (
+    worker_start_time IS NULL OR worker_start_time BETWEEN 0 AND 9007199254740991
+  ),
+  result_json TEXT CHECK (
+    result_json IS NULL
+    OR (
+      length(CAST(result_json AS BLOB)) BETWEEN 1 AND 65536
+      AND instr(result_json, char(0)) = 0
+      AND json_valid(result_json)
+    )
+  ),
+  error_text TEXT CHECK (
+    error_text IS NULL
+    OR (
+      length(CAST(error_text AS BLOB)) BETWEEN 1 AND 4096
+      AND instr(error_text, char(0)) = 0
+      AND instr(error_text, char(10)) = 0
+      AND instr(error_text, char(13)) = 0
+    )
+  ),
+  completed_at_ms INTEGER CHECK (
+    completed_at_ms IS NULL OR completed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (
+    updated_at_ms BETWEEN created_at_ms AND 9007199254740991
+  ),
+  CHECK ((worker_pid IS NULL) = (worker_start_time IS NULL)),
+  CHECK (
+    (state = 'pending'
+      AND worker_pid IS NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
+    OR
+    (state = 'running'
+      AND worker_pid IS NOT NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
+    OR
+    (state = 'completed'
+      AND result_json IS NOT NULL AND error_text IS NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+    OR
+    (state IN ('failed', 'interrupted', 'cancelled')
+      AND result_json IS NULL AND error_text IS NOT NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+  )
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
@@ -1280,54 +1398,6 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS commitments (
-  id TEXT NOT NULL PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  account_id TEXT,
-  recipient_id TEXT,
-  thread_id TEXT,
-  sender_id TEXT,
-  kind TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
-  source TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  suggested_text TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  due_earliest_ms INTEGER NOT NULL,
-  due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL,
-  source_message_id TEXT,
-  source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL,
-  last_attempt_at_ms INTEGER,
-  sent_at_ms INTEGER,
-  dismissed_at_ms INTEGER,
-  snoozed_until_ms INTEGER,
-  expired_at_ms INTEGER,
-  record_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
-  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_status_due
-  ON commitments(status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
-  ON commitments(agent_id, session_key, channel, dedupe_key, status);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1405,6 +1475,11 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   sort_order INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (store_key, job_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS cron_store_epochs (
+  store_key TEXT PRIMARY KEY,
+  store_epoch INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
@@ -1861,6 +1936,14 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at_ms INT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS user_preferences (
+  profile_id TEXT NOT NULL,
+  pref_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at_ms INT NOT NULL,
+  PRIMARY KEY (profile_id, pref_key)
+) STRICT;
+
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
 -- owns which groups exist and how operator UIs order them.
@@ -1910,6 +1993,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   bootstrap_bundle_hash TEXT,
   bootstrap_openclaw_version TEXT,
   bootstrap_protocol_features_json TEXT,
+  bootstrap_install_kind TEXT,
   owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
   teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
   attached_session_ids_json TEXT NOT NULL DEFAULT '[]',

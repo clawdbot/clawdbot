@@ -352,6 +352,7 @@ public struct OpenClawChatSessionSettingsRouteLease: Sendable {
 public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public typealias PatchSession = @Sendable (
         _ key: String,
+        _ expectedSessionID: String?,
         _ label: String??,
         _ category: String??,
         _ pinned: Bool?,
@@ -372,13 +373,21 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
 
     public func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
     {
-        try await self.patchSessionImpl(key, label, category, pinned, archived, unread)
+        try await self.patchSessionImpl(
+            key,
+            expectedSessionID,
+            label,
+            category,
+            pinned,
+            archived,
+            unread)
     }
 
     public func deleteSession(key: String) async throws {
@@ -727,6 +736,7 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease?
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -879,9 +889,10 @@ extension OpenClawChatTransport {
     public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
                 try await transport.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: label,
                     category: category,
                     pinned: pinned,
@@ -1060,6 +1071,7 @@ extension OpenClawChatTransport {
 
     public func patchSession(
         key _: String,
+        expectedSessionID _: String?,
         label _: String?? = nil,
         category _: String?? = nil,
         pinned _: Bool? = nil,

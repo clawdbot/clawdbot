@@ -13,6 +13,7 @@ function createTestContext(params?: {
   groupDmChannels?: string[];
   appClient?: App["client"];
   apiAppId?: string;
+  channelsConfig?: Record<string, { enabled?: boolean }>;
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -38,6 +39,7 @@ function createTestContext(params?: {
     groupDmEnabled: params?.groupDmEnabled ?? false,
     groupDmChannels: params?.groupDmChannels ?? [],
     defaultRequireMention: true,
+    channelsConfig: params?.channelsConfig,
     groupPolicy: "allowlist",
     useAccessGroups: true,
     reactionMode: "off",
@@ -149,6 +151,46 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
 
     expect(ctx.isChannelAllowed({ channelId: "G456", channelType: "mpim" })).toBe(true);
     expect(ctx.isChannelAllowed({ channelId: "G999", channelType: "mpim" })).toBe(false);
+  });
+
+  it("matches workspace-qualified channel and group DM policies", () => {
+    const ctx = createTestContext({
+      groupDmEnabled: true,
+      groupDmChannels: ["team:T11111111:channel:G01234567"],
+      channelsConfig: {
+        "team:T11111111:channel:C01234567": { enabled: true },
+        "team:T22222222:channel:C01234567": { enabled: false },
+      },
+    });
+
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(false);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(false);
   });
 });
 

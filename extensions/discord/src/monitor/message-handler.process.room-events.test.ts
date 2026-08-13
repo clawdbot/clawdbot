@@ -1,5 +1,5 @@
 // Discord message processing coverage split by cohesive behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
   createBaseContext,
@@ -299,6 +299,7 @@ describe("processDiscordMessage session routing and room events", () => {
       persist: false,
       enableSweeper: false,
     });
+    onTestFinished(() => threadBindings.stop());
     await threadBindings.bindTarget({
       threadId: "thread-1",
       channelId: "c-parent",

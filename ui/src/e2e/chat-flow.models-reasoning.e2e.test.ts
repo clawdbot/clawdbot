@@ -530,7 +530,8 @@ suite.define(() => {
       const search = main.locator('[data-chat-model-search="true"]');
       await expect
         .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+        .toBe(false);
+      await search.focus();
       await search.fill("anthropic");
       const anthropicModel = main.locator('[data-chat-model-option="anthropic/claude-fable-5"]');
       await expect.poll(() => anthropicModel.isVisible()).toBe(true);

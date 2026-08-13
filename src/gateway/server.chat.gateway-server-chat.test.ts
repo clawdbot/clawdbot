@@ -33,7 +33,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
-import { agentCommand } from "./test-helpers.runtime-state.js";
+import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
@@ -685,7 +685,7 @@ describe("gateway server chat", () => {
         },
       });
 
-      vi.mocked(agentCommand).mockClear();
+      vi.mocked(agentCommandMock).mockClear();
       const agentAllowedRes = await rpcReq(ws, "agent", {
         sessionKey: "cron:job-1",
         message: "hi",
@@ -694,7 +694,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
+      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -830,7 +830,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history applies the reset boundary kept-tail cut", async () => {
+  test("chat.history applies the reset kept-tail cut and preserves its marker", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
       if (!storePath) {
@@ -883,6 +883,7 @@ describe("gateway server chat", () => {
       expect(collectHistoryTextValues(history.payload?.messages ?? [])).toEqual([
         "kept question",
         "kept answer",
+        "Reset",
         "new turn",
       ]);
     });
@@ -1594,7 +1595,7 @@ describe("gateway server chat", () => {
 
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
-      const spy = vi.mocked(agentCommand);
+      const spy = vi.mocked(agentCommandMock);
       const callsBefore = spy.mock.calls.length;
       const eventPromise = onceMessage(
         ws,
@@ -2115,7 +2116,7 @@ describe("gateway server chat", () => {
     const blockedAgentRun = new Promise<void>((resolve) => {
       resolveAgentRun = resolve;
     });
-    const agentSpy = vi.mocked(agentCommand);
+    const agentSpy = vi.mocked(agentCommandMock);
     agentSpy.mockImplementationOnce(async () => {
       await blockedAgentRun;
       return undefined;

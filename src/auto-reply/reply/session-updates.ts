@@ -7,7 +7,10 @@ import {
 } from "../../agents/exec-defaults.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -378,7 +381,7 @@ export async function incrementCompactionCount(params: {
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
   if (effectiveStorePath) {
-    const persistedEntry = await patchSessionEntry(
+    const persistedEntry = await patchSessionEntryCore(
       { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
       () => updates,
       { fallbackEntry: nextEntry },

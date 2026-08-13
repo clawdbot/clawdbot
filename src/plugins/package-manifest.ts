@@ -55,6 +55,8 @@ export type PluginPackageChannel = {
 
 export type PluginPackageChannelDoctorCapabilities = {
   dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  /** Whether dmPolicy="open" requires an explicit "*" in allowFrom. Defaults to true. */
+  openDmRequiresAllowFromWildcard?: boolean;
   groupModel?: "sender" | "route" | "hybrid";
   groupAllowFromFallbackToAllowFrom?: boolean;
   warnOnEmptyGroupSenderAllowlist?: boolean;

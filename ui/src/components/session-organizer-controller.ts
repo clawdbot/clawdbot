@@ -15,7 +15,10 @@ import {
   sidebarRouteDragActive,
   writeSidebarRouteDragData,
 } from "../lib/sessions/drag.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  categoryClearReturnsToGroups,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -579,6 +582,26 @@ export class SessionOrganizerController implements ReactiveController {
     await operations?.assignSessionCategory(this.host, session, category, scope, patch);
   }
 
+  private sectionAcceptsSession(
+    sectionId: string,
+    category: string | undefined,
+    session: SidebarRecentSession | undefined,
+  ): boolean {
+    if (sectionId === "pinned") {
+      return true;
+    }
+    if (
+      this.host.sessionsGrouping === "category" &&
+      (sectionId === "ungrouped" || Boolean(category))
+    ) {
+      return true;
+    }
+    return (
+      sectionId === "groups" &&
+      Boolean(session && categoryClearReturnsToGroups(session, this.host.sessionsGrouping))
+    );
+  }
+
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
     if (sidebarSectionDragActive(dataTransfer) && this.draggingSidebarSection !== sectionId) {
@@ -599,11 +622,12 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sessionDragActive(dataTransfer)) {
       return;
     }
-    const acceptsSession =
-      sectionId === "pinned" ||
-      (this.host.sessionsGrouping === "category" &&
-        (sectionId === "ungrouped" || Boolean(category)));
-    if (!acceptsSession) {
+    // Browsers protect transferred data during dragover. Use the key recorded
+    // at dragstart for hover eligibility; sectionDrop reads the payload itself.
+    const session = this.draggingSessionKey
+      ? this.host.findSidebarSessionByKey(this.draggingSessionKey)
+      : undefined;
+    if (!this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
     }
@@ -638,11 +662,9 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sourceSectionId && !sessionKey) {
       return;
     }
-    if (
-      !sourceSectionId &&
-      sectionId !== "pinned" &&
-      (this.host.sessionsGrouping !== "category" || (sectionId !== "ungrouped" && !category))
-    ) {
+    // Rows can be dragged from a browsed agent section, so search all caches.
+    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
     }
@@ -654,23 +676,19 @@ export class SessionOrganizerController implements ReactiveController {
           ? this.sidebarSectionDropTarget.position
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
-    } else {
-      // Rows can be dragged from a browsed agent section, so search all caches.
-      const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-      if (session && sectionId === "pinned") {
-        if (!session.pinned) {
-          void this.patchSession(session, { pinned: true });
-        }
-      } else if (session) {
-        const nextCategory = category ?? null;
-        if (session.category !== nextCategory || session.pinned) {
-          // The pinned:false leg prunes the persisted zone entry via patchSession.
-          void this.assignSessionCategory(
-            session,
-            nextCategory,
-            session.pinned ? { pinned: false } : {},
-          );
-        }
+    } else if (session && sectionId === "pinned") {
+      if (!session.pinned) {
+        void this.patchSession(session, { pinned: true });
+      }
+    } else if (session) {
+      const nextCategory = category ?? null;
+      if (session.category !== nextCategory || session.pinned) {
+        // The pinned:false leg prunes the persisted zone entry via patchSession.
+        void this.assignSessionCategory(
+          session,
+          nextCategory,
+          session.pinned ? { pinned: false } : {},
+        );
       }
     }
     this.finishSidebarEntryDrag();

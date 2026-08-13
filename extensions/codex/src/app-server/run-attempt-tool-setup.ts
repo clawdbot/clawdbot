@@ -338,6 +338,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           agentDir: policyContext.agentDir,
           cfg: params.config,
           manifestRegistry: bundleManifestRegistry,
+          toolOverrides: codexMcpToolOverrides,
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,

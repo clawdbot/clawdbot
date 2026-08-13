@@ -25,7 +25,7 @@ import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import {
-  resolveOpenClawMetadata,
+  resolveSkillManifestMetadata,
   resolveSkillInvocationPolicy,
   resolveSkillKey,
 } from "./frontmatter.js";
@@ -153,7 +153,7 @@ function resolveSkillEntryMetadata(params: {
   frontmatter: ParsedSkillFrontmatter;
   skillDir: string;
 }): OpenClawSkillMetadata | undefined {
-  const metadata = resolveOpenClawMetadata(params.frontmatter);
+  const metadata = resolveSkillManifestMetadata(params.frontmatter);
   if (metadata?.skillKey) {
     return metadata;
   }

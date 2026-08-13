@@ -47,11 +47,11 @@ export const terminalPanelStyles = css`
     width: min(360px, calc(100vw - 24px));
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
-    border: 1px solid var(--border, #262b34);
-    border-radius: 8px;
-    background: var(--bg, #0e1015);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
-    padding: 6px;
+    padding: var(--menu-padding);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--menu-radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
   }
   .tp-session-menu__header {
     display: flex;
@@ -77,7 +77,8 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    border-radius: 6px;
+    min-height: var(--menu-item-height);
+    border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);
     padding: 7px 8px;
@@ -85,7 +86,7 @@ export const terminalPanelStyles = css`
   }
   .tp-session:not(:disabled):hover,
   .tp-session:not(:disabled):focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: var(--bg-hover);
   }
   .tp-session:disabled {
     opacity: 0.55;

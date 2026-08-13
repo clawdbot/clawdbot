@@ -19,7 +19,7 @@ import { createSystemAgentModelSelectionUpdater } from "./setup-apply.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
-  log,
+  setupInferenceLog,
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceDeps,
   type ActivateSetupInferenceParams,
@@ -361,7 +361,9 @@ export async function persistActivatedSetupInference(input: {
       throw error;
     }
     committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
-    log.warn("Inference activation committed successfully despite a post-write cleanup error.");
+    setupInferenceLog.warn(
+      "Inference activation committed successfully despite a post-write cleanup error.",
+    );
   }
 
   state.committedConfig = committedConfig;

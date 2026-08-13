@@ -49,7 +49,7 @@ function truncateSkillDescription(description: string, maxChars: number): string
  * package root on the cold skills path. Visibility policy is applied upstream
  * before calling this helper.
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPromptCore(skills: Skill[]): string {
   if (skills.length === 0) {
     return "";
   }

@@ -15,7 +15,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
-import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
+import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
@@ -35,7 +35,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  return requireRecord(value, "record");
+  return requireGatewayRecord(value, "record");
 }
 
 function expectCliSessionMarker(message: unknown, sessionId: string): void {

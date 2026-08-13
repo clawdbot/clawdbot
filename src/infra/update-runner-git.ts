@@ -40,7 +40,7 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
-export async function runGitUpdate(params: {
+export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
   gitRoot: string;
   runCommand: CommandRunner;

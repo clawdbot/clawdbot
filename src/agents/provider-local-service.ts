@@ -14,6 +14,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -425,7 +426,7 @@ async function startAndWaitForLocalService(params: {
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
-    env: service.env ? { ...process.env, ...service.env } : process.env,
+    env: service.env ? mergeProcessEnv([process.env, service.env]) : process.env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: shouldDetachChildForProcessTree(),
   });

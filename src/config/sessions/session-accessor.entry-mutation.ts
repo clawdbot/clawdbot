@@ -7,8 +7,8 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
+  listSessionEntriesCore,
+  patchSessionEntryCore,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
@@ -90,7 +90,10 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   const store = Object.fromEntries(
-    listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
   const created = await createEntry({
@@ -260,7 +263,7 @@ export async function updateSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  return await patchSessionEntry(scope, update, options);
+  return await patchSessionEntryCore(scope, update, options);
 }
 
 export type RecordInboundSessionMetaParams = {
@@ -328,7 +331,7 @@ export async function markSessionAbortTarget(params: {
   let resolvedTarget: SessionAbortTargetResult | null = null;
   try {
     const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
-    const updated = await patchSessionEntry(
+    const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
         resolvedTarget = {

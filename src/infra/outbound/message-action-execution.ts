@@ -18,6 +18,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -30,7 +31,6 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
-import { readBooleanParam } from "./message-action-params.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import {

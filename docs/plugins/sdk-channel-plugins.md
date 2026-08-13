@@ -565,6 +565,14 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- `readAgentRunTerminalOutcome(dispatchResult)` from
+  `openclaw/plugin-sdk/channel-inbound` when terminal reactions or status UI
+  must distinguish a completed core agent run from a recovered failed run. It
+  returns `"completed"` or `"failed"` only when a core run actually started,
+  and `undefined` for commands, dedupe, busy, pre-run abort, and custom dispatch
+  results. Delivery counts and visibility remain transport facts, including
+  successful delivery of an error payload; the process-local carrier is not
+  serialized to JSON.
 - `createInboundEventDeliveryCorrelation(...)` from
   `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
   retire an active inbound-event marker; create one tracker per channel and

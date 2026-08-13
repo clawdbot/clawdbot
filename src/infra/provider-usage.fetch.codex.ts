@@ -1,12 +1,7 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import { cancelUnreadResponseBody } from "./http-body.js";
-import { parseStrictFiniteNumber } from "./parse-finite-number.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -81,23 +76,14 @@ export async function fetchCodexUsage(
       defaultHeaders,
     }) ?? defaultHeaders;
 
-  const res = await fetchJson(
-    "https://chatgpt.com/backend-api/wham/usage",
-    { method: "GET", headers },
+  const parsed = await fetchUsageJson({
+    provider: "openai",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    init: { method: "GET", headers },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await cancelUnreadResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "openai",
-      status: res.status,
-      tokenExpiredStatuses: [401, 403],
-    });
-  }
-
-  const parsed = await readUsageJson("openai", res);
+    tokenExpiredStatuses: [401, 403],
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }

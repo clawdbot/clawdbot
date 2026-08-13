@@ -15,6 +15,7 @@ import {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./chat-pane-header.ts";
 
@@ -79,6 +80,8 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     renameValue: "Session title",
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
+    workspaceIcon: null,
+    parentSession: null,
     branch: "feature/header",
     branches: [],
     branchSwitchDisabledReason: null,
@@ -99,6 +102,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onCancelRename: vi.fn(),
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
+    onOpenParentSession: vi.fn(),
     onBranchSelect: vi.fn(),
     ...patch,
   };
@@ -298,15 +302,113 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
-  it("places pane presence between the workspace chip and face control", () => {
+  it("renders a quiet cloud placement chip with the canonical stop action", () => {
+    const onPlacementReclaim = vi.fn();
+    const { container } = mount({
+      session: row({
+        placement: {
+          state: "active",
+          generation: 1,
+          createdAtMs: 100_000,
+          updatedAtMs: 300_000,
+          stateChangedAtMs: 300_000,
+          environmentId: "worker:one",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      }),
+      onPlacementReclaim,
+    });
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      "Runs on Cloud",
+    );
+    expect(container.querySelector(".chat-pane__placement-state")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-note")).toBeNull();
+    const actions = container.querySelectorAll(".chat-pane__placement-menu wa-dropdown-item");
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.textContent?.trim()).toBe("Stop cloud worker…");
+    expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(true);
+    expect(actions[0]?.getAttribute("variant")).toBe("danger");
+    expect(actions[0]?.querySelector(".session-menu__icon")).not.toBeNull();
+    actions[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPlacementReclaim).toHaveBeenCalledOnce();
+  });
+
+  it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
+    const { container } = mount({
+      session: row({
+        placement: {
+          state,
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+        },
+      }),
+    });
+    expect(container.querySelector(".chat-pane__placement-chip")).toBeNull();
+  });
+
+  it("places pane presence between the identity trail and face control", () => {
     const { container } = mount({
       presence: html`<span data-slot="presence"></span>`,
       faceControl: html`<span data-slot="face"></span>`,
     });
-    const workspace = container.querySelector(".chat-pane__workspace-menu");
-    expect(workspace?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
-    expect(workspace?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe(
-      "face",
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
+    expect(crumbs?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe("face");
+  });
+
+  it("leads with the project, then a separator, then the session title", () => {
+    const { container } = mount();
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    const segments = [...(crumbs?.children ?? [])].map((child) => child.className);
+    expect(segments).toEqual([
+      "chat-pane__workspace-menu",
+      "chat-pane__crumb-sep",
+      "chat-pane__session-title chat-pane__session-title-button",
+    ]);
+    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
+    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+  });
+
+  it("places a clickable parent between the project and child session", () => {
+    const parentSession = { key: "agent:main:parent", title: "Release prep" };
+    const { container, props } = mount({ parentSession });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+
+    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
+      "chat-pane__workspace-menu",
+      "chat-pane__crumb-sep",
+      "chat-pane__parent-session",
+      "chat-pane__crumb-sep",
+      "chat-pane__session-title chat-pane__session-title-button",
+    ]);
+    const parent = crumbs?.querySelector<HTMLButtonElement>(".chat-pane__parent-session");
+    expect(parent?.textContent?.trim()).toBe("Release prep");
+    parent?.click();
+    expect(props.onOpenParentSession).toHaveBeenCalledExactlyOnceWith("agent:main:parent");
+  });
+
+  it("drops the separator when the session has no project segment", () => {
+    const { container } = mount({ workspaceLabel: null, workspaceRoot: null });
+    expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
+    expect(container.querySelector(".chat-pane__crumbs")?.firstElementChild?.className).toContain(
+      "chat-pane__session-title",
+    );
+  });
+
+  it("keeps the rename input inside the trail so the project stays visible", () => {
+    const { container } = mount({ editing: true, renameValue: "Renaming" });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.querySelector(".chat-pane__workspace-chip")).not.toBeNull();
+    expect(crumbs?.querySelector<HTMLInputElement>(".chat-pane__session-title-input")?.value).toBe(
+      "Renaming",
     );
   });
 
@@ -404,7 +506,7 @@ describe("chat pane header", () => {
       }),
       canReveal: false,
     });
-    expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
   });
@@ -474,6 +576,150 @@ describe("chat pane header", () => {
       }),
     );
     expect(props.onBranchSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat pane parent resolution", () => {
+  it("uses the navigation parent and its canonical display name", () => {
+    const parent = row({
+      key: "agent:main:parent",
+      label: "Release prep",
+    });
+    const controlOwner = row({
+      key: "agent:main:control-owner",
+      label: "Coordinator",
+    });
+
+    expect(
+      resolveChatPaneParentSession(
+        row({
+          key: "agent:main:child",
+          parentSessionKey: parent.key,
+          spawnedBy: controlOwner.key,
+        }),
+        [controlOwner, parent],
+      ),
+    ).toEqual({ key: parent.key, title: "Release prep" });
+  });
+
+  it("omits unresolved and self-referential parents", () => {
+    const child = row({ key: "agent:main:child", parentSessionKey: "agent:main:missing" });
+    expect(resolveChatPaneParentSession(child, [child])).toBeNull();
+    expect(
+      resolveChatPaneParentSession({ ...child, parentSessionKey: child.key }, [child]),
+    ).toBeNull();
+  });
+});
+
+describe("chat pane workspace chip icon", () => {
+  async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
+    const { container } = mount({ workspaceIcon });
+    const element = container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
+      | null;
+    await element?.updateComplete;
+    return { container, element };
+  }
+
+  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
+    const { container, element } = await mountChip(null);
+    expect(element).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+  });
+
+  it("keeps the folder glyph while credentials are not ready", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { container, element } = await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: [],
+      authReady: false,
+    });
+    expect(element).not.toBeNull();
+    expect(container.querySelector(".workspace-icon")).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("keeps the folder glyph when the icon route fails", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("workspace icon unavailable"));
+    const { container } = await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: ["token"],
+      authReady: true,
+    });
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
+    );
+    expect(container.querySelector(".workspace-icon")).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+    fetchSpy.mockRestore();
+  });
+
+  it("does not refetch a missing project icon when the header rerenders", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({ ok: false, status: 404 } as Response);
+    const workspaceIcon = {
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: ["token"],
+      authReady: true,
+    };
+    const mounted = mount({ workspaceIcon });
+    const element = mounted.container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
+      | null;
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await element?.updateComplete;
+    render(
+      html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
+      mounted.container,
+    );
+    await element?.updateComplete;
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    render(
+      html`${renderChatPaneHeader({
+        ...mounted.props,
+        workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] },
+      })}`,
+      mounted.container,
+    );
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    fetchSpy.mockRestore();
+  });
+
+  it("retries the next credential when a stale token is rejected", async () => {
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => png,
+      } as unknown as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:workspace-icon");
+
+    await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: ["stale-token", "session-password"],
+      authReady: true,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
+      headers: { Authorization: "Bearer session-password" },
+    });
+    vi.restoreAllMocks();
   });
 });
 

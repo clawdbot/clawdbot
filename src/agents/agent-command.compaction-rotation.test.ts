@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -304,7 +304,7 @@ function requireStorePath(): string {
 }
 
 function findStoredSessionEntry(sessionKey: string): SessionEntry | undefined {
-  return listSessionEntries({ storePath: requireStorePath() }).find(
+  return listSessionEntriesCore({ storePath: requireStorePath() }).find(
     (candidate) => candidate.sessionKey === sessionKey,
   )?.entry;
 }
@@ -443,7 +443,7 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     const storeAfterRotation = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
     );
     const entriesAfterRotation = Object.entries(storeAfterRotation);
     expect(entriesAfterRotation).toHaveLength(1);
@@ -977,7 +977,7 @@ describe("agentCommand compaction transcript rotation", () => {
       sessionId: "rotated-session",
     });
     const persisted = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
     );
     expect(persisted[sessionKey]).toMatchObject({
       sessionId: "rotated-session",

@@ -11,7 +11,7 @@ import type {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
-import { convertMessages } from "../openai-completions-messages.js";
+import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
@@ -32,7 +32,6 @@ import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  Message,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -78,27 +77,6 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-
-/**
- * Check if conversation messages contain tool calls or tool results.
- * This is needed because Anthropic (via proxy) requires the tools param
- * to be present when messages include tool_calls or tool role messages.
- */
-function hasToolHistory(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.role === "toolResult") {
-      return true;
-    }
-    if (msg.role === "assistant") {
-      // Assistant content can be a raw string from transcript replay; a string
-      // never carries tool calls, so it should not count toward tool history.
-      if (Array.isArray(msg.content) && msg.content.some((block) => block.type === "toolCall")) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
@@ -813,13 +791,13 @@ function buildParams(
     toolProjection = converted.projection;
     if (converted.tools.length > 0) {
       params.tools = converted.tools;
-    } else if (hasToolHistory(context.messages)) {
+    } else if (hasToolCallHistory(context.messages)) {
       params.tools = [];
     }
     if (compat.zaiToolStream && converted.tools.length > 0) {
       params.tool_stream = true;
     }
-  } else if (hasToolHistory(context.messages)) {
+  } else if (hasToolCallHistory(context.messages)) {
     // Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
     params.tools = [];
   }
