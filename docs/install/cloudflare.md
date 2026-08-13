@@ -27,12 +27,31 @@ The template lives in [`scripts/cloudflare`](https://github.com/openclaw/opencla
 
 The Worker forwards every HTTP and WebSocket request to one stable Durable Object name. That Durable Object owns one Container instance and is the single-writer fence around the Litestream replica. The Container exposes OpenClaw on port `8080`; `/startupz` is its traffic-readiness check.
 
+```mermaid
+flowchart TD
+    client[Channels, browsers, API clients]
+    worker[Cloudflare Worker]
+    durable[Durable Object, one stable name]
+    container[Container running the OpenClaw Gateway on 8080]
+    litestream[Litestream sidecar process]
+    r2[(R2 bucket of SQLite replicas)]
+
+    client --> worker
+    worker --> durable
+    durable --> container
+    container --> litestream
+    litestream -- continuous WAL streaming --> r2
+    r2 -- restore on boot --> container
+```
+
 Litestream watches both SQLite roots:
 
 - `/home/node/.openclaw/state/*.sqlite`
 - `/home/node/.openclaw/agents/**/*.sqlite`
 
 At boot, the entrypoint uses R2's S3 `ListObjectsV2` API as the restore manifest, rejects paths outside those roots, restores each discovered database, and only then starts the Gateway.
+
+Measured on this template against a real R2 bucket: about 2.4 seconds from write to replica, and about 9 seconds to restore both databases into a fresh Container that reached a healthy Gateway roughly 13 seconds after start. Treat these as order-of-magnitude expectations, not guarantees.
 
 ## Deploy
 
@@ -156,6 +175,59 @@ At boot, the entrypoint uses R2's S3 `ListObjectsV2` API as the restore manifest
   </Step>
 </Steps>
 
+## Verify the deployment
+
+Run these checks after the first bootstrap, before you depend on this deployment.
+
+Confirm the Gateway admits traffic. `/startupz` reports startup completion and ignores channel health, so it stays green when one channel account is broken:
+
+```bash
+curl -sS https://<worker-subdomain>.workers.dev/startupz
+curl -sS -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  https://<worker-subdomain>.workers.dev/readyz
+```
+
+Confirm replication is actually reaching R2. Objects should appear under `replicas/` within seconds of activity:
+
+```bash
+npx wrangler r2 object get openclaw-backups/replicas --remote 2>/dev/null || true
+npx wrangler r2 bucket list
+```
+
+Rehearse recovery before you need it. An untested restore path is not a backup:
+
+1. Send one message so the Gateway writes a session row.
+2. Wait about ten seconds for replication.
+3. Delete the Container instance, or redeploy to force replacement.
+4. Reopen the Worker URL and confirm the conversation still exists.
+
+If step 4 loses data, stop and fix replication before connecting production channels.
+
+## Cost and sizing
+
+Containers require the Workers Paid plan. Memory and disk bill on the resources **provisioned** for the instance type for as long as the Container is awake; CPU bills on active use only.
+
+The default `standard-2` instance provisions 1 vCPU, 6 GiB memory, and 12 GB disk. Running it always-on for a full month is therefore dominated by provisioned memory rather than by how busy the agent is. At the published rates, that is roughly 40 to 50 US dollars per month including the plan fee, mostly memory, before egress.
+
+This matters for the lifecycle decision below:
+
+- **Socket channels keep the Container awake**, so they pay the always-on rate. A small always-on virtual machine is often cheaper. Choose Cloudflare here for its operational model, colocation with other Cloudflare services, or the R2 durability path, not to save money.
+- **Webhook-only installations sleep**, and a sleeping Container bills nothing. That is where this target is genuinely inexpensive.
+
+Verify current rates on [Cloudflare's Containers pricing page](https://developers.cloudflare.com/containers/pricing/) before committing; these figures are estimates from the published rate card and change independently of OpenClaw.
+
+## Observability
+
+Stream Worker and Container logs while reproducing an issue:
+
+```bash
+npx wrangler tail
+npx wrangler containers list
+npx wrangler containers instances <application-id> --json
+```
+
+Gateway logs stay inside the Container. Reach them over the temporary SSH session described in the bootstrap step, or forward them to your own collector. The Container filesystem is ephemeral, so treat in-Container logs as debugging output rather than as a durable record.
+
 ## Choose the lifecycle mode
 
 `OPENCLAW_WEBHOOK_ONLY` defaults to `false`, which keeps the Container running through idle periods. Keep this default for channels that maintain sockets or long-lived processes, including:
@@ -190,6 +262,26 @@ npm run deploy
 ```
 
 Test updates and rollbacks against a separate R2 bucket first. Preserve current state before activating older bytes.
+
+## Troubleshooting
+
+**Worker returns 5xx and the Container never becomes ready** -- Cloudflare only runs `linux/amd64` images pulled from a public registry. Rebuild with `--platform linux/amd64`, confirm the derived Docker Hub repository is public, and confirm `containers[].image` uses the pushed digest rather than a moving tag.
+
+**Deployment succeeds but every request times out** -- The Container helper waits for `GET /startupz`. Check that the Gateway inside the Container listens on port `8080` and that no bootstrap step changed the port.
+
+**Litestream logs authentication or signature errors** -- Litestream needs R2 S3 API credentials, which are not the same as a Cloudflare API token. Create an R2 API token and use its access key ID and secret access key, and confirm `LITESTREAM_ENDPOINT` contains your account ID.
+
+**First boot logs no databases to restore** -- Expected on an empty bucket. The entrypoint treats an empty replica listing as a fresh installation and starts the Gateway normally.
+
+**`/readyz` returns 503 while `/startupz` returns 200** -- Working as designed. Startup finished, and a configured channel account is unhealthy. Inspect channel status rather than restarting the Container; see [Health checks](/gateway/health#http-probes).
+
+**`wrangler containers ssh` is rejected** -- SSH ships disabled. Add `"ssh": { "enabled": true }` to the container entry, redeploy, then connect.
+
+**Configuration disappeared after a sleep or a redeploy** -- Litestream restores SQLite databases only. `openclaw.json`, credential files, installed plugin files, and workspaces live on the ephemeral disk. Reapply your bootstrap runbook, or keep the installation always-on and take [full archives](/install/backups#full-archives).
+
+**Channel sessions break after a restore** -- Restoring older bytes rolls back ratcheting credentials. Relink the affected channel and review pending approvals; see [Limits and recovery](#limits-and-recovery).
+
+**WebSocket connections close on large payloads** -- Cloudflare closes received WebSocket messages larger than 32 MiB. Reduce attachment sizes or transfer them out of band.
 
 ## Related
 
