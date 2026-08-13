@@ -1094,6 +1094,47 @@ describe("server-channels auto restart", () => {
     expect(account?.restartPending).toBe(false);
   });
 
+  it("blocks paired include-known restart when timed-out stopAccount rejects late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+      throw new Error("late stop hook failed");
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTaskRejected;
+
+    const restartTask = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    await flushMicrotasks();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await expect(restartTask).rejects.toThrow("late stop hook failed");
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBe("late stop hook failed");
+  });
+
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
     const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
     const startAccount = vi.fn(
