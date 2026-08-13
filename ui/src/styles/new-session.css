@@ -334,6 +334,27 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
+.new-session-page__menu-facts {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+}
+
+.new-session-page__menu-fact {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-hover) 62%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
 /* Place browsing uses the same shell as its root menu, with inset root rows. */
 wa-popover.new-session-page__place-popover {
   --max-width: min(420px, calc(100vw - 24px));
