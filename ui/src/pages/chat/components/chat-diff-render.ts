@@ -30,6 +30,7 @@ export function renderDiffStatChips(stat: DiffStat & { modified?: number }) {
 export function renderDiffBlock(
   lines: readonly DiffLine[],
   outcome: ToolCardOutcome = "succeeded",
+  renderSkip?: (line: DiffLine) => unknown,
 ) {
   const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
   return html`
@@ -47,7 +48,7 @@ export function renderDiffBlock(
           return html`<div class="chat-diff__row chat-diff__row--skip">
             ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
             <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">${line.text || "⋯"}</span>
+            <span class="chat-diff__text">${(renderSkip?.(line) ?? line.text) || "⋯"}</span>
           </div>`;
         }
         const kindClass =

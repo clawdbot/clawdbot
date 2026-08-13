@@ -1,6 +1,5 @@
 // Gateway WebSocket connection handler owns pre-auth limits, handshake auth, presence, and message-handler attachment.
 import { randomUUID } from "node:crypto";
-import type { Socket } from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
@@ -10,7 +9,6 @@ import { touchPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
@@ -33,6 +31,13 @@ import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
+import { takePublicWorkerIngress } from "./public-worker-ingress-context.js";
+import {
+  isWsPayloadLimitError,
+  resolveSocketAddress,
+  sanitizeWsLogValue,
+  stringMetaValue,
+} from "./ws-connection-diagnostics.js";
 import {
   buildHandshakeAuthLogKey,
   HandshakeAuthLogLimiter,
@@ -54,104 +59,15 @@ import {
   GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   WS_HANDSHAKE_PHASES,
   type GatewayIngressWebSocket,
+  type GatewayWorkerIngress,
   type GatewayWsClient,
   type WsHandshakePhase,
 } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-const LOG_HEADER_MAX_LEN = 300;
-const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
-
-function replaceControlChars(value: string): string {
-  let cleaned = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (
-      codePoint !== undefined &&
-      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-    ) {
-      cleaned += " ";
-      continue;
-    }
-    cleaned += char;
-  }
-  return cleaned;
-}
-
-function stringMetaValue(meta: Record<string, unknown>, key: string): string | undefined {
-  const value = meta[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-const sanitizeLogValue = (value: string | undefined): string | undefined => {
-  if (!value) {
-    return undefined;
-  }
-  const cleaned = replaceControlChars(value)
-    .replace(LOG_HEADER_FORMAT_REGEX, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  if (cleaned.length <= LOG_HEADER_MAX_LEN) {
-    return cleaned;
-  }
-  return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
-};
-
-function formatSocketEndpoint(
-  address: string | undefined,
-  port: number | undefined,
-): string | undefined {
-  if (!address) {
-    return undefined;
-  }
-  if (port === undefined) {
-    return address;
-  }
-  return address.includes(":") ? `[${address}]:${port}` : `${address}:${port}`;
-}
-
-function resolveSocketAddress(socket: WebSocket): {
-  remoteAddr?: string;
-  remotePort?: number;
-  localAddr?: string;
-  localPort?: number;
-  endpoint?: string;
-} {
-  const rawSocket = (socket as WebSocket & { _socket?: Socket })["_socket"];
-  const remoteAddr = rawSocket?.remoteAddress;
-  const remotePort = rawSocket?.remotePort;
-  const localAddr = rawSocket?.localAddress;
-  const localPort = rawSocket?.localPort;
-  const remoteEndpoint = formatSocketEndpoint(remoteAddr, remotePort);
-  const localEndpoint = formatSocketEndpoint(localAddr, localPort);
-  return {
-    remoteAddr,
-    remotePort,
-    localAddr,
-    localPort,
-    endpoint:
-      remoteEndpoint && localEndpoint
-        ? `${remoteEndpoint}->${localEndpoint}`
-        : (remoteEndpoint ?? localEndpoint),
-  };
-}
-
-function isWsPayloadLimitError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as { code?: unknown }).code;
-  if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
-    return true;
-  }
-  const message = (err as { message?: unknown }).message;
-  return typeof message === "string" && /max payload size exceeded/i.test(message);
-}
 
 type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
@@ -277,7 +193,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const connId = randomUUID();
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
-    const workerIngress = ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
+    const workerIngress: GatewayWorkerIngress =
+      ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
+    const publicWorkerIngress =
+      workerIngress === "public" ? takePublicWorkerIngress(socket) : undefined;
     const connectionPreauthBudget =
       ingressSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ?? preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
@@ -489,11 +408,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const handleSocketClose = async (code: number, reason: Buffer) => {
       const durationMs = Date.now() - openedAt;
-      const logForwardedFor = sanitizeLogValue(forwardedFor);
-      const logOrigin = sanitizeLogValue(requestOrigin);
-      const logHost = sanitizeLogValue(requestHost);
-      const logUserAgent = sanitizeLogValue(requestUserAgent);
-      const logReason = sanitizeLogValue(reason?.toString());
+      const logForwardedFor = sanitizeWsLogValue(forwardedFor);
+      const logOrigin = sanitizeWsLogValue(requestOrigin);
+      const logHost = sanitizeWsLogValue(requestHost);
+      const logUserAgent = sanitizeWsLogValue(requestUserAgent);
+      const logReason = sanitizeWsLogValue(reason?.toString());
       const handshakeIncomplete = lastHandshakePhase !== "ready";
       const closeContext = {
         cause: closeCause,
@@ -683,8 +602,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         service: workerConnectionService,
         isStartupPending,
         ingress: workerIngress,
-        rateLimiter: workerIngress === "public" ? rateLimiter : undefined,
-        rateLimitClientIp: workerIngress === "public" ? preauthBudgetKey : undefined,
         send,
         close,
         isClosed: () => closed,
@@ -699,6 +616,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         setLastFrameMeta,
         logGateway,
         logWsControl,
+        publicAdmission: publicWorkerIngress,
       });
       return;
     }

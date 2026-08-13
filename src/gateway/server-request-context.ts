@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
+import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -36,6 +38,7 @@ type GatewayRequestContextParams = {
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
+  getPortalService?: () => GatewayRequestContext["portalService"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -79,6 +82,7 @@ type GatewayRequestContextParams = {
     scopes: string[];
   }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -164,6 +168,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -183,9 +188,13 @@ export function createGatewayRequestContext(
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
+    get portalService() {
+      return params.getPortalService?.();
+    },
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
       : undefined,
@@ -365,6 +374,9 @@ export function createGatewayRequestContext(
     releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
     completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...(params.nodeDesktopService
+      ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
+      : {}),
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),

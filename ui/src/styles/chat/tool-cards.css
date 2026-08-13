@@ -121,11 +121,6 @@
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-.chat-tool-msg-summary--error .chat-tool-msg-summary__icon,
-.chat-tool-msg-summary--error .chat-tool-msg-summary__label {
-  color: var(--destructive, var(--danger, #c0392b));
-}
-
 /* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
@@ -1032,10 +1027,6 @@
   background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
 }
 
-.chat-activity-group__summary--error {
-  color: var(--destructive, var(--danger, #c0392b));
-}
-
 .chat-activity-group__icon {
   display: inline-flex;
   align-items: center;
@@ -1045,10 +1036,6 @@
 
 .chat-activity-group__icon {
   color: var(--muted);
-}
-
-.chat-activity-group__summary--error .chat-activity-group__icon {
-  color: inherit;
 }
 
 .chat-activity-group__icon svg {
@@ -1104,10 +1091,6 @@
 
 .chat-work-group .chat-activity-group__label {
   color: var(--muted);
-}
-
-.chat-work-group .chat-activity-group__summary--error .chat-activity-group__label {
-  color: inherit;
 }
 
 /* Reading indicator = working claw: the brand pincer claws in place where the
@@ -2049,6 +2032,31 @@ openclaw-tooltip.chat-tasks-status__preview {
   min-height: 22px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.chat-subagent-activity__row--interactive {
+  width: 100%;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.chat-subagent-activity__row--interactive:hover,
+.chat-subagent-activity__row--interactive:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--text);
+}
+
+.chat-subagent-activity__row--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .chat-subagent-activity__indicator {

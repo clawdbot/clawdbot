@@ -14,6 +14,7 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -82,6 +83,7 @@ const activeAppServerAttemptsForTest = new Set<{
   sessionId: string;
   sessionKey?: string;
 }>();
+const activeHarnessHostClosuresForTest = new Set<() => void>();
 
 type RunCodexAppServerAttemptOptions = Omit<
   NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
@@ -268,6 +270,26 @@ export function createParams(
 
 export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
+/** Replaces the lightweight default with the admitted host boundary used in production. */
+export async function bindProductionHarnessHostCapabilitiesForTest(
+  params: EmbeddedRunAttemptParams,
+): Promise<() => void> {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+  params.hostCapabilities = host.capabilities;
+  let active = true;
+  const close = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    activeHarnessHostClosuresForTest.delete(close);
+    host.close();
+  };
+  activeHarnessHostClosuresForTest.add(close);
+  return close;
 }
 
 export function setCodexTestModelSupportsTools(
@@ -676,6 +698,9 @@ export function setupRunAttemptTestHooks(): void {
 
   afterEach(async () => {
     await drainActiveAppServerAttemptsForTest();
+    for (const close of activeHarnessHostClosuresForTest) {
+      close();
+    }
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
     clearRuntimeAuthProfileStoreSnapshots();

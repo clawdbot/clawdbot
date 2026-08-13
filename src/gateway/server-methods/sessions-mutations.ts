@@ -11,6 +11,8 @@ import {
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
@@ -128,9 +130,24 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      key,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const canonicalKey = resolveStoredSessionKeyForAgentStore({
+      cfg: context.getRuntimeConfig(),
+      agentId: requestedAgent.agentId,
+      sessionKey: key,
+    });
     const patched = await patchPluginSessionExtension({
       cfg: context.getRuntimeConfig(),
-      sessionKey: key,
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
       pluginId,
       namespace,
       value: params.value,
@@ -144,6 +161,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
     emitSessionsChanged(context, {
       sessionKey: patched.key,
+      agentId: requestedAgent.agentId,
       reason: "plugin-patch",
     });
   },
@@ -188,7 +206,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: result.key,
-      ...(result.key === "global" ? { agentId: result.agentId } : {}),
+      agentId: result.agentId,
       reason,
     });
   },

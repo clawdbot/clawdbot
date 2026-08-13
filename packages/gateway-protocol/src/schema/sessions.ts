@@ -7,8 +7,10 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -93,6 +95,7 @@ export const SessionCompanionExchangeSchema = closedObject({
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
 });
 
@@ -105,6 +108,7 @@ export const SessionsCompanionAskResultSchema = closedObject({
 /** Selects the in-memory companion thread for one session. */
 export const SessionsCompanionStateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Current bounded exchanges for one session companion thread. */
@@ -115,6 +119,7 @@ export const SessionsCompanionStateResultSchema = closedObject({
 /** Selects the in-memory companion thread to clear. */
 export const SessionsCompanionResetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Acknowledges clearing one companion thread. */
@@ -515,6 +520,7 @@ export const SessionsAbortParamsSchema = closedObject({
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   pluginId: NonEmptyString,
   namespace: NonEmptyString,
   value: Type.Optional(PluginJsonValueSchema),
@@ -812,6 +818,8 @@ export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchR
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
+export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<

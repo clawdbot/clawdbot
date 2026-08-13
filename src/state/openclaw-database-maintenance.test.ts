@@ -160,6 +160,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "claw_installs.bootstrap_content_digest TEXT",
       "claw_installs.bootstrap_source_path TEXT",
       "worker_environments.desktop_json TEXT",
+      "worker_environments.bootstrap_install_kind TEXT",
       "claw_package_refs.extension_adapter_identity TEXT",
       "claw_package_refs.extension_detected_format TEXT",
       "claw_package_refs.extension_format TEXT",
@@ -311,39 +312,39 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("allows the lazy worker SSH fallback table to be absent but rejects drift", () => {
-    const database = createGlobalDatabase();
-    try {
-      const canonicalTable = database
-        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("worker_environment_ssh_fallback_ports") as { sql?: unknown } | undefined;
-      if (typeof canonicalTable?.sql !== "string") {
-        throw new Error("missing canonical worker SSH fallback port table");
+  it.each(["node_worker_launches", "worker_environment_ssh_fallback_ports"])(
+    "allows lazy table %s to be absent but rejects drift",
+    (tableName) => {
+      const database = createGlobalDatabase();
+      try {
+        const canonicalTable = database
+          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName) as { sql?: unknown } | undefined;
+        if (typeof canonicalTable?.sql !== "string") {
+          throw new Error(`missing canonical ${tableName} table`);
+        }
+        database.exec(`DROP TABLE ${tableName};`);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).not.toThrow();
+
+        const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
+        expect(driftedTableSql).not.toBe(canonicalTable.sql);
+        database.exec(driftedTableSql);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).toThrow(`column definitions differ for ${tableName}`);
+      } finally {
+        database.close();
       }
-      database.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-
-      const driftedTableSql = canonicalTable.sql.replace(
-        "  PRIMARY KEY (environment_id, position)",
-        "  unexpected TEXT,\n  PRIMARY KEY (environment_id, position)",
-      );
-      expect(driftedTableSql).not.toBe(canonicalTable.sql);
-      database.exec(driftedTableSql);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("column definitions differ for worker_environment_ssh_fallback_ports");
-    } finally {
-      database.close();
-    }
-  });
+    },
+  );
 
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();

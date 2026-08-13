@@ -161,4 +161,17 @@ export const desktopPanelStyles = css`
     inset: 0;
     background: var(--bg);
   }
+  /* View-only affordance: clicking anywhere on the desktop takes control. */
+  .desktop-stage__take-control {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: var(--cursor-action, pointer);
+  }
+  .desktop-stage__take-control:focus-visible {
+    outline: 2px solid var(--accent, #ff5c5c);
+    outline-offset: -2px;
+  }
 `;

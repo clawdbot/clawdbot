@@ -26,6 +26,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType,
     eventScope: params.eventScope,
+    retryNameLookup: eventKind.startsWith("member-"),
   });
   if (!auth.allowed) {
     logVerbose(

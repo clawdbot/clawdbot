@@ -477,8 +477,6 @@ class OpenClawShell
     this.shellChrome.handleDeferredTerminalToggle(event);
   readonly handleDeferredBrowserToggle = (event: Event) =>
     this.shellChrome.handleDeferredBrowserToggle(event);
-  readonly handleDeferredCustodianToggle = (event: Event) =>
-    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
 

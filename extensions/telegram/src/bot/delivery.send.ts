@@ -4,7 +4,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
+import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
@@ -32,7 +32,7 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 
 function createTelegramDeliverySendRetry() {
   return createChannelApiRetryRunner({
-    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
+    shouldRetry: shouldRetryTelegramSendError,
     strictShouldRetry: true,
     retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
@@ -61,7 +61,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
             getTelegramNativeQuoteReplyMessageId(requestParams) && isTelegramQuoteParamError(error)
           ),
         fn: () => requestWithRetry(() => params.send(requestParams), operation),
-      }),
+      }).catch(rethrowTelegramSendError),
   });
   return result;
 }

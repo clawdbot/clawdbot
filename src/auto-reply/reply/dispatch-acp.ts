@@ -407,6 +407,7 @@ async function finalizeAcpTurnOutput(params: {
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     })?.acp;
     const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
     if (!isSessionIdentityPending(identityAfterTurn)) {

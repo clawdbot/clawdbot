@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 

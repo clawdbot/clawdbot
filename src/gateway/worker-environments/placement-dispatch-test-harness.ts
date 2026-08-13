@@ -175,7 +175,8 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
-    remoteSocketPath: "/worker/gateway.sock",
+    connectionEndpoint: { kind: "unix", socketPath: "/worker/gateway.sock" },
+    launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
       return {

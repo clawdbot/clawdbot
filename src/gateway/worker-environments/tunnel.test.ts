@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
@@ -68,6 +69,21 @@ describe("worker tunnel manager", () => {
     expect(workspace?.argv).toContain("ControlPath=none");
     expect(workspace?.argv.at(-1)).toContain("pwd");
     expect(fake.starts).toHaveLength(1);
+    expect(handle.connectionEndpoint).toMatchObject({
+      kind: "unix",
+      socketPath: expect.stringMatching(/\/gateway\.sock$/u),
+    });
+    const descriptor = { version: 3 } as unknown as WorkerLaunchDescriptor;
+    await expect(handle.launchTurn({ descriptor, timeoutMs: 123 })).resolves.toEqual(success());
+    const launch = fake.runs.at(-1);
+    const remoteLaunchCommand = launch?.argv.at(-1) ?? "";
+    expect(remoteLaunchCommand).toContain("'sh' '-c'");
+    expect(remoteLaunchCommand).toContain(
+      'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker',
+    );
+    expect(remoteLaunchCommand).toContain(`'${BUNDLE_HASH}'`);
+    expect(launch?.options.input).toBe(JSON.stringify(descriptor));
+    expect(launch?.options.timeoutMs).toBe(123);
     await handle.stop();
     expect(tunnel?.process.stopCount).toBe(1);
     expect(manager.status("worker:one")).toBe("stopped");

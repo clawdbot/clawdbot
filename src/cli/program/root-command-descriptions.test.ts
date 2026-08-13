@@ -28,6 +28,7 @@ const JSON_NOT_APPLICABLE = {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
       "backup",
+      "backup git",
       "backup sqlite",
       "database",
       "database ownership",
@@ -143,6 +144,8 @@ const JSON_NOT_APPLICABLE = {
     commands: [
       "reset",
       "uninstall",
+      "backup enable",
+      "backup disable",
       "config set",
       "mcp add",
       "mcp set",

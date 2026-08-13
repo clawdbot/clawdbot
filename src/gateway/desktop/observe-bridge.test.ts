@@ -62,6 +62,7 @@ async function createProxyHarness(
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: {
+        claimStream: () => undefined,
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
             observer.close(code, reason);

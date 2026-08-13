@@ -310,6 +310,39 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
+      agentCommandMock.mockClear();
+
+      const missing = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as { error?: { message?: string; type?: string } };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
+      expect(agentCommandMock).not.toHaveBeenCalled();
+
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const selected = await postResponses(
+        enabledPort,
+        { model: "openclaw/default", input: "hi" },
+        { "x-openclaw-agent-id": "main" },
+      );
+      expect(selected.status).toBe(200);
+      expect((firstAgentOpts() as { sessionKey?: string }).sessionKey ?? "").toMatch(
+        /^agent:main:/,
+      );
+      await ensureResponseConsumed(selected);
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
   it.each([false, true])(
     "accepts the official OpenAI SDK plain-text response format (stream: %s)",
     async (stream) => {
@@ -558,7 +591,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { list: [{ id: "main" }] };
       resetConfigRuntimeState();
 
       const resNonPost = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
@@ -570,7 +603,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       const resMissingAuth = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-openclaw-agent-id": "main" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
       expect(resMissingAuth.status).toBe(200);
@@ -598,6 +631,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resInvalidModel);
 
       mockAgentOnce([{ text: "hello" }]);
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
       const resHeader = await postResponses(
         port,
         { model: "openclaw", input: "hi" },
@@ -627,6 +665,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
         "agent:beta:openresponses:custom",
       );
       await ensureResponseConsumed(resSessionOverride);
+
+      testState.agentsConfig = { list: [{ id: "main" }] };
+      resetConfigRuntimeState();
 
       agentCommandMock.mockClear();
       const resReservedSessionOverride = await postResponses(
@@ -662,6 +703,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(0);
 
       mockAgentOnce([{ text: "hello" }]);
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
       const optsModel = firstAgentOpts();
@@ -669,6 +715,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      testState.agentsConfig = { list: [{ id: "main" }] };
+      resetConfigRuntimeState();
 
       mockAgentOnce([{ text: "hello" }]);
       const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });

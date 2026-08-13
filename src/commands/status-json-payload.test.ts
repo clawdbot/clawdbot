@@ -137,7 +137,6 @@ describe("status-json-payload", () => {
       },
     });
   });
-
   it("omits optional sections when they are absent", () => {
     expect(
       buildStatusJsonPayload({

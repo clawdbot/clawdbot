@@ -227,6 +227,33 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ),
     };
   });
+  // A persisted session override can outlive the catalog (retired or
+  // temporarily unavailable model). Synthesize its row so the dialog still
+  // shows the selection and lets the operator move off it. An entirely empty
+  // catalog keeps its "no models" state instead of one orphaned row.
+  if (
+    currentOverride &&
+    modelOptions.length > 0 &&
+    !modelOptions.some((option) => option.value === currentOverride)
+  ) {
+    const catalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
+    modelOptions.push({
+      commitValue: currentOverride,
+      ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
+      ...(typeof catalogEntry?.supportsTools === "boolean"
+        ? { supportsTools: catalogEntry.supportsTools }
+        : {}),
+      isDefault: false,
+      value: currentOverride,
+      label: catalogEntry?.name.trim() || currentOverride,
+      provider: resolveChatModelProvider(
+        currentOverride,
+        props.modelCatalog,
+        "",
+        currentProviderHint,
+      ),
+    });
+  }
   const lockedModelLabel =
     props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
       ? t("chat.selectors.nativeCodexModel")

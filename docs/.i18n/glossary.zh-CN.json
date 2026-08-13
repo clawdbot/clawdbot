@@ -1746,5 +1746,9 @@
   {
     "source": "Connect a machine",
     "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
   }
 ]

@@ -114,9 +114,10 @@ such as `preflight`, `security-fast`, `build-artifacts`, and platform lanes.
 
 For repeated pull-request pushes, multiply by the number of runs expected to
 reach Blacksmith admission in the same 5-minute window, including runs canceled
-after admission. Canonical `main` is single-flight: one run completes while
-GitHub's default single pending slot is replaced by the newest push. Count one
-active main matrix plus its next pending matrix, not every intermediate merge.
+after admission. Canonical `main` uses two run-number-parity slots. Each slot
+keeps one active non-canceling run and one coalesced pending tip. Budget for up
+to two active main matrices plus their two pending tips entering the next
+admission wave, not every intermediate merge.
 
 Reject a change unless the org-level worst case stays below about 60% of the
 live bucket. With the current 10,000-registration bucket, keep planned
@@ -128,8 +129,8 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 Prefer these in order:
 
 1. Preserve cancel-in-progress for superseded pull-request heads.
-2. Preserve canonical `main` single-flight without canceling its running
-   integration cycle; GitHub's default pending slot coalesces to the newest tip.
+2. Preserve canonical `main` as two non-canceling parity slots; each slot's
+   default pending run coalesces to the newest tip.
 3. Move high-frequency, short, non-build jobs to `ubuntu-24.04`.
 4. Reduce matrix rows by bundling related tests inside one runner job when the
    combined job stays under timeout and keeps useful failure names.
@@ -155,13 +156,15 @@ Do not:
 
 These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 
-- `CI` concurrency key version, PR cancellation, and non-canceling canonical
-  `main` single-flight with one coalesced pending tip.
+- `CI` concurrency key version, PR cancellation, and canonical `main`'s two
+  non-canceling parity slots, each with one coalesced pending tip.
 - `preflight` and hosted `security-fast` start immediately without a debounce
-  or standalone admission job. On Node-relevant canonical main pushes,
-  preflight also owns the sole dependency sticky-disk write and 8 GiB prune
-  before fanout; replacement visibility is proved only by a later exact-marker
-  restore because Blacksmith snapshot promotion can lag job completion.
+  or standalone admission job. On Node-relevant canonical main pushes and
+  same-repo pull requests, preflight owns the sole immutable semantic
+  dependency-cache write of workspace `node_modules` plus the local pnpm store
+  before fanout; all Blacksmith Node jobs are restore-only consumers and exact
+  misses fall back to the ordinary pnpm-store cache, while
+  hosted/fork/manual paths use only that store cache.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;

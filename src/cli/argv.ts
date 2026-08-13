@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Low-level CLI argv helpers for root options, help/version detection, and command paths.
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
@@ -7,7 +8,6 @@ import {
   getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
 import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
@@ -76,10 +76,6 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     return false;
   }
   return false;
-}
-
-function parsePositiveInt(value: string): number | undefined {
-  return parseStrictPositiveInteger(value);
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -497,7 +493,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   }
   // Keep absent distinct from present-but-invalid so route-first callers can
   // defer invalid input to Commander instead of silently applying defaults.
-  return parsePositiveInt(raw) ?? null;
+  return parseStrictPositiveInteger(raw) ?? null;
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {

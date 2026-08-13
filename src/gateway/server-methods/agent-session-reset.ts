@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -255,20 +254,15 @@ export function loadBareSessionResetDeliverySession(params: {
   entry?: SessionEntry;
   agentId: string;
 } {
-  const selectedGlobalAgentId =
-    params.sessionKey === "global" && params.agentId ? params.agentId : undefined;
   const loaded = loadSessionEntry(params.sessionKey, {
     clone: false,
-    ...(selectedGlobalAgentId ? { agentId: selectedGlobalAgentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
     cfg: loadedCfg,
     entry: loaded?.entry,
-    agentId:
-      selectedGlobalAgentId ??
-      resolveAgentIdFromSessionKey(params.sessionKey) ??
-      resolveDefaultAgentId(loadedCfg),
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }
 

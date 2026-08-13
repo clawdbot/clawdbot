@@ -2174,14 +2174,14 @@
       "translated": "برای راه‌اندازی محلی از یک IP خصوصی LAN استفاده کنید، یا برای دسترسی از راه دور Tailscale Serve را فعال کنید / یک نشانی URL از نوع wss:// برای Gateway در دسترس قرار دهید."
     },
     {
-      "id": "native.android.ff5abe2418979715",
-      "source": "${if (tls) \"https\" else \"http\"}://$displayHost",
-      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost"
+      "id": "native.android.73109af9b97b61eb",
+      "source": "${if (tls) \"https\" else \"http\"}://$displayHost$displayPath",
+      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost$displayPath"
     },
     {
-      "id": "native.android.28e58e1bd98e08ab",
-      "source": "${if (tls) \"https\" else \"http\"}://$displayHost:$port",
-      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
+      "id": "native.android.6c4a0216a29d5921",
+      "source": "${if (tls) \"https\" else \"http\"}://$displayHost:$port$displayPath",
+      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port$displayPath"
     },
     {
       "id": "native.android.180483eb1b7a4ff1",
@@ -17834,11 +17834,6 @@
       "translated": "مجوز %@ رد شده است"
     },
     {
-      "id": "native.apple.944004de80cfc8b7",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.12a4a51d251f65c0",
       "source": "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.",
       "translated": "OpenClaw این Apple Watch را در شبکه‌های محلی مورد اعتماد مستقیماً به Gateway شما متصل می‌کند."
@@ -20682,11 +20677,6 @@
       "id": "native.apple.2a5e0e9e073b8db1",
       "source": "Click a discovered gateway to fill the SSH target.",
       "translated": "برای پر کردن هدف SSH، روی یک gateway کشف‌شده کلیک کنید."
-    },
-    {
-      "id": "native.apple.66ad783199ef9729",
-      "source": "Discover OpenClaw gateways on your LAN",
-      "translated": "کشف gatewayهای OpenClaw در LAN شما"
     },
     {
       "id": "native.apple.110f6e64e25dcd2e",
@@ -26917,6 +26907,16 @@
       "id": "native.apple.081a07c7306b223e",
       "source": "gateway connect failed",
       "translated": "gateway connect failed"
+    },
+    {
+      "id": "native.apple.1dba7d27dc80088a",
+      "source": "[\\(self.host)]",
+      "translated": "[\\(self.host)]"
+    },
+    {
+      "id": "native.apple.c25ea221748a03ba",
+      "source": ":\\(self.port)",
+      "translated": ":\\(self.port)"
     },
     {
       "id": "native.apple.2f45f005d2a7c3c2",

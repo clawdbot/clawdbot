@@ -191,9 +191,27 @@ for ((index = 0; index < run_count; index += 1)); do
       --validate-run "$run_id" \
       --repo "$REPO" \
       --trusted-workflow-ref main \
+      --verifier-source-sha "$VERIFIER_WORKFLOW_SHA" \
+      --verifier-source-file "$VALIDATOR" \
       --json
   )"; then
-    echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run; skipping" >&2
+    validator_error="$(
+      jq -r '
+        if (.error | type) == "string" then
+          .error
+          | gsub("[\\r\\n\\t ]+"; " ")
+          | gsub("^ +| +$"; "")
+          | if length > 500 then .[0:497] + "..." else . end
+        else
+          empty
+        end
+      ' <<< "$validation_record" 2>/dev/null || true
+    )"
+    if [[ -n "$validator_error" ]]; then
+      echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run: ${validator_error}; skipping" >&2
+    else
+      echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run; skipping" >&2
+    fi
     continue
   fi
   if ! jq -e \

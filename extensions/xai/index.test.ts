@@ -206,6 +206,7 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "grok-4.6", object: "model" },
           { id: "grok-4.5", object: "model" },
           { id: "grok-4.20-0309-reasoning", object: "model" },
           { id: "grok-4.20-0309-non-reasoning", object: "model" },
@@ -222,6 +223,7 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.6");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
@@ -802,6 +804,12 @@ describe("xai provider plugin", () => {
     expect(
       provider.isModernModelRef?.({
         provider: "xai",
+        modelId: "grok-4.6",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "xai",
         modelId: "grok-4.3",
       } as never),
     ).toBe(true);
@@ -853,5 +861,29 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
+  });
+
+  it("preserves Grok 4.6 xhigh reasoning through OAuth auto", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch((url) =>
+      url.endsWith("/settings")
+        ? Response.json({ default_model: "grok-4.6" })
+        : Response.json({
+            data: [{ id: "grok-4.6", api_backend: "responses" }],
+          }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const auto = result.models.find((model) => model.id === "auto");
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "auto",
+      model: { ...auto, provider: "xai" },
+    } as never);
+
+    expect(normalized?.id).toBe("grok-4.6");
+    expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
+    expect(normalized?.compat).toMatchObject({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
   });
 });

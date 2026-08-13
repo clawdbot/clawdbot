@@ -16,10 +16,10 @@ import {
   ControlUiGitHubError,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  githubApiToken,
   isRecord,
   optionalNumber,
   readOptionalGitHubString,
+  resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
 import {
   gitOutput,
@@ -569,9 +569,10 @@ async function refreshBranchPullRequests(
   context: SessionPullRequestGitContext,
   fetchImpl: typeof fetch,
   entry: CacheEntry,
+  token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
   try {
-    const result = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
+    const result = await fetchBranchPullRequests(context, fetchImpl, token);
     // Degraded state-only chips still become lastGood: a later refresh that
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
@@ -639,7 +640,8 @@ async function cachedBranchPullRequests(
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
 ): Promise<BranchPullRequestsSnapshot> {
-  const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
+  const { token, cacheScope } = resolveGitHubApiCredentialScope();
+  const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}\0${cacheScope}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     branchCache.delete(key);
@@ -660,7 +662,7 @@ async function cachedBranchPullRequests(
         }
         return snapshot;
       }
-      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached);
+      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached, token);
     });
   }
   const entry: CacheEntry = cached ?? {
@@ -669,7 +671,7 @@ async function cachedBranchPullRequests(
     refreshMode: null,
   };
   const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>
-    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry),
+    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry, token),
   );
   branchCache.delete(key);
   branchCache.set(key, entry);

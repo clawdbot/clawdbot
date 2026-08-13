@@ -73,4 +73,37 @@ describe("readDraftEnvironments", () => {
       { id: "worker:aws", type: "worker" },
     ]);
   });
+
+  it("preserves valid environment facts and safely drops malformed optional shapes", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:macbook",
+          type: "node",
+          platform: " darwin ",
+          sessionHost: false,
+          trust: "persistent",
+          capabilities: [" camera.snap ", 42, "custom.unknown", "system.run", null],
+        },
+        {
+          id: "node:malformed",
+          type: "node",
+          platform: { name: "linux" },
+          sessionHost: "yes",
+          trust: "temporary",
+          capabilities: "camera",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:macbook",
+        type: "node",
+        platform: "darwin",
+        sessionHost: false,
+        trust: "persistent",
+        capabilities: ["camera.snap", "custom.unknown", "system.run"],
+      },
+      { id: "node:malformed", type: "node" },
+    ]);
+  });
 });

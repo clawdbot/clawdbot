@@ -63,6 +63,7 @@ describe("tool-catalog", () => {
       "screen",
       "dashboard",
       "terminal",
+      "portal",
       "automations",
       "get_goal",
       "create_goal",

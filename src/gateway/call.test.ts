@@ -201,6 +201,7 @@ const {
   formatGatewayTransportErrorJson,
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
+  isImplicitLocalGatewayTarget,
   isGatewayTransportError,
 } = await import("./call.js");
 const { GatewaySecretRefUnavailableError } = await import("./credentials.js");
@@ -324,6 +325,22 @@ describe("callGateway url resolution", () => {
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
+  });
+
+  it("classifies only the implicit configured local Gateway as local", async () => {
+    setLocalLoopbackGatewayConfig();
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(true);
+
+    setGatewayConfig({ mode: "remote", remote: { url: "wss://gateway.example/ws" } });
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
+
+    setLocalLoopbackGatewayConfig();
+    await expect(isImplicitLocalGatewayTarget({ url: "ws://127.0.0.1:18789" })).resolves.toBe(
+      false,
+    );
+
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example/ws";
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
   });
 
   afterEach(() => {

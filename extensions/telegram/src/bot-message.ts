@@ -67,7 +67,10 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
+  >;
 };
 
 export function resolveTelegramMessageTurnSettings(params: {
@@ -197,6 +200,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       bot,
       cfg: turnCfg,
       account,
+      ownerAgentId: opts.ownerAgentId,
       historyLimit: turnSettings.historyLimit,
       dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,

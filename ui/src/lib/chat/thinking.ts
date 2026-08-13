@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -12,7 +13,6 @@ import type {
 } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 

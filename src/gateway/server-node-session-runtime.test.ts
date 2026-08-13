@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -23,7 +24,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -72,6 +73,25 @@ function registerNode(
 }
 
 describe("gateway node session runtime", () => {
+  test("publishes pairing-generation transitions to lifecycle consumers", () => {
+    const onPairingGenerationChanged = vi.fn();
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      onPairingGenerationChanged,
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    });
+    registerNode(runtime, "conn-original", "generation-a", []);
+    registerNode(runtime, "conn-replacement", "generation-b", []);
+
+    expect(onPairingGenerationChanged).toHaveBeenCalledWith({
+      nodeId: "node-a",
+      previousPairingGeneration: "generation-a",
+      nextPairingGeneration: "generation-b",
+      preserveSessionState: false,
+    });
+  });
+
   test("forwards subscribed payload json without parsing it again", async () => {
     const frames: string[] = [];
     const runtime = createRuntime(async () => "generation-a");
@@ -203,7 +223,6 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
     currentPairingGeneration = "generation-b";
     expect(
       runtime.nodeRegistry.updateSurface(

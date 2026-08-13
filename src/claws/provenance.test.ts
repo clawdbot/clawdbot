@@ -108,7 +108,7 @@ describe("Claw root install provenance", () => {
     const record = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 42 });
 
     expect(record).toMatchObject({
-      schemaVersion: "openclaw.clawInstallRecord.v1",
+      schemaVersion: "openclaw.clawInstallRecord.v2",
       claw: { name: "@acme/worker", version: "1.0.0", integrity: "sha256:manifest" },
       manifestSchemaVersion: 1,
       planIntegrity: plan.planIntegrity,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -77,11 +78,30 @@ type WorkerPlacementDispatchOptions = {
 function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
-): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+):
+  | { transport: "node"; environmentId: string; ownerEpoch: number }
+  | { transport: "ssh"; environmentId: string; ownerEpoch: number; bundleHash: string } {
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
+    environment.environmentId !== expectedEnvironmentId
+  ) {
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
+  }
+  if (
+    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+    !environment.sshEndpoint &&
+    !environment.bootstrapReceipt
+  ) {
+    return {
+      transport: "node",
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+    };
+  }
+  if (
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId ||
     !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
     throw new Error(
@@ -89,6 +109,7 @@ function requireProvisionedEnvironment(
     );
   }
   return {
+    transport: "ssh",
     environmentId: environment.environmentId,
     ownerEpoch: environment.ownerEpoch,
     bundleHash: environment.bootstrapReceipt.bundleHash,
@@ -179,6 +200,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;
+      if (provisioned.transport === "node") {
+        await environments.startTunnel({ environmentId, ownerEpoch });
+        throw new Error("Device worker transport unexpectedly started before launch support");
+      }
       placement = placements.transition({
         sessionId: request.sessionId,
         from: "provisioning",

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
@@ -38,7 +39,6 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,

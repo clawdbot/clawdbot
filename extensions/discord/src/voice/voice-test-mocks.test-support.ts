@@ -158,8 +158,16 @@ const {
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
-    resolveConfiguredRealtimeVoiceProviderMock: vi.fn(() => ({
-      provider: { id: "openai" },
+    resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
+      () => {
+        provider: {
+          id: string;
+          capabilities?: { supportsActivationNameGating?: boolean };
+        };
+        providerConfig: Record<string, unknown>;
+      }
+    >(() => ({
+      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),

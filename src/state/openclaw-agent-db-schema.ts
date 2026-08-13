@@ -697,13 +697,25 @@ function ensureAgentSchema(
             updated_at: now,
           })
           .onConflict((conflict) =>
-            conflict.column("meta_key").doUpdateSet({
-              role: "agent",
-              schema_version: targetVersion,
-              agent_id: agentId,
-              app_version: VERSION,
-              updated_at: now,
-            }),
+            conflict
+              .column("meta_key")
+              .doUpdateSet({
+                role: "agent",
+                schema_version: targetVersion,
+                agent_id: agentId,
+                app_version: VERSION,
+                updated_at: now,
+              })
+              // updated_at records when schema metadata last changed, not when
+              // the database was last opened; unconditional bumps make every
+              // open dirty the row and defeat no-change backup detection.
+              .where((eb) =>
+                eb.or([
+                  eb("schema_meta.schema_version", "!=", targetVersion),
+                  eb("schema_meta.app_version", "!=", VERSION),
+                  eb("schema_meta.agent_id", "!=", agentId),
+                ]),
+              ),
           ),
       );
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });

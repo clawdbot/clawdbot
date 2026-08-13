@@ -57,8 +57,6 @@ import {
 } from "./workspace-result-finalize.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
-const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
-
 type WorkerTurnEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "acknowledgeCredentialDelivery"
@@ -326,8 +324,8 @@ async function executeWorkerTurn(params: {
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchDescriptor({
-        version: 2,
-        socketPath: tunnel.remoteSocketPath,
+        version: 3,
+        connectionEndpoint: tunnel.connectionEndpoint,
         admission: {
           environmentId: placement.environmentId,
           credential: credential.credential,
@@ -375,10 +373,8 @@ async function executeWorkerTurn(params: {
   turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
   const handoffAbort = new AbortController();
   params.onHandoff();
-  const processPromise = tunnel.runWorkspaceCommand({
-    transportRetry: "never",
-    argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", placement.workerBundleHash],
-    input: JSON.stringify(descriptor),
+  const processPromise = tunnel.launchTurn({
+    descriptor,
     timeoutMs: turn.timeoutMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])

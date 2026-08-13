@@ -9,7 +9,6 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
@@ -26,9 +25,11 @@ import {
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
@@ -46,10 +47,12 @@ import {
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -62,6 +65,7 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   runWithGatewayHttpWorkAdmission,
@@ -73,6 +77,7 @@ import {
   type PluginRoutePathContext,
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
+import { markPublicWorkerIngress } from "./server/public-worker-ingress-context.js";
 import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
@@ -559,6 +564,12 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
+      const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
+      addRequestStage("worker-gateway", workerGatewayRoute !== "outside", () => {
+        respondNotFound(res);
+        return true;
+      });
+
       const devicePairingJoinShortcode = parseDevicePairingJoinRequestPath(scopedRequestPath);
       if (devicePairingJoinShortcode !== null) {
         addAdmittedStage("device-pairing-join", true, async () =>
@@ -926,10 +937,14 @@ export function attachGatewayUpgradeHandler(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Strict public-ingress limiter; loopback is never exempt. */
+  publicRateLimiter?: AuthRateLimiter;
+  workerIngressEnabled?: boolean;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
-  workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
 }) {
   const {
     httpServer,
@@ -941,6 +956,8 @@ export function attachGatewayUpgradeHandler(opts: {
     preauthConnectionBudget,
     resolvedAuth,
     rateLimiter,
+    publicRateLimiter,
+    workerIngressEnabled,
     log,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
@@ -950,20 +967,27 @@ export function attachGatewayUpgradeHandler(opts: {
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
-      const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
-      if (scopedNodeCapability.malformedScopedPath) {
-        writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
+      const originalRequestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
+      const originalWorkerGatewayRoute = originalRequestPath
+        ? classifyWorkerGatewayPath(originalRequestPath)
+        : "outside";
+      if (originalWorkerGatewayRoute === "worker" && !workerIngressEnabled) {
+        writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
         socket.destroy();
         return;
       }
-      if (scopedNodeCapability.rewrittenUrl) {
-        req.url = scopedNodeCapability.rewrittenUrl;
-      }
-      const resolvedAuthLocal = getResolvedAuth();
-      const requestPath = scopedNodeCapability.pathname;
-      if (requestPath === WORKER_PUBLIC_INGRESS_PATH) {
-        if (!opts.workerIngressEnabled) {
-          writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
+      if (originalWorkerGatewayRoute === "worker") {
+        const rateCheck = publicRateLimiter?.check(
+          requestClientIp,
+          AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+        );
+        if (rateCheck && !rateCheck.allowed) {
+          writeUpgradeAuthFailure(socket, {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: rateCheck.retryAfterMs,
+          });
           socket.destroy();
           return;
         }
@@ -979,6 +1003,10 @@ export function attachGatewayUpgradeHandler(opts: {
             prepareSocket: (workerSocket) => {
               workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
               workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "public";
+              markPublicWorkerIngress(workerSocket, {
+                clientIp: requestClientIp,
+                rateLimiter: publicRateLimiter,
+              });
             },
           });
         } catch {
@@ -986,7 +1014,29 @@ export function attachGatewayUpgradeHandler(opts: {
         }
         return;
       }
+      if (originalWorkerGatewayRoute !== "outside") {
+        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
+      if (scopedNodeCapability.malformedScopedPath) {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
+        socket.destroy();
+        return;
+      }
+      if (scopedNodeCapability.rewrittenUrl) {
+        req.url = scopedNodeCapability.rewrittenUrl;
+      }
+      const resolvedAuthLocal = getResolvedAuth();
+      const requestPath = scopedNodeCapability.pathname;
       const pathContext = resolvePluginRoutePathContext(requestPath);
+      const workerGatewayRoute = classifyWorkerGatewayPath(requestPath);
+      if (workerGatewayRoute !== "outside") {
+        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
       if (nodeCapability) {
         // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
@@ -1072,6 +1122,21 @@ export function attachGatewayUpgradeHandler(opts: {
         handleDesktopObserveUpgrade(req, socket, head, {
           registry: opts.desktopSessionRegistry,
         });
+        return;
+      }
+      if (requestPath === NODE_DESKTOP_ATTACH_PATH) {
+        const context = opts.getGatewayRequestContext?.();
+        if (!opts.nodeDesktopStreamBroker || !context) {
+          writeGatewayUpgradeServiceUnavailable(socket, "node desktop attach unavailable");
+          socket.destroy();
+          return;
+        }
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        await opts.nodeDesktopStreamBroker.handleUpgrade(req, socket, head, context.nodeRegistry);
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.

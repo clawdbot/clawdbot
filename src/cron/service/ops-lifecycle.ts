@@ -1,3 +1,4 @@
+import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
@@ -29,6 +30,24 @@ export async function start(state: CronServiceState) {
   const postPersistNotifications: DeferredCronNotifications = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.stopped) {
+      return;
+    }
+    if (state.deps.legacyDefaultAgentId) {
+      const rewritten = materializeLegacyDefaultCronJobOwners({
+        storePath: state.deps.storePath,
+        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
+      });
+      if (rewritten > 0) {
+        state.deps.log.info(
+          { storePath: state.deps.storePath, rewritten },
+          "cron: assigned legacy jobs to the retained owner",
+        );
+        // The first load can import legacy JSON into SQLite. Refresh the runtime
+        // snapshot after ownership is committed and before any job can run.
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      }
+    }
     if (state.stopped) {
       return;
     }

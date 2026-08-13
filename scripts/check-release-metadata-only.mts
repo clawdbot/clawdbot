@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mts";
 
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
@@ -150,20 +151,7 @@ function stripPackageVersion(raw: string) {
     throw new Error("package.json must contain an object");
   }
   delete parsed.version;
-  return stableJson(parsed);
-}
-
-function stableJson(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+  return stableStringify(parsed);
 }
 
 function normalizeVersionText(raw: string) {

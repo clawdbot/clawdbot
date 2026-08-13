@@ -9,7 +9,6 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
-  findProjectRegistryByOrigin,
   listProjectRegistry,
   registerClonedProjectRegistry,
   type ProjectRegistryRecord,
@@ -64,9 +63,7 @@ export async function materializeProjectClone(
       operationLabel: "projects.clone.lease",
     },
     async (lease) => {
-      const raced =
-        existingCanonicalProject(input.cfg, parsed.url, options) ??
-        findProjectRegistryByOrigin(parsed.url, options);
+      const raced = existingCanonicalProject(input.cfg, parsed.url, options);
       if (raced) {
         return raced;
       }

@@ -44,6 +44,7 @@ vi.mock("../talk-session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
+import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import {
@@ -154,7 +155,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(gatewayBudget.release).not.toHaveBeenCalled();
   });
 
-  it("uses the main budget and auth limiter for public worker sockets", async () => {
+  it("uses the main budget and public admission context for public worker sockets", async () => {
     const socket = createGatewayWsTestSocket();
     const gatewayBudget = { release: vi.fn() };
     const rateLimiter = { check: vi.fn() };
@@ -163,25 +164,24 @@ describe("attachGatewayWsConnectionHandler", () => {
       [GATEWAY_WS_WORKER_INGRESS_PROPERTY]: "public",
       __openclawPreauthBudgetKey: "203.0.113.10",
     });
+    markPublicWorkerIngress(socket as never, {
+      clientIp: "203.0.113.10",
+      rateLimiter: rateLimiter as never,
+    });
 
     await connectTestWs({
       socket,
       options: {
         preauthConnectionBudget: gatewayBudget as never,
-        rateLimiter: rateLimiter as never,
       },
     });
 
     const handler = firstAttachedWorkerHandlerParams() as {
-      ingress: string;
-      rateLimiter: unknown;
-      rateLimitClientIp: string;
+      publicAdmission: { clientIp: string; rateLimiter: unknown };
       setClient(client: never): boolean;
     };
     expect(handler).toMatchObject({
-      ingress: "public",
-      rateLimiter,
-      rateLimitClientIp: "203.0.113.10",
+      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
     });
     expect(handler.setClient({ socket } as never)).toBe(true);
     expect(gatewayBudget.release).toHaveBeenCalledWith("203.0.113.10");

@@ -3,6 +3,7 @@ import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-htt
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
 
 type ControlUiRequestClassification =
@@ -68,6 +69,11 @@ export function classifyControlUiRequest(params: {
     // The standalone host owns this namespace when enabled. When disabled or
     // malformed, plugins may still claim it before the final Gateway 404.
     if (classifyMcpAppStandalonePath(pathname) !== "outside") {
+      return { kind: "not-control-ui" };
+    }
+    // Worker admission is upgrade-only; never let the root SPA turn a plain GET
+    // or a malformed descendant into an apparently successful HTML response.
+    if (classifyWorkerGatewayPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA

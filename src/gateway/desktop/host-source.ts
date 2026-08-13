@@ -4,6 +4,11 @@ import { registerSecretValueForRedaction } from "../../logging/secret-redaction-
 import type { RfbAttachment } from "./attachment.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
 import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
+import {
+  createManagedLinuxDesktop,
+  type ManagedLinuxDesktop,
+  type ManagedLinuxDesktopStatus,
+} from "./managed-linux.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
@@ -17,12 +22,19 @@ export type HostDesktopAcquireResult = {
   vncPassword?: string;
 };
 
-export type HostDesktopStatus = {
-  enabled: boolean;
-  state: "attached" | "unavailable" | "disabled";
-  port: number;
-  security?: string;
-};
+export type HostDesktopStatus =
+  | { enabled: false; state: "disabled"; port: number }
+  | { enabled: true; state: "attached"; port: number; security: string }
+  | { enabled: true; state: "unavailable"; port: number; security?: string }
+  | {
+      enabled: true;
+      state: "managed";
+      managedState: ManagedLinuxDesktopStatus["state"] | "unknown";
+      port: number;
+      display?: number;
+      error?: string;
+      security?: "VncAuth";
+    };
 
 export type HostDesktopInspection = {
   status: HostDesktopStatus;
@@ -36,6 +48,68 @@ function nonRfbError(port: number): string {
 
 function unavailableError(port: number, platform: NodeJS.Platform): string {
   return `gateway host desktop is unavailable at 127.0.0.1:${port}. ${getHostDesktopGuidance(platform)}`;
+}
+
+function managedPlatformError(platform: NodeJS.Platform): string {
+  return `desktop.host.managed is available only on Linux; disable it on ${platform} or configure desktop.host.port for an existing loopback VNC server`;
+}
+
+function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDesktopInspection {
+  if (managedStatus.state === "running") {
+    return {
+      status: {
+        enabled: true,
+        state: "managed",
+        managedState: "running",
+        display: managedStatus.display,
+        port: managedStatus.port,
+        security: "VncAuth",
+      },
+      detail: `managed (running, display :${managedStatus.display}, port ${managedStatus.port}, security: VncAuth)`,
+    };
+  }
+  if (managedStatus.state === "failed") {
+    return {
+      status: {
+        enabled: true,
+        state: "managed",
+        managedState: "failed",
+        port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
+        ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
+        error: managedStatus.error,
+      },
+      detail: `managed (failed: ${managedStatus.error})`,
+      unavailableReason: "unsupported",
+    };
+  }
+  const startingCoordinates =
+    managedStatus.state === "starting"
+      ? {
+          port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
+          ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
+        }
+      : { port: DEFAULT_HOST_DESKTOP_PORT };
+  return {
+    status: {
+      enabled: true,
+      state: "managed",
+      managedState: managedStatus.state,
+      ...startingCoordinates,
+    },
+    detail: managedStatus.state === "starting" ? "managed (starting)" : "managed (not started)",
+  };
+}
+
+function configuredManagedInspection(): HostDesktopInspection {
+  return {
+    status: {
+      enabled: true,
+      state: "managed",
+      managedState: "unknown",
+      port: DEFAULT_HOST_DESKTOP_PORT,
+    },
+    detail: "managed (configured; runtime state is available from the running Gateway status)",
+  };
 }
 
 function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string {
@@ -56,6 +130,8 @@ function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string 
 export async function inspectHostDesktop(params: {
   config?: DesktopHostConfig;
   platform?: NodeJS.Platform;
+  managedDesktop?: ManagedLinuxDesktop;
+  probeRfb?: typeof probeRfbServer;
 }): Promise<HostDesktopInspection> {
   const port = params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT;
   if (params.config?.enabled !== true) {
@@ -66,12 +142,24 @@ export async function inspectHostDesktop(params: {
     };
   }
   const platform = params.platform ?? process.platform;
-  const probe = await probeRfbServer({
+  const probe = await (params.probeRfb ?? probeRfbServer)({
     host: "127.0.0.1",
     port,
     timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
   });
   if (probe.kind === "unreachable" || probe.kind === "timeout") {
+    if (params.config.port === undefined && params.config.managed === true) {
+      if (platform !== "linux") {
+        return {
+          status: { enabled: true, state: "unavailable", port },
+          detail: managedPlatformError(platform),
+          unavailableReason: "unsupported",
+        };
+      }
+      return params.managedDesktop
+        ? managedInspection(params.managedDesktop.status())
+        : configuredManagedInspection();
+    }
     return {
       status: { enabled: true, state: "unavailable", port },
       detail: unavailableError(port, platform),
@@ -108,22 +196,21 @@ export async function inspectHostDesktop(params: {
 export function createHostDesktopSource(params: {
   config: DesktopHostConfig;
   platform?: NodeJS.Platform;
+  managedDesktop?: ManagedLinuxDesktop;
+  probeRfb?: typeof probeRfbServer;
 }) {
   const port = params.config.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
+  const probeRfb = params.probeRfb ?? probeRfbServer;
+  const managedDesktop =
+    params.managedDesktop ??
+    (params.config.managed === true && platform === "linux"
+      ? createManagedLinuxDesktop()
+      : undefined);
 
-  const acquire = async (): Promise<HostDesktopAcquireResult> => {
-    const probe = await probeRfbServer({
-      host: "127.0.0.1",
-      port,
-      timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
-    });
-    if (probe.kind === "unreachable" || probe.kind === "timeout") {
-      throw new Error(unavailableError(port, platform));
-    }
-    if (probe.kind === "not-rfb") {
-      throw new Error(nonRfbError(port));
-    }
+  const acquireAttached = async (
+    probe: Extract<RfbProbeResult, { kind: "rfb" }>,
+  ): Promise<HostDesktopAcquireResult> => {
     const security = classifyRfbSecurity(probe.securityTypes);
     if (security === "none") {
       throw new Error(
@@ -165,7 +252,41 @@ export function createHostDesktopSource(params: {
     };
   };
 
-  return { acquire };
+  const acquire = async (): Promise<HostDesktopAcquireResult> => {
+    const probe = await probeRfb({
+      host: "127.0.0.1",
+      port,
+      timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
+    });
+    if (probe.kind === "unreachable" || probe.kind === "timeout") {
+      if (params.config.port === undefined && params.config.managed === true) {
+        if (platform !== "linux") {
+          throw new Error(managedPlatformError(platform));
+        }
+        if (!managedDesktop) {
+          throw new Error("managed Linux desktop lifecycle is unavailable; restart the gateway");
+        }
+        return await managedDesktop.acquire();
+      }
+      throw new Error(unavailableError(port, platform));
+    }
+    if (probe.kind === "not-rfb") {
+      throw new Error(nonRfbError(port));
+    }
+    return await acquireAttached(probe);
+  };
+
+  return {
+    acquire,
+    teardown: managedDesktop ? () => managedDesktop.stop() : undefined,
+    inspect: () =>
+      inspectHostDesktop({
+        config: params.config,
+        platform,
+        managedDesktop,
+        probeRfb,
+      }),
+  };
 }
 
 export type HostDesktopService = {
@@ -188,10 +309,22 @@ export function createHostDesktopService(params: {
   config: DesktopHostConfig;
   registry: DesktopSessionRegistry;
   platform?: NodeJS.Platform;
+  managedDesktop?: ManagedLinuxDesktop;
 }): HostDesktopService {
+  const platform = params.platform ?? process.platform;
+  const managedDesktop =
+    params.managedDesktop ??
+    (params.config.managed === true && platform === "linux"
+      ? createManagedLinuxDesktop({
+          onFailed: () => {
+            void params.registry.stop("host", 0);
+          },
+        })
+      : undefined);
   const source = createHostDesktopSource({
     config: params.config,
-    ...(params.platform ? { platform: params.platform } : {}),
+    platform,
+    ...(managedDesktop ? { managedDesktop } : {}),
   });
   return {
     async observe(observeParams) {
@@ -199,6 +332,7 @@ export function createHostDesktopService(params: {
         sourceKey: "host",
         ownerEpoch: 0,
         start: source.acquire,
+        ...(source.teardown ? { teardown: source.teardown } : {}),
       });
       const auth = acquired.auth;
       if (!auth) {
@@ -238,12 +372,7 @@ export function createHostDesktopService(params: {
       };
     },
     async status() {
-      return (
-        await inspectHostDesktop({
-          config: params.config,
-          ...(params.platform ? { platform: params.platform } : {}),
-        })
-      ).status;
+      return (await source.inspect()).status;
     },
   };
 }

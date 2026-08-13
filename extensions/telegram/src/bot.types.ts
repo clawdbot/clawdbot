@@ -8,6 +8,8 @@ import type { TelegramTransport } from "./fetch.js";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
+  /** Agent that owns account-scoped Telegram runtime state. */
+  ownerAgentId?: string;
   runtime?: RuntimeEnv;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;

@@ -37,7 +37,9 @@ function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-decision-facts-") } };
 }
 
-function seedExecutionContext(database: ReturnType<typeof databaseOptions>): void {
+function seedExecutionContext(
+  database: ReturnType<typeof databaseOptions>,
+): ExecutionIdentityContextV1 {
   let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
   const clear = configureExecutionIdentityAdmissionSink((work) => {
     if (work.kind === "capture") {
@@ -78,6 +80,7 @@ function seedExecutionContext(database: ReturnType<typeof databaseOptions>): voi
   ) {
     throw new Error(`unexpected execution context: ${JSON.stringify(stored)}`);
   }
+  return stored;
 }
 
 function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
@@ -193,7 +196,7 @@ describe("execution decision facts", () => {
 
   it("pages equal-time facts by a bounded row key", () => {
     const database = databaseOptions();
-    seedExecutionContext(database);
+    const context = seedExecutionContext(database);
     for (const id of ["same-time-a", "same-time-b", "same-time-c"]) {
       recordExecutionDecisionFact(receipt(id, 100), { ...database, now: 100 });
     }
@@ -214,6 +217,31 @@ describe("execution decision facts", () => {
         now: 100,
         database,
       }).receipts.map((item) => item.receiptId),
+    ).toEqual(["same-time-b", "same-time-c"]);
+
+    for (const decisionCursor of ["1", "001"]) {
+      const legacyPage = presentExecutionDecisionReceipts({
+        context,
+        decisionCursor,
+        decisionLimit: 1,
+        options: { ...database, now: 100 },
+      });
+      expect(legacyPage.decisions.map((item) => item.receiptId)).toEqual(["same-time-a"]);
+      expect(legacyPage.nextDecisionCursor).toMatch(/^g:/);
+    }
+    const legacyPage = presentExecutionDecisionReceipts({
+      context,
+      decisionCursor: "1",
+      decisionLimit: 1,
+      options: { ...database, now: 100 },
+    });
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: legacyPage.nextDecisionCursor,
+        decisionLimit: 2,
+        options: { ...database, now: 100 },
+      }).decisions.map((item) => item.receiptId),
     ).toEqual(["same-time-b", "same-time-c"]);
   });
 

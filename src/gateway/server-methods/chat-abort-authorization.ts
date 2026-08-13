@@ -1,9 +1,8 @@
 // Authorization and pending-run state transitions for chat cancellation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -87,7 +86,7 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   runId: string;
   sessionKey: string;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   includeHidden?: boolean;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
@@ -119,17 +118,12 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   }
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
   if (agentId) {
-    const parsed = parseAgentSessionKey(params.sessionKey);
-    const sessionAgentId =
-      params.sessionKey === "global"
-        ? resolveStoredGlobalRunAgentId(
-            normalizeUnknownText(payload.agentId),
-            params.defaultAgentId,
-          )
-        : parsed?.agentId
-          ? normalizeAgentId(parsed.agentId)
-          : undefined;
-    if (sessionAgentId && sessionAgentId !== agentId) {
+    const sessionAgentId = resolveChatRunOwnerAgentId({
+      agentId: normalizeUnknownText(payload.agentId),
+      sessionKey: params.sessionKey,
+      defaultAgentId: params.defaultAgentId,
+    });
+    if (sessionAgentId !== agentId) {
       return undefined;
     }
   }
@@ -188,13 +182,6 @@ function resolvePreRegisteredAgentDedupeKeys(
     }
   }
   return uniqueStrings(keys);
-}
-
-export function resolveStoredGlobalRunAgentId(
-  agentId: string | undefined,
-  defaultAgentId: string,
-): string {
-  return normalizeOptionalText(agentId)?.toLowerCase() ?? defaultAgentId.toLowerCase();
 }
 
 export function writePreRegisteredAgentAbort(params: {
@@ -263,7 +250,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
@@ -307,14 +294,15 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
     if (
       agentId &&
-      run.sessionKey === "global" &&
-      resolveStoredGlobalRunAgentId(
-        normalizeUnknownText(run.payload.agentId),
-        params.defaultAgentId,
-      ) !== agentId
+      !chatRunBelongsToAgent(
+        {
+          agentId: normalizeUnknownText(run.payload.agentId),
+          sessionKey: run.sessionKey,
+          defaultAgentId: params.defaultAgentId,
+        },
+        agentId,
+      )
     ) {
-      // Global keys are shared across agent stores; another agent's run is
-      // outside the selected global-agent scope.
       continue;
     }
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
@@ -350,7 +338,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
@@ -385,11 +373,15 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     }
     if (
       agentId &&
-      active.sessionKey === "global" &&
-      resolveStoredGlobalRunAgentId(active.agentId, params.defaultAgentId) !== agentId
+      !chatRunBelongsToAgent(
+        {
+          agentId: active.agentId,
+          sessionKey: active.sessionKey,
+          defaultAgentId: params.defaultAgentId,
+        },
+        agentId,
+      )
     ) {
-      // Global keys are shared across agent stores; another agent's run is
-      // outside the selected global-agent scope.
       continue;
     }
     matchedRunIds.push(runId);

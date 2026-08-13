@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -18,11 +19,11 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { formatByteSize } from "../../../lib/format.ts";
@@ -37,7 +38,6 @@ import {
   resolveAgentIdFromSessionKey,
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -835,6 +835,8 @@ export function createSessionWorkspaceProps(
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
 function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
   const sessionKey = state.sessionKey;
+  const canLoadFileText =
+    isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   return {
     kind: "session-diff",
     load: async (scope) => {
@@ -847,6 +849,27 @@ function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarCon
         ...scope,
       });
     },
+    loadFileText: canLoadFileText
+      ? async (path) => {
+          try {
+            const result = await state.sessions.getFile(sessionKey, path, {
+              agentId: scopedAgentParamsForSession(state, sessionKey).agentId,
+            });
+            const file = result?.file;
+            if (
+              !file ||
+              (file.previewKind !== undefined && file.previewKind !== "text") ||
+              (file.contentEncoding !== undefined && file.contentEncoding !== "utf8") ||
+              typeof file.content !== "string"
+            ) {
+              return null;
+            }
+            return file.content;
+          } catch {
+            return null;
+          }
+        }
+      : undefined,
     openFile: (path) => openFile(state, getWorkspaceState(state), path),
     revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };

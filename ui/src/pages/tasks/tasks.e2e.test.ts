@@ -65,6 +65,23 @@ const failedTask = {
   error: "Worker exited",
 };
 
+const readOnlyRetainedTask = {
+  id: "synthetic-retained-task",
+  taskId: "synthetic-retained-task",
+  kind: "subagent",
+  runtime: "subagent",
+  status: "completed",
+  title: "Sanitized retained task",
+  agentId: "main",
+  createdAt: baseTime - 60_000,
+  updatedAt: baseTime - 50_000,
+  deliveryStatus: "dismissed",
+  terminalOutcome: "blocked",
+  terminalSummary: "Synthetic task completed; delivery was dismissed.",
+};
+
+const readOnlyRetainedResult = "Synthetic retained result copied by a read-only operator.";
+
 const pageTwoSentinel = {
   id: "task-page-two-sentinel",
   taskId: "task-page-two-sentinel",
@@ -227,6 +244,68 @@ suite.define(() => {
         await copyFile(await video.path(), path.join(artifactDir, "tasks-flow.webm"));
       }
       await rm(rawVideoDir, { force: true, recursive: true });
+    }
+  });
+
+  it("lets an operator.read-only user copy a retained result without mutations", async () => {
+    await mkdir(artifactDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(suite.server.baseUrl).origin,
+    });
+    const page = await context.newPage();
+    try {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read"],
+        methodResponses: {
+          "tasks.list": {
+            cases: [
+              {
+                match: { agentId: "main", limit: 500, status: ["queued", "running"] },
+                response: { tasks: [] },
+              },
+              {
+                match: { agentId: "main", limit: 200 },
+                response: { tasks: [readOnlyRetainedTask] },
+              },
+            ],
+          },
+          "tasks.get": {
+            task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult },
+          },
+        },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}tasks`);
+      expect(response?.status()).toBe(200);
+      const task = page.locator('[data-task-id="synthetic-retained-task"]');
+      await task.waitFor({ state: "visible" });
+      await task.scrollIntoViewIfNeeded();
+      expect(await task.textContent()).toContain("Completed; result delivery was dismissed.");
+      expect(await task.getByRole("button", { name: "Retry delivery" }).count()).toBe(0);
+      expect(await task.getByRole("button", { name: "Dismiss delivery" }).count()).toBe(0);
+      expect(await task.getByRole("button", { name: /Cancel/ }).count()).toBe(0);
+      await page.screenshot({
+        path: path.join(artifactDir, "04-read-only-retained-result.png"),
+      });
+
+      const copyButton = task.getByRole("button", { name: "Copy result" });
+      await copyButton.waitFor({ state: "visible" });
+      await copyButton.click();
+      const getRequest = await gateway.waitForRequest("tasks.get");
+      expect(getRequest.params).toEqual({ taskId: readOnlyRetainedTask.taskId });
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(readOnlyRetainedResult);
+      expect(await gateway.getRequests("tasks.retry")).toHaveLength(0);
+      expect(await gateway.getRequests("tasks.dismiss")).toHaveLength(0);
+      expect(await gateway.getRequests("tasks.cancel")).toHaveLength(0);
+    } finally {
+      await context.close();
     }
   });
 });

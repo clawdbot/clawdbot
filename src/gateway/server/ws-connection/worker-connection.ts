@@ -54,13 +54,12 @@ import {
   runWithGatewayIndependentRootWorkContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import {
-  AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-  type AuthRateLimiter,
-} from "../../auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
+import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWorkerIngress, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   buildWorkerHello,
   workerInferenceError,
@@ -137,22 +136,12 @@ type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
 
-function isWorkerCredentialFailure(reason: WorkerProtocolCloseReason): boolean {
-  return (
-    reason === "invalid-credential" ||
-    reason === "environment-mismatch" ||
-    reason === "credential-expired"
-  );
-}
-
 type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
   connId: string;
   service?: WorkerConnectionService;
   isStartupPending?: () => boolean;
-  ingress?: GatewayWorkerIngress;
-  rateLimiter?: AuthRateLimiter;
-  rateLimitClientIp?: string;
+  ingress: GatewayWorkerIngress;
   send(frame: unknown): void;
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
@@ -165,6 +154,7 @@ type WorkerWsMessageHandlerParams = {
   setLastFrameMeta(meta: { type?: string; method?: string }): void;
   logGateway: WorkerLogger;
   logWsControl: WorkerLogger;
+  publicAdmission?: PublicWorkerIngressContext;
 };
 
 function rejectWorkerRequest(params: {
@@ -376,6 +366,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     params.close(code, reason);
   };
   const failHandshake = (code: number, reason: WorkerProtocolCloseReason) => {
+    params.publicAdmission?.rateLimiter?.recordFailure(
+      params.publicAdmission.clientIp,
+      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+    );
     params.setHandshakeState("failed");
     params.setCloseCause(reason);
     params.logWsControl.warn(`worker admission rejected reason=${reason}`);
@@ -397,29 +391,24 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   };
   const rejectAdmission = (rejection: {
     id: string;
-    reason: WorkerProtocolCloseReason;
+    reason: WorkerProtocolCloseReason | "rate-limited";
     internalReason?: string;
     error?: WorkerErrorShape;
     code?: number;
+    opaqueOnPublicIngress?: boolean;
   }) => {
     const internalReason = rejection.internalReason ?? rejection.reason;
+    const wireReason: WorkerProtocolCloseReason =
+      (rejection.opaqueOnPublicIngress && params.publicAdmission) ||
+      rejection.reason === "rate-limited"
+        ? "invalid-handshake"
+        : rejection.reason;
+    const wireError =
+      rejection.error ?? workerProtocolError(wireReason, { message: "worker admission rejected" });
     params.setHandshakeState("failed");
     params.setCloseCause(internalReason);
     params.logWsControl.warn(`worker admission rejected reason=${internalReason}`);
-    sendError(
-      rejection.id,
-      rejection.reason,
-      rejection.error ??
-        workerProtocolError(rejection.reason, { message: "worker admission rejected" }),
-      rejection.code ?? 1008,
-    );
-  };
-  const rejectVerifiedAdmission = (id: string, internalReason: WorkerProtocolCloseReason) => {
-    rejectAdmission({
-      id,
-      reason: params.ingress === "public" ? "admission-rejected" : internalReason,
-      internalReason,
-    });
+    sendError(rejection.id, wireReason, wireError, rejection.code ?? 1008);
   };
 
   const handleConnect = async (
@@ -441,65 +430,51 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       });
       return;
     }
+    if (params.ingress === "public" && !params.publicAdmission) {
+      rejectAdmission({
+        id,
+        reason: "invalid-handshake",
+        internalReason: "public-ingress-context-missing",
+      });
+      return;
+    }
     if (connect.minProtocol > PROTOCOL_VERSION || connect.maxProtocol < PROTOCOL_VERSION) {
       rejectAdmission({ id, reason: "protocol-mismatch" });
       return;
     }
-    const rateLimit = params.rateLimiter?.check(
-      params.rateLimitClientIp,
-      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-    );
-    if (rateLimit && !rateLimit.allowed) {
-      rejectAdmission({
-        id,
-        reason: "admission-rejected",
-        internalReason: "rate-limited",
-        error: workerProtocolError("admission-rejected", {
-          code: ErrorCodes.UNAVAILABLE,
-          message: "worker admission rejected",
-          retryable: true,
-          retryAfterMs: rateLimit.retryAfterMs,
-        }),
-      });
-      return;
-    }
-    const admission =
-      (await params.service?.admitWorker(connect.admission)) ??
-      ({ ok: false, reason: "environment-unavailable" } as const);
-    if (!admission.ok) {
-      if (isWorkerCredentialFailure(admission.reason)) {
-        await params.rateLimiter?.recordFailureAndDelay(
-          params.rateLimitClientIp,
-          AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-        );
-      }
-      rejectVerifiedAdmission(id, admission.reason);
-      return;
-    }
-    params.rateLimiter?.reset(params.rateLimitClientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
-    const ownershipFailure = params.service?.validateWorkerConnection(admission.identity);
-    if (ownershipFailure) {
-      rejectVerifiedAdmission(id, ownershipFailure);
-      return;
-    }
-    const client: GatewayWsClient = {
-      socket: params.socket,
-      connect: {
-        minProtocol: connect.minProtocol,
-        maxProtocol: connect.maxProtocol,
-        client: connect.client,
-        role: "worker",
-        scopes: [],
+    const admission = await runWorkerAdmissionBoundary({
+      service: params.service,
+      admission: connect.admission,
+      publicAdmission: params.publicAdmission,
+      claim: (identity) => {
+        const client: GatewayWsClient = {
+          socket: params.socket,
+          connect: {
+            minProtocol: connect.minProtocol,
+            maxProtocol: connect.maxProtocol,
+            client: connect.client,
+            role: "worker",
+            scopes: [],
+          },
+          connId: params.connId,
+          connectionKind: "worker",
+          worker: identity,
+          usesSharedGatewayAuth: false,
+        };
+        params.clearHandshakeTimer();
+        params.advanceHandshakePhase("auth_validated");
+        if (!params.setClient(client)) {
+          params.setHandshakeState("failed");
+          return false;
+        }
+        return true;
       },
-      connId: params.connId,
-      connectionKind: "worker",
-      worker: admission.identity,
-      usesSharedGatewayAuth: false,
-    };
-    params.clearHandshakeTimer();
-    params.advanceHandshakePhase("auth_validated");
-    if (!params.setClient(client)) {
-      params.setHandshakeState("failed");
+    });
+    if (!admission.ok) {
+      if (admission.reason === "claim-rejected") {
+        return;
+      }
+      rejectAdmission({ id, reason: admission.reason, opaqueOnPublicIngress: true });
       return;
     }
     params.setHandshakeState("connected");

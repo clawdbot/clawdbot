@@ -54,9 +54,11 @@ describe("onboarding main-agent creation", () => {
 
     expect(mocks.createAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        entry: expect.objectContaining({ id: "main", default: true }),
+        entry: expect.objectContaining({ id: "main" }),
+        bootstrapMain: true,
       }),
     );
+    expect(mocks.createAgent.mock.calls[0]?.[0]?.entry).not.toHaveProperty("default");
     expect(result).toMatchObject({
       agentId: "main",
       config: {

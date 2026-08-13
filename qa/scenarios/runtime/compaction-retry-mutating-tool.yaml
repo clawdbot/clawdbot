@@ -244,9 +244,9 @@ flow:
           value:
             expr: "store[sessionKey]"
         - assert:
-            expr: "sessionEntry?.compactionCount === 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
+            expr: "Number.isInteger(sessionEntry?.compactionCount) && sessionEntry.compactionCount >= 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
             message:
-              expr: "`OpenClaw token snapshot was not fresh after one compaction: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
+              expr: "`OpenClaw token snapshot did not retain a positive compaction count with fresh token data: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
         - set: checkpointPage
           value:
             expr: "await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })"

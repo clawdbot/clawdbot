@@ -127,6 +127,30 @@ describe("printDaemonStatus", () => {
     );
   });
 
+  it("prints a managed host desktop failure without a fake listener address", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "failed",
+          port: 46_001,
+          display: 99,
+          error: "startxfce4 not installed",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
+  });
+
   it("prints the applied Gateway heap limit and derivation", () => {
     printDaemonStatus(
       {

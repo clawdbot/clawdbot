@@ -116,6 +116,7 @@ describe("MCP App transcript reconstruction", () => {
     expect(restored).toEqual({ runtime, view });
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
       runtime,
+      agentId: "main",
       serverName: "demo",
       toolName: "show",
       uiResourceUri: "ui://demo/app",

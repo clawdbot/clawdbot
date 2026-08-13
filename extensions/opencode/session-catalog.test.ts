@@ -6,6 +6,7 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteLockContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type ResolveAcpSessionAvailability =
@@ -454,6 +455,47 @@ describe("OpenCode session catalog", () => {
     await expect(provider!.list({})).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
     ]);
+  });
+
+  itWithCli("allows a relative OPENCODE_DB as an explicit isolated-state root", async () => {
+    await installFakeOpenCode();
+    const { provider } = captureOpenCodeSessionRegistrations();
+
+    await withEnvAsync(
+      { OPENCODE_DB: undefined, XDG_DATA_HOME: undefined },
+      async () =>
+        await Promise.all([
+          expect(
+            provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+          ).resolves.toEqual([]),
+          expect(
+            provider!.continueSession?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+          expect(
+            provider!.openTerminal?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+        ]),
+    );
+    await withEnvAsync({ OPENCODE_DB: "relative.db", XDG_DATA_HOME: undefined }, async () => {
+      await expect(
+        provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+      ).resolves.toEqual([expect.objectContaining({ hostId: "gateway" })]);
+      await expect(
+        provider!.read({
+          allowProcessHomeFallback: false,
+          hostId: "gateway",
+          threadId: "ses_test",
+        }),
+      ).resolves.toMatchObject({ hostId: "gateway", threadId: "ses_test" });
+    });
   });
 
   itWithCli(

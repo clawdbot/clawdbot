@@ -9,9 +9,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
+  getCurrentPluginMetadataSnapshotMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedExtensionFactoriesMock,
@@ -1169,6 +1171,69 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             runtime: "codex",
           }),
         ]),
+      }),
+    );
+  });
+
+  it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
+    const baseMetadataSnapshot = expectDefined(
+      getCurrentPluginMetadataSnapshotMock(),
+      "default plugin metadata snapshot",
+    );
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR
+        ? {
+            ...baseMetadataSnapshot,
+            configFingerprint: "workspace-compaction-normalization",
+            plugins: [
+              {
+                id: "compaction-normalizer",
+                channels: [],
+                providers: ["anthropic"],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "workspace",
+                rootDir: TEST_WORKSPACE_DIR,
+                source: `${TEST_WORKSPACE_DIR}/index.js`,
+                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+                modelIdNormalization: {
+                  providers: {
+                    anthropic: {
+                      aliases: { legacy: "claude-modern" },
+                    },
+                  },
+                },
+              } satisfies PluginManifestRecord,
+            ],
+          }
+        : undefined,
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+      agentHarnessId: "codex",
+      modelFallbacksOverride: ["anthropic/legacy"],
+      config: {} as never,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "anthropic",
+            modelId: "claude-modern",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+    );
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: TEST_WORKSPACE_DIR,
+        allowWorkspaceScopedSnapshot: true,
       }),
     );
   });

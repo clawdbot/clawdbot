@@ -18,6 +18,8 @@ export type NodeListNode = {
   pathEnv?: string;
   caps?: string[];
   commands?: string[];
+  /** Connected node currently advertises full worker session hosting. */
+  sessionHost?: boolean;
   nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
   approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";

@@ -28,6 +28,7 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
+  SLACK_SESSION_LINK_ACTION_ID,
 } from "../../reply-action-ids.js";
 import { truncateSlackText } from "../../truncate.js";
 import {
@@ -387,6 +388,9 @@ function readSlackApprovalAction(parsed: ParsedSlackBlockAction): SlackApprovalA
 }
 
 function isSlackReplyLinkAction(parsed: ParsedSlackBlockAction): boolean {
+  if (parsed.actionId === SLACK_SESSION_LINK_ACTION_ID) {
+    return true;
+  }
   if (
     parsed.actionId === SLACK_REPLY_LINK_ACTION_ID ||
     parsed.actionId.startsWith(`${SLACK_REPLY_LINK_ACTION_ID}:`)

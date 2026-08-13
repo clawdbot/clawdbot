@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   createHostDesktopService,
   createHostDesktopSource,
   inspectHostDesktop,
 } from "./host-source.js";
+import type { ManagedLinuxDesktop } from "./managed-linux.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -62,6 +63,19 @@ async function unusedPort(): Promise<number> {
     server.close(() => resolve());
   });
   return address.port;
+}
+
+function fakeManagedDesktop(
+  status: ReturnType<ManagedLinuxDesktop["status"]> = { state: "not-started" },
+) {
+  const acquire = vi.fn(async () => ({
+    attachment: { kind: "tcp" as const, host: "127.0.0.1" as const, port: 46_001 },
+    auth: "vnc-password" as const,
+    vncPassword: "managed-secret",
+  }));
+  const stop = vi.fn(async () => undefined);
+  const managed: ManagedLinuxDesktop = { acquire, stop, status: () => status };
+  return { acquire, managed, stop };
 }
 
 describe("gateway host desktop source", () => {
@@ -163,5 +177,114 @@ describe("gateway host desktop source", () => {
       platform: "linux",
     });
     await expect(source.acquire()).rejects.toThrow("apt install tigervnc-standalone-server");
+  });
+
+  it("keeps an explicitly configured port ahead of managed mode", async () => {
+    const port = await listenRfb({ securityTypes: [2] });
+    const managed = fakeManagedDesktop();
+    const source = createHostDesktopSource({
+      config: { enabled: true, managed: true, port },
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    await expect(source.acquire()).resolves.toEqual({
+      attachment: { kind: "tcp", host: "127.0.0.1", port },
+      auth: "vnc-password",
+    });
+    expect(managed.acquire).not.toHaveBeenCalled();
+  });
+
+  it("keeps a default-port RFB listener ahead of managed mode", async () => {
+    const managed = fakeManagedDesktop();
+    const source = createHostDesktopSource({
+      config: { enabled: true, managed: true },
+      platform: "linux",
+      managedDesktop: managed.managed,
+      probeRfb: async () => ({ kind: "rfb", securityTypes: [2] }),
+    });
+    await expect(source.acquire()).resolves.toEqual({
+      attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 },
+      auth: "vnc-password",
+    });
+    expect(managed.acquire).not.toHaveBeenCalled();
+  });
+
+  it("starts managed mode only on Linux after the default port is unreachable", async () => {
+    const managed = fakeManagedDesktop();
+    const source = createHostDesktopSource({
+      config: { enabled: true, managed: true },
+      platform: "linux",
+      managedDesktop: managed.managed,
+      probeRfb: async () => ({ kind: "unreachable" }),
+    });
+    await expect(source.acquire()).resolves.toMatchObject({
+      attachment: { host: "127.0.0.1", port: 46_001 },
+      auth: "vnc-password",
+    });
+    expect(managed.acquire).toHaveBeenCalledOnce();
+  });
+
+  it("reports managed mode as Linux-only on other platforms", async () => {
+    const managed = fakeManagedDesktop();
+    const source = createHostDesktopSource({
+      config: { enabled: true, managed: true },
+      platform: "darwin",
+      managedDesktop: managed.managed,
+      probeRfb: async () => ({ kind: "unreachable" }),
+    });
+    await expect(source.acquire()).rejects.toThrow(
+      "desktop.host.managed is available only on Linux",
+    );
+    await expect(
+      inspectHostDesktop({
+        config: { enabled: true, managed: true },
+        platform: "darwin",
+        managedDesktop: managed.managed,
+        probeRfb: async () => ({ kind: "unreachable" }),
+      }),
+    ).resolves.toMatchObject({
+      status: { state: "unavailable" },
+      detail: expect.stringContaining("available only on Linux"),
+    });
+  });
+
+  it("reports managed lifecycle states without exposing password material", async () => {
+    const managed = fakeManagedDesktop({ state: "running", display: 99, port: 46_001 });
+    await expect(
+      inspectHostDesktop({
+        config: { enabled: true, managed: true },
+        platform: "linux",
+        managedDesktop: managed.managed,
+        probeRfb: async () => ({ kind: "unreachable" }),
+      }),
+    ).resolves.toEqual({
+      status: {
+        enabled: true,
+        state: "managed",
+        managedState: "running",
+        display: 99,
+        port: 46_001,
+        security: "VncAuth",
+      },
+      detail: "managed (running, display :99, port 46001, security: VncAuth)",
+    });
+  });
+
+  it("does not infer process-local managed state from standalone inspection", async () => {
+    await expect(
+      inspectHostDesktop({
+        config: { enabled: true, managed: true },
+        platform: "linux",
+        probeRfb: async () => ({ kind: "unreachable" }),
+      }),
+    ).resolves.toEqual({
+      status: {
+        enabled: true,
+        state: "managed",
+        managedState: "unknown",
+        port: 5900,
+      },
+      detail: "managed (configured; runtime state is available from the running Gateway status)",
+    });
   });
 });

@@ -3,7 +3,10 @@ import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveSystemAgentTargetAgentId,
+} from "../agents/agent-scope-config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
@@ -653,7 +656,7 @@ function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.
   return {
     config,
     env,
-    workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env),
+    workspaceDir: resolveAgentWorkspaceDir(config, resolveSystemAgentTargetAgentId(config), env),
   };
 }
 
@@ -1715,8 +1718,4 @@ export async function uninstallManagedPlugin(params: {
   });
 }
 
-/** Normalize unexpected lifecycle failures for Gateway response adapters. */
-export function formatManagedPluginLifecycleError(error: unknown): string {
-  return formatErrorMessage(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

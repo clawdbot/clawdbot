@@ -3,7 +3,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -27,6 +26,7 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -38,6 +38,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import {
+  resolveSessionStoreCompatibilityAgentId,
   resolveSessionStoreTargets,
   type SessionStoreTarget,
   type SessionStoreSelectionOptions,
@@ -395,7 +396,7 @@ async function previewStoreCleanup(params: {
   });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: Object.keys(previewStore).length,
+    entryCount: countSessionEntryMaintenanceEligibleEntries(previewStore, preserveSessionKeys),
     // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
     // preview caps unconditionally below), so mirror that here: prune stale probes before the
     // forced cap can evict real sessions in their place.
@@ -708,7 +709,7 @@ export async function purgeAgentSessionStoreEntries(
     const storeConfig = cfg.session?.store;
     const storeAgentId =
       typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
-        ? normalizeAgentId(resolveDefaultAgentId(cfg))
+        ? resolveSessionStoreCompatibilityAgentId(cfg)
         : normalizedAgentId;
     const storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,

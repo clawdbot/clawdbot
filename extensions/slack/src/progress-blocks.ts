@@ -4,12 +4,14 @@ import type { AnyChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
   type AgentPlanStep,
+  type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
   formatPlanChecklistLines,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { SLACK_SESSION_LINK_ACTION_ID } from "./reply-action-ids.js";
 import { truncateSlackText } from "./truncate.js";
 
 const SLACK_PROGRESS_FIELD_MAX = 1800;
@@ -254,15 +256,48 @@ function buildSlackProgressStreamChunks(params: {
   return chunks;
 }
 
-export function buildSlackProgressDraftBlocks(params: {
-  label?: string;
-  title?: string;
+type SlackProgressCardState = "working" | "success" | "error";
+type SlackProgressDiffStat = NonNullable<ChannelProgressDraftCompositorSnapshot["diffStat"]>;
+
+function formatDiffStat(diffStat: SlackProgressDiffStat | undefined): string | undefined {
+  if (!diffStat || (diffStat.files === 0 && diffStat.added === 0 && diffStat.removed === 0)) {
+    return undefined;
+  }
+  return [
+    `📝 ${diffStat.files} files`,
+    ...(diffStat.added > 0 ? [`+${diffStat.added}`] : []),
+    ...(diffStat.removed > 0 ? [`−${diffStat.removed}`] : []),
+  ].join(" ");
+}
+
+function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineChars: number) {
+  const rendered: string[] = [];
+  let length = 0;
+  for (const line of lines.slice(-SLACK_MAX_BLOCKS).toReversed()) {
+    const row = `${legacyLineTitle(line)} — ${legacyLineDetail(line, maxLineChars)}`;
+    const nextLength = length + row.length + (rendered.length > 0 ? 1 : 0);
+    if (nextLength > SLACK_PROGRESS_FIELD_MAX) {
+      break;
+    }
+    rendered.push(row);
+    length = nextLength;
+  }
+  return rendered.toReversed().join("\n");
+}
+
+export function buildSlackProgressCardBlocks(params: {
+  state: SlackProgressCardState;
+  title: string;
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
   narration?: string;
   maxLineChars?: number;
-}): (Block | KnownBlock)[] | undefined {
-  const label = params.label?.trim() || params.title?.trim();
+  toolCalls?: number;
+  elapsedSeconds?: number;
+  diffStat?: SlackProgressDiffStat;
+  receiptSummary?: string;
+  sessionUrl?: string;
+}): (Block | KnownBlock)[] {
   const maxLineChars = resolveMaxLineChars(
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS,
@@ -272,18 +307,21 @@ export function buildSlackProgressDraftBlocks(params: {
     maxLineChars,
   });
   const narration = params.narration?.replace(/\s+/g, " ").trim();
-  // Status blocks (label, narration, checklist) take priority over rolling
-  // tool lines inside Slack's 50-block budget; the tail slice would otherwise
-  // silently drop the checklist first.
-  const headBlocks: (Block | KnownBlock)[] = [
-    ...(label
-      ? [
-          {
-            type: "section" as const,
-            text: field(`*${escapeSlackMrkdwn(label)}*`),
-          },
-        ]
-      : []),
+  const activityText = buildActivityText(params.lines, maxLineChars);
+  const diffStat = formatDiffStat(params.diffStat);
+  const workingFooter = [
+    ...(params.toolCalls && params.toolCalls > 0 ? [`🛠️ ${params.toolCalls} tools`] : []),
+    ...(diffStat ? [diffStat] : []),
+    ...(params.elapsedSeconds && params.elapsedSeconds > 0 ? [`⏱ ${params.elapsedSeconds}s`] : []),
+  ].join(" · ");
+  const terminalFooter = [params.receiptSummary?.trim(), diffStat].filter(Boolean).join(" · ");
+  const footer = params.state === "working" ? workingFooter : terminalFooter;
+  const icon = params.state === "working" ? "🔄" : params.state === "success" ? "✅" : "❌";
+  const blocks: (Block | KnownBlock)[] = [
+    {
+      type: "section" as const,
+      text: field(`${icon} *${escapeSlackMrkdwn(params.title.trim() || "Working")}*`),
+    },
     ...(narration
       ? [
           {
@@ -300,16 +338,39 @@ export function buildSlackProgressDraftBlocks(params: {
           },
         ]
       : []),
-  ].slice(0, SLACK_MAX_BLOCKS);
-  const lineBudget = Math.max(0, SLACK_MAX_BLOCKS - headBlocks.length);
-  const renderedBlocks: (Block | KnownBlock)[] = [
-    ...headBlocks,
-    ...params.lines.slice(-lineBudget).map((line) => ({
-      type: "section" as const,
-      fields: [field(legacyLineTitle(line)), field(legacyLineDetail(line, maxLineChars))],
-    })),
+    ...(activityText
+      ? [
+          {
+            type: "section" as const,
+            text: field(activityText),
+          },
+        ]
+      : []),
+    ...(footer
+      ? [
+          {
+            type: "context" as const,
+            elements: [field(footer)],
+          },
+        ]
+      : []),
+    ...(params.state !== "working" && params.sessionUrl
+      ? [
+          {
+            type: "actions" as const,
+            elements: [
+              {
+                type: "button" as const,
+                action_id: SLACK_SESSION_LINK_ACTION_ID,
+                text: { type: "plain_text" as const, text: "Open in OpenClaw" },
+                url: params.sessionUrl,
+              },
+            ],
+          },
+        ]
+      : []),
   ];
-  return renderedBlocks.length ? renderedBlocks : undefined;
+  return blocks.slice(0, SLACK_MAX_BLOCKS);
 }
 
 export type SlackNativeTaskSnapshot = ReadonlyMap<

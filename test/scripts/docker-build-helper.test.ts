@@ -28,6 +28,8 @@ const OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/scenario.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
+const AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH =
+  "scripts/e2e/agents-delete-shared-workspace-docker.sh";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
@@ -4979,6 +4981,25 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(scenario).not.toContain('kill "$gateway_pid"');
     expect(scenario).not.toContain('kill "$mock_pid"');
     expect(scenario).not.toContain('node "$entry" gateway --port "$PORT"');
+  });
+
+  it("runs agents delete shared workspace smoke through one managed gateway", () => {
+    const runner = readFileSync(AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(runner, [
+      'entry="$(openclaw_e2e_resolve_entrypoint)"',
+      'gateway_pid="$(openclaw_e2e_start_gateway "$entry" 18789 "$gateway_log")"',
+      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$gateway_log" 300 18789',
+      'node "$entry" agents delete ops --force --json > "$output_file"',
+      'openclaw_e2e_terminate_gateways "${gateway_pid:-}"',
+      'openclaw_e2e_print_log "$gateway_log" >&2',
+      "trap cleanup EXIT",
+      "trap dump_logs_on_error ERR",
+    ]);
+
+    expect(runner.match(/openclaw_e2e_start_gateway/gu)).toHaveLength(1);
+    expect(runner.match(/openclaw_e2e_wait_gateway_ready/gu)).toHaveLength(1);
+    expect(runner).not.toContain("run_openclaw()");
+    expect(runner).not.toContain("for _ in");
   });
 
   it("keeps OpenAI web search smoke logs isolated per run", () => {

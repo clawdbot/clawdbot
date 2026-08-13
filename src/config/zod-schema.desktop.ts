@@ -15,6 +15,10 @@ const DesktopHostConfigShape = {
     label: "Gateway Host Desktop (Labs)",
     help: "Enables the experimental gateway-host desktop source. Restart the gateway after changing this setting.",
   }),
+  managed: z.boolean().optional().register(configUiMetadata, {
+    label: "Managed Linux Host Desktop",
+    help: "Runs and supervises a loopback-only headless TigerVNC/XFCE desktop on Linux. An explicit port or existing default-port VNC server still takes precedence.",
+  }),
   port: z.number().int().min(1).max(65_535).optional().register(configUiMetadata, {
     label: "Gateway Host VNC Port",
     help: "Loopback RFB port of an already-running VNC server on the gateway host (default: 5900).",
@@ -36,13 +40,13 @@ const DesktopHostConfigSchema = z
   .strict()
   .register(configUiMetadata, {
     label: "Gateway Host Desktop",
-    help: "Connects OpenClaw to an already-running loopback-only VNC server on the gateway host.",
+    help: "Connects to an existing loopback VNC server or, on Linux, an explicitly enabled managed headless desktop.",
   });
 
 const DesktopConfigShape = {
   host: DesktopHostConfigSchema.optional().register(configUiMetadata, {
     label: "Gateway Host Desktop",
-    help: "Experimental gateway-host desktop observation backed by an already-running VNC server.",
+    help: "Experimental gateway-host desktop observation backed by an existing or managed loopback VNC server.",
   }),
 } satisfies ConfigSchemaShape<DesktopConfig>;
 
@@ -51,6 +55,7 @@ export const DesktopConfigSchema = z.object(DesktopConfigShape).strict().optiona
 const DESKTOP_FIELD_SCHEMAS = {
   "desktop.host": DesktopConfigShape.host,
   "desktop.host.enabled": DesktopHostConfigShape.enabled,
+  "desktop.host.managed": DesktopHostConfigShape.managed,
   "desktop.host.port": DesktopHostConfigShape.port,
   "desktop.host.passwordFile": DesktopHostConfigShape.passwordFile,
 };

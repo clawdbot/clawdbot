@@ -2,7 +2,6 @@
  * Gateway pre-auth hardening tests.
  */
 import http from "node:http";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -22,6 +21,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createWorkerConnection } from "../worker/worker-connection.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -232,7 +232,7 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
-  it("admits a valid worker over the public path without a gateway challenge", async () => {
+  it("admits the production worker client over the public path without a gateway challenge", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
@@ -303,62 +303,48 @@ describe("gateway pre-auth hardening", () => {
     });
     const address = httpServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    const client = new WebSocket(`ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`);
-    const received: unknown[] = [];
-    client.on("message", (data) => received.push(JSON.parse(rawDataToString(data))));
+    const client = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`,
+      },
+      connectParams: {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: GATEWAY_CLIENT_IDS.WORKER,
+          version: "2026.8.12",
+          platform: "linux",
+          mode: GATEWAY_CLIENT_MODES.WORKER,
+        },
+        role: "worker",
+        admission: {
+          environmentId: "worker-public",
+          credential: "public-worker-credential",
+          sessionId: null,
+          runId: null,
+          ownerEpoch: 1,
+          rpcSetVersion: 1,
+          handshake: {
+            bundleHash: "a".repeat(64),
+            openclawVersion: "2026.8.12",
+            protocolFeatures: [],
+          },
+        },
+      },
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      admissionTimeoutMs: 2_000,
+    });
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        client.once("open", resolve);
-        client.once("error", reject);
+      await client.start();
+      expect(client.state).toMatchObject({
+        kind: "ready",
+        hello: { type: "worker-hello-ok", environmentId: "worker-public" },
       });
-      client.send(
-        JSON.stringify({
-          type: "req",
-          id: "connect-public-worker",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: GATEWAY_CLIENT_IDS.WORKER,
-              version: "2026.8.12",
-              platform: "linux",
-              mode: GATEWAY_CLIENT_MODES.WORKER,
-            },
-            role: "worker",
-            admission: {
-              environmentId: "worker-public",
-              credential: "public-worker-credential",
-              sessionId: null,
-              runId: null,
-              ownerEpoch: 1,
-              rpcSetVersion: 1,
-              handshake: {
-                bundleHash: "a".repeat(64),
-                openclawVersion: "2026.8.12",
-                protocolFeatures: [],
-              },
-            },
-          },
-        }),
-      );
-      await vi.waitFor(() => expect(received).toHaveLength(1));
-      expect(received[0]).toMatchObject({
-        type: "res",
-        id: "connect-public-worker",
-        ok: true,
-        payload: { type: "worker-hello-ok", environmentId: "worker-public" },
-      });
-      expect(received).not.toContainEqual(
-        expect.objectContaining({ type: "event", event: "connect.challenge" }),
-      );
       expect(workerConnectionService.admitWorker).toHaveBeenCalledOnce();
     } finally {
-      client.close();
-      await new Promise<void>((resolve) => {
-        client.once("close", () => resolve());
-      });
+      await client.stop();
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());
       });

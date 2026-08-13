@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -229,6 +230,44 @@ describe("channel turn pipeline", () => {
 
     expect(events).toEqual(["message_sent", "onDelivered", "after-deliver"]);
     expect(onDelivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      channel: "slack",
+      routeSessionKey: "agent:main:slack:channel:c1",
+      dispatchSessionKey: "agent:main:slack:channel:c1:thread:123.456",
+    },
+    {
+      channel: "discord",
+      routeSessionKey: "agent:main:discord:channel:c1",
+      dispatchSessionKey: "agent:main:discord:channel:c1:thread:t1",
+    },
+  ])("carries $channel route system-event ownership privately into dispatch", async (scenario) => {
+    const { channel, routeSessionKey, dispatchSessionKey } = scenario;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
+      expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
+      await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchTestAssembledTurn({
+      channel,
+      routeSessionKey,
+      ctxPayload: createCtx({
+        SessionKey: dispatchSessionKey,
+        Surface: channel,
+        Provider: channel,
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async () => ({ visibleReplySent: true }),
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("does not emit a second failure when a post-send observer throws", async () => {

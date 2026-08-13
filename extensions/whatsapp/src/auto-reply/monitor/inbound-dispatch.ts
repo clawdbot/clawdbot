@@ -32,7 +32,6 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
-import type { EchoTracker } from "./echo.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
@@ -623,7 +622,6 @@ export function createWhatsAppReplyPlan(params: {
   maxMediaTextChunkLimit?: number;
   inbound: PreparedChannelInbound;
   onModelSelected?: ChannelReplyOnModelSelected;
-  rememberSentText: EchoTracker["rememberText"];
   replyLogger: ReturnType<typeof getChildLogger>;
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
@@ -657,13 +655,6 @@ export function createWhatsAppReplyPlan(params: {
     payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
   ): void => {
     didSendReply = true;
-    const shouldLog = payload.text ? true : undefined;
-    params.rememberSentText(payload.text, {
-      combinedBody: params.context.Body as string | undefined,
-      combinedBodySessionKey: params.route.sessionKey,
-      conversationId,
-      logVerboseMessage: shouldLog,
-    });
     if (shouldLogVerbose()) {
       const reply = resolveSendableOutboundReplyParts(payload);
       const preview = payload.text != null ? reply.text : "<media>";
@@ -724,14 +715,7 @@ export function createWhatsAppReplyPlan(params: {
       return result;
     }
     if (options?.recordDelivery !== false) {
-      try {
-        recordDeliveredPayload(normalizedDeliveryPayload);
-      } catch (error: unknown) {
-        throw createChannelPartialDeliveryError(error, {
-          ...result,
-          visibleReplySent: true,
-        });
-      }
+      recordDeliveredPayload(normalizedDeliveryPayload);
     }
     return result;
   };

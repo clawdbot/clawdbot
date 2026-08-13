@@ -12,6 +12,7 @@ import {
   createIssueMutationHelpers,
   guardTrustedActorCandidates,
   isCommentNewerThan,
+  normalizeGuardLoginSet,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
 } from "./guard-shared.mjs";
@@ -264,21 +265,11 @@ export function isDependencyGuardTrustedForHead(comment, currentHeadSha) {
 }
 
 export function securityApproverSet(value) {
-  return new Set(
-    String(value ?? "")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value);
 }
 
 export function dependencyGuardCommentAuthors(value) {
-  return new Set(
-    String(value ?? "github-actions[bot]")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value, "github-actions[bot]");
 }
 
 export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) {

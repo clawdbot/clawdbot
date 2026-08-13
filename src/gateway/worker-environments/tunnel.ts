@@ -78,6 +78,7 @@ directory=$2
 rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   bundleHash: string;
@@ -230,11 +231,8 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     ).catch(() => undefined);
   };
 
-  const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => ({
-    environmentId: entry.environmentId,
-    ownerEpoch: entry.ownerEpoch,
-    remoteSocketPath: entry.remoteSocketPath,
-    ...createWorkerWorkspaceActions({
+  const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => {
+    const workspace = createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
@@ -243,9 +241,23 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       runner,
       tasks: entry.workspaceTasks,
       bundleHash: entry.bundleHash,
-    }),
-    stop: () => stop(entry.environmentId, entry.ownerEpoch),
-  });
+    });
+    return {
+      environmentId: entry.environmentId,
+      ownerEpoch: entry.ownerEpoch,
+      connectionEndpoint: { kind: "unix", socketPath: entry.remoteSocketPath },
+      launchTurn: (request) =>
+        workspace.runWorkspaceCommand({
+          transportRetry: "never",
+          argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", entry.bundleHash],
+          input: JSON.stringify(request.descriptor),
+          timeoutMs: request.timeoutMs,
+          signal: request.signal,
+        }),
+      ...workspace,
+      stop: () => stop(entry.environmentId, entry.ownerEpoch),
+    };
+  };
 
   const connect = async (
     entry: TunnelEntry,

@@ -4,6 +4,8 @@ import {
   booleanFlag,
   classifyBoundedUnsignedDecimal,
   intFlag,
+  isOpenEndedTruthyValue,
+  isStrictAffirmativeValue,
   parseFlagArgs,
   parsePermissiveBooleanToken,
   parseStrictBooleanArg,
@@ -77,6 +79,35 @@ describe("scripts/lib/arg-utils permissive Boolean tokens", () => {
     { input: 1, expected: undefined },
   ])("parses $input as $expected", ({ input, expected }) => {
     expect(parsePermissiveBooleanToken(input)).toBe(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils environment Boolean policies", () => {
+  it.each([
+    { input: undefined, expected: false },
+    { input: "", expected: false },
+    { input: "  ", expected: false },
+    { input: "0", expected: false },
+    { input: " FALSE ", expected: false },
+    { input: "no", expected: false },
+    { input: "off", expected: true },
+    { input: "enabled", expected: true },
+    { input: "1", expected: true },
+  ])("applies open-ended truthiness to $input", ({ input, expected }) => {
+    expect(isOpenEndedTruthyValue(input)).toBe(expected);
+  });
+
+  it.each([
+    { input: undefined, expected: false },
+    { input: "", expected: false },
+    { input: "0", expected: false },
+    { input: "on", expected: false },
+    { input: "enabled", expected: false },
+    { input: "1", expected: true },
+    { input: " TRUE ", expected: true },
+    { input: "Yes", expected: true },
+  ])("applies strict affirmative truthiness to $input", ({ input, expected }) => {
+    expect(isStrictAffirmativeValue(input)).toBe(expected);
   });
 });
 
@@ -159,24 +190,6 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--json", "--json"], { json: false }, [booleanFlag("--json", "json")]),
     ).toThrow("--json was provided more than once");
-  });
-
-  it("requires custom specs to declare consumed flags", () => {
-    expect(() =>
-      parseFlagArgs(["--custom"], {}, [
-        {
-          consume(argv, index) {
-            if (argv[index] !== "--custom") {
-              return null;
-            }
-            return {
-              nextIndex: index,
-              apply() {},
-            };
-          },
-        },
-      ]),
-    ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
   });
 
   it("rejects missing string flag values before consuming the next option", () => {

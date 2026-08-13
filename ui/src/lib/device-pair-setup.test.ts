@@ -5,6 +5,7 @@ import {
   createDevicePairSetupState,
   openDevicePairSetup,
   refreshDevicePairSetup,
+  requestDevicePairJoinSetup,
   setDevicePairSetupAccess,
   type DevicePairSetup,
 } from "./device-pair-setup.ts";
@@ -41,6 +42,22 @@ function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetu
 }
 
 describe("device pairing setup state", () => {
+  it("requests a one-paste join URL without rendering a QR", async () => {
+    const result = setupResult("NODE", "node");
+    const request = vi.fn().mockResolvedValue({
+      ...result,
+      joinUrl: "https://gateway.example.com/j/fresh-code",
+    });
+
+    await expect(requestDevicePairJoinSetup({ request })).resolves.toMatchObject({
+      joinUrl: "https://gateway.example.com/j/fresh-code",
+    });
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      includeQr: false,
+      joinUrl: true,
+    });
+  });
+
   it("opens without minting a setup credential", async () => {
     const request = vi.fn();
     const state = createDevicePairSetupState({

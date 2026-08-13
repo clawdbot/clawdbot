@@ -55,8 +55,8 @@ describe("listSessionsFromStore resolver cache", () => {
     const rowCount = 30;
     const rowContext = buildSessionListRowMetadataContext({ now });
     const thinkingSpy = vi
-      .spyOn(thinking, "listThinkingLevelOptions")
-      .mockReturnValue([{ id: "off", label: "Off" }]);
+      .spyOn(thinking, "resolveThinkingProfile")
+      .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
     const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig").mockReturnValue({
       input: 1,
       output: 1,
@@ -210,8 +210,8 @@ describe("listSessionsFromStore resolver cache", () => {
         return originalPrepare(sql);
       });
       try {
-        // Cross the production 500-key chunk boundary without materializing
-        // tens of thousands of rows just to prove the same batching behavior.
+        // Composite and legacy identities share the production 500-key chunks.
+        // Cross two boundaries without materializing tens of thousands of rows.
         const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
           sessionKey: `agent:default:webchat:dm:missing-${index}`,
           entry: {
@@ -223,7 +223,7 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
         expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
         expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-        expect(acpSelects).toBe(2);
+        expect(acpSelects).toBe(3);
 
         acpSelects = 0;
         const result = listSessionsFromStore({

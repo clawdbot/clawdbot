@@ -395,10 +395,33 @@ describe("worker environment service", () => {
     });
   });
 
+  it("keeps a dormant paired-device lease in its nonterminal holding state", async () => {
+    support.seedReady("worker-dormant");
+    const destroy = vi.fn(async () => {});
+    const tunnelManager = {
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+      status: () => "stopped" as const,
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "dormant" }), destroy }),
+      { tunnelManager },
+    );
+
+    await workerService.reconcileOnce();
+    await workerService.reconcileOnce();
+
+    expect(support.testState.store.get("worker-dormant")).toMatchObject({ state: "ready" });
+    expect(tunnelManager.stop).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
   it.each([
     null,
     { status: "future" },
     { status: "active", sharedHost: "yes" },
+    { status: "dormant", sharedHost: true },
     { status: "unknown", sharedHost: true },
   ])("retains retryable state for malformed inspection result %#", async (inspection) => {
     support.seedReady("worker-malformed");
