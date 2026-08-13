@@ -20,6 +20,7 @@ export type ChatModelPickerOption = {
   agentRuntimeId?: string;
   commitValue: string;
   contextWindow?: number;
+  disabled?: boolean;
   isDefault: boolean;
   label: string;
   provider: string;
@@ -63,6 +64,7 @@ type ChatModelPickerParams = {
   sessionKey: string;
   triggerModelLabel: string;
   triggerStatusLabel?: string;
+  onModelSetup?: () => void;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
@@ -99,6 +101,10 @@ function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
         Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
         Number(right.dataset.chatModelRank ?? right.dataset.chatModelIndex ?? 0),
     );
+}
+
+function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
+  return visibleModelRows(root).filter((row) => !row.disabled);
 }
 
 function ensureModelPickerIds(menu: HTMLElement): void {
@@ -186,9 +192,10 @@ function updateModelSearch(input: HTMLInputElement): void {
       row.style.setProperty("--chat-model-rank", String(rank));
     });
   const visibleRows = visibleModelRows(menu);
-  updateModelShortcuts(menu, visibleRows);
-  const selected = visibleRows.find((row) => row.getAttribute("aria-selected") === "true");
-  highlightModelRow(menu, query ? visibleRows[0] : (selected ?? visibleRows[0]));
+  const selectableRows = selectableModelRows(menu);
+  updateModelShortcuts(menu, selectableRows);
+  const selected = selectableRows.find((row) => row.getAttribute("aria-selected") === "true");
+  highlightModelRow(menu, query ? selectableRows[0] : (selected ?? selectableRows[0]));
   const empty = menu.querySelector<HTMLElement>("[data-chat-model-search-empty]");
   if (empty) {
     empty.hidden = !query || visibleRows.length > 0;
@@ -230,7 +237,7 @@ function handleModelSearchKeydown(event: KeyboardEvent): void {
   if (!menu) {
     return;
   }
-  const rows = visibleModelRows(menu);
+  const rows = selectableModelRows(menu);
   if (rows.length === 0) {
     return;
   }
@@ -258,13 +265,18 @@ function handleModelPickerKeydown(event: KeyboardEvent): void {
   if (!details.open || event.target instanceof HTMLInputElement || !/^[1-9]$/u.test(event.key)) {
     return;
   }
-  const row = visibleModelRows(details)[Number(event.key) - 1];
+  const row = selectableModelRows(details)[Number(event.key) - 1];
   event.preventDefault();
   row?.click();
 }
 
-function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions: boolean) {
-  if (!state || (state.status === "ready" && hasOptions)) {
+function renderCatalogState(
+  state: ChatModelCatalogState | undefined,
+  hasOptions: boolean,
+  hasSelectableOptions: boolean,
+  onModelSetup?: () => void,
+) {
+  if (!state || (state.status === "ready" && hasSelectableOptions)) {
     return nothing;
   }
   const label =
@@ -275,7 +287,7 @@ function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions
           ? t("chat.modelControls.modelsRefreshFailed")
           : t("chat.modelControls.modelsUnavailable")
         : state.status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
+          ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
           : t("chat.modelControls.loadingModels");
   return html`
     <div
@@ -302,6 +314,21 @@ function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions
             >
               ${icons.refresh}
               <span>${t("common.retry")}</span>
+            </button>
+          `
+        : nothing}
+      ${state.status === "ready" && !hasSelectableOptions && onModelSetup
+        ? html`
+            <button
+              class="chat-controls__model-catalog-retry"
+              data-chat-model-setup="true"
+              type="button"
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                onModelSetup();
+              }}
+            >
+              ${t("modelSetup.connectionFailure.action")}
             </button>
           `
         : nothing}
@@ -349,6 +376,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
   const hasOptions = params.modelOptions.length + targetOptionCount > 0;
+  const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
   const commitModel = (value: string) => {
     if (params.modelSelectionLocked) {
       return;
@@ -358,7 +386,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
-    if (params.disabled || params.modelSelectionLocked) {
+    if (params.disabled || params.modelSelectionLocked || entry.disabled) {
       event.preventDefault();
       return;
     }
@@ -476,7 +504,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                   @keydown=${handleModelSearchKeydown}
                 />
               </div>
-              ${renderCatalogState(params.modelCatalogState, params.modelOptions.length > 0)}
+              ${renderCatalogState(
+                params.modelCatalogState,
+                params.modelOptions.length > 0,
+                hasSelectableModelOptions,
+                params.onModelSetup,
+              )}
               ${hasOptions
                 ? html`
                     <div
@@ -521,6 +554,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                   entry.agentRuntimeId
                                     ? formatAgentRuntimeLabel(entry.agentRuntimeId)
                                     : "",
+                                  entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
                                 ]
                                   .filter(Boolean)
                                   .join(" · ");
@@ -540,7 +574,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     role="option"
                                     aria-selected=${selected ? "true" : "false"}
                                     type="button"
-                                    ?disabled=${params.disabled}
+                                    ?disabled=${params.disabled || entry.disabled}
                                     @mouseenter=${(event: MouseEvent) => {
                                       const menu = pickerMenu(event.currentTarget);
                                       if (menu) {

@@ -655,6 +655,7 @@ export class NewSessionModelControl {
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
+      onModelSetup: () => options.context?.navigate("model-setup"),
       onRequestUpdate: this.notify,
     });
   }

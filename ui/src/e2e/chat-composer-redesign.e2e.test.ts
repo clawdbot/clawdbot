@@ -668,6 +668,84 @@ suite.define(() => {
     });
   });
 
+  it("keeps an auth-cold configured catalog visible and blocks chat until setup", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          available: false,
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available: false,
+        },
+      ];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.6-sol",
+        models,
+        methodResponses: {
+          "sessions.list": {
+            count: 1,
+            defaults: {
+              contextTokens: 200_000,
+              model: "gpt-5.6-sol",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                model: "gpt-5.6-sol",
+                modelProvider: "openai",
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("models.list");
+
+      const composer = page.locator(".agent-chat__input");
+      const picker = composer.locator("wa-select.chat-controls__model-picker");
+      const options = picker.locator("wa-option");
+      await expect.poll(() => options.count()).toBe(2);
+      await expect.poll(() => options.first().textContent()).toContain("Default (GPT-5.6 Sol)");
+      await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
+      await expect
+        .poll(() =>
+          options.evaluateAll((rows) => rows.every((row) => row.hasAttribute("disabled"))),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
+        .toContain("Review the provider credential or sign-in, then retry");
+      await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await picker.click();
+        await expect.poll(() => options.last().isVisible()).toBe(true);
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/auth-cold-model-picker.png`,
+        });
+        await picker.click();
+      }
+      await composer.locator('[data-chat-model-setup="true"]').click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+    });
+  });
+
   it("loads agent-scoped startup models when the route switches sessions", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const workModel = {
