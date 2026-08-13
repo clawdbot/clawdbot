@@ -31,7 +31,7 @@ describe("DraftSubmissionFlow", () => {
         }),
     );
     let finishNavigation!: () => void;
-    const navigate = vi.fn(
+    const navigateAndWait = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finishNavigation = resolve;
@@ -85,7 +85,7 @@ describe("DraftSubmissionFlow", () => {
       sessions: { state: { result: null }, createResult },
       cloudStartup: { start },
       config: { current: {} },
-      navigate,
+      navigateAndWait,
       preload,
     } as unknown as ApplicationContext;
     const host = new ControllerHost();
@@ -195,7 +195,7 @@ describe("DraftSubmissionFlow", () => {
     ]);
 
     const submission = flow.submit();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
 
     expect(flow.submitting).toBe(true);
     finishNavigation();

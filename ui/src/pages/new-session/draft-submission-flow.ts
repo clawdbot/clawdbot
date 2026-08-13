@@ -528,7 +528,7 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
           agentId: submissionAgentId,
         });
-        await context.navigate(
+        await context.navigateAndWait(
           "chat",
           sessionNavigationTarget({
             context,
@@ -572,7 +572,7 @@ export class DraftSubmissionFlow {
         sessionKey: result.key,
         agentId: submissionAgentId,
       });
-      await context.navigate(
+      await context.navigateAndWait(
         "chat",
         sessionNavigationTarget({
           context,
