@@ -86,7 +86,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
   };
 });
 
@@ -4854,7 +4858,10 @@ describe("prepareSlackMessage sender prefix", () => {
       mediaMaxBytes: 1000,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
-      resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
+      resolveSlackSystemEventRoute: () => ({
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:c1",
+      }),
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
       resolveUserName: async () => ({ name: "Alice" }),

@@ -96,23 +96,6 @@
   }
 }
 
-/* ---- Sleeping eyes overlay ---- */
-
-.dreams__eyes {
-  animation: dreams-blink 6s ease-in-out infinite;
-}
-
-@keyframes dreams-blink {
-  0%,
-  90%,
-  100% {
-    opacity: 1;
-  }
-  95% {
-    opacity: 0;
-  }
-}
-
 /* ---- Floating Z's ---- */
 
 .dreams__z {
@@ -199,14 +182,6 @@
   gap: 6px;
   animation: dreams-bubble-float 6s ease-in-out infinite;
   pointer-events: none;
-}
-
-.dreams__bubble-label {
-  font-size: 12px; /* was 11px */
-  color: var(--accent-muted);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
 }
 
 .dreams__bubble-text {

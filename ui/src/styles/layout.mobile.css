@@ -636,10 +636,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .brand-title {
-    font-size: 13px;
-  }
-
   .nav-item {
     padding: 6px 8px;
     font-size: var(--control-ui-text-sm); /* was 11px */
@@ -727,10 +723,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   .data-table-search input {
     font-size: 14px;
     padding: 8px 10px;
-  }
-
-  .data-table-wrapper {
-    border-radius: var(--radius-sm);
   }
 
   .session-key-cell {
