@@ -1958,12 +1958,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/video-generation-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/vllm:
     devDependencies:
       '@openclaw/plugin-sdk':
