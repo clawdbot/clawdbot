@@ -193,6 +193,11 @@ export async function finalizeCompletedCronRunOutcomes(
                     hooks.afterWrite?.(database);
                   }
                 },
+                afterCommit: () => {
+                  for (const hooks of receiptHooks) {
+                    hooks.afterCommit?.();
+                  }
+                },
               },
             }
           : {}),

@@ -7,7 +7,9 @@ import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
+  isCronRunReceiptSettlementPending,
   prepareCronRunReceiptClaim,
+  trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
@@ -96,11 +98,54 @@ function terminalReceiptStatus(status: CronRunStatus): Exclude<CronRunReceiptSta
   return "error";
 }
 
+function logReceiptFinishError(
+  state: CronServiceState,
+  handle: CronRunReceiptHandle,
+  error: unknown,
+) {
+  state.deps.log.warn(
+    { jobId: handle.jobId, err: String(error) },
+    "cron: failed to finalize run receipt after execution settlement",
+  );
+}
+
+function finishReceiptAfterCommit(
+  state: CronServiceState,
+  terminal: Parameters<typeof finishCronRunReceipt>[0],
+): void {
+  try {
+    finishCronRunReceipt(terminal);
+  } catch (error) {
+    logReceiptFinishError(state, terminal.handle, error);
+  }
+}
+
+export function trackServiceCronRunReceiptSettlement(params: {
+  state: CronServiceState;
+  handle: CronRunReceiptHandle;
+  settlement: Promise<unknown>;
+}): void {
+  trackCronRunReceiptSettlement({
+    handle: params.handle,
+    settlement: params.settlement,
+    onFinishError: (error) => logReceiptFinishError(params.state, params.handle, error),
+  });
+}
+
 export function cronRunReceiptPersistHooks(params: {
   state: CronServiceState;
   handle: CronRunReceiptHandle;
   terminal?: { status: CronRunStatus; finishedAtMs: number; error?: string };
 }): CronStoreTransactionHooks {
+  const terminal = params.terminal
+    ? {
+        handle: params.handle,
+        status: terminalReceiptStatus(params.terminal.status),
+        finishedAtMs: params.terminal.finishedAtMs,
+        error: params.terminal.error,
+      }
+    : undefined;
+  const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
   return {
     beforeWrite: (database) => {
       if (params.state.deps.isAgentAvailable?.(params.handle.agentId) === false) {
@@ -115,37 +160,44 @@ export function cronRunReceiptPersistHooks(params: {
         resolveAgentId: resolveAgentId(params.state),
       });
     },
-    ...(params.terminal
+    ...(terminal && !deferTerminal
       ? {
           afterWrite: (
             database: Parameters<NonNullable<CronStoreTransactionHooks["afterWrite"]>>[0],
           ) => {
             finishCronRunReceiptInDatabase({
               database,
-              handle: params.handle,
-              status: terminalReceiptStatus(params.terminal!.status),
-              finishedAtMs: params.terminal!.finishedAtMs,
-              error: params.terminal!.error,
+              ...terminal,
             });
           },
         }
+      : {}),
+    ...(terminal && deferTerminal
+      ? { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) }
       : {}),
   };
 }
 
 export function cronRunReceiptSupersedeHooks(params: {
+  state: CronServiceState;
   handle: CronRunReceiptHandle;
   finishedAtMs: number;
   error: string;
 }): CronStoreTransactionHooks {
+  const terminal = {
+    handle: params.handle,
+    status: "superseded" as const,
+    finishedAtMs: params.finishedAtMs,
+    error: params.error,
+  };
+  if (isCronRunReceiptSettlementPending(params.handle)) {
+    return { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) };
+  }
   return {
     afterWrite: (database) => {
       finishCronRunReceiptInDatabase({
         database,
-        handle: params.handle,
-        status: "superseded",
-        finishedAtMs: params.finishedAtMs,
-        error: params.error,
+        ...terminal,
       });
     },
   };

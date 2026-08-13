@@ -258,6 +258,7 @@ export async function supersedeActivatedCronRun(params: {
       reservations: [params],
       recompute: "maintenance",
       transactionHooks: cronRunReceiptSupersedeHooks({
+        state: params.state,
         handle: params.runReceipt,
         finishedAtMs: params.state.deps.nowMs(),
         error: params.reason,

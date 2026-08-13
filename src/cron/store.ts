@@ -286,6 +286,9 @@ export async function saveCronJobsStore(
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     opts?.transactionHooks?.afterWrite?.(database.db);
   });
+  // Timeout outcomes may commit before their runner settles. Only after this
+  // commit may a deferred receipt terminal request become externally visible.
+  opts?.transactionHooks?.afterCommit?.();
   noteCronJobsStoreCommit(storeKey);
 }
 

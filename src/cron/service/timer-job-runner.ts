@@ -18,7 +18,10 @@ import {
   isSetupTimeoutErrorText,
   timeoutErrorMessage,
 } from "./execution-errors.js";
-import { assertServiceCronRunReceiptCurrent } from "./run-receipts.js";
+import {
+  assertServiceCronRunReceiptCurrent,
+  trackServiceCronRunReceiptSettlement,
+} from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -191,6 +194,14 @@ export async function executeJobCoreWithTimeout(
   const assertRunCurrent = opts?.runReceipt
     ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!)
     : undefined;
+  // Timeout/cancel returns a projected outcome before an abort-ignoring core
+  // settles; keep its durable receipt lease tied to the underlying promise.
+  const trackRunSettlement = (settlement: Promise<unknown>) => {
+    if (opts?.runReceipt) {
+      trackServiceCronRunReceiptSettlement({ state, handle: opts.runReceipt, settlement });
+    }
+    trackActiveCronTaskRunSettlement(settlement, runAbortController.signal);
+  };
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
   let resolveOperatorCancellation: ((value: typeof operatorCancellationMarker) => void) | undefined;
   const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
@@ -269,7 +280,7 @@ export async function executeJobCoreWithTimeout(
           assertRunCurrent,
         );
       });
-      trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
+      trackRunSettlement(runPromise);
       void runPromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
           state.deps.log.warn(
@@ -357,7 +368,7 @@ export async function executeJobCoreWithTimeout(
         assertRunCurrent,
       );
     });
-    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
+    trackRunSettlement(runPromise);
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(

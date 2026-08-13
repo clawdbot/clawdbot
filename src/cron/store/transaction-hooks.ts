@@ -5,6 +5,7 @@ import type { CronStoreFile } from "../types.js";
 export type CronStoreTransactionHooks = {
   beforeWrite?: (db: DatabaseSync) => void;
   afterWrite?: (db: DatabaseSync) => void;
+  afterCommit?: () => void;
 };
 
 type SaveCronJobsStoreOptions = NonNullable<Parameters<typeof saveCronJobsStore>[2]>;

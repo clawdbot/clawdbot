@@ -78,6 +78,19 @@ const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const locallyOwnedReceipts = new Set<string>();
+type CronRunReceiptFinish = {
+  handle: CronRunReceiptHandle;
+  status: Exclude<CronRunReceiptStatus, "running">;
+  finishedAtMs: number;
+  error?: string;
+  env?: NodeJS.ProcessEnv;
+};
+type CronRunReceiptSettlement = {
+  finish?: CronRunReceiptFinish;
+  releaseRequested: boolean;
+  onFinishError: (error: unknown) => void;
+};
+const pendingReceiptSettlements = new Map<string, CronRunReceiptSettlement>();
 
 export class CronRunReceiptConflictError extends Error {
   constructor(readonly receipt: CronRunReceipt) {
@@ -433,13 +446,46 @@ export function assertCronRunReceiptCurrent(params: {
   );
 }
 
-export function finishCronRunReceipt(params: {
+/** Keeps the durable lease live when timeout/cancel returns before the runner. */
+export function trackCronRunReceiptSettlement(params: {
   handle: CronRunReceiptHandle;
-  status: Exclude<CronRunReceiptStatus, "running">;
-  finishedAtMs: number;
-  error?: string;
-  env?: NodeJS.ProcessEnv;
-}): CronRunReceipt | undefined {
+  settlement: Promise<unknown>;
+  onFinishError: (error: unknown) => void;
+}): void {
+  const receiptId = params.handle.receiptId;
+  const pending: CronRunReceiptSettlement = {
+    releaseRequested: false,
+    onFinishError: params.onFinishError,
+  };
+  pendingReceiptSettlements.set(receiptId, pending);
+  const settle = () => {
+    if (pendingReceiptSettlements.get(receiptId) !== pending) {
+      return;
+    }
+    pendingReceiptSettlements.delete(receiptId);
+    if (pending.finish) {
+      try {
+        finishCronRunReceipt(pending.finish);
+      } catch (error) {
+        pending.onFinishError(error);
+      }
+    } else if (pending.releaseRequested) {
+      locallyOwnedReceipts.delete(receiptId);
+    }
+  };
+  void params.settlement.then(settle, settle);
+}
+
+export function isCronRunReceiptSettlementPending(handle: CronRunReceiptHandle): boolean {
+  return pendingReceiptSettlements.has(handle.receiptId);
+}
+
+export function finishCronRunReceipt(params: CronRunReceiptFinish): CronRunReceipt | undefined {
+  const pending = pendingReceiptSettlements.get(params.handle.receiptId);
+  if (pending) {
+    pending.finish ??= params;
+    return undefined;
+  }
   try {
     return withReceiptWrite(
       "cron.run-receipt.finish",
@@ -453,6 +499,11 @@ export function finishCronRunReceipt(params: {
 
 /** Releases only this process's liveness proof after terminal persistence fails. */
 export function releaseLocalCronRunReceiptOwnership(handle: CronRunReceiptHandle): void {
+  const pending = pendingReceiptSettlements.get(handle.receiptId);
+  if (pending) {
+    pending.releaseRequested = true;
+    return;
+  }
   locallyOwnedReceipts.delete(handle.receiptId);
 }
 
