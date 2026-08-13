@@ -854,6 +854,7 @@ export function createSessionMcpRuntime(params: {
                   serverName,
                   safeServerName,
                   launchSummary: launchDescription,
+                  transportType: session.transportType,
                   toolCount: exposedTools.length,
                   requestTimeoutMs: resolved.requestTimeoutMs,
                   supportsParallelToolCalls: resolved.supportsParallelToolCalls,

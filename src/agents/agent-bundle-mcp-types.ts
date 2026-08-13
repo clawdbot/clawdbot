@@ -27,6 +27,8 @@ export type McpServerCatalog = {
   serverName: string;
   safeServerName?: string;
   launchSummary: string;
+  /** Actual connected transport; synthetic harness-native catalogs may not know it. */
+  transportType?: "stdio" | "sse" | "streamable-http";
   toolCount: number;
   resources?: {
     listChanged?: boolean;
