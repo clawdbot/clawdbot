@@ -478,13 +478,13 @@ export function createStreamRendering({
     markBlockReplyTextHandled();
   };
 
-function trimBlockReplyTextPreservingParagraphSuffix(text: string): string {
-  const paragraphSuffix = text.match(/\n[\t ]*\n+$/)?.[0];
-  if (!paragraphSuffix) {
-    return text.trimEnd();
+  function trimBlockReplyTextPreservingParagraphSuffix(text: string): string {
+    const paragraphSuffix = text.match(/\n[\t ]*\n+$/)?.[0];
+    if (!paragraphSuffix) {
+      return text.trimEnd();
+    }
+    return `${text.slice(0, -paragraphSuffix.length).trimEnd()}${paragraphSuffix}`;
   }
-  return `${text.slice(0, -paragraphSuffix.length).trimEnd()}${paragraphSuffix}`;
-}
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
     replyDirectiveAccumulator.consume(text, options);
