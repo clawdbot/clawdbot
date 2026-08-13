@@ -79,8 +79,12 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
   return channels;
 }
 
-function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
-  for (const rawPath of resolveExternalCatalogPaths(env)) {
+function readExternalCatalogChannels(
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+): ExternalCatalogChannelEntry[] {
+  const channels: ExternalCatalogChannelEntry[] = [];
+  for (const rawPath of paths) {
     const resolved = resolveUserPath(rawPath, env);
     if (!fs.existsSync(resolved)) {
       continue;
@@ -95,12 +99,8 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
         maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
       });
       const payload = JSON.parse(buffer.toString("utf-8")) as unknown;
-      const channel = parseExternalCatalogChannelEntries(payload).find(
-        (entry) => entry.id === channelId,
-      );
-      if (channel) {
-        return channel.preferOver;
-      }
+      // Earlier files win a channel, so append in path order and take the first match on lookup.
+      channels.push(...parseExternalCatalogChannelEntries(payload));
     } catch (err) {
       // Surface oversized catalogs so operators know a configured file was
       // skipped — unlike parse or permission errors which mean the file is
@@ -112,7 +112,29 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
       }
     }
   }
-  return [];
+  return channels;
+}
+
+/**
+ * One slot holding the parsed external catalogs, rebuilt only when the resolved paths change.
+ * Catalog files are plugin metadata, so they are process-stable until an install or reload flow
+ * runs. `loadGatewayRuntimeConfigSchema` builds a schema per Control UI config request and now
+ * resolves channel ownership, so reading and parsing them per build would put synchronous
+ * filesystem work on the Gateway event loop.
+ */
+let externalCatalogSnapshot: { pathsKey: string; channels: ExternalCatalogChannelEntry[] } | null =
+  null;
+
+function resolveExternalCatalogPreferOver(
+  channelId: string,
+  env: NodeJS.ProcessEnv,
+): readonly string[] {
+  const paths = resolveExternalCatalogPaths(env);
+  const pathsKey = JSON.stringify(paths);
+  if (externalCatalogSnapshot?.pathsKey !== pathsKey) {
+    externalCatalogSnapshot = { pathsKey, channels: readExternalCatalogChannels(paths, env) };
+  }
+  return externalCatalogSnapshot.channels.find((entry) => entry.id === channelId)?.preferOver ?? [];
 }
 
 function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {

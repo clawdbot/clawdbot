@@ -271,6 +271,7 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   for (const record of registry.plugins) {
     const originRank = resolveOriginRank(record.origin);
+    const recordActive = policy.isPluginActive(record.id);
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
@@ -279,13 +280,17 @@ export function collectChannelSchemaMetadataWithOwnership(
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
       if (!current || originRank <= current.originRank) {
-        // Presentation travels with the selected schema owner. A same-origin record that will not
-        // win the schema must not relabel the channel, or docs and config UI show the replaced
-        // plugin's name above the replacement's fields. The winner re-sets both below.
+        // Presentation travels with the selected schema owner. A record that will not win the
+        // schema must not relabel the channel, or docs and config UI show the replaced plugin's
+        // name above the replacement's fields. Two ways to lose it: a same-origin claimant settled
+        // by the preference below, or an inactive plugin that operator policy already ruled out
+        // however close its origin sits. The winner re-sets both below.
+        const ownerActive =
+          current?.schemaPluginId === undefined || policy.isPluginActive(current.schemaPluginId);
         const keepOwnerPresentation =
           current?.schemaPluginId !== undefined &&
           current.schemaPluginId !== record.id &&
-          current.schemaOriginRank === originRank;
+          (current.schemaOriginRank === originRank || (ownerActive && !recordActive));
         byChannelId.set(channelId, {
           id: channelId,
           label: keepOwnerPresentation
@@ -309,9 +314,9 @@ export function collectChannelSchemaMetadataWithOwnership(
       const currentOwnsSchema =
         current !== undefined &&
         (current.configSchema !== undefined || current.configUiHints !== undefined);
-      const incomingActive = policy.isPluginActive(record.id);
       const currentActive =
         current?.schemaPluginId === undefined || policy.isPluginActive(current.schemaPluginId);
+      const incomingActive = recordActive;
       // Operator policy outranks install origin. Auto-enable activates whichever claimant is still
       // enabled, so an inactive plugin must neither take the channel from an active one nor keep
       // it once an active claimant appears, however close its origin sits.

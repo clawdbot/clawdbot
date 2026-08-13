@@ -211,6 +211,36 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     },
   );
 
+  // Codex review P2 on #123209: the activity guard keeps the fallback's schema, but the
+  // presentation pass ran first and only skipped SAME-origin non-owners, so a closer disabled
+  // replacement still branded the channel. Config UI then showed the disabled plugin's name above
+  // the active fallback's fields.
+  it("keeps the active fallback's label when a closer replacement is disabled", () => {
+    const core = {
+      ...claimant({ id: "clickclack-core", origin: "bundled" }),
+      channelCatalogMeta: { id: "clickclack", label: "ClickClack", blurb: "the active one" },
+    };
+    const replacement = {
+      ...claimant({
+        id: "clickclack-plus",
+        origin: "global",
+        preferOver: ["clickclack-core"],
+      }),
+      channelCatalogMeta: { id: "clickclack", label: "ClickClack Plus", blurb: "the disabled one" },
+    };
+    const policy = policyFor({ isPluginActive: (id) => id !== "clickclack-plus" });
+
+    const entry = entryFor(
+      [core, replacement] as unknown as ReturnType<typeof claimant>[],
+      "clickclack",
+      policy,
+    );
+
+    expect(entry?.schemaPluginId).toBe("clickclack-core");
+    expect(entry?.label).toBe("ClickClack");
+    expect(entry?.description).toBe("the active one");
+  });
+
   // Codex review P2 on #123209: auto-enable falls back to the built-in channel registration and an
   // external plugin catalog when the manifest declares no preference. Ownership has to read the
   // same resolved facts or the two disagree for catalog-declared replacements.

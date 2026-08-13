@@ -103,7 +103,10 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
   });
 
-  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+  // Was two reads, one per distinct candidate channel. Catalog files are process-stable plugin
+  // metadata and channel schema ownership resolves preferences on the Gateway config path too, so
+  // they are now parsed once per resolved catalog path rather than once per lookup key.
+  it("parses an external catalog once for a whole auto-enable pass", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
     fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
@@ -163,7 +166,7 @@ describe("applyPluginAutoEnable channels", () => {
         realpathSpy.mock.calls.filter(([filePath]) =>
           String(filePath).endsWith("plugins/catalog.json"),
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       realpathSpy.mockRestore();
     }
