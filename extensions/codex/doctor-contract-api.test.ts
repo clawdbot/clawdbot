@@ -123,6 +123,78 @@ afterEach(() => {
 });
 
 describe("codex doctor contract", () => {
+  it("skips retired binding discovery without an implicit agent owner", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    await fs.mkdir(path.join(stateDir, "sessions"));
+    const params = {
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          entries: { main: {}, ops: {} },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("missing Codex binding migration");
+    }
+
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("retains an unscoped retired binding whose agent owner is ambiguous", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionsDir = path.join(stateDir, "sessions");
+    const transcriptPath = path.join(sessionsDir, "legacy.jsonl");
+    const sidecarPath = `${transcriptPath}.codex-app-server.json`;
+    await fs.mkdir(sessionsDir);
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({ legacy: { sessionId: "legacy", sessionFile: "legacy.jsonl" } }),
+    );
+    await fs.writeFile(transcriptPath, `${JSON.stringify({ type: "session", id: "legacy" })}\n`);
+    await fs.writeFile(
+      sidecarPath,
+      JSON.stringify({ schemaVersion: 2, threadId: "thread-legacy" }),
+    );
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("missing Codex binding migration");
+    }
+    const params = {
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          entries: { main: {}, ops: {} },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("has no agent owner for legacy")],
+    });
+    await expect(fs.access(sidecarPath)).resolves.toBeUndefined();
+
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("reports the retired dynamic tools profile config key", () => {
     expect(
       legacyConfigRules[0]?.match({
