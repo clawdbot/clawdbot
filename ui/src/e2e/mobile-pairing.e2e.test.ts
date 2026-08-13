@@ -338,13 +338,18 @@ suite.define(() => {
         await captureUiProof(page, "07-desktop-delivery-uncertain.png");
         await page.locator(".device-pair-setup__close").click();
 
-        await gateway.setMethodResponse("device.pair.setupStatus", {});
         await pairFromSettings.click();
+        await gateway.deferNext("device.pair.setupStatus");
         await gateway.setMethodResponse(
           "device.pair.setupCode",
           setupResult("setup-expired", "full", 0),
         );
         await page.getByRole("button", { name: "Create setup code" }).click();
+        await page.getByRole("status").getByText("Loading…", { exact: true }).waitFor();
+        expect(await qr.count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Copy setup code" }).count()).toBe(0);
+        expect(await page.getByText(setupCode, { exact: true }).count()).toBe(0);
+        await gateway.resolveDeferred("device.pair.setupStatus", {});
         await page.getByRole("heading", { name: "Setup code expired", exact: true }).waitFor();
         expect(await qr.count()).toBe(0);
         await captureUiProof(page, "07-desktop-expired.png");

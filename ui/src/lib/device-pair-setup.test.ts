@@ -408,7 +408,7 @@ describe("device pairing setup state", () => {
 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
-    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -461,6 +461,40 @@ describe("device pairing setup state", () => {
 
     expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires the bearer while an expiry status lookup is pending", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const status = deferred<Record<string, never>>();
+    const onChange = vi.fn();
+    const request = vi.fn(async (method: string) =>
+      method === "device.pair.setupStatus"
+        ? await status.promise
+        : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
+    );
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+      onChange,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "reconciling",
+      access: "full",
+      setupId: "live-setup",
+    });
+    expect(onChange).toHaveBeenCalledOnce();
+
+    status.resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -587,7 +621,7 @@ describe("device pairing setup state", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
-    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

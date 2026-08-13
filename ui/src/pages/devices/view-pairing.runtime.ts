@@ -68,6 +68,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const showAccessChoices =
     lifecycle.phase !== "success" &&
     lifecycle.phase !== "delivery-uncertain" &&
+    lifecycle.phase !== "reconciling" &&
     !(lifecycle.phase === "error" && lifecycle.source === "status");
   const canSelectAccess =
     lifecycle.phase === "selection" ||
@@ -135,6 +136,14 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 <div class="device-pair-setup__loading" role="status" aria-live="polite">
                   <span class="device-pair-setup__spinner" aria-hidden="true"></span>
                   <span>${t("devices.pairing.generating")}</span>
+                </div>
+              `
+            : nothing}
+          ${lifecycle.phase === "reconciling"
+            ? html`
+                <div class="device-pair-setup__loading" role="status" aria-live="polite">
+                  <span class="device-pair-setup__spinner" aria-hidden="true"></span>
+                  <span>${t("common.loading")}</span>
                 </div>
               `
             : nothing}

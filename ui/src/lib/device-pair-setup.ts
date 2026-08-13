@@ -30,6 +30,11 @@ export type DevicePairSetupLifecycle =
   | { phase: "selection"; access: DevicePairSetupAccess }
   | { phase: "loading"; access: DevicePairSetupAccess }
   | { phase: "waiting"; access: DevicePairSetupAccess; setup: DevicePairSetup }
+  | {
+      phase: "reconciling";
+      access: DevicePairSetupAccess;
+      setupId: string;
+    }
   | { phase: "error"; source: "create"; access: DevicePairSetupAccess; message: string }
   | {
       phase: "error";
@@ -185,6 +190,7 @@ function applyDevicePairSetupCompletionLookup(
   const lifecycle = state.devicePairSetupLifecycle;
   const ownsLifecycle =
     (lifecycle.phase === "waiting" && lifecycle.setup.setupId === setupId) ||
+    (lifecycle.phase === "reconciling" && lifecycle.setupId === setupId) ||
     (lifecycle.phase === "error" && lifecycle.source === "status" && lifecycle.setupId === setupId);
   if (!ownsLifecycle) {
     return;
@@ -211,15 +217,17 @@ async function expireDevicePairSetup(state: DevicePairSetupState, setupId: strin
     return;
   }
   clearDevicePairSetupExpiry(state);
+  stopDevicePairSetupCountdown(state);
+  const access = active.access;
+  // Retire bearer presentation before the status round-trip. Correlation remains
+  // so a delayed event or response can still settle this exact setup.
+  state.devicePairSetupLifecycle = { phase: "reconciling", access, setupId };
+  state.onDevicePairSetupChange();
   // The completion broadcast is best-effort, so a redeemed credential can reach
   // its expiry with the event never delivered. Reconcile the gateway's recorded
   // outcome first or a successful pairing is presented as expired.
   const completion = await readGatewaySetupCompletion(state, setupId);
-  const lifecycle = state.devicePairSetupLifecycle;
-  if (lifecycle.phase !== "waiting" || lifecycle.setup.setupId !== setupId) {
-    return;
-  }
-  applyDevicePairSetupCompletionLookup(state, setupId, lifecycle.access, completion);
+  applyDevicePairSetupCompletionLookup(state, setupId, access, completion);
 }
 
 function scheduleDevicePairSetupExpiry(state: DevicePairSetupState, setup: DevicePairSetup) {
@@ -265,6 +273,7 @@ export function completeDevicePairSetup(
   const lifecycle = state.devicePairSetupLifecycle;
   const matchesActiveSetup =
     (lifecycle.phase === "waiting" && lifecycle.setup.setupId === completion.setupId) ||
+    (lifecycle.phase === "reconciling" && lifecycle.setupId === completion.setupId) ||
     (lifecycle.phase === "error" &&
       lifecycle.source === "status" &&
       lifecycle.setupId === completion.setupId);
@@ -289,6 +298,7 @@ export function markDevicePairSetupDeliveryUncertain(
   const lifecycle = state.devicePairSetupLifecycle;
   const matchesActiveSetup =
     (lifecycle.phase === "waiting" && lifecycle.setup.setupId === outcome.setupId) ||
+    (lifecycle.phase === "reconciling" && lifecycle.setupId === outcome.setupId) ||
     (lifecycle.phase === "error" &&
       lifecycle.source === "status" &&
       lifecycle.setupId === outcome.setupId);
