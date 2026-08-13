@@ -6,6 +6,7 @@ import {
   assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
+  createVitestCacheWarmGroups,
   resolvePolicyTestTargets,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
@@ -134,6 +135,51 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
       { ...changedOnly, saveVitestFsCache: true },
     ]);
+  });
+
+  it("projects cache-warm groups from the owned node test plan", () => {
+    const groups = createVitestCacheWarmGroups();
+    expect(groups).toHaveLength(10);
+    expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+    expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
+
+    const coreStripeGroups = groups.filter(
+      (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
+    );
+    expect(coreStripeGroups).toHaveLength(2);
+    expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+    const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
+
+    const isolatedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+    );
+    expect(isolatedGroups).toHaveLength(2);
+    expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+    expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
+
+    const embeddedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
+    );
+    expect(embeddedGroups).toHaveLength(4);
+    expect(
+      embeddedGroups.every((group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000"),
+    ).toBe(true);
+
+    const gatewayGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
+    );
+    expect(gatewayGroups).toHaveLength(1);
+    expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
+    expect(gatewayGroups[0]?.env).toBeUndefined();
+
+    const autoReplyGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
+    );
+    expect(autoReplyGroups).toHaveLength(1);
+    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+    expect(autoReplyGroups[0]?.env).toBeUndefined();
   });
 
   it("creates split shards without walking test roots", () => {
