@@ -50,6 +50,15 @@ describe("toSanitizedMarkdownHtml", () => {
     );
   });
 
+  it("does not stamp presentation classes on links whose href contains 'tail'", () => {
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml("[tailscale docs](https://docs.openclaw.ai/tailscale)"),
+    );
+    const link = fragment.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://docs.openclaw.ai/tailscale");
+    expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
+  });
+
   it("strips unsupported citation control markers before display", () => {
     const html = toSanitizedMarkdownHtml(
       "v2026.5.20 release note citeturn2view0\n\nStill readable.",
