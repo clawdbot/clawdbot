@@ -26,6 +26,7 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -981,7 +982,17 @@ describe("session.message websocket events", () => {
     });
 
     const profile = withMockedDateNow(SHARED_REV, () => {
-      const created = ensureProfileForEmail("current-profile-display@example.com");
+      // Avoid random UUID spans such as `fc-...` that transcript redaction treats as secrets.
+      const created = (() => {
+        const profileIdSpy = vi
+          .spyOn(secureRandom, "generateSecureUuid")
+          .mockReturnValue("00000000-0000-4000-8000-000000000001");
+        try {
+          return ensureProfileForEmail("current-profile-display@example.com");
+        } finally {
+          profileIdSpy.mockRestore();
+        }
+      })();
       setDisplayName(created.id, "Old Display Name");
       expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
       return created;
