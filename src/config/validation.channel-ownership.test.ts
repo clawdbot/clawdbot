@@ -143,9 +143,15 @@ describe("duplicate alias-equivalent channel sections are rejected", () => {
   });
 
   it("names the first authored variant when no exact canonical section exists", () => {
+    // Distinct plugin ids are load-bearing: the config-wide registry folds records by normalized
+    // plugin id, so two claimants sharing the default id collapse onto the later record and the
+    // earlier spelling stops resolving as a channel at all.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
-      plugins: [variantClaimant("ClickClack"), variantClaimant("CLICKCLACK")],
+      plugins: [
+        variantClaimant("ClickClack", "clickclack-variant-mixed"),
+        variantClaimant("CLICKCLACK", "clickclack-variant-upper"),
+      ],
     });
 
     const result = validateConfigObjectWithPlugins({
