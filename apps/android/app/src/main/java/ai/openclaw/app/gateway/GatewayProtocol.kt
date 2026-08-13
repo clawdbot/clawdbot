@@ -408,6 +408,7 @@ enum class GatewayMethod(
   SessionsGroupsList("sessions.groups.list"),
   SessionsGroupsPut("sessions.groups.put"),
   SessionsGroupsRename("sessions.groups.rename"),
+  SessionsGroupsUpdate("sessions.groups.update"),
   SessionsGroupsDelete("sessions.groups.delete"),
   LastHeartbeat("last-heartbeat"),
   SetHeartbeats("set-heartbeats"),
