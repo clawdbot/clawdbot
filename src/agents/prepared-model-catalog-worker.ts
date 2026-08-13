@@ -159,7 +159,7 @@ function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url
   return new URL(`./prepared-model-catalog.worker${extension}`, currentModuleUrl);
 }
 
-export type PreparedModelCatalogWorker = Readonly<{
+type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
   loadCatalog: () => Promise<ModelCatalogSnapshot>;
 }>;

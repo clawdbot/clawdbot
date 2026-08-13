@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
-import { overlayExternalAuthProfiles, overlayExternalCliAuthProfiles } from "./external-auth.js";
+import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
@@ -142,7 +142,7 @@ describe("auth external oauth helpers", () => {
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(
       createCredential({ access: "rotated-access", refresh: "rotated-refresh", expires }),
     );
-    const rotated = overlayExternalCliAuthProfiles(retained, {
+    const rotated = overlayExternalAuthProfiles(retained, {
       externalCliProfileIds: ["openai:default"],
     });
     expect(rotated.profiles["openai:default"]).toMatchObject({
@@ -152,7 +152,7 @@ describe("auth external oauth helpers", () => {
     expect(getRuntimeExternalCliProfileIds(rotated)).toEqual(["openai:default"]);
 
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(null);
-    const loggedOut = overlayExternalCliAuthProfiles(rotated, {
+    const loggedOut = overlayExternalAuthProfiles(rotated, {
       externalCliProviderIds: ["openai"],
     });
     expect(loggedOut.profiles["openai:default"]).toBeUndefined();
@@ -182,15 +182,14 @@ describe("auth external oauth helpers", () => {
     expect(prepared.runtimeExternalProfileIds).toEqual(["openai:default"]);
     expect(getRuntimeExternalCliProfileIds(prepared)).toEqual([]);
 
-    resolveExternalAuthProfilesWithPluginsMock.mockClear();
-    const refreshed = overlayExternalCliAuthProfiles(prepared, {
+    const refreshed = overlayExternalAuthProfiles(prepared, {
       externalCliProviderIds: ["openai"],
     });
     expect(refreshed.profiles["openai:default"]).toMatchObject({
       access: "plugin-access",
       refresh: "plugin-refresh",
     });
-    expect(resolveExternalAuthProfilesWithPluginsMock).not.toHaveBeenCalled();
+    expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledTimes(2);
   });
 
   it("replaces CLI provenance only inside the requested refresh scope", () => {
@@ -207,7 +206,7 @@ describe("auth external oauth helpers", () => {
       runtimeExternalCliProfileIds: ["claude-cli:default", "openai:default"],
     };
 
-    const refreshed = overlayExternalCliAuthProfiles(store, {
+    const refreshed = overlayExternalAuthProfiles(store, {
       externalCliProfileIds: ["openai:default"],
     });
 

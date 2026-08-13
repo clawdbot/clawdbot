@@ -267,40 +267,6 @@ export function overlayExternalAuthProfiles(
   return next;
 }
 
-/** Refresh external CLI credentials without reevaluating lifecycle-owned provider hooks. */
-export function overlayExternalCliAuthProfiles(
-  store: AuthProfileStore,
-  params?: { env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
-): AuthProfileStore {
-  const scoped = hasScopedExternalCliOverlay(params);
-  const refreshedProfileIds = new Set(
-    getRuntimeExternalCliProfileIds(store).filter(
-      (profileId) =>
-        scoped &&
-        externalCliSync.isExternalCliAuthProfileInScope({
-          store,
-          profileId,
-          providerIds: params?.externalCliProviderIds,
-          profileIds: params?.externalCliProfileIds,
-        }),
-    ),
-  );
-  const base = removeRuntimeExternalProfileReferences({ store, profileIds: refreshedProfileIds });
-  const profiles = resolveAllowedExternalCliAuthProfiles({
-    store: base,
-    env: params?.env,
-    externalCli: params,
-  });
-  const next = overlayRuntimeExternalOAuthProfiles(base, profiles);
-  setRuntimeExternalCliProfileIds(next, [
-    ...getRuntimeExternalCliProfileIds(base),
-    ...profiles
-      .filter((profile) => profile.persistence !== "persisted")
-      .map((profile) => profile.profileId),
-  ]);
-  return next;
-}
-
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
