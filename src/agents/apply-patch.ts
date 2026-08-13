@@ -313,7 +313,8 @@ async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOpt
   if (options.workspaceOnly === false || options.sandbox) {
     return;
   }
-  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
+  // Sandboxed calls return above, so this only ever runs the host-only probe.
+  const filePath = await preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   const parent = path.dirname(filePath);
   if (!parent || parent === ".") {
     return;
@@ -363,7 +364,12 @@ async function resolvePatchPath(
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
-  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
+  // No bridge here: every SandboxFsBridge.resolvePath() implementation (docker
+  // fs-bridge.ts, remote-fs-bridge.ts) resolves filePath+cwd with plain path.resolve
+  // and never strips a leading "@" the way the host resolveToCwd()/normalizeAtPrefix()
+  // chain does, so the "./" disambiguation this returns is inert for sandboxed calls
+  // — routing it through the bridge would only add a real round-trip with no effect.
+  const filePath = await preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,

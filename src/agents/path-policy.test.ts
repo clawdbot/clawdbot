@@ -12,6 +12,7 @@ vi.mock("./sandbox-paths.js", () => ({
 }));
 
 import { preserveAtPrefixedRelativePath, toRelativeWorkspacePath } from "./path-policy.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 describe("toRelativeWorkspacePath (windows semantics)", () => {
   beforeEach(() => {
@@ -90,23 +91,42 @@ describe("preserveAtPrefixedRelativePath", () => {
     // Relative, no literal on disk: the TUI autocomplete emits this form.
     "@src/foo.ts",
     "notes.md",
-  ])("leaves %s alone when no literal file exists", (input) => {
-    expect(preserveAtPrefixedRelativePath(input, "/workspace/root")).toBe(input);
+  ])("leaves %s alone when no literal file exists", async (input) => {
+    expect(await preserveAtPrefixedRelativePath(input, "/workspace/root")).toBe(input);
   });
 
   it("marks a relative @path explicitly relative once that literal file exists", async () => {
     const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-at-policy-")));
     try {
       await fs.writeFile(path.join(cwd, "@notes.md"), "literal\n");
-      expect(preserveAtPrefixedRelativePath("@notes.md", cwd)).toBe("./@notes.md");
+      expect(await preserveAtPrefixedRelativePath("@notes.md", cwd)).toBe("./@notes.md");
       // An absolute mention shorthand keeps stripping even with a literal present.
-      expect(preserveAtPrefixedRelativePath("@/etc/passwd", cwd)).toBe("@/etc/passwd");
+      expect(await preserveAtPrefixedRelativePath("@/etc/passwd", cwd)).toBe("@/etc/passwd");
       // "~" only expands as "~" or "~/", so "@~notes.md" is an ordinary filename.
       await fs.writeFile(path.join(cwd, "@~notes.md"), "tilde\n");
-      expect(preserveAtPrefixedRelativePath("@~notes.md", cwd)).toBe("./@~notes.md");
+      expect(await preserveAtPrefixedRelativePath("@~notes.md", cwd)).toBe("./@~notes.md");
     } finally {
       await fs.rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("routes the existence probe through a sandbox bridge instead of the host filesystem", async () => {
+    // The bridge's map is the only place "@notes.md" exists — proves a remote/SSH
+    // sandbox literal is found even though this host has no such file on disk.
+    const remoteFiles = new Set(["@notes.md"]);
+    const bridge: Pick<SandboxFsBridge, "stat"> = {
+      stat: async ({ filePath }) =>
+        remoteFiles.has(filePath) ? { type: "file", size: 0, mtimeMs: 0 } : null,
+    };
+    expect(
+      await preserveAtPrefixedRelativePath("@notes.md", "/workspace", bridge as SandboxFsBridge),
+    ).toBe("./@notes.md");
+    // A host-only probe (no bridge) must not see the sandbox-only literal.
+    expect(await preserveAtPrefixedRelativePath("@notes.md", "/workspace")).toBe("@notes.md");
+    // The bridge sees no "@missing.md" either, so the strip still applies.
+    expect(
+      await preserveAtPrefixedRelativePath("@missing.md", "/workspace", bridge as SandboxFsBridge),
+    ).toBe("@missing.md");
   });
 });
 

@@ -75,6 +75,8 @@ type OpenClawReadToolOptions = {
   imageSanitization?: ImageSanitizationLimits;
   /** Root the read resolves relative paths against; enables the leading-`@` disambiguation. */
   cwd?: string;
+  /** Sandbox bridge routing the leading-`@` existence probe for sandboxed reads. */
+  bridge?: SandboxFsBridge;
 };
 
 type SkillReadContent = {
@@ -736,7 +738,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
@@ -862,6 +864,8 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    /** Sandbox bridge routing the leading-`@` existence probe for sandboxed tools. */
+    bridge?: SandboxFsBridge;
   },
 ): AnyAgentTool {
   const pathParamKeys =
@@ -876,7 +880,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = normalizeFileToolPathParam(rawFilePath, root);
+        const filePath = await normalizeFileToolPathParam(rawFilePath, root, options?.bridge);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -958,6 +962,7 @@ export function createSandboxedReadTool(
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
     cwd: params.root,
+    bridge: params.bridge,
   });
 }
 
@@ -970,7 +975,7 @@ export function createSandboxedWriteTool(
       operations: createSandboxWriteOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, params.root);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, params.root, params.bridge);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -982,7 +987,7 @@ export function createSandboxedEditTool(
       operations: createSandboxEditOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, params.root);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, params.root, params.bridge);
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
@@ -1031,7 +1036,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"], options?.cwd)
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"], options?.cwd, options?.bridge)
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const filePath =

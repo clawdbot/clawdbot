@@ -163,6 +163,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                     readOnlyWorkspaceSkillMounts,
                   ),
                   containerWorkdir: sandbox.containerWorkdir,
+                  bridge: sandboxFsBridge,
                 }
               : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
           )
@@ -215,11 +216,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : edit,
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : write,
     );

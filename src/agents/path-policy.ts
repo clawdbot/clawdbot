@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathExistsSync } from "../infra/fs-safe.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 // Shared path boundary helpers for workspace and sandbox-facing agent inputs.
 // Callers get normalized relative paths only after the candidate proves it stays
@@ -175,8 +176,17 @@ export function resolvePathFromInput(filePath: string, cwd: string): string {
  *
  * Call where a model-supplied path enters, before the workspace guard, so the
  * guard and the resolver see one path.
+ *
+ * `bridge` routes the existence probe through the sandbox filesystem bridge for
+ * sandboxed tool calls. A host-only `fs.stat` is blind to a literal file that
+ * exists only inside a remote/SSH sandbox, so omitting `bridge` there would
+ * still let `@notes.md` retarget writes/edits to `notes.md`.
  */
-export function preserveAtPrefixedRelativePath(filePath: string, cwd: string): string {
+export async function preserveAtPrefixedRelativePath(
+  filePath: string,
+  cwd: string,
+  bridge?: SandboxFsBridge,
+): Promise<string> {
   if (!filePath.startsWith("@")) {
     return filePath;
   }
@@ -192,5 +202,8 @@ export function preserveAtPrefixedRelativePath(filePath: string, cwd: string): s
   if (isMentionShorthand) {
     return filePath;
   }
-  return pathExistsSync(path.resolve(cwd, filePath)) ? `./${filePath}` : filePath;
+  const exists = bridge
+    ? (await bridge.stat({ filePath, cwd })) !== null
+    : pathExistsSync(path.resolve(cwd, filePath));
+  return exists ? `./${filePath}` : filePath;
 }

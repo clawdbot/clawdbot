@@ -12,7 +12,62 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+
+/**
+ * A remote/SSH sandbox (see `remote-fs-bridge.ts`) has no host-mounted copy of the
+ * workspace: `resolvePath()` returns no `hostPath`, and every read/stat crosses the
+ * bridge instead of the local filesystem. This fake reproduces exactly that shape so
+ * a literal `@notes.md` that exists only "remotely" cannot be seen by a host-only
+ * `fs.stat` probe. Files are keyed by the same absolute container path a real bridge
+ * resolves to (`${cwd}/${relativePath}`), since callers pass either a raw relative
+ * `filePath` + `cwd` (the leading-`@` existence probe) or an already-resolved
+ * absolute path (the write/edit tool's own file operations) — a real bridge
+ * resolves both forms the same way, so this fake must too.
+ */
+function createRemoteOnlySandboxBridge(
+  root: string,
+  initialFiles: Record<string, string> = {},
+): {
+  files: Map<string, string>;
+  bridge: SandboxFsBridge;
+} {
+  const resolve = (filePath: string, cwd?: string) =>
+    filePath.startsWith("/") ? filePath : `${cwd ?? root}/${filePath.replace(/^\.\//, "")}`;
+  const files = new Map(
+    Object.entries(initialFiles).map(([name, contents]) => [resolve(name), contents]),
+  );
+  const bridge: SandboxFsBridge = {
+    resolvePath: ({ filePath, cwd }) => {
+      const key = resolve(filePath, cwd);
+      return { relativePath: key.slice(root.length + 1), containerPath: key };
+    },
+    readFile: async ({ filePath, cwd }) =>
+      Buffer.from(files.get(resolve(filePath, cwd)) ?? "", "utf8"),
+    writeFile: async ({ filePath, cwd, data }) => {
+      files.set(resolve(filePath, cwd), Buffer.isBuffer(data) ? data.toString("utf8") : data);
+    },
+    mkdirp: async () => {},
+    remove: async ({ filePath, cwd }) => {
+      files.delete(resolve(filePath, cwd));
+    },
+    rename: async ({ from, to, cwd }) => {
+      const key = resolve(from, cwd);
+      const contents = files.get(key);
+      if (contents !== undefined) {
+        files.set(resolve(to, cwd), contents);
+        files.delete(key);
+      }
+    },
+    stat: async ({ filePath, cwd }): Promise<SandboxFsStat | null> => {
+      const contents = files.get(resolve(filePath, cwd));
+      return contents === undefined ? null : { type: "file", size: contents.length, mtimeMs: 0 };
+    },
+  };
+  return { files, bridge };
+}
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -104,6 +159,35 @@ describe("@-prefixed tool paths", () => {
         });
         await expect(fs.readFile(target, "utf8")).resolves.toBe("after\n");
       });
+    },
+  );
+
+  it.each(WORKSPACE_ONLY_CASES)(
+    "mutates the literal @-named file when it exists only inside a remote sandbox (workspaceOnly=%s)",
+    async (workspaceOnly) => {
+      const root = "/workspace";
+      const { files, bridge } = createRemoteOnlySandboxBridge(root, {
+        "@notes.md": "literal\n",
+        "notes.md": "sibling\n",
+      });
+      const sandbox = createAgentToolsSandboxContext({ workspaceDir: root, fsBridge: bridge });
+      const config: OpenClawConfig = { tools: { fs: { workspaceOnly } } };
+      const tools = createOpenClawCodingTools({ sandbox, config });
+      const { writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      // A host-only existence probe cannot see "@notes.md" here — it only lives in
+      // the bridge's in-memory map, never on this process's real filesystem — so
+      // this proves the sandbox bridge's stat() call, not a host fs coincidence.
+      await writeTool.execute("sbx-at-write", { path: "@notes.md", content: "written\n" });
+      expect(files.get(`${root}/@notes.md`)).toBe("written\n");
+      expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
+
+      await editTool.execute("sbx-at-edit", {
+        path: "@notes.md",
+        edits: [{ oldText: "written", newText: "edited" }],
+      });
+      expect(files.get(`${root}/@notes.md`)).toBe("edited\n");
+      expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
     },
   );
 });
