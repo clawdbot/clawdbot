@@ -428,8 +428,8 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
-  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
-  if (params.entry?.archivedAt !== undefined) {
+  // Archived and pinned sessions are user-retained; only an explicit user action may release them.
+  if (params.entry?.archivedAt !== undefined || params.entry?.pinnedAt !== undefined) {
     return true;
   }
   // A model lock is durable harness ownership, not merely a UI restriction.
