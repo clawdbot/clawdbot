@@ -59,6 +59,7 @@ import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import { resolveConfiguredCatalogMode } from "./models-list-catalog-mode.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListEntry = Pick<
@@ -714,13 +715,7 @@ export async function buildModelsListResult(
       });
     },
   });
-  const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
-  const catalogMode =
-    view === "configured" &&
-    sourceConfig.models?.mode === "replace" &&
-    buildProviderConfigModelCatalogForBrowse({ cfg: sourceConfig, workspaceDir }).length > 0
-      ? "replace"
-      : undefined;
+  const catalogMode = resolveConfiguredCatalogMode({ cfg, view, workspaceDir });
   return {
     ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
