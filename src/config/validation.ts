@@ -10,7 +10,7 @@ import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-sta
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { validateManifestSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
@@ -623,7 +623,11 @@ function validateConfigObjectWithPluginsBase(
       if (!channelSchema?.schema) {
         continue;
       }
-      const result = validateJsonSchemaValue({
+      // channelSchema.schema can come from an external plugin's channelConfigs.*.schema
+      // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
+      // is untrusted manifest input and must use the isolation path instead of the
+      // throwing validator reserved for repo-owned schemas.
+      const result = validateManifestSchemaValue({
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],

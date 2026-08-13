@@ -468,7 +468,10 @@ function resolvePluginConfigEnablement(params: {
   if (result.ok) {
     return { mode: "ready" };
   }
-  if (!hasConfig) {
+  // A malformed manifest schema fails validation regardless of what config is supplied,
+  // so it is never "missing" (no config value could satisfy it) even when hasConfig is
+  // false; only a well-formed schema rejecting an absent/empty config counts as missing.
+  if (!hasConfig && !result.schemaError) {
     return { mode: "missing" };
   }
   return { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };

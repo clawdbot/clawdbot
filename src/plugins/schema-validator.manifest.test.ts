@@ -37,4 +37,20 @@ describe("validateManifestSchemaValue", () => {
 
     expect(result).toEqual({ ok: true, value: { a: "ok" } });
   });
+
+  it("flags schemaError only when the schema itself is unusable, not on ordinary value failures", () => {
+    const malformedSchema = validateManifestSchemaValue({
+      cacheKey: "manifest-schema.schema-error-flag",
+      schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
+      value: {},
+    });
+    expect(malformedSchema).toMatchObject({ ok: false, schemaError: true });
+
+    const wellFormedSchemaRejectingValue = validateManifestSchemaValue({
+      cacheKey: "manifest-schema.value-error-flag",
+      schema: { type: "object", required: ["token"], properties: { token: { type: "string" } } },
+      value: {},
+    });
+    expect(wellFormedSchemaRejectingValue).toMatchObject({ ok: false, schemaError: false });
+  });
 });
