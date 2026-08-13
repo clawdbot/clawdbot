@@ -7,7 +7,6 @@ import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
   SHARED_AUTH_STORE_STATE_KEY,
-  type SharedAuthStoreOwnership,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
@@ -56,7 +55,6 @@ type MigrationStage = "copied" | "ownership-flipped" | "completed";
 
 export type SharedAuthStoreMigrationDetection = {
   sourcePath: string;
-  ownership: SharedAuthStoreOwnership;
   hasLegacy: boolean;
 };
 
@@ -562,18 +560,19 @@ export function detectSharedAuthStoreMigration(params: {
   doctorOnlyStateMigrations?: boolean;
 }): SharedAuthStoreMigrationDetection {
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
-  const ownership = resolveSharedAuthStoreOwnership(env);
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  if (params.doctorOnlyStateMigrations !== true) {
+    return { sourcePath, hasLegacy: false };
+  }
+  const ownership = resolveSharedAuthStoreOwnership(env);
   const sourceRows = inspectSourceRowsReadOnly(sourcePath);
   return {
     sourcePath,
-    ownership,
     hasLegacy:
-      params.doctorOnlyStateMigrations === true &&
-      (ownership.location === "legacy-main" ||
-        sourceRows.store !== null ||
-        sourceRows.state !== null ||
-        hasPendingCleanup(env, sourcePath)),
+      ownership.location === "legacy-main" ||
+      sourceRows.store !== null ||
+      sourceRows.state !== null ||
+      hasPendingCleanup(env, sourcePath),
   };
 }
 

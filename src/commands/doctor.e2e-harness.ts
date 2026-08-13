@@ -268,7 +268,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     sharedAuthStore: {
       sourcePath: "/tmp/state/agents/main/agent/openclaw-agent.sqlite",
-      ownership: { location: "legacy-main" },
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, pathRewrites: [] },

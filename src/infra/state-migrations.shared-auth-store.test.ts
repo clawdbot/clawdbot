@@ -219,9 +219,9 @@ describe("shared auth store relocation", () => {
       });
 
       expect(first.warnings).toEqual([]);
-      expect(retryDetected).toMatchObject({
-        ownership: { location: "state-db" },
-        hasLegacy: false,
+      expect(retryDetected).toMatchObject({ hasLegacy: false });
+      expect(fixture.ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+        location: "state-db",
       });
       expect(retry).toEqual({ changes: [], warnings: [] });
       expect(target.prepare("SELECT COUNT(*) AS count FROM auth_profile_stores").get()).toEqual({
@@ -276,7 +276,7 @@ describe("shared auth store relocation", () => {
     ).toBeUndefined();
   });
 
-  it("fails closed when the legacy source cannot be inspected", async () => {
+  it("inspects an unreadable legacy source only in the explicit Doctor path", async () => {
     const fixture = await createFixture();
     const sourcePath = fixture.sqlite.resolveAuthProfileDatabasePath(fixture.mainAgentDir);
     const realLstat = fs.lstatSync;
@@ -287,6 +287,12 @@ describe("shared auth store relocation", () => {
       return realLstat(pathname, options as never);
     });
 
+    expect(
+      fixture.migration.detectSharedAuthStoreMigration({
+        stateDir: fixture.stateDir,
+        doctorOnlyStateMigrations: false,
+      }),
+    ).toEqual({ sourcePath, hasLegacy: false });
     expect(() =>
       fixture.migration.detectSharedAuthStoreMigration({
         stateDir: fixture.stateDir,

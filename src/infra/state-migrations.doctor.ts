@@ -534,7 +534,6 @@ export async function detectLegacyStateMigrations(params: {
       ? detectDoctorOwnedState(detectSharedAuthStoreMigration)
       : {
           sourcePath: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
-          ownership: { location: "legacy-main" } as const,
           hasLegacy: false,
         };
   const deviceIdentity = detectLegacyDeviceIdentity({
