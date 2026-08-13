@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -23,32 +22,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 
-/** Gateway Control UI dashboard for one chat session. */
+/** Full-height viewer for a gateway-observable desktop source. */
 @Composable
-internal fun SessionDashboardScreen(
+internal fun DesktopScreen(
   viewModel: MainViewModel,
-  sessionKey: String,
+  source: String? = null,
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
-  val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
-  var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
-  if (showingDesktop) {
-    // Session summaries do not advertise an environment id, so the viewer opens
-    // its source picker instead of guessing a gateway or node association.
-    DesktopScreen(viewModel = viewModel, source = null, onBack = { showingDesktop = false })
-    return
-  }
   ClawScaffold(
     contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
   ) {
@@ -64,22 +52,15 @@ internal fun SessionDashboardScreen(
           onClick = onBack,
         )
         Text(
-          text = nativeString("Dashboard"),
+          text = nativeString("Desktop"),
           style = ClawTheme.type.title,
           color = ClawTheme.colors.text,
           modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        if (desktopObserveAvailable) {
-          ClawPlainIconButton(
-            icon = Icons.Outlined.DesktopWindows,
-            contentDescription = nativeString("Open desktop"),
-            onClick = { showingDesktop = true },
-          )
-        }
         Icon(
-          imageVector = Icons.Outlined.Dashboard,
+          imageVector = Icons.Outlined.DesktopWindows,
           contentDescription = null,
           tint = ClawTheme.colors.textMuted,
         )
@@ -87,10 +68,11 @@ internal fun SessionDashboardScreen(
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         val page = controlPage
         if (isConnected && page != null) {
-          key(page, sessionKey) {
+          // GatewayControlPage equality includes credentials and the accepted TLS pin.
+          key(page, source) {
             ControlUiWebView(
               page = page,
-              url = sessionDashboardUrl(baseUrl = page.baseUrl, sessionKey = sessionKey),
+              url = desktopUrl(baseUrl = page.baseUrl, source = source),
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -101,12 +83,12 @@ internal fun SessionDashboardScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             Text(
-              text = nativeString("Dashboard needs a connected gateway"),
+              text = nativeString("Desktop needs a connected gateway"),
               style = ClawTheme.type.section,
               color = ClawTheme.colors.text,
             )
             Text(
-              text = nativeString("Connect to your gateway to open this session dashboard."),
+              text = nativeString("Connect to your gateway to view a machine screen."),
               style = ClawTheme.type.body,
               color = ClawTheme.colors.textMuted,
             )
@@ -117,23 +99,20 @@ internal fun SessionDashboardScreen(
   }
 }
 
-/**
- * Builds the one-shot dashboard route without placing credentials in the URL.
- * Appends to the served base like the terminal screen so a Control UI mounted
- * under gateway.controlUi.basePath keeps its prefix.
- */
-internal fun sessionDashboardUrl(
+/** Builds the desktop document route; credentials stay in ControlUiWebView's startup script. */
+internal fun desktopUrl(
   baseUrl: String,
-  sessionKey: String,
-): String =
-  baseUrl
-    .trimEnd('/')
-    .toUri()
-    .buildUpon()
-    .appendPath("chat")
-    .clearQuery()
-    .fragment(null)
-    .appendQueryParameter("session", sessionKey)
-    .appendQueryParameter("face", "dashboard")
-    .build()
-    .toString()
+  source: String? = null,
+): String {
+  val baseUri = baseUrl.trimEnd('/').toUri()
+  val routePath = "${baseUri.encodedPath.orEmpty().trimEnd('/')}/"
+  val builder =
+    baseUri
+      .buildUpon()
+      .encodedPath(routePath)
+      .clearQuery()
+      .fragment(null)
+      .appendQueryParameter("view", "desktop")
+  source?.let { builder.appendQueryParameter("source", it) }
+  return builder.build().toString()
+}
