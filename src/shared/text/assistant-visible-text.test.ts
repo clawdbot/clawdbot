@@ -991,6 +991,12 @@ describe("sanitizeAssistantVisibleText", () => {
       "Before <think>literal tag text after",
     );
   });
+
+  it("never recovers unclosed internal reflection from final-answer prose", () => {
+    expect(
+      sanitizeAssistantFinalAnswerText("Visible prefix <thinking><internal>private reflection"),
+    ).toBe("Visible prefix");
+  });
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {
