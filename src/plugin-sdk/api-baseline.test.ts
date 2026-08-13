@@ -130,6 +130,34 @@ async function renderPrivateDeclarationFixture(params?: {
   return renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
 }
 
+async function renderDependencyDeclarationFixture(dependencyDeclaration: string) {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-dependency-");
+  const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
+  const dependencyDir = path.join(repoRoot, "node_modules", "fixture-dependency");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(dependencyDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "tsconfig.json"),
+    `${JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        target: "ESNext",
+      },
+    })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture.ts"),
+    'import { fixtureValue } from "fixture-dependency";\nexport const publicValue = fixtureValue;\n',
+  );
+  fs.writeFileSync(
+    path.join(dependencyDir, "package.json"),
+    '{"name":"fixture-dependency","type":"module","types":"index.d.ts"}\n',
+  );
+  fs.writeFileSync(path.join(dependencyDir, "index.d.ts"), dependencyDeclaration);
+  return renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
+}
+
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
   const fileName = "/plugin-sdk-tuple-fixture.ts";
   const source = [
@@ -361,6 +389,24 @@ describe("Plugin SDK API baseline", () => {
     expect(() =>
       parsePluginSdkApiDiffSurface('{"declarationSections":[],"modules":[{"entrypoint":1}]}'),
     ).toThrow("invalid module");
+  });
+
+  it("reports public types resolved from each revision's dependency declarations", async () => {
+    const before = await renderDependencyDeclarationFixture(
+      "export declare const fixtureValue: { oldValue: string };\n",
+    );
+    const after = await renderDependencyDeclarationFixture(
+      "export declare const fixtureValue: { newValue: number };\n",
+    );
+    const diff = diffPluginSdkApi(before, after);
+    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+
+    expect(diff.exports).toEqual([
+      expect.objectContaining({ change: "signature", exportName: "publicValue" }),
+    ]);
+    expect(report).toContain("oldValue: string");
+    expect(report).toContain("newValue: number");
+    expect(report).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
   });
 
   it("renders byte-identical surfaces deterministically", async () => {

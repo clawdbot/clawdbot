@@ -106,6 +106,23 @@ function git(repoRoot: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+function installRevisionDependencies(repoRoot: string): void {
+  const result = spawnSync(
+    "pnpm",
+    ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "openclaw"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      result.stderr.trim() || result.stdout.trim() || "Plugin SDK revision install failed",
+    );
+  }
+}
+
 async function writeFile(filePath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
@@ -153,7 +170,6 @@ async function main(): Promise<void> {
   const repoRoot = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   const baseCommit = git(repoRoot, ["rev-parse", "--verify", `${args.base}^{commit}`]);
   const headCommit = git(repoRoot, ["rev-parse", "--verify", `${args.head}^{commit}`]);
-  const nodeModules = await fs.realpath(path.join(repoRoot, "node_modules"));
   const temporaryParent = process.env.RUNNER_TEMP ?? path.join(repoRoot, ".local");
   await fs.mkdir(temporaryParent, { recursive: true });
   const temporaryRoot = await fs.mkdtemp(
@@ -170,9 +186,9 @@ async function main(): Promise<void> {
       const worktree = path.join(temporaryRoot, root.name);
       git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, root.commit]);
       addedWorktrees.push(worktree);
-      git(worktree, ["sparse-checkout", "set", "src", "packages", "scripts"]);
+      git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
       git(worktree, ["checkout", "--detach", root.commit]);
-      await fs.symlink(nodeModules, path.join(worktree, "node_modules"), "junction");
+      installRevisionDependencies(worktree);
     }
 
     const baseRenderPath = path.join(temporaryRoot, "base.json");
