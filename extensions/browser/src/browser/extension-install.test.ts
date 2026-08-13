@@ -79,6 +79,7 @@ async function writeSecurePreferences(params: {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     fileModesToRestore
       .splice(0)
