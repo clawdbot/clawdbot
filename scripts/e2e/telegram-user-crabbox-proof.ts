@@ -66,6 +66,7 @@ type Options = {
     | "status"
     | "view";
   crabboxBin: string;
+  credentialRole: "ci" | "maintainer";
   chat?: string;
   desktopChatTitle: string;
   dryRun: boolean;
@@ -229,6 +230,7 @@ function usageText() {
     "",
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
+    "  --credential-role <role>      Convex role: maintainer or ci. Defaults by CI state.",
     "  --chat <id|username>          Telegram chat override for send (for example @bot for DM).",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
@@ -318,6 +320,22 @@ function createTelegramProofRunId() {
   return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
+function isTruthyCi(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function resolveTelegramUserProofCredentialRole(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Options["credentialRole"] {
+  const normalized = value?.trim().toLowerCase() || (isTruthyCi(env.CI) ? "ci" : "maintainer");
+  if (normalized === "ci" || normalized === "maintainer") {
+    return normalized;
+  }
+  throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
+}
+
 export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -339,6 +357,7 @@ export function parseArgs(argvInput: string[]): Options {
     crabboxClass: "standard",
     command,
     crabboxBin: trimToValue(process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN) ?? "crabbox",
+    credentialRole: resolveTelegramUserProofCredentialRole(process.env.OPENCLAW_QA_CREDENTIAL_ROLE),
     desktopChatTitle:
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DESKTOP_CHAT_TITLE) ?? "OpenClaw Testing",
     dryRun: false,
@@ -401,6 +420,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.chat = readValue();
     } else if (arg === "--crabbox-bin") {
       opts.crabboxBin = readValue();
+    } else if (arg === "--credential-role") {
+      opts.credentialRole = resolveTelegramUserProofCredentialRole(readValue());
     } else if (arg === "--desktop-chat-title") {
       opts.desktopChatTitle = readValue();
     } else if (arg === "--dry-run") {
@@ -2644,6 +2665,8 @@ async function leaseCredential(params: { localRoot: string; opts: Options; root:
     leaseFile,
     "--payload-output",
     payloadFile,
+    "--credential-role",
+    params.opts.credentialRole,
   ];
   if (params.opts.envFile) {
     args.push("--env-file", params.opts.envFile);
@@ -2960,9 +2983,12 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   fs.mkdirSync(localRoot, { mode: 0o700, recursive: true });
 
   const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+  const roleSecret =
+    opts.credentialRole === "ci"
+      ? process.env.OPENCLAW_QA_CONVEX_SECRET_CI
+      : process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER;
   const hasConvexEnv =
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) && trimToValue(roleSecret);
   if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
     throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
   }
@@ -3796,9 +3822,12 @@ async function main() {
 
   try {
     const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+    const roleSecret =
+      opts.credentialRole === "ci"
+        ? process.env.OPENCLAW_QA_CONVEX_SECRET_CI
+        : process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER;
     const hasConvexEnv =
-      trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
-      trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+      trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) && trimToValue(roleSecret);
     if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
       throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
     }

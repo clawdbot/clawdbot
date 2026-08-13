@@ -21,6 +21,7 @@ import {
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
+  resolveTelegramUserProofCredentialRole,
   REMOTE_SETUP_COMMAND_TIMEOUT_MS,
   renderLaunchDesktop,
   renderRemoteProbe,
@@ -397,6 +398,16 @@ describe("telegram user Crabbox proof log polling", () => {
     ).toBe("@sut");
     expect(() => parseArgs(["inspect", "--session", "session.json", "--chat", "@sut"])).toThrow(
       "--chat is available only for held-session sends",
+    );
+  });
+
+  it("selects the documented Convex credential role for held proof", () => {
+    expect(resolveTelegramUserProofCredentialRole(undefined, {})).toBe("maintainer");
+    expect(resolveTelegramUserProofCredentialRole(undefined, { CI: "true" })).toBe("ci");
+    expect(resolveTelegramUserProofCredentialRole("maintainer", { CI: "1" })).toBe("maintainer");
+    expect(parseArgs(["start", "--credential-role", "ci"]).credentialRole).toBe("ci");
+    expect(() => parseArgs(["start", "--credential-role", "operator"])).toThrow(
+      'Credential role must be one of maintainer or ci, got "operator".',
     );
   });
 
