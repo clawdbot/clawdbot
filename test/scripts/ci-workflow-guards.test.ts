@@ -191,6 +191,7 @@ function runCiManifestFixture(options: {
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
   runNode?: boolean;
+  runnerBackend?: "blacksmith" | "github";
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -383,6 +384,7 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
           options.nodeFastPluginContracts ?? false,
         ),
+        OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? "",
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
@@ -5761,15 +5763,47 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
-    // Three serial workers own Control UI files while the fourth owns browser
-    // extension E2E; all four remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
-    expect(uiE2e.strategy).toEqual({
-      "fail-fast": false,
-      "max-parallel": 4,
-      matrix: { shard: [1, 2, 3, 4] },
+    expect(uiE2e.strategy["fail-fast"]).toBe(false);
+    expect(uiE2e.strategy["max-parallel"]).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 8 || 4 }}",
+    );
+    expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
+    const expectedUiE2eMatrix = (shardCount: number) => ({
+      include: Array.from({ length: shardCount }, (_, index) => {
+        const shard = index + 1;
+        return {
+          shard,
+          shard_count: shardCount,
+          task: shard === shardCount ? "browser-extension" : "control-ui",
+          vitest_shard_count: shardCount - 1,
+        };
+      }),
     });
+    for (const [runnerBackend, shardCount] of [
+      ["blacksmith", 4],
+      ["github", 8],
+    ] as const) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        historicalCompatibility: false,
+        runnerBackend,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} UI E2E matrix`)),
+      ).toEqual(expectedUiE2eMatrix(shardCount));
+      expect(
+        evaluateWorkflowExpression(uiE2e.strategy["max-parallel"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend,
+          runAttempt: 1,
+        }),
+      ).toBe(shardCount);
+    }
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
 
@@ -5918,9 +5952,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
-    expect(scenario.if).toBe("matrix.shard != 4");
+    expect(scenario.if).toBe("matrix.task == 'control-ui'");
+    expect(scenario.env).toEqual({
+      SHARD_INDEX: "${{ matrix.shard }}",
+      VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
+    });
     expect(scenario.run).toBe(
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/3",
+      'node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"',
     );
     const browserExtension = expectDefined(
       uiE2e.steps.find(
@@ -5928,7 +5966,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ),
       "browser extension bootstrap E2E suite",
     );
-    expect(browserExtension.if).toBe("matrix.shard == 4");
+    expect(browserExtension.if).toBe("matrix.task == 'browser-extension'");
     expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
     for (const { job } of routedUiE2eJobs) {
       const jobContract = JSON.stringify(job);

@@ -112,6 +112,7 @@ jobs:
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
+      ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
       strict_native_i18n: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.strict_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -600,6 +601,8 @@ jobs:
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
+          const uiE2eShardCount =
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 8 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
@@ -814,6 +817,17 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
+            ui_e2e_matrix: createMatrix(
+              Array.from({ length: uiE2eShardCount }, (_, index) => {
+                const shard = index + 1;
+                return {
+                  shard,
+                  shard_count: uiE2eShardCount,
+                  task: shard === uiE2eShardCount ? "browser-extension" : "control-ui",
+                  vitest_shard_count: uiE2eShardCount - 1,
+                };
+              }),
+            ),
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -1588,7 +1602,7 @@ jobs:
   checks-ui-e2e:
     permissions:
       contents: read
-    name: checks-ui-e2e (${{ matrix.shard }}/4)
+    name: checks-ui-e2e (${{ matrix.shard }}/${{ matrix.shard_count }})
     needs: [preflight]
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
@@ -1602,9 +1616,8 @@ jobs:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: 4
-      matrix:
-        shard: [1, 2, 3, 4]
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 8 || 4 }}
+      matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1620,15 +1633,18 @@ jobs:
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
-        if: matrix.shard != 4
+        if: matrix.task == 'control-ui'
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
-          --shard ${{ matrix.shard }}/3
+          --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Test browser extension bootstrap end-to-end
-        if: matrix.shard == 4
+        if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension
 
   checks-ui-e2e-real-gateway:
