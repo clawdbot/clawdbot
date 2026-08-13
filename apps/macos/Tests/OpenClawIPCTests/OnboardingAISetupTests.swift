@@ -881,9 +881,9 @@ struct OnboardingAISetupTests {
                     return count == 1
                         ? configuredModelResponse(id: request.id)
                         : missingConfiguredModelResponse(id: request.id)
-                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
-                case "openclaw.setup.detect": detectedSetupResponse(id: request.id)
-                default: nil
+                case "openclaw.setup.verify": return rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect": return detectedSetupResponse(id: request.id)
+                default: return nil
                 }
             },
             receiveHook: { task, receiveIndex in
