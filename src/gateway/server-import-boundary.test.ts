@@ -214,7 +214,10 @@ describe("gateway startup import boundaries", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf("const workerEnvironmentService =", prepareStart);
+    const serviceStart = workerStartup.indexOf(
+      "const workerEnvironmentServiceBase =",
+      prepareStart,
+    );
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
     const loggerStart = workerStartup.indexOf("logger: params.log.child", bootstrapStart);
