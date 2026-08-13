@@ -587,17 +587,52 @@ export function finishCronRunReceiptInDatabase(params: {
   return row ? receiptFromRow(row) : undefined;
 }
 
+/** Corrects the exact interrupted receipt only after task-ledger restoration commits. */
+export function correctInterruptedCronRunReceiptInDatabase(params: {
+  database: DatabaseSync;
+  storePath: string;
+  jobId: string;
+  startedAtMs: number;
+  status: "ok" | "error" | "skipped";
+  finishedAtMs: number;
+  error?: string;
+}): void {
+  const storeKey = cronStoreKey(params.storePath);
+  const receipt = executeSqliteQueryTakeFirstSync(
+    params.database,
+    query(params.database)
+      .selectFrom("cron_run_receipts")
+      .select("receipt_id")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", params.jobId)
+      .where("started_at_ms", "=", params.startedAtMs)
+      .where("status", "=", "interrupted")
+      .orderBy("receipt_id", "desc"),
+  );
+  if (!receipt) {
+    return;
+  }
+  executeSqliteQuerySync(
+    params.database,
+    query(params.database)
+      .updateTable("cron_run_receipts")
+      .set({
+        status: params.status,
+        finished_at_ms: params.finishedAtMs,
+        error_text: params.error ?? null,
+      })
+      .where("receipt_id", "=", receipt.receipt_id)
+      .where("status", "=", "interrupted"),
+  );
+  pruneTerminalReceipts(params.database, storeKey, params.jobId);
+}
+
 /** Returns a still-live foreign claim, or retires a provably stale owner. */
 export function reconcileCronRunReceiptForStartup(params: {
   storePath: string;
   jobId: string;
   startedAtMs: number;
   nowMs: number;
-  staleOwnerTerminal?: {
-    status: Exclude<CronRunReceiptStatus, "running">;
-    finishedAtMs: number;
-    error?: string;
-  };
   env?: NodeJS.ProcessEnv;
 }): CronRunReceipt | undefined {
   const storeKey = cronStoreKey(params.storePath);
@@ -626,11 +661,9 @@ export function reconcileCronRunReceiptForStartup(params: {
       query(database)
         .updateTable("cron_run_receipts")
         .set({
-          status: params.staleOwnerTerminal?.status ?? "interrupted",
-          finished_at_ms: params.staleOwnerTerminal?.finishedAtMs ?? params.nowMs,
-          error_text:
-            params.staleOwnerTerminal?.error ??
-            (params.staleOwnerTerminal ? null : "cron: job interrupted by owner process exit"),
+          status: "interrupted",
+          finished_at_ms: params.nowMs,
+          error_text: "cron: job interrupted by owner process exit",
         })
         .where("receipt_id", "=", current.receipt_id)
         .where("status", "=", "running"),

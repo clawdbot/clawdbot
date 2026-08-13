@@ -16,11 +16,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import {
-  claimCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../store/run-receipt-store.js";
+import * as runReceiptStore from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -35,7 +31,7 @@ import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
-import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
+import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -947,6 +943,65 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
+  it("preserves a foreign completion committed during startup receipt inspection", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const job = createInterruptedMainJob(now);
+    job.state.runningAtMs = startedAt;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
+      storePath,
+      job,
+      agentId: "main",
+      startedAtMs: startedAt,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      runReceiptStore.claimCronRunReceiptInDatabase({
+        database: db,
+        prepared: preparedReceipt,
+        resolveAgentId: (current) => current.agentId ?? "main",
+      }),
+    );
+    const completedJob = structuredClone(job);
+    delete completedJob.state.runningAtMs;
+    completedJob.state.lastRunAtMs = startedAt;
+    completedJob.state.lastRunStatus = "ok";
+    completedJob.state.lastStatus = "ok";
+    completedJob.state.nextRunAtMs = now + 60_000;
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    vi.spyOn(runReceiptStore, "reconcileCronRunReceiptForStartup").mockImplementationOnce(() => {
+      runReceiptStore.finishCronRunReceipt({
+        handle: receipt,
+        status: "ok",
+        finishedAtMs: now,
+      });
+      void cronStoreModule.saveCronStore(storePath, { version: 1, jobs: [completedJob] });
+      return undefined;
+    });
+
+    await start(state);
+
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    expect(persisted?.state).toMatchObject({
+      lastRunAtMs: startedAt,
+      lastRunStatus: "ok",
+      lastStatus: "ok",
+    });
+    expect(persisted?.state.nextRunAtMs).toEqual(expect.any(Number));
+    expect(persisted?.state.runningAtMs).toBeUndefined();
+    expect(persisted?.state.lastError).toBeUndefined();
+    stop(state);
+  });
+
   it.each([
     { identity: "canonical", reservationOffsetMs: undefined },
     { identity: "shipped reservation-keyed", reservationOffsetMs: 250 },
@@ -965,20 +1020,20 @@ describe("cron service ops seam coverage", () => {
         job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
         job.state.triggerState = { cursor: "old" };
         await writeCronStoreSnapshot({ storePath, jobs: [job] });
-        const preparedReceipt = prepareCronRunReceiptClaim({
+        const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
           storePath,
           job,
           agentId: "main",
           startedAtMs: startedAt,
         });
         const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-          claimCronRunReceiptInDatabase({
+          runReceiptStore.claimCronRunReceiptInDatabase({
             database: db,
             prepared: preparedReceipt,
             resolveAgentId: (current) => current.agentId ?? "main",
           }),
         );
-        releaseLocalCronRunReceiptOwnership(receipt);
+        runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
@@ -992,7 +1047,7 @@ describe("cron service ops seam coverage", () => {
         });
         const taskRunId =
           reservationOffsetMs === undefined
-            ? tryCreateCronTaskRun({ state, job, startedAt })
+            ? taskRuns.tryCreateCronTaskRun({ state, job, startedAt })
             : taskExecutor.createRunningTaskRunCore({
                 runtime: "cron",
                 sourceId: job.id,
@@ -1011,7 +1066,7 @@ describe("cron service ops seam coverage", () => {
           throw new Error("expected reserved cron task run");
         }
 
-        tryFinishCronTaskRun(state, {
+        taskRuns.tryFinishCronTaskRun(state, {
           taskRunId,
           job,
           triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
@@ -1078,6 +1133,81 @@ describe("cron service ops seam coverage", () => {
     },
   );
 
+  it("keeps an interrupted receipt when finalized task restoration is invalid", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createInterruptedMainJob(now);
+      job.id = "invalid-finalized-receipt";
+      job.state.runningAtMs = startedAt;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
+        storePath,
+        job,
+        agentId: "main",
+        startedAtMs: startedAt,
+      });
+      const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+        runReceiptStore.claimCronRunReceiptInDatabase({
+          database: db,
+          prepared: preparedReceipt,
+          resolveAgentId: (current) => current.agentId ?? "main",
+        }),
+      );
+      runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
+      if (!taskRunId) {
+        throw new Error("expected invalid finalized cron task run");
+      }
+      taskRuns.tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "ok",
+          runAtMs: startedAt,
+          durationMs: 1_000,
+        },
+      });
+      const finalized = taskRuns.tryFindFinalizedCronTaskRun(state, job.id, startedAt);
+      if (!finalized) {
+        throw new Error("expected finalized cron task record");
+      }
+      const finalizedSpy = vi.spyOn(taskRuns, "tryFindFinalizedCronTaskRun").mockReturnValue({
+        ...finalized,
+        entry: { ...finalized.entry, ts: Number.NaN },
+      });
+
+      try {
+        await start(state);
+      } finally {
+        finalizedSpy.mockRestore();
+      }
+
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted?.state.lastRunStatus).toBe("error");
+      const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+        db
+          .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ) as { status: string };
+      expect(receiptRow.status).toBe("interrupted");
+      stop(state);
+    });
+  });
+
   it("prunes scratch when startup deletes a finalized delete-after-run one-shot", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
@@ -1112,11 +1242,11 @@ describe("cron service ops seam coverage", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         onEvent: (event) => events.push(structuredClone(event)),
       });
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         taskRunId,
         job,
         event: {
@@ -1178,11 +1308,11 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         taskRunId,
         job,
         event: {
@@ -1253,11 +1383,11 @@ describe("cron service ops seam coverage", () => {
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
-        const taskRunId = tryCreateCronTaskRun({ state, job: original, startedAt });
+        const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job: original, startedAt });
         if (!taskRunId) {
           throw new Error("expected cron task run");
         }
-        tryFinishCronTaskRun(state, {
+        taskRuns.tryFinishCronTaskRun(state, {
           taskRunId,
           job: original,
           event: {
@@ -1321,7 +1451,7 @@ describe("cron service ops seam coverage", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
 
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         job,
         event: {
           jobId: job.id,

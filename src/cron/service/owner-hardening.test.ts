@@ -15,6 +15,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
+import type { CronServiceState } from "./state.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
@@ -52,6 +53,7 @@ beforeEach(async () => {
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block") await new Promise(() => {});
+          if (mode === "hold") while (!fs.existsSync(releasePath)) await sleep(10);
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
@@ -73,7 +75,7 @@ beforeEach(async () => {
         \`);
         await cron.run(jobId, "force");
       }
-      if (mode === "block") await cron.run(jobId, "force");
+      if (mode === "block" || mode === "hold") await cron.run(jobId, "force");
       if (mode === "due") await sleep(350);
       cron.stop();
     `,
@@ -109,7 +111,7 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode: "block" | "trigger" | "due" | "crash-activation";
+  mode: "block" | "hold" | "trigger" | "due" | "crash-activation";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -392,6 +394,99 @@ describe("cron durable run ownership", () => {
       replacement.stop();
       if (owner.exitCode === null && owner.signalCode === null) {
         owner.kill("SIGKILL");
+      }
+    }
+  });
+
+  it("re-arms the next run after a foreign owner completes normally", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("foreign-normal-completion", now + 60_000);
+    job.schedule = { kind: "every", everyMs: 3_000, anchorMs: now };
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const releasePath = path.join(scriptRoot, `normal-release-${now}`);
+    const outputPath = path.join(scriptRoot, `normal-output-${now}`);
+    const owner = spawnRunner({ storePath, jobId: job.id, mode: "hold", releasePath, outputPath });
+    await waitForLine(owner, "started");
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET next_run_at_ms = NULL WHERE job_id = ?")
+      .run(job.id);
+
+    const replacement = makeParentService(storePath);
+    try {
+      await replacement.start();
+      const replacementState = (replacement as unknown as { state: CronServiceState }).state;
+      const staleTimer = replacementState.timer;
+      await fsPromises.writeFile(releasePath, "release");
+      await waitForExit(owner);
+      await vi.waitFor(
+        async () => {
+          expect(replacementState.timer).not.toBe(staleTimer);
+          expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toEqual(
+            expect.any(Number),
+          );
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+    } finally {
+      replacement.stop();
+      if (owner.exitCode === null && owner.signalCode === null) {
+        owner.kill("SIGKILL");
+      }
+    }
+  });
+
+  it("keeps monitoring when the marker hands off to another foreign run", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("foreign-marker-handoff", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const first = spawnRunner({
+      storePath,
+      jobId: job.id,
+      mode: "block",
+      releasePath: path.join(scriptRoot, `first-release-${now}`),
+      outputPath: path.join(scriptRoot, `first-output-${now}`),
+    });
+    await waitForLine(first, "started");
+
+    const replacement = makeParentService(storePath);
+    let second: ChildProcess | undefined;
+    try {
+      await replacement.start();
+      replacement.pauseScheduling();
+      first.kill("SIGKILL");
+      await waitForExit(first);
+      second = spawnRunner({
+        storePath,
+        jobId: job.id,
+        mode: "block",
+        releasePath: path.join(scriptRoot, `second-release-${now}`),
+        outputPath: path.join(scriptRoot, `second-output-${now}`),
+      });
+      await waitForLine(second, "started");
+      replacement.resumeScheduling();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 2_500);
+      });
+      second.kill("SIGKILL");
+      await waitForExit(second);
+
+      await vi.waitFor(
+        async () => {
+          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+          expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+        },
+        { timeout: 6_000, interval: 50 },
+      );
+    } finally {
+      replacement.stop();
+      for (const child of [first, second]) {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
       }
     }
   });

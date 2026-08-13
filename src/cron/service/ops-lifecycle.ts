@@ -1,5 +1,9 @@
+import type { DatabaseSync } from "node:sqlite";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
-import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
+import {
+  correctInterruptedCronRunReceiptInDatabase,
+  reconcileCronRunReceiptForStartup,
+} from "../store/run-receipt-store.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -32,6 +36,13 @@ type ForeignReceiptMonitor = {
 };
 const foreignReceiptMonitors = new WeakMap<CronServiceState, ForeignReceiptMonitor>();
 type FinalizedCronTaskRun = ReturnType<typeof tryFindFinalizedCronTaskRun>;
+type RecoveredReceiptCorrection = {
+  jobId: string;
+  startedAtMs: number;
+  status: "ok" | "error" | "skipped";
+  finishedAtMs: number;
+  error?: string;
+};
 
 function foreignReceiptMonitor(state: CronServiceState): ForeignReceiptMonitor {
   let monitor = foreignReceiptMonitors.get(state);
@@ -50,6 +61,7 @@ function repairStoppedCronRun(params: {
   deferredNotifications: DeferredCronNotifications;
 }): {
   interrupted?: InterruptedStartupRun;
+  receiptCorrection?: RecoveredReceiptCorrection;
   replacementAtMs?: number;
   shouldDelete: boolean;
 } {
@@ -67,7 +79,14 @@ function repairStoppedCronRun(params: {
       deferredNotifications,
     });
     if (repaired) {
-      return { ...repaired };
+      return {
+        ...repaired,
+        receiptCorrection: {
+          jobId: job.id,
+          startedAtMs: runningAtMs,
+          ...receiptTerminalFromFinalized(finalized),
+        },
+      };
     }
     state.deps.log.warn(
       { jobId: job.id },
@@ -89,16 +108,11 @@ function repairStoppedCronRun(params: {
   };
 }
 
-function receiptTerminalFromFinalized(finalized: FinalizedCronTaskRun):
-  | {
-      status: "ok" | "error" | "skipped";
-      finishedAtMs: number;
-      error?: string;
-    }
-  | undefined {
-  if (!finalized) {
-    return undefined;
-  }
+function receiptTerminalFromFinalized(finalized: NonNullable<FinalizedCronTaskRun>): {
+  status: "ok" | "error" | "skipped";
+  finishedAtMs: number;
+  error?: string;
+} {
   const receiptStatus = (runStatus: CronRunStatus) => {
     if (runStatus === "ok" || runStatus === "skipped") {
       return runStatus;
@@ -109,6 +123,26 @@ function receiptTerminalFromFinalized(finalized: FinalizedCronTaskRun):
     status: receiptStatus(finalized.entry.status),
     finishedAtMs: finalized.entry.ts,
     error: finalized.entry.error,
+  };
+}
+
+function recoveredReceiptHooks(
+  state: CronServiceState,
+  corrections: readonly RecoveredReceiptCorrection[],
+) {
+  if (corrections.length === 0) {
+    return undefined;
+  }
+  return {
+    afterWrite: (database: DatabaseSync) => {
+      for (const correction of corrections) {
+        correctInterruptedCronRunReceiptInDatabase({
+          database,
+          storePath: state.deps.storePath,
+          ...correction,
+        });
+      }
+    },
   };
 }
 
@@ -172,7 +206,7 @@ function armForeignReceiptReconciliation(state: CronServiceState): void {
 
 async function reconcileForeignRunReceipts(state: CronServiceState): Promise<void> {
   const monitor = foreignReceiptMonitor(state);
-  let repaired = false;
+  let schedulingChanged = false;
   await locked(state, async () => {
     if (state.stopped || monitor.startedAtByJobId.size === 0) {
       return;
@@ -188,7 +222,12 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     )) {
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (job?.state.runningAtMs !== runningAtMs) {
-        monitor.startedAtByJobId.delete(jobId);
+        if (typeof job?.state.runningAtMs === "number") {
+          monitor.startedAtByJobId.set(jobId, job.state.runningAtMs);
+        } else {
+          monitor.startedAtByJobId.delete(jobId);
+        }
+        schedulingChanged = true;
         continue;
       }
       // The store helper observes process liveness before entering SQLite, then
@@ -200,7 +239,6 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
           jobId,
           startedAtMs: runningAtMs,
           nowMs: state.deps.nowMs(),
-          staleOwnerTerminal: receiptTerminalFromFinalized(finalized),
         })
       ) {
         candidates.push({ jobId, runningAtMs, finalized });
@@ -216,12 +254,18 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     const rollbackSnapshot = snapshotStoreForRollback(state);
     const completedJobIdsToDelete = new Set<string>();
     const interruptedRuns: InterruptedStartupRun[] = [];
+    const receiptCorrections: RecoveredReceiptCorrection[] = [];
     const recoveredJobIds: string[] = [];
     const postPersistNotifications: DeferredCronNotifications = [];
     for (const { jobId, runningAtMs, finalized } of candidates) {
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (job?.state.runningAtMs !== runningAtMs) {
-        monitor.startedAtByJobId.delete(jobId);
+        if (typeof job?.state.runningAtMs === "number") {
+          monitor.startedAtByJobId.set(jobId, job.state.runningAtMs);
+        } else {
+          monitor.startedAtByJobId.delete(jobId);
+        }
+        schedulingChanged = true;
         continue;
       }
       const recovery = repairStoppedCronRun({
@@ -237,6 +281,9 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       if (recovery.interrupted) {
         interruptedRuns.push(recovery.interrupted);
       }
+      if (recovery.receiptCorrection) {
+        receiptCorrections.push(recovery.receiptCorrection);
+      }
       recoveredJobIds.push(jobId);
     }
     if (recoveredJobIds.length === 0) {
@@ -249,7 +296,10 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       recomputeExpired: true,
       deferredNotifications: postPersistNotifications,
     });
-    await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
+    await persistOrRestore(state, rollbackSnapshot, {
+      postPersistNotifications,
+      transactionHooks: recoveredReceiptHooks(state, receiptCorrections),
+    });
     for (const jobId of recoveredJobIds) {
       monitor.startedAtByJobId.delete(jobId);
     }
@@ -257,15 +307,15 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     for (const interrupted of interruptedRuns) {
       emitInterruptedRun(state, interrupted);
     }
-    repaired = true;
+    schedulingChanged = true;
   });
-  if (repaired) {
+  if (schedulingChanged) {
     armTimer(state);
   }
 }
 
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
-export async function start(state: CronServiceState) {
+export async function start(state: CronServiceState): Promise<void> {
   state.stopped = false;
   stopForeignReceiptReconciliation(state, true);
   if (!state.deps.cronEnabled) {
@@ -275,8 +325,10 @@ export async function start(state: CronServiceState) {
 
   const interruptedJobIds = new Set<string>();
   const interruptedRuns: InterruptedStartupRun[] = [];
+  const receiptCorrections: RecoveredReceiptCorrection[] = [];
   const completedJobIdsToDelete = new Set<string>();
   let repairedAnyStartupRun = false;
+  let restartStartupRecovery = false;
   const postPersistNotifications: DeferredCronNotifications = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
@@ -301,8 +353,37 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const jobs = state.store?.jobs ?? [];
-    for (const job of jobs) {
+    const recoveryCandidates: Array<{
+      jobId: string;
+      runningAtMs: number;
+      finalized: FinalizedCronTaskRun;
+    }> = [];
+    for (const job of state.store?.jobs ?? []) {
+      if (typeof job.state.runningAtMs !== "number") {
+        continue;
+      }
+      const runningAtMs = job.state.runningAtMs;
+      const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
+      if (
+        reconcileCronRunReceiptForStartup({
+          storePath: state.deps.storePath,
+          jobId: job.id,
+          startedAtMs: runningAtMs,
+          nowMs: state.deps.nowMs(),
+        })
+      ) {
+        foreignReceiptMonitor(state).startedAtByJobId.set(job.id, runningAtMs);
+        interruptedJobIds.add(job.id);
+      } else {
+        recoveryCandidates.push({ jobId: job.id, runningAtMs, finalized });
+      }
+    }
+    if (recoveryCandidates.length > 0) {
+      // A falsey receipt query can mean the foreign owner just committed. Reload
+      // every runtime row before applying any queued-marker or recovery mutation.
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    }
+    for (const job of state.store?.jobs ?? []) {
       job.state ??= {};
       if (typeof job.state.queuedAtMs === "number") {
         state.deps.log.info(
@@ -312,61 +393,57 @@ export async function start(state: CronServiceState) {
         job.state.queuedAtMs = undefined;
         repairedAnyStartupRun = true;
       }
-      if (typeof job.state.runningAtMs === "number") {
-        // Older releases used runningAtMs for both queued and active work. Those
-        // rows are intentionally recovered conservatively to avoid replaying side effects.
-        const runningAtMs = job.state.runningAtMs;
-        const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
-        const liveReceipt = reconcileCronRunReceiptForStartup({
-          storePath: state.deps.storePath,
-          jobId: job.id,
-          startedAtMs: runningAtMs,
-          nowMs: state.deps.nowMs(),
-          staleOwnerTerminal: receiptTerminalFromFinalized(finalized),
-        });
-        if (liveReceipt) {
-          // An overlapping replacement gateway must not retire work whose
-          // exact process incarnation is still alive.
-          foreignReceiptMonitor(state).startedAtByJobId.set(job.id, runningAtMs);
-          interruptedJobIds.add(job.id);
-          continue;
-        }
-        const recovery = repairStoppedCronRun({
-          state,
-          job,
-          runningAtMs,
-          finalized,
-          deferredNotifications: postPersistNotifications,
-        });
-        // Skip only the old invocation; a distinct overdue replacement must
-        // remain eligible for normal one-shot startup catch-up.
-        if (recovery.replacementAtMs === undefined) {
-          interruptedJobIds.add(job.id);
-        }
-        if (recovery.shouldDelete) {
-          completedJobIdsToDelete.add(job.id);
-        }
-        if (recovery.interrupted) {
-          interruptedRuns.push(recovery.interrupted);
-        }
-        repairedAnyStartupRun = true;
+    }
+    for (const { jobId, runningAtMs, finalized } of recoveryCandidates) {
+      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      if (job?.state.runningAtMs !== runningAtMs) {
+        restartStartupRecovery = true;
+        return;
       }
+      const recovery = repairStoppedCronRun({
+        state,
+        job,
+        runningAtMs,
+        finalized,
+        deferredNotifications: postPersistNotifications,
+      });
+      if (recovery.replacementAtMs === undefined) {
+        interruptedJobIds.add(job.id);
+      }
+      if (recovery.shouldDelete) {
+        completedJobIdsToDelete.add(job.id);
+      }
+      if (recovery.interrupted) {
+        interruptedRuns.push(recovery.interrupted);
+      }
+      if (recovery.receiptCorrection) {
+        receiptCorrections.push(recovery.receiptCorrection);
+      }
+      repairedAnyStartupRun = true;
     }
     if (completedJobIdsToDelete.size > 0 && state.store) {
-      state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
+      state.store.jobs = state.store.jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
     }
-    if (repairedAnyStartupRun || jobs.length > 0) {
+    if (repairedAnyStartupRun || (state.store?.jobs.length ?? 0) > 0) {
       // Recovery notifications describe repaired durable rows, so never
       // publish them until the startup write has committed successfully.
       const persisted = await persist(state, {
         ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
         postPersistNotifications,
+        transactionHooks: recoveredReceiptHooks(state, receiptCorrections),
       });
       if (persisted) {
         pruneCronJobScratchAfterCommit(state, completedJobIdsToDelete);
       }
     }
   });
+
+  if (restartStartupRecovery) {
+    if (!state.stopped) {
+      await start(state);
+    }
+    return;
+  }
 
   if (state.stopped) {
     return;
