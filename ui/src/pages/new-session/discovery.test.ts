@@ -38,17 +38,20 @@ describe("readDraftCloudProfiles", () => {
         {
           id: " zeta ",
           providerId: " static-ssh ",
+          trust: "disposable",
           settings: { token: "hidden" },
         },
-        { id: "aws", providerId: "crabbox" },
+        { id: "aws", providerId: "crabbox", trust: "persistent" },
         { id: "legacy", providerId: "static-ssh" },
+        { id: "invalid-trust", providerId: "crabbox", trust: "temporary" },
         { id: "", providerId: "crabbox" },
         { id: "missing-provider" },
       ]),
     ).toEqual([
-      { id: "aws", providerId: "crabbox" },
-      { id: "legacy", providerId: "static-ssh" },
-      { id: "zeta", providerId: "static-ssh" },
+      { id: "aws", providerId: "crabbox", trust: "persistent" },
+      { id: "invalid-trust", providerId: "crabbox", trust: undefined },
+      { id: "legacy", providerId: "static-ssh", trust: undefined },
+      { id: "zeta", providerId: "static-ssh", trust: "disposable" },
     ]);
   });
 });

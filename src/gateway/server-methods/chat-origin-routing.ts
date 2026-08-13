@@ -2,8 +2,8 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -22,7 +22,7 @@ import {
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -104,56 +104,34 @@ export function validateChatSelectedAgent(params: {
   requestedSessionKey: string;
   agentId?: string;
 }): { ok: true; agentId?: string } | { ok: false; error: string } {
-  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  if (!agentId) {
-    return { ok: true };
-  }
-  if (!listAgentIds(params.cfg).includes(agentId)) {
-    return { ok: false, error: `Unknown agent id "${params.agentId}"` };
-  }
-  const requestedSessionKey = params.requestedSessionKey.trim();
-  const parsed = parseAgentSessionKey(requestedSessionKey);
-  if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-    return {
-      ok: false,
-      error: `agentId "${params.agentId}" does not match session key "${params.requestedSessionKey}"`,
-    };
-  }
-  if (requestedSessionKey.toLowerCase() === "global") {
-    return { ok: true, agentId };
-  }
-  if (resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKey }) === "global") {
-    return { ok: true, agentId };
-  }
-  if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
-    return {
-      ok: false,
-      error: `agentId "${params.agentId}" does not match session key "${params.requestedSessionKey}"`,
-    };
-  }
-  return { ok: true, agentId };
+  const resolved = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    params.agentId,
+  );
+  return resolved.ok
+    ? { ok: true, agentId: resolved.agentId }
+    : { ok: false, error: resolved.error.message };
 }
 
 export function resolveRequestedChatAgentId(params: {
   cfg?: OpenClawConfig;
   requestedSessionKey: string;
   agentId?: string;
-}): string | undefined {
+}): { ok: true; agentId?: string } | { ok: false; error: ErrorShape } {
   const explicitAgentId = normalizeOptionalText(params.agentId);
-  if (explicitAgentId) {
-    return normalizeAgentId(explicitAgentId);
-  }
   if (!params.cfg) {
-    return undefined;
+    return { ok: true, ...(explicitAgentId ? { agentId: normalizeAgentId(explicitAgentId) } : {}) };
   }
-  const parsed = parseAgentSessionKey(params.requestedSessionKey.trim());
-  if (
-    !parsed?.agentId ||
-    resolveSessionStoreKey({ cfg: params.cfg, sessionKey: params.requestedSessionKey }) !== "global"
-  ) {
-    return undefined;
+  const resolved = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    explicitAgentId,
+  );
+  if (!resolved.ok) {
+    return resolved;
   }
-  return normalizeAgentId(parsed.agentId);
+  return { ok: true, ...(resolved.agentId ? { agentId: resolved.agentId } : {}) };
 }
 
 export function resolveChatSendActiveScopeKey(params: {
@@ -161,7 +139,7 @@ export function resolveChatSendActiveScopeKey(params: {
   agentId?: string;
   mainKey?: string;
 }): string {
-  if (params.sessionKey !== "global" || !params.agentId) {
+  if (parseAgentSessionKey(params.sessionKey) || !params.agentId) {
     return params.sessionKey;
   }
   return (

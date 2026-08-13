@@ -39,7 +39,6 @@ import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
-import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -200,10 +199,6 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  rememberSentText: EchoTracker["rememberText"];
-  echoHas: EchoTracker["has"];
-  echoForget: EchoTracker["forget"];
-  buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
@@ -363,17 +358,6 @@ export async function processMessage(params: {
       });
     }
     shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
-  }
-
-  // Echo detection uses combined body so we don't respond twice.
-  const combinedEchoKey = params.buildCombinedEchoKey({
-    sessionKey: params.route.sessionKey,
-    combinedBody,
-  });
-  if (params.echoHas(combinedEchoKey)) {
-    logVerbose("Skipping auto-reply: detected echo for combined message");
-    params.echoForget(combinedEchoKey);
-    return false;
   }
 
   // When statusReactions.enabled, a StatusReactionController takes over lifecycle
@@ -580,7 +564,6 @@ export async function processMessage(params: {
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           inbound,
           onModelSelected,
-          rememberSentText: params.rememberSentText,
           replyLogger: params.replyLogger,
           replyPipeline: {
             ...replyPipeline,

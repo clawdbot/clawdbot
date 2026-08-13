@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements connect error behavior.
 import {
   ConnectErrorDetailCodes,
@@ -7,7 +8,6 @@ import {
   readPairingConnectErrorDetails,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
 type ErrorWithMessageAndDetails = {
   message?: unknown;

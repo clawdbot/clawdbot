@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Progress tests cover CLI progress rendering and lifecycle cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 const clackMocks = vi.hoisted(() => {

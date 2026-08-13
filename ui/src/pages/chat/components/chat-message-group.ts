@@ -8,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -143,7 +143,6 @@ function buildGroupedMessageRenderOptions(
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
     runActive: opts.runActive,
-    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
@@ -231,11 +230,6 @@ export function renderActivityGroup(
   const latestCards = latestGroup.messages.flatMap((item) =>
     extractToolCardsCached(item.message, item.key),
   );
-  const toolCount =
-    cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  // Aggregate chrome follows the latest group; older failures stay visible
-  // in the settled summary and expanded child rows.
-  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -243,16 +237,10 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(
-        cards.map((card) => ({
-          name: card.name,
-          args: card.args,
-          isError: isToolCardError(card),
-        })),
-      );
+    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const showAvatarGutter = opts.showAvatarGutter !== false;
   const assistantName = opts.assistantName ?? "Assistant";
 
@@ -282,27 +270,17 @@ export function renderActivityGroup(
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-activity-group__summary"
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
-            aria-label=${hasError
-              ? t(
-                  toolCount === 1
-                    ? "chat.toolCards.group.activityErrorOne"
-                    : "chat.toolCards.group.activityErrorMany",
-                  { count: String(toolCount) },
-                )
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
               }
             }}
           >
-            <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
+            <span class="chat-activity-group__icon">${icons.activity}</span>
             <span class="chat-activity-group__label" title=${groupSummaryLabel}
               >${groupSummaryLabel}</span
             >

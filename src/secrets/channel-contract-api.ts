@@ -2,16 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  listAgentEntries,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
@@ -161,18 +156,11 @@ function listChannelSecretContractRecords(params: {
   env: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): PluginManifestRecord[] {
-  // Static target-registry compilation intentionally has no runtime config.
-  // External plugin discovery can proceed without a workspace scan in that case.
-  const workspaceDir =
-    listAgentEntries(params.config).length > 0
-      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
-      : undefined;
-  const snapshot = loadPluginMetadataSnapshot({
+  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
     config: params.config,
-    ...(workspaceDir ? { workspaceDir } : {}),
     env: params.env,
   });
-  return snapshot.plugins
+  return manifestRegistry.plugins
     .filter((record) => record.origin !== "bundled")
     .filter((record) => recordOwnsChannel(record, params.channelId))
     .filter(

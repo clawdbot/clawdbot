@@ -3,7 +3,8 @@ import {
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -48,38 +49,73 @@ function isTrackedActiveSessionRunForKey(
   if (!active.sessionKey || active.sessionKey !== key) {
     return false;
   }
-  if (key !== "global") {
-    return true;
-  }
-  const requestedAgentId = agentId ?? defaultAgentId;
+  const requestedAgentId = resolveChatRunOwnerAgentId({
+    agentId,
+    sessionKey: key,
+    defaultAgentId,
+  });
   if (!requestedAgentId) {
-    return true;
+    return false;
   }
-  const activeAgentId = active.agentId ?? defaultAgentId;
+  const activeAgentId = resolveChatRunOwnerAgentId({
+    agentId: active.agentId,
+    sessionKey: active.sessionKey,
+    defaultAgentId,
+  });
   return activeAgentId
     ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
     : false;
+}
+
+function isTrackedActiveSessionRunForSessionId(
+  active: TrackedActiveSessionRun,
+  sessionId: string,
+  agentId?: string,
+  defaultAgentId?: string,
+): boolean {
+  if (active.sessionId !== sessionId) {
+    return false;
+  }
+  const requestedAgentId = agentId ?? defaultAgentId;
+  if (!requestedAgentId) {
+    return false;
+  }
+  return (
+    resolveChatRunOwnerAgentId({
+      agentId: active.agentId,
+      sessionKey: active.sessionKey,
+      defaultAgentId,
+    }) === normalizeAgentId(requestedAgentId)
+  );
 }
 
 export function hasRegisteredChatRunForSessionKey(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   sessionKey: string;
   agentId: string | undefined;
+  defaultAgentId?: string;
 }): boolean {
   if (!(params.context.chatAbortControllers instanceof Map)) {
     return false;
   }
-  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const requestedAgentId = resolveChatRunOwnerAgentId({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    defaultAgentId: params.defaultAgentId,
+  });
+  if (!requestedAgentId) {
+    return false;
+  }
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.sessionKey?.trim() !== params.sessionKey) {
       continue;
     }
-    if (params.sessionKey !== "global") {
-      return true;
-    }
-    const activeAgentId =
-      typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined;
-    if (!requestedAgentId || !activeAgentId || requestedAgentId === activeAgentId) {
+    const activeAgentId = resolveChatRunOwnerAgentId({
+      agentId: active.agentId,
+      sessionKey: active.sessionKey,
+      defaultAgentId: params.defaultAgentId,
+    });
+    if (!requestedAgentId || requestedAgentId === activeAgentId) {
       return true;
     }
   }
@@ -125,28 +161,40 @@ export function resolveVisibleActiveSessionRunState(params: {
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
 }): { active: boolean; runIds: string[] } {
   const sessionId = params.sessionId?.trim();
+  const resolvedAgentId =
+    params.agentId ??
+    parseAgentSessionKey(params.canonicalKey)?.agentId ??
+    parseAgentSessionKey(params.requestedKey)?.agentId;
   const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
     .filter(
       (active) =>
         isTrackedActiveSessionRunForKey(
           active,
           params.canonicalKey,
-          params.agentId,
+          resolvedAgentId,
           params.defaultAgentId,
         ) ||
         isTrackedActiveSessionRunForKey(
           active,
           params.requestedKey,
-          params.agentId,
+          resolvedAgentId,
           params.defaultAgentId,
         ) ||
-        (sessionId !== undefined && active.sessionId === sessionId),
+        (sessionId !== undefined &&
+          isTrackedActiveSessionRunForSessionId(
+            active,
+            sessionId,
+            resolvedAgentId,
+            params.defaultAgentId,
+          )),
     )
     .map((active) => active.runId)
     .toSorted();
   const hasProjectedRun = hasProjectedAgentRunForSession({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
+    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+    ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
   const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);

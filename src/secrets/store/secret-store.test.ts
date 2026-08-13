@@ -7,6 +7,7 @@ import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redact
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../../state/openclaw-state-db.js";
 import {
   deleteSecretStoreEntry,
@@ -164,13 +165,15 @@ describe("secret store", () => {
     expect(stored.ok && stored.value).toBe("");
   });
 
-  it("treats a missing lazy table as empty and preserves schema version 6 on ensure", () => {
+  it("treats a missing lazy table as empty and preserves the current schema version", () => {
     const database = createDatabaseOptions();
     openOpenClawStateDatabase(database);
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
     const before = new DatabaseSync(database.path);
-    expect(before.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(before.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     before.exec("DROP TABLE secret_store_entries;");
     before.close();
 
@@ -197,7 +200,9 @@ describe("secret store", () => {
     });
     closeOpenClawStateDatabaseForTest();
     const after = new DatabaseSync(database.path, { readOnly: true });
-    expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(after.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     expect(
       after
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")

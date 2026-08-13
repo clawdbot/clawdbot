@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -14,6 +14,7 @@ import type {
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { toWorkerConnectionError } from "./worker-connection-contract.js";
+import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
@@ -44,7 +45,7 @@ const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
 
 function createIdleConnection() {
   return createWorkerConnection({
-    socketPath: "ws://127.0.0.1:1",
+    endpoint: { kind: "unix", socketPath: "/tmp/worker-listener-isolation.sock" },
     connectParams: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -130,6 +131,26 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
   });
   return { observed, throwingCalls: () => throwingCalls };
 }
+
+describe("worker connection endpoint failures", () => {
+  it("fails insecure public endpoints without entering reconnect backoff", async () => {
+    const createSocket = vi.fn();
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: "ws://gateway.example/__openclaw__/worker",
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      createSocket,
+      admissionDeadlineMs: 60_000,
+      reconnectBackoff: { initialMs: 30_000, maxMs: 30_000, factor: 1, jitter: 0 },
+    });
+
+    await expect(connection.start()).rejects.toBeInstanceOf(WorkerConnectionEndpointError);
+    expect(connection.state).toMatchObject({ kind: "failed" });
+    expect(createSocket).not.toHaveBeenCalled();
+  });
+});
 
 describe("worker connection error coercion", () => {
   it("preserves structured non-Error causes", () => {

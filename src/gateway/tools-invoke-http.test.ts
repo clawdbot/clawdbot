@@ -42,7 +42,8 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
+vi.mock("../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions.js")>()),
   resolveMainSessionKey: (params?: {
     session?: { scope?: string; mainKey?: string };
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
@@ -63,6 +64,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
     ...actual,
+    loadExactSessionEntryReadOnly: (params: { sessionKey: string }) => {
+      const entry = sessionEntries.get(params.sessionKey);
+      return entry ? { sessionKey: params.sessionKey, entry } : undefined;
+    },
     resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
       entry: sessionEntries.get(params.sessionKey),
     }),
@@ -1302,7 +1307,7 @@ describe("tools.invoke Gateway RPC", () => {
     expect(call?.[1]?.toolName).toBe("agents_list");
     const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
     expect(error?.code).toBe("validation_error");
-    expect(error?.message).toBe('agent id "other" does not match session agent "main"');
+    expect(error?.message).toBe('agent "other" does not match session key agent "main"');
   });
 
   it("rejects malformed params at the RPC boundary", async () => {

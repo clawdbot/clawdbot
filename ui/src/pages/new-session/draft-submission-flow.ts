@@ -528,13 +528,14 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
           agentId: submissionAgentId,
         });
-        context.navigate(
+        await context.navigateAndWait(
           "chat",
           sessionNavigationTarget({
             context,
             face: "chat",
             sessionKey: result.key,
             agentId: this.place.agentId,
+            focusComposer: true,
           }).options,
         );
         return;
@@ -571,13 +572,14 @@ export class DraftSubmissionFlow {
         sessionKey: result.key,
         agentId: submissionAgentId,
       });
-      context.navigate(
+      await context.navigateAndWait(
         "chat",
         sessionNavigationTarget({
           context,
           face: "chat",
           sessionKey: result.key,
           agentId: this.place.agentId,
+          focusComposer: true,
         }).options,
       );
     } finally {

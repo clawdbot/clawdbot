@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-46)).toEqual([
+    expect(listGatewayMethods().slice(-50)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -113,6 +113,10 @@ describe("listGatewayMethods", () => {
       "users.prefs.set",
       "projects.add",
       "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -204,7 +208,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-53)).toEqual([
+    expect(coreMethods.slice(-57)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -258,6 +262,10 @@ describe("listGatewayMethods", () => {
       "users.prefs.set",
       "projects.add",
       "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -283,6 +291,14 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
     expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
     expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
+    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
+    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
+    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
+      methods.indexOf("desktop.launch") + 1,
+    );
+    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
+      methods.indexOf("device.scopes.requestUpgrade") + 1,
+    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {

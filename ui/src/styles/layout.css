@@ -2713,14 +2713,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: 10px;
 }
 
-.session-menu__item:hover:not(:disabled),
+.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
   background: var(--bg-hover);
 }
 
-.session-menu__item:disabled {
+.session-menu__item:disabled,
+.session-menu__item[aria-disabled="true"] {
   opacity: 0.42;
   cursor: not-allowed;
 }

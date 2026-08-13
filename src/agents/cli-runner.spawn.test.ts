@@ -84,11 +84,6 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 function emitClaudeInputStarted(stdout: ((chunk: string) => void) | undefined, data: string): void {
   const event = createClaudeInputStartedEvent(data);
   if (event) {

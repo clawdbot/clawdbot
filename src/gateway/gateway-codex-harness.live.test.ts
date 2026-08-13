@@ -148,6 +148,7 @@ const CODEX_HARNESS_SUBAGENT_ONLY = shouldUseCodexHarnessSubagentOnlyFastPath({
   guardianProbe: CODEX_HARNESS_GUARDIAN_PROBE,
   imageProbe: CODEX_HARNESS_IMAGE_PROBE,
   mcpProbe: CODEX_HARNESS_MCP_PROBE,
+  multiSessionProbe: CODEX_HARNESS_MULTI_SESSION_PROBE,
   resumeStress: CODEX_HARNESS_RESUME_STRESS,
   subagentProbe: CODEX_HARNESS_SUBAGENT_PROBE,
 });
@@ -2209,7 +2210,6 @@ describeLive("gateway live (Codex harness)", () => {
                 },
                 workspace,
               });
-              break;
             }
 
             if (CODEX_HARNESS_SUBAGENT_PROBE) {

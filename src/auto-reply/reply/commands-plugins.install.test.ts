@@ -204,7 +204,7 @@ describe("handleCommands /plugins install", () => {
         spec: "@acme/policy-plugin@1.0.0",
         config: {
           ...policyConfig,
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
         },
         mode: "update",
       });
@@ -267,7 +267,7 @@ describe("handleCommands /plugins install", () => {
         spec: "@openclaw/brave-plugin",
         config: {
           ...policyConfig,
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
         },
         expectedPluginId: "brave",
         trustedSourceLinkedOfficialInstall: true,

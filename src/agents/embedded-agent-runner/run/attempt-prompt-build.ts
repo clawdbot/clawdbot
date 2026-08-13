@@ -48,6 +48,7 @@ import {
 import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState,
   toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
@@ -219,6 +220,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     ? undefined
     : resolveAttemptMediaTaskSystemPromptAddition({
         sessionKey: attempt.sessionKey,
+        agentId: input.sessionAgentId,
         trigger: attempt.trigger,
       });
   if (mediaTaskSystemPromptAddition) {
@@ -473,6 +475,14 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   );
   if (sessionMessages.length < input.messages.length) {
     input.replaceSessionMessages(sessionMessages);
+  }
+  // Raw probes temporarily hide durable history; only normal prepared history
+  // is authoritative for reclaiming session-owned provider projections.
+  if (!input.isRawModelRun) {
+    reconcileToolResultPromptProjectionState(
+      sessionMessages,
+      input.toolResultPromptProjectionState,
+    );
   }
   const prePromptMessageCount = sessionMessages.length;
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;

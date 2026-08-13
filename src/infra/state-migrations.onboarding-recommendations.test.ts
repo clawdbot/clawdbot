@@ -83,7 +83,9 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         expect(result).toEqual({
-          changes: ["Migrated onboarding recommendation state to the default workspace scope."],
+          changes: [
+            "Migrated onboarding recommendation state to the legacy owner workspace scope.",
+          ],
           warnings: [],
         });
         expect(
@@ -136,7 +138,7 @@ describe("onboarding recommendations scope migration", () => {
 
         expect(result).toEqual({
           changes: [
-            "Removed ambiguous legacy onboarding recommendation state; kept the default workspace record.",
+            "Removed ambiguous legacy onboarding recommendation state; kept the legacy owner workspace record.",
           ],
           warnings: [],
         });

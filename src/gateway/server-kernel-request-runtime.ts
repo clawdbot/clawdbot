@@ -63,7 +63,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     claimControlUiDeviceAuthMigration,
     releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
+    nodeDesktopService,
     workerEnvironmentService,
+    hostDesktopService,
     workerEnvironmentStartup,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -162,7 +164,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
+      ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
+      ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),

@@ -22,9 +22,10 @@ export function locationWithoutDraft(location: RouteLocation): RouteLocation {
 
 export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
   const draft = draftFromLocation(location);
+  const focusComposer = focusComposerFromLocation(location);
   return {
     draft,
-    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
+    ...(focusComposer ? { focusComposer: true } : {}),
   };
 }
 
@@ -34,7 +35,7 @@ export function draftSearchFromLocation(location: RouteLocation): string {
   if (draft) {
     search.set("draft", draft);
   }
-  if (draft && focusComposerFromLocation(location)) {
+  if (focusComposerFromLocation(location)) {
     search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   return search.size > 0 ? "?" + search.toString() : "";
