@@ -610,8 +610,10 @@ describe("compaction-safeguard summary budgets", () => {
 
   it("keeps a floor share of the structured body when the suffix alone exceeds the cap", () => {
     const body = "## Decisions\n- keep flow\n## Open TODOs\n- fix eviction";
+    const workspaceTail =
+      "\n\n<workspace-critical-rules>\nNever touch prod.\n</workspace-critical-rules>";
     const oversizedSuffix =
-      "## Preserved turns\n" + "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 1000);
+      "## Preserved turns\n" + "x".repeat(MAX_COMPACTION_SUMMARY_CHARS) + workspaceTail;
 
     const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
 
@@ -619,8 +621,8 @@ describe("compaction-safeguard summary budgets", () => {
     // Structured body must survive instead of being evicted entirely.
     expect(capped).toContain("## Decisions");
     expect(capped).toContain("keep flow");
-    // Suffix tail must still be preserved (workspace rules live at the tail).
-    expect(capped.endsWith("x")).toBe(true);
+    // Suffix tail (workspace-critical rules) must still be preserved verbatim.
+    expect(capped.endsWith(workspaceTail)).toBe(true);
   });
 
   it("keeps a fitting suffix whole instead of tail-slicing it below the cap", () => {
@@ -2801,6 +2803,97 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("keeps the structured body and workspace-critical tail when the preserved suffix exceeds the cap", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      summaryResult(
+        [
+          "## Decisions",
+          "Keep current flow.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Preserve exact context.",
+          "## Pending user asks",
+          "Report status.",
+          "## Exact identifiers",
+          "svc-prod-1",
+        ].join("\n"),
+      ),
+    );
+
+    // Tool-heavy transcript: 12 preserved turns whose verbatim content alone
+    // exceeds the 16K summary cap (the issue's normal path, not a corner case).
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      messages.push({ role: "user", content: `ask ${i} `.repeat(100), timestamp: i * 4 + 1 });
+      messages.push({
+        role: "assistant",
+        content: [{ type: "text", text: `answer ${i} `.repeat(100) }],
+        timestamp: i * 4 + 2,
+      } as unknown as AgentMessage);
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call_${i}`, name: "exec", arguments: {} }],
+        timestamp: i * 4 + 3,
+      } as unknown as AgentMessage);
+      messages.push({
+        role: "toolResult",
+        toolCallId: `call_${i}`,
+        toolName: "exec",
+        content: [{ type: "text", text: `output ${i} `.repeat(100) }],
+        timestamp: i * 4 + 4,
+      } as unknown as AgentMessage);
+    }
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cap-"));
+    try {
+      fs.writeFileSync(
+        path.join(workspaceRoot, "AGENTS.md"),
+        "## Session Startup\n\nRead AGENTS.md.\n\n## Red Lines\n\nNever touch prod.\n",
+      );
+      const sessionManager = stubSessionManager();
+      setCompactionSafeguardRuntime(sessionManager, {
+        model: createAnthropicModelFixture(),
+        recentTurnsPreserve: 12,
+        postCompactionSections: ["Session Startup", "Red Lines"],
+        workspaceDir: workspaceRoot,
+      });
+
+      const event = {
+        preparation: {
+          messagesToSummarize: messages,
+          turnPrefixMessages: [] as AgentMessage[],
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 30_000,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4_000 },
+          previousSummary: "previous compacted context",
+          isSplitTurn: false,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      };
+
+      const { result } = await runCompactionScenario({
+        sessionManager,
+        event,
+        apiKey: "test-key",
+      });
+
+      const compaction = expectCompactionResult(result);
+      // Production boundary: the stored summary keeps the structured body...
+      expect(compaction.summary).toContain("## Decisions");
+      // ...and the workspace-critical tail survives verbatim at the end.
+      expect(compaction.summary.endsWith("</workspace-critical-rules>")).toBe(true);
+      expect(compaction.summary).toContain("Never touch prod.");
+      // Still bounded by the 16K cap.
+      expect(compaction.summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    } finally {
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 });
 
