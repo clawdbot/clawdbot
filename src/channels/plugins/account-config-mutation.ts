@@ -87,6 +87,14 @@ export async function prepareChannelAccountConfiguration(params: {
     }) ?? normalizeAccountId(params.requestedAccountId);
   const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
   if (missingEnvMessage) {
+    const validationError = setup.validateInput?.({
+      cfg: params.cfg,
+      accountId,
+      input,
+    });
+    if (validationError) {
+      return resultError({ kind: "invalid-input", message: validationError });
+    }
     return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }
   if (setup.prepareAccountConfigInput) {

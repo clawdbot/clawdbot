@@ -39,7 +39,11 @@ export async function restartRunningChannelAccounts(
         const restarted = manager.getRuntimeSnapshot().channelAccounts[channel]?.[accountId];
         if (restarted?.restartPending === true) {
           // A timed-out stop uses a two-call recovery contract: the first call
-          // requests replacement and the second discards the stale task.
+          // requests replacement and the second discards the stale task. Recheck
+          // admission because the first call may have awaited deferred teardown.
+          if (!opts.shouldContinue()) {
+            return;
+          }
           await manager.startChannel(channel, accountId, { preserveManualStop: true });
         }
       } catch (error) {

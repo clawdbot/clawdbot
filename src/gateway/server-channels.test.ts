@@ -972,14 +972,23 @@ describe("server-channels auto restart", () => {
     const replacement = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(replacement?.running).toBe(true);
 
-    // The abandoned stop settles late and tries to repaint the replacement.
+    // The abandoned stop writes after the gateway has already timed it out; that
+    // plugin-authored stale patch must not repaint the still-running runtime.
     lateSetStatus?.({ accountId: DEFAULT_ACCOUNT_ID, running: false, lifecycle: "stopped" });
-    releaseStop?.();
     await flushMicrotasks();
 
-    const after = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(after?.running).toBe(true);
-    expect(after?.lifecycle).not.toBe("stopped");
+    const afterLateWrite =
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(afterLateWrite?.running).toBe(true);
+    expect(afterLateWrite?.lifecycle).not.toBe("stopped");
+
+    releaseStop?.();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected settled stopAccount timeout to finalize stopped runtime",
+    );
   });
 
   it("stops thaw restarts once admission closes mid-pass", async () => {
@@ -1224,6 +1233,60 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
 
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("preserves recovery when stopAccount settles before task teardown", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    let firstTaskStarted = false;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      const isFirstTask = !firstTaskStarted;
+      firstTaskStarted = true;
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      if (isFirstTask) {
+        await releaseAbortedTask.promise;
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopTaskRejected;
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+
+    releaseAbortedTask.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected task teardown to finish deferred stopAccount recovery",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
     expect(startAccount).toHaveBeenCalledTimes(2);
     account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(true);

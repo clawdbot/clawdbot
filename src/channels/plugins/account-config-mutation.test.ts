@@ -208,6 +208,47 @@ describe("channel account config mutations", () => {
     expect(prepareAccountConfigInput).not.toHaveBeenCalled();
   });
 
+  it("preserves account-owner validation before generic missing-env setup advice", async () => {
+    const prepareAccountConfigInput = vi.fn(() => {
+      throw new Error("prepare should stay lazy when validation rejects input");
+    });
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "env-owner-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use environment credentials" },
+            envVars: ["ENV_OWNER_CHAT_TOKEN"],
+          },
+        },
+        adapter: {
+          prepareAccountConfigInput,
+          validateInput: ({ accountId }) =>
+            accountId === "default" ? null : "--use-env only supports the default account",
+          applyAccountConfig: ({ cfg }) => cfg,
+        },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      requestedAccountId: "work",
+      resolveInput: () => ({ useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid-input",
+        message: "--use-env only supports the default account",
+      },
+    });
+    expect(prepareAccountConfigInput).not.toHaveBeenCalled();
+  });
+
   it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
     const applyAccountConfig = vi.fn(({ cfg }) => cfg);
     const onAccountConfigChanged = vi.fn();

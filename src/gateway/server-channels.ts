@@ -99,6 +99,7 @@ type ChannelRuntimeStore = {
   stops: Map<string, ChannelAccountStopState>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+  startEpochs: Map<string, number>;
   stopAccountFences: Map<string, StopAccountFence>;
 };
 
@@ -161,6 +162,7 @@ function createRuntimeStore(): ChannelRuntimeStore {
     stops: new Map(),
     tasks: new Map(),
     runtimes: new Map(),
+    startEpochs: new Map(),
     stopAccountFences: new Map(),
   };
 }
@@ -327,6 +329,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   // Tracks stop/restart handoffs where the caller owns the restart, such as hot reload.
   const restartDeferredToCaller = new Set<string>();
+  const restartPendingDeferredToCaller = new Set<string>();
   // Tracks private caller-owned handoffs that should stay in includeKnownAccounts
   // restarts without surfacing as health-monitor restart candidates.
   const knownAccountDeferredToCaller = new Set<string>();
@@ -580,6 +583,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       restarts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
       restartDeferredToCaller.delete(restartKey(channelId, id));
+      restartPendingDeferredToCaller.delete(restartKey(channelId, id));
       knownAccountDeferredToCaller.delete(restartKey(channelId, id));
       recoveryStartRequested.delete(restartKey(channelId, id));
     }
@@ -636,6 +640,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         const rKey = restartKey(channelId, id);
         restartDeferredToCaller.delete(rKey);
+        restartPendingDeferredToCaller.delete(rKey);
         knownAccountDeferredToCaller.delete(rKey);
         recoveryStopTimedOut.delete(rKey);
         recoveryStartRequested.delete(rKey);
@@ -651,6 +656,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         const rKey = restartKey(channelId, id);
         restartDeferredToCaller.delete(rKey);
+        restartPendingDeferredToCaller.delete(rKey);
         knownAccountDeferredToCaller.delete(rKey);
         recoveryStopTimedOut.delete(rKey);
         recoveryStartRequested.delete(rKey);
@@ -696,6 +702,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             store.stops.set(id, { status: "rejected", error: lateStopAccountError });
             restartDeferredToCaller.delete(rKey);
+            restartPendingDeferredToCaller.delete(rKey);
             knownAccountDeferredToCaller.delete(rKey);
             recoveryStopTimedOut.delete(rKey);
             recoveryStartRequested.delete(rKey);
@@ -834,8 +841,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
         const shouldPreserveCallerDeferredRestart = () =>
           restartDeferredToCaller.has(rKey) &&
-          !manuallyStopped.has(rKey) &&
-          getRuntime(channelId, id).restartPending === true;
+          restartPendingDeferredToCaller.has(rKey) &&
+          !manuallyStopped.has(rKey);
 
         let resolveStart: (() => void) | undefined;
         const startGate = new Promise<void>((resolve) => {
@@ -876,6 +883,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
         try {
           restartDeferredToCaller.delete(rKey);
+          restartPendingDeferredToCaller.delete(rKey);
           knownAccountDeferredToCaller.delete(rKey);
           // Reject the account before plugin resolution so an explicit failed SecretRef cannot
           // drift into a channel-specific environment or file fallback.
@@ -1003,6 +1011,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
           let channelRunDurationMs: number | undefined;
+          store.startEpochs.set(id, (store.startEpochs.get(id) ?? 0) + 1);
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
@@ -1153,6 +1162,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               setStoppedRuntime(channelId, id, {
+                restartPending: shouldPreserveCallerDeferredRestart(),
                 lastStopAt: Date.now(),
               });
             })
@@ -1171,6 +1181,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 recoveryStopTimedOut.delete(rKey);
                 recoveryStartRequested.delete(rKey);
                 restartDeferredToCaller.delete(rKey);
+                restartPendingDeferredToCaller.delete(rKey);
                 knownAccountDeferredToCaller.delete(rKey);
                 restarts.delete(rKey);
                 setRuntime(channelId, id, {
@@ -1185,6 +1196,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {
                   restartDeferredToCaller.delete(rKey);
+                  restartPendingDeferredToCaller.delete(rKey);
                   // A private include-known handoff must survive this inverse ordering:
                   // the stale task can settle after a timed-out stop but before the
                   // paired reload start has had a chance to union known accounts.
@@ -1408,6 +1420,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (manual) {
             manuallyStopped.add(rKey);
             restartDeferredToCaller.delete(rKey);
+            restartPendingDeferredToCaller.delete(rKey);
             knownAccountDeferredToCaller.delete(rKey);
           }
           return { status: "fulfilled" };
@@ -1416,9 +1429,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (manual) {
           manuallyStopped.add(rKey);
           restartDeferredToCaller.delete(rKey);
+          restartPendingDeferredToCaller.delete(rKey);
           knownAccountDeferredToCaller.delete(rKey);
         } else if (hadLiveState) {
           restartDeferredToCaller.add(rKey);
+          if (accountRestartPending) {
+            restartPendingDeferredToCaller.add(rKey);
+          } else {
+            restartPendingDeferredToCaller.delete(rKey);
+          }
           if (preserveKnownAccount) {
             knownAccountDeferredToCaller.add(rKey);
           } else {
@@ -1426,6 +1445,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         } else {
           restartDeferredToCaller.delete(rKey);
+          restartPendingDeferredToCaller.delete(rKey);
           knownAccountDeferredToCaller.delete(rKey);
         }
 
@@ -1488,6 +1508,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               // into the existing recoveryStopTimedOut two-call restart contract.
               let stopAttemptAbandoned = false;
               let lateStopAccountError: unknown;
+              const stopAccountStartEpoch = store.startEpochs.get(id) ?? 0;
               const stopAccountAttempt = plugin.gateway
                 .stopAccount({
                   cfg,
@@ -1547,6 +1568,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                     ) {
                       store.stops.delete(id);
                       if (
+                        (store.startEpochs.get(id) ?? 0) === stopAccountStartEpoch &&
                         !store.aborts.has(id) &&
                         !store.tasks.has(id) &&
                         !store.starting.has(id)
@@ -1622,6 +1644,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             if (!manual && hadLiveState) {
               restartDeferredToCaller.delete(rKey);
+              restartPendingDeferredToCaller.delete(rKey);
               recoveryStopTimedOut.add(rKey);
             }
             return outcome;
