@@ -3,10 +3,9 @@
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  resolveManifestChannelPreferOverIds,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
+import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -18,7 +17,14 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
+  // Rank of the closest record that has claimed this channel, which decides who may still replace
+  // the schema.
   originRank: number;
+  // Rank of the record that actually supplied the schema, never closer than `originRank`: a nearer
+  // claimant shipping no channel config lowers `originRank` while the schema stays put.
+  // Reading `originRank` as the owner's rank would call a farther owner same-origin and let the
+  // preference tie-break below keep its schema over a genuinely closer plugin.
+  schemaOriginRank: number;
 };
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
@@ -127,6 +133,30 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
   return changed ? normalized : schema;
 }
 
+/**
+ * Whether `record` both claims `channelId` and declares that it replaces `replacedPluginId` there.
+ * Auto-enable and the runtime channel facade build the claimant set from `record.channels` alone,
+ * so a manifest that declares `preferOver` for a channel it never claims must not win that
+ * channel's schema either — validation would check operator config against a plugin the runtime
+ * never activates.
+ */
+function declaresChannelReplacement(params: {
+  record: PluginManifestRecord;
+  channelId: string;
+  replacedPluginId: string;
+}): boolean {
+  const claimedId = normalizeChatChannelId(params.channelId) ?? params.channelId;
+  const claimsChannel = params.record.channels.some(
+    (id) => (normalizeChatChannelId(id) ?? id) === claimedId,
+  );
+  return (
+    claimsChannel &&
+    resolveManifestChannelPreferOverIds(params.record, params.channelId).includes(
+      params.replacedPluginId,
+    )
+  );
+}
+
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
@@ -194,7 +224,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         const keepOwnerPresentation =
           current?.schemaPluginId !== undefined &&
           current.schemaPluginId !== record.id &&
-          current.originRank === originRank;
+          current.schemaOriginRank === originRank;
         byChannelId.set(channelId, {
           id: channelId,
           label: keepOwnerPresentation
@@ -208,6 +238,7 @@ export function collectChannelSchemaMetadataWithOwnership(
           schemaPluginId: current?.schemaPluginId,
           schemaPluginOrigin: current?.schemaPluginOrigin,
           originRank,
+          schemaOriginRank: current?.schemaOriginRank ?? originRank,
         });
       }
     }
@@ -226,16 +257,21 @@ export function collectChannelSchemaMetadataWithOwnership(
       // skips a candidate that another configured plugin lists in `preferOver`, so schema
       // ownership has to follow the same declaration or config validation rejects the very
       // plugin the runtime activates. Mutual declarations stay order-dependent, as before.
-      if (currentOwnsSchema && current.originRank === originRank && current.schemaPluginId) {
+      if (currentOwnsSchema && current.schemaOriginRank === originRank && current.schemaPluginId) {
         const ownerId = current.schemaPluginId;
-        const incomingDeclaresOwner = resolveManifestChannelPreferOverIds(
+        const incomingDeclaresOwner = declaresChannelReplacement({
           record,
           channelId,
-        ).includes(ownerId);
+          replacedPluginId: ownerId,
+        });
         const ownerRecord = recordsById.get(ownerId);
         const ownerDeclaresIncoming =
           ownerRecord !== undefined &&
-          resolveManifestChannelPreferOverIds(ownerRecord, channelId).includes(record.id);
+          declaresChannelReplacement({
+            record: ownerRecord,
+            channelId,
+            replacedPluginId: record.id,
+          });
         const incomingReplaces = incomingDeclaresOwner && canReplace(record.id);
         const ownerReplaces = ownerDeclaresIncoming && canReplace(ownerId);
         // A declared replacement that the operator denied or disabled must not take the channel:
@@ -263,20 +299,22 @@ export function collectChannelSchemaMetadataWithOwnership(
         schemaPluginId: configSchema === undefined ? undefined : record.id,
         schemaPluginOrigin: configSchema === undefined ? undefined : record.origin,
         originRank,
+        schemaOriginRank: originRank,
       });
     }
   }
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, schemaOriginRank: _schemaOriginRank, ...entry }) => entry);
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
 export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
+  canReplaceChannelOwner?: (pluginId: string) => boolean,
 ): ChannelUiMetadata[] {
-  return collectChannelSchemaMetadataWithOwnership(registry).map(
+  return collectChannelSchemaMetadataWithOwnership(registry, canReplaceChannelOwner).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );

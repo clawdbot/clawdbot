@@ -6,15 +6,22 @@ import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-meta
 type ClaimantParams = {
   id: string;
   origin?: string;
+  channels?: readonly string[];
   preferOver?: readonly string[];
   catalogPreferOver?: readonly string[];
 };
 
-function claimant({ id, origin = "global", preferOver, catalogPreferOver }: ClaimantParams) {
+function claimant({
+  id,
+  origin = "global",
+  channels = ["clickclack"],
+  preferOver,
+  catalogPreferOver,
+}: ClaimantParams) {
   return {
     id,
     origin,
-    channels: ["clickclack"],
+    channels,
     ...(catalogPreferOver
       ? { channelCatalogMeta: { id: "clickclack", preferOver: catalogPreferOver } }
       : {}),
@@ -77,6 +84,42 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     });
 
     expect(ownerOf([replacement, core])).toBe("clickclack-plus");
+  });
+
+  // Codex review P2 on #123209: a closer claimant that ships no channel config lowers the entry's
+  // origin rank for label precedence while the schema stays with the farther plugin. Ranking the
+  // tie-break on the entry rank read those two as same-origin and kept the farther schema.
+  it.each([
+    { order: "farther first", plugins: ["clickclack-plus", "clickclack-core"] },
+    { order: "closer first", plugins: ["clickclack-core", "clickclack-plus"] },
+  ])(
+    "keeps the closer origin when a farther plugin declares the replacement ($order)",
+    ({ plugins }) => {
+      const byId = {
+        "clickclack-core": claimant({ id: "clickclack-core", origin: "global" }),
+        "clickclack-plus": claimant({
+          id: "clickclack-plus",
+          origin: "bundled",
+          preferOver: ["clickclack-core"],
+        }),
+      };
+
+      expect(ownerOf(plugins.map((id) => byId[id as keyof typeof byId]))).toBe("clickclack-core");
+    },
+  );
+
+  // Codex review P2 on #123209: auto-enable and the runtime channel facade build claimants from
+  // `record.channels`, so a preference declared for a channel the record never claims must not
+  // decide that channel's schema.
+  it("ignores a preference from a record that does not claim the channel", () => {
+    const core = claimant({ id: "clickclack-core" });
+    const ghost = claimant({
+      id: "clickclack-ghost",
+      channels: [],
+      preferOver: ["clickclack-core"],
+    });
+
+    expect(ownerOf([ghost, core])).toBe("clickclack-core");
   });
 
   it("keeps a closer origin ahead of a farther plugin that claims to replace it", () => {

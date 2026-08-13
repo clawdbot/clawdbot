@@ -7,6 +7,7 @@ import {
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
@@ -17,13 +18,27 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   });
 }
 
-/** Builds one config schema from an exact manifest registry. */
+/**
+ * The operator-facing schema must describe the plugin the runtime actually activates. A channel
+ * whose declared replacement is denied or disabled falls back to the replaced plugin, so config UI
+ * would otherwise offer fields that `config validate` then rejects.
+ */
+function canReplaceChannelOwner(config: OpenClawConfig): (pluginId: string) => boolean {
+  return (pluginId) => !isPluginPolicyDisabled(config, pluginId);
+}
+
+/**
+ * Builds one config schema from an exact manifest registry. Callers holding the active config pass
+ * the replacement predicate so the schema names the owner the runtime activates; callers that only
+ * have a registry (CLI redaction hints) omit it and get the unfiltered owner.
+ */
 export function buildRuntimeConfigSchemaFromRegistry(
   registry: PluginManifestRegistry,
+  canReplaceOwner?: (pluginId: string) => boolean,
 ): ConfigSchemaResponse {
   return buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),
-    channels: collectChannelSchemaMetadataCore(registry),
+    channels: collectChannelSchemaMetadataCore(registry, canReplaceOwner),
   });
 }
 
@@ -31,7 +46,7 @@ export function buildRuntimeConfigSchemaFromRegistry(
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
-  return buildRuntimeConfigSchemaFromRegistry(registry);
+  return buildRuntimeConfigSchemaFromRegistry(registry, canReplaceChannelOwner(config));
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
@@ -42,6 +57,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
-    channels: collectChannelSchemaMetadataCore(registry),
+    channels: collectChannelSchemaMetadataCore(registry, canReplaceChannelOwner(config)),
   });
 }

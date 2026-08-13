@@ -6,12 +6,11 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  resolveManifestChannelPreferOverIds,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Maximum bytes to read from an external catalog file before rejecting it. */
@@ -155,8 +154,6 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   configured: readonly PluginAutoEnableCandidate[];
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
-  isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
-  isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
   preferOverCache: Map<string, string[]>;
 }): boolean {
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
@@ -174,10 +171,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (other.pluginId === params.entry.pluginId) {
       continue;
     }
-    if (
-      params.isPluginDenied(params.config, other.pluginId) ||
-      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
-    ) {
+    if (isPluginPolicyDisabled(params.config, other.pluginId)) {
       continue;
     }
     if (getPreferredOverIds(other).includes(params.entry.pluginId)) {

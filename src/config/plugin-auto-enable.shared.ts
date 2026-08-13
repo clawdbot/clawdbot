@@ -39,7 +39,7 @@ import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
-import { isPluginDenied, isPluginExplicitlyDisabled } from "./plugin-replacement-eligibility.js";
+import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -957,8 +957,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
     const entry = entries[pluginId];
     if (
       !hasMaterialPluginEntryConfig(entry) ||
-      isPluginDenied(next, pluginId) ||
-      isPluginExplicitlyDisabled(next, pluginId) ||
+      isPluginPolicyDisabled(next, pluginId) ||
       allow.includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
@@ -1058,7 +1057,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    if (isPluginPolicyDisabled(next, entry.pluginId)) {
       continue;
     }
     if (
@@ -1068,8 +1067,6 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
         configured: params.candidates,
         env: params.env,
         registry: params.manifestRegistry,
-        isPluginDenied,
-        isPluginExplicitlyDisabled,
         preferOverCache,
       })
     ) {
