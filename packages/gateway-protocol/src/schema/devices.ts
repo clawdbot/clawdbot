@@ -177,7 +177,6 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   // Optional on the wire so separately shipped native clients can still decode
   // setup-code responses from older v4 gateways that predate lifecycle metadata.
   setupId: Type.Optional(SetupIdSchema),
-  expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
