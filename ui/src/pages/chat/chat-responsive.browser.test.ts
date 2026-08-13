@@ -594,14 +594,16 @@ async function waitForLayoutSettled(page: Page, selector: string): Promise<void>
   // content-visibility and container queries can defer descendant layout beyond
   // a fixed rAF pair. Measure the owning geometry until two frames agree.
   await page.evaluate(
-    async ({ maxFrames, selector }) => {
+    async ({ maxFrames, selector: targetSelector }) => {
       let previousGeometry: string | undefined;
       let stableFrames = 0;
       for (let frame = 0; frame < maxFrames; frame += 1) {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        const elements = [...document.querySelectorAll<HTMLElement>(selector)];
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
         if (elements.length === 0) {
-          throw new Error(`No layout elements matched ${selector}`);
+          throw new Error(`No layout elements matched ${targetSelector}`);
         }
         const geometry = JSON.stringify(
           elements.map((element) => {
@@ -615,7 +617,7 @@ async function waitForLayoutSettled(page: Page, selector: string): Promise<void>
         }
         previousGeometry = geometry;
       }
-      throw new Error(`Layout did not stabilize for ${selector} within ${maxFrames} frames`);
+      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
     },
     { maxFrames: 60, selector },
   );
