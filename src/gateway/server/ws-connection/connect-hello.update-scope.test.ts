@@ -10,12 +10,16 @@ const {
   listControlUiPluginWidgetKindsMock,
   redeemDeviceBootstrapTokenProfileMock,
   broadcastSetupHandoffCompletionMock,
+  broadcastSetupHandoffDeliveryUncertainMock,
+  confirmSetupHandoffDeliveryMock,
   consumeSetupHandoffMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
   broadcastSetupHandoffCompletionMock: vi.fn(),
+  broadcastSetupHandoffDeliveryUncertainMock: vi.fn(),
+  confirmSetupHandoffDeliveryMock: vi.fn(async ({ handoff }) => handoff),
   redeemDeviceBootstrapTokenProfileMock: vi.fn(async () => ({
     recorded: true,
     fullyRedeemed: true,
@@ -74,6 +78,8 @@ vi.mock("../../../infra/device-bootstrap.js", () => ({
 
 vi.mock("../../device-pair-setup-completion.js", () => ({
   broadcastSetupHandoffCompletion: broadcastSetupHandoffCompletionMock,
+  broadcastSetupHandoffDeliveryUncertain: broadcastSetupHandoffDeliveryUncertainMock,
+  confirmSetupHandoffDelivery: confirmSetupHandoffDeliveryMock,
   consumeSetupHandoff: consumeSetupHandoffMock,
 }));
 
@@ -284,6 +290,7 @@ describe("sendGatewayHello update detail scope", () => {
     const state = {
       ...makeState("node", []),
       device: { id: "device-123" },
+      devicePublicKey: "public-key-123",
       authMethod: "bootstrap-token",
       bootstrapTokenCandidate: "bootstrap-secret",
       issuedBootstrapProfile: { roles: ["node"], scopes: [] },
@@ -294,8 +301,10 @@ describe("sendGatewayHello update detail scope", () => {
     expect(consumeSetupHandoffMock).toHaveBeenCalledWith({
       token: "bootstrap-secret",
       deviceId: "device-123",
+      pairedDeviceMatches: expect.any(Function),
     });
     expect(broadcastSetupHandoffCompletionMock).not.toHaveBeenCalled();
+    expect(broadcastSetupHandoffDeliveryUncertainMock).toHaveBeenCalled();
     expect(context.handler.close).toHaveBeenCalled();
   });
 });

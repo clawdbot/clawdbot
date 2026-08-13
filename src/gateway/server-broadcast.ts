@@ -68,6 +68,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "device.pair.setup.completed": [PAIRING_SCOPE],
+  "device.pair.setup.deliveryUncertain": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],

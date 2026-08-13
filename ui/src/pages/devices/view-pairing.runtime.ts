@@ -53,9 +53,11 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const description =
     lifecycle.phase === "success"
       ? t("devices.pairing.pairedTitle")
-      : lifecycle.phase === "expired"
-        ? t("devices.pairing.expiredTitle")
-        : t("devices.pairing.subtitle");
+      : lifecycle.phase === "delivery-uncertain"
+        ? t("devices.pairing.deliveryUncertainTitle")
+        : lifecycle.phase === "expired"
+          ? t("devices.pairing.expiredTitle")
+          : t("devices.pairing.subtitle");
   const copyLabel = t("devices.pairing.copySetupCode");
   const setup = lifecycle.phase === "waiting" ? lifecycle.setup : null;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
@@ -65,6 +67,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const setupExpired = Boolean(setup && setup.expiresAtMs <= props.nowMs);
   const showAccessChoices =
     lifecycle.phase !== "success" &&
+    lifecycle.phase !== "delivery-uncertain" &&
     !(lifecycle.phase === "error" && lifecycle.source === "status");
   const canSelectAccess =
     lifecycle.phase === "selection" ||
@@ -264,6 +267,20 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 <button class="btn primary" type="button" @click=${props.onClose}>
                   ${t("devices.pairing.done")}
                 </button>
+              </div>`
+            : nothing}
+          ${lifecycle.phase === "delivery-uncertain"
+            ? html`<div class="device-pair-setup__state" role="alert">
+                <div class="device-pair-setup__state-icon" aria-hidden="true">
+                  ${icons.alertTriangle}
+                </div>
+                <h3>${t("devices.pairing.deliveryUncertainTitle")}</h3>
+                <p>${t("devices.pairing.deliveryUncertainHint")}</p>
+                <div class="device-pair-setup__actions">
+                  <button class="btn primary" type="button" @click=${props.onRefresh}>
+                    ${icons.refresh} ${t("devices.pairing.generateNewCode")}
+                  </button>
+                </div>
               </div>`
             : nothing}
           ${lifecycle.phase === "expired"

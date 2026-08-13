@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DevicePairSetupCodeResultSchema,
   DevicePairSetupCompletedEventSchema,
+  DevicePairSetupDeliveryUncertainEventSchema,
   DevicePairSetupStatusParamsSchema,
   DevicePairSetupStatusResultSchema,
 } from "./devices.js";
@@ -42,6 +43,7 @@ describe("device pairing setup schemas", () => {
         ts: 1_800_000_000_001,
       };
       expect(Value.Check(DevicePairSetupCompletedEventSchema, event)).toBe(true);
+      expect(Value.Check(DevicePairSetupDeliveryUncertainEventSchema, event)).toBe(true);
       expect(
         Value.Check(DevicePairSetupCompletedEventSchema, { ...event, bootstrapToken: "secret" }),
       ).toBe(false);
@@ -70,6 +72,9 @@ describe("device pairing setup schemas", () => {
 
     expect(Value.Check(DevicePairSetupStatusResultSchema, {})).toBe(true);
     expect(Value.Check(DevicePairSetupStatusResultSchema, { completion })).toBe(true);
+    expect(Value.Check(DevicePairSetupStatusResultSchema, { deliveryUncertain: completion })).toBe(
+      true,
+    );
     // Retention bookkeeping is store-side and must not reach the wire.
     expect(
       Value.Check(DevicePairSetupStatusResultSchema, {

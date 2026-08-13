@@ -311,6 +311,33 @@ suite.define(() => {
         await captureUiProof(page, "06-desktop-reconciled-success.png");
         await page.getByRole("button", { name: "Done" }).click();
 
+        // Retiring the bearer is not success when the credential-bearing
+        // response did not finish. Surface a recovery path instead.
+        await pairFromSettings.click();
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-uncertain", "full", Date.now() + 2_000),
+        );
+        await gateway.setMethodResponse("device.pair.setupStatus", {
+          deliveryUncertain: {
+            setupId: "setup-uncertain",
+            deviceId: "phone-uncertain",
+            access: "full",
+            ts: 6,
+          },
+        });
+        await page.getByRole("button", { name: "Create setup code" }).click();
+        await page
+          .getByRole("heading", { name: "Pairing delivery could not be confirmed" })
+          .waitFor();
+        expect(await qr.count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Generate new code" }).isVisible()).toBe(
+          true,
+        );
+        expect(await page.getByRole("button", { name: "Manage devices" }).isVisible()).toBe(true);
+        await captureUiProof(page, "07-desktop-delivery-uncertain.png");
+        await page.locator(".device-pair-setup__close").click();
+
         await gateway.setMethodResponse("device.pair.setupStatus", {});
         await pairFromSettings.click();
         await gateway.setMethodResponse(

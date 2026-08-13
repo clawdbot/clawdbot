@@ -4,11 +4,14 @@ import {
   closeDevicePairSetup,
   completeDevicePairSetup,
   createDevicePairSetupState,
+  markDevicePairSetupDeliveryUncertain,
   openDevicePairSetup,
   parseDevicePairSetupCompletion,
+  parseDevicePairSetupDeliveryUncertain,
   refreshDevicePairSetup,
   requestDevicePairJoinSetup,
   setDevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
   type DevicePairSetupLifecycle,
 } from "./device-pair-setup.ts";
 
@@ -321,6 +324,50 @@ describe("device pairing setup state", () => {
         ts: 1_000,
       }),
     ).toEqual({ setupId: "setup-1", access: "node" });
+  });
+
+  it("stops the node countdown when delivery reaches a terminal outcome", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const state = createDevicePairSetupState({ client: null, connected: true });
+    state.devicePairSetupOpen = true;
+    state.devicePairSetupLifecycle = {
+      phase: "waiting",
+      access: "node",
+      setup: setupResult("node-setup", "NODE", { access: "node", expiresAtMs: 10_000 }),
+    };
+    syncDevicePairSetupCountdown(state, vi.fn());
+    expect(state.devicePairSetupCountdownTimer).not.toBeNull();
+
+    expect(completeDevicePairSetup(state, { setupId: "node-setup", access: "node" })).toBe(true);
+
+    expect(state.devicePairSetupCountdownTimer).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("surfaces delivery uncertainty as a recoverable terminal state", () => {
+    const state = createDevicePairSetupState({ client: null, connected: true });
+    state.devicePairSetupOpen = true;
+    state.devicePairSetupLifecycle = {
+      phase: "waiting",
+      access: "limited",
+      setup: setupResult("setup-uncertain", "SECRET", { access: "limited" }),
+    };
+    const parsed = parseDevicePairSetupDeliveryUncertain({
+      setupId: "setup-uncertain",
+      deviceId: "phone-1",
+      deviceName: " Phone ",
+      access: "limited",
+      ts: 1,
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(markDevicePairSetupDeliveryUncertain(state, parsed!)).toBe(true);
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "delivery-uncertain",
+      access: "limited",
+      deviceName: "Phone",
+    });
   });
 
   it.each([

@@ -15,6 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
   consumeSetupHandoff,
 } from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -70,7 +71,9 @@ describe("device pair setup completion", () => {
       ts: 3,
     });
     expect(handoff).not.toBeNull();
-    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
+    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
+    expect(confirmed).not.toBeNull();
+    broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast });
     expect(broadcast).toHaveBeenCalledWith(
       "device.pair.setup.completed",
       {
@@ -125,7 +128,9 @@ describe("device pair setup completion", () => {
       ts: 3,
     });
     expect(handoff).not.toBeNull();
-    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
+    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
+    expect(confirmed).not.toBeNull();
+    broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast });
 
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(slowSocket.close).not.toHaveBeenCalled();
@@ -136,6 +141,7 @@ describe("device pair setup completion", () => {
       deviceId: "device-123",
       access: "full",
       completedAtMs: 3,
+      deliveryState: "confirmed",
     });
   });
 
@@ -164,7 +170,9 @@ describe("device pair setup completion", () => {
       baseDir,
       ts: 4,
     });
-    expect(() => broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast })).toThrow(
+    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
+    expect(confirmed).not.toBeNull();
+    expect(() => broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast })).toThrow(
       "socket fanout failed",
     );
     await expect(

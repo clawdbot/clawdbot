@@ -168,17 +168,21 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
     }
     try {
       const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
-      // Retention bookkeeping stays server-side; the wire shape matches the broadcast.
+      // Retention bookkeeping stays server-side; the wire shape matches the
+      // corresponding success or delivery-uncertain broadcast.
       const result: DevicePairSetupStatusResult = completion
-        ? {
-            completion: {
+        ? (() => {
+            const payload = {
               setupId: completion.setupId,
               deviceId: completion.deviceId,
               ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
               access: completion.access,
               ts: completion.completedAtMs,
-            },
-          }
+            };
+            return completion.deliveryState === "confirmed"
+              ? { completion: payload }
+              : { deliveryUncertain: payload };
+          })()
         : {};
       respond(true, result, undefined);
     } catch (err) {

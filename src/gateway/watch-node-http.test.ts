@@ -698,11 +698,17 @@ describe("watch node HTTP transport", () => {
         abortedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed"),
       ).toBeUndefined();
       expect(
+        abortedRuntime.broadcasts.find(
+          (entry) => entry.event === "device.pair.setup.deliveryUncertain",
+        )?.payload,
+      ).toMatchObject({ setupId: abortedBootstrap.setupId });
+      expect(
         loadDevicePairSetupCompletionRecord(abortedBootstrap.setupId, Date.now(), abortedBaseDir),
       ).toMatchObject({
         setupId: abortedBootstrap.setupId,
         deviceId: abortedIdentity.deviceId,
         access: "node",
+        deliveryState: "uncertain",
       });
       const stillLimited = await fetch(`${abortedRuntime.baseUrl}/challenge`);
       expect(stillLimited.status).toBe(429);
@@ -742,6 +748,13 @@ describe("watch node HTTP transport", () => {
         access: "node",
         ts: expect.any(Number),
       });
+      expect(
+        loadDevicePairSetupCompletionRecord(
+          completedBootstrap.setupId,
+          Date.now(),
+          completedBaseDir,
+        ),
+      ).toMatchObject({ deliveryState: "confirmed" });
       await waitForLastConnectedMetadata(completedBaseDir, completedIdentity.deviceId);
       const resetAfterCompletion = await fetch(`${completedRuntime.baseUrl}/challenge`);
       expect(resetAfterCompletion.status).toBe(200);
@@ -781,6 +794,7 @@ describe("watch node HTTP transport", () => {
       deviceId: fixture.identity.deviceId,
       deviceName: "Test Watch",
       access: "node",
+      deliveryState: "uncertain",
     });
     fixture.runtime.close();
   });

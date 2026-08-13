@@ -117,6 +117,7 @@ export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): v
       device_name TEXT,
       access TEXT NOT NULL,
       completed_at_ms INTEGER NOT NULL,
+      delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
       retain_until_ms INTEGER NOT NULL
     ) STRICT
   `);

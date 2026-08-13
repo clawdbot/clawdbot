@@ -126,20 +126,24 @@ export const DevicePairSetupCompletedEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
+/** Event emitted when the bearer was retired but response delivery could not be confirmed. */
+export const DevicePairSetupDeliveryUncertainEventSchema = DevicePairSetupCompletedEventSchema;
+
 /** Reconciles one setup credential the caller already holds a `setupId` for. */
 export const DevicePairSetupStatusParamsSchema = closedObject({
   setupId: SetupIdSchema,
 });
 
 /**
- * Authoritative answer to "did this exact setup credential complete?". The
- * gateway records completion before broadcasting `device.pair.setup.completed`,
- * so a client that missed the event can still reach the same terminal fact.
- * An absent `completion` means the gateway holds no completion for that
- * `setupId`: it is still outstanding, expired, or already past retention.
+ * Authoritative answer to "what happened to this exact setup credential?".
+ * `completion` means the credential-bearing response finished. `deliveryUncertain`
+ * means the bearer was retired for replay safety but the client may not have
+ * received its credential. When both are absent, the setup is outstanding,
+ * expired, or already past retention.
  */
 export const DevicePairSetupStatusResultSchema = closedObject({
   completion: Type.Optional(DevicePairSetupCompletedEventSchema),
+  deliveryUncertain: Type.Optional(DevicePairSetupDeliveryUncertainEventSchema),
 });
 
 const SetupCodeQrDataUrlSchema = Type.String({
@@ -202,6 +206,9 @@ export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>
 export type DevicePairSetupCodeParams = Static<typeof DevicePairSetupCodeParamsSchema>;
 export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultSchema>;
 export type DevicePairSetupCompletedEvent = Static<typeof DevicePairSetupCompletedEventSchema>;
+export type DevicePairSetupDeliveryUncertainEvent = Static<
+  typeof DevicePairSetupDeliveryUncertainEventSchema
+>;
 export type DevicePairSetupStatusParams = Static<typeof DevicePairSetupStatusParamsSchema>;
 export type DevicePairSetupStatusResult = Static<typeof DevicePairSetupStatusResultSchema>;
 export type DevicePairRenameParams = Static<typeof DevicePairRenameParamsSchema>;

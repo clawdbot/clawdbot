@@ -18,10 +18,12 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import {
+  confirmDevicePairSetupCompletionDeliveryInTransaction,
   consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
   loadDeviceBootstrapTokenRecords,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
+  pruneExpiredDevicePairSetupCompletionRecords,
 } from "./device-pairing-store.js";
 import type {
   DeviceBootstrapTokenRecord,
@@ -251,11 +253,9 @@ export async function issueDevicePairSetupBootstrapToken(params: {
 }
 
 /**
- * Record the terminal outcome of one setup credential. Redemption deletes the
- * bootstrap row, so without this the completion broadcast is the only proof the
- * setup succeeded and a dropped frame becomes a false "expired" for the
- * operator. Retention outlives the credential so a client waiting to its expiry
- * can always reconcile.
+ * Retire one setup bearer and record that credential delivery is not yet known.
+ * The transport confirms delivery only after its response finishes; a crash or
+ * disconnect therefore cannot turn replay safety into a false operator success.
  */
 export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
   token: string;
@@ -280,6 +280,22 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
   });
 }
 
+/** Confirm that the pairing client received the credential-bearing handoff response. */
+export async function confirmDevicePairSetupCompletionDelivery(params: {
+  setupId: string;
+  deviceId: string;
+  baseDir?: string;
+}): Promise<DevicePairSetupCompletionRecord | null> {
+  return await withLock(async () =>
+    confirmDevicePairSetupCompletionDeliveryInTransaction({
+      setupId: params.setupId,
+      deviceId: params.deviceId,
+      nowMs: Date.now(),
+      ...(params.baseDir ? { baseDir: params.baseDir } : {}),
+    }),
+  );
+}
+
 /**
  * Read the terminal outcome for one setup credential, or null while none is
  * recorded. Shares this module's lock with issuance and revocation so a status
@@ -291,6 +307,18 @@ export async function readDevicePairSetupCompletion(params: {
 }): Promise<DevicePairSetupCompletionRecord | null> {
   return await withLock(async () =>
     loadDevicePairSetupCompletionRecord(params.setupId, Date.now(), params.baseDir),
+  );
+}
+
+/** Remove retained setup outcomes independently of status requests or later pairings. */
+export async function pruneExpiredDevicePairSetupCompletions(
+  params: {
+    nowMs?: number;
+    baseDir?: string;
+  } = {},
+): Promise<number> {
+  return await withLock(async () =>
+    pruneExpiredDevicePairSetupCompletionRecords(params.nowMs ?? Date.now(), params.baseDir),
   );
 }
 

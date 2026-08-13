@@ -168,5 +168,6 @@ export type DevicePairSetupCompletionRecord = {
   deviceName?: string;
   access: PairingSetupAccess;
   completedAtMs: number;
+  deliveryState: "uncertain" | "confirmed";
   retainUntilMs: number;
 };

@@ -56,6 +56,7 @@ export const PluginLifecycleProtocolSchemas = {
   DevicePairRequestedEvent: devices.DevicePairRequestedEventSchema,
   DevicePairResolvedEvent: devices.DevicePairResolvedEventSchema,
   DevicePairSetupCompletedEvent: devices.DevicePairSetupCompletedEventSchema,
+  DevicePairSetupDeliveryUncertainEvent: devices.DevicePairSetupDeliveryUncertainEventSchema,
   ChatHistoryParams: logsChat.ChatHistoryParamsSchema,
   ChatMetadataParams: logsChat.ChatMetadataParamsSchema,
   ChatMessageGetParams: logsChat.ChatMessageGetParamsSchema,

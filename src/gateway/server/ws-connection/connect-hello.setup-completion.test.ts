@@ -119,6 +119,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           role: "operator",
           scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
           device: { id: paired.deviceId },
+          devicePublicKey: paired.publicKey,
           hasTokenAuth: false,
           hasPasswordAuth: false,
           bootstrapTokenCandidate: issued.token,
@@ -138,13 +139,123 @@ describe("sendGatewayHello setup completion ordering", () => {
         });
         releaseHandoff.resolve();
         await hello;
+        const completionAfterHandoff = await readDevicePairSetupCompletion({
+          setupId: issued.setupId,
+        });
 
         expect(completionAtHandoff).toMatchObject({
           setupId: issued.setupId,
           deviceId: paired.deviceId,
           deviceName: paired.displayName,
           access: "limited",
+          deliveryState: "uncertain",
         });
+        expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+        expect(broadcast).toHaveBeenCalledWith(
+          "device.pair.setup.completed",
+          expect.objectContaining({ setupId: issued.setupId }),
+          { dropIfSlow: true },
+        );
+      },
+    );
+  });
+
+  it("does not consume a setup bearer after the paired public key is replaced", async () => {
+    await withOpenClawTestState(
+      { label: "ws-setup-completion-replaced-key", layout: "state-only" },
+      async () => {
+        const paired: PairedDevice = {
+          deviceId: "device-setup-replaced",
+          publicKey: "public-key-original",
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        };
+        persistDevicePairingStoreState(
+          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+          undefined,
+          "paired",
+        );
+        const issued = await issueDevicePairSetupBootstrapToken({
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        await expect(
+          verifyDeviceBootstrapToken({
+            token: issued.token,
+            deviceId: paired.deviceId,
+            publicKey: paired.publicKey,
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          }),
+        ).resolves.toEqual({ ok: true });
+        persistDevicePairingStoreState(
+          {
+            pendingById: {},
+            pairedByDeviceId: {
+              [paired.deviceId]: { ...paired, publicKey: "public-key-replacement" },
+            },
+          },
+          undefined,
+          "paired",
+        );
+        const close = vi.fn();
+        const context = {
+          handler: {
+            connId: "conn-setup-replaced",
+            gatewayMethods: [],
+            events: [],
+            buildRequestContext: () => ({ broadcast: vi.fn(), nodeRegistry: { get: vi.fn() } }),
+            refreshHealthSnapshot: vi.fn(async () => ({})),
+            close,
+            advanceHandshakePhase: vi.fn(),
+            setCloseCause: vi.fn(),
+            logGateway: { warn: vi.fn() },
+            logHealth: { error: vi.fn() },
+          },
+          frame: { id: "hello-setup-replaced" },
+          connectParams: {
+            client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          },
+          configSnapshot: {},
+          sendFrame: vi.fn(async () => undefined),
+          pendingNodePairingCleanup: {},
+          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+        };
+        const state = {
+          resolvedAuth: { mode: "none" },
+          role: "operator",
+          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          device: { id: paired.deviceId },
+          devicePublicKey: paired.publicKey,
+          hasTokenAuth: false,
+          hasPasswordAuth: false,
+          bootstrapTokenCandidate: issued.token,
+          authResult: { ok: true, method: "bootstrap-token" },
+          authMethod: "bootstrap-token",
+          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          deviceToken: null,
+          bootstrapDeviceTokens: [],
+          controlUiDeviceAuthMigrationPending: false,
+        };
+
+        await sendGatewayHello(context as never, state as never, {});
+
+        expect(close).toHaveBeenCalled();
+        expect(context.sendFrame).not.toHaveBeenCalled();
+        await expect(
+          readDevicePairSetupCompletion({ setupId: issued.setupId }),
+        ).resolves.toBeNull();
+        await expect(
+          verifyDeviceBootstrapToken({
+            token: issued.token,
+            deviceId: paired.deviceId,
+            publicKey: paired.publicKey,
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          }),
+        ).resolves.toEqual({ ok: true });
       },
     );
   });

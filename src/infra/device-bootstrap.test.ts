@@ -19,11 +19,13 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
+  confirmDevicePairSetupCompletionDelivery,
   consumeDeviceBootstrapTokenWithSetupCompletion,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
   issueDevicePairSetupBootstrapToken,
+  pruneExpiredDevicePairSetupCompletions,
   readDevicePairSetupCompletion,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -128,7 +130,7 @@ describe("device bootstrap tokens", () => {
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]?.profile).toEqual(profile);
   });
 
-  it("records completion while consuming the setup credential", async () => {
+  it("records uncertain delivery while consuming, then confirms the handoff", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDevicePairSetupBootstrapToken({
       baseDir,
@@ -149,10 +151,49 @@ describe("device bootstrap tokens", () => {
       deviceId: "device-123",
       access: "node",
       completedAtMs: 1_000,
+      deliveryState: "uncertain",
     });
+    await expect(
+      confirmDevicePairSetupCompletionDelivery({
+        baseDir,
+        setupId: issued.setupId,
+        deviceId: "device-123",
+      }),
+    ).resolves.toMatchObject({ deliveryState: "confirmed" });
     await expect(
       readDevicePairSetupCompletion({ baseDir, setupId: "some-other-setup" }),
     ).resolves.toBeNull();
+  });
+
+  it("prunes retained setup outcomes without a status lookup", async () => {
+    const baseDir = await createTempDir();
+    vi.useFakeTimers();
+    try {
+      const recordedAtMs = Date.now();
+      const issued = await issueDevicePairSetupBootstrapToken({
+        baseDir,
+        profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
+      await verifyBootstrapToken(baseDir, issued.token);
+      await consumeDeviceBootstrapTokenWithSetupCompletion({
+        token: issued.token,
+        deviceId: "device-123",
+        completedAtMs: recordedAtMs,
+        baseDir,
+      });
+
+      await expect(
+        pruneExpiredDevicePairSetupCompletions({
+          baseDir,
+          nowMs: recordedAtMs + 20 * 60 * 1000,
+        }),
+      ).resolves.toBe(1);
+      await expect(
+        readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
+      ).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects a setup credential that expires after verification but before consumption", async () => {

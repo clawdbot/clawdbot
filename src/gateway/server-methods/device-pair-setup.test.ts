@@ -412,6 +412,7 @@ describe("device.pair.setupStatus", () => {
       deviceName: "Pixel 9",
       access: "full",
       completedAtMs: 1_800_000_000_000,
+      deliveryState: "confirmed",
       retainUntilMs: 1_800_000_600_000,
     });
 
@@ -427,6 +428,30 @@ describe("device.pair.setupStatus", () => {
         deviceId: "device-123",
         deviceName: "Pixel 9",
         access: "full",
+        ts: 1_800_000_000_000,
+      },
+    });
+  });
+
+  it("returns a recoverable outcome when credential delivery is uncertain", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue({
+      setupId: "setup-uncertain",
+      deviceId: "device-123",
+      access: "limited",
+      completedAtMs: 1_800_000_000_000,
+      deliveryState: "uncertain",
+      retainUntilMs: 1_800_000_600_000,
+    });
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-uncertain" });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(payload).toEqual({
+      deliveryUncertain: {
+        setupId: "setup-uncertain",
+        deviceId: "device-123",
+        access: "limited",
         ts: 1_800_000_000_000,
       },
     });

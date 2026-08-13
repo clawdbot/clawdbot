@@ -51,7 +51,9 @@ import {
 } from "./auth-rate-limit.js";
 import { hasForwardedRequestHeaders } from "./auth.js";
 import {
+  broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
   consumeSetupHandoff,
   type SetupHandoff,
 } from "./device-pair-setup-completion.js";
@@ -881,17 +883,46 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         });
         const responseCompleted = await responseLifecycle.completed;
         if (!responseCompleted) {
+          if (bootstrapHandoff) {
+            try {
+              broadcastSetupHandoffDeliveryUncertain({
+                handoff: bootstrapHandoff,
+                broadcast: options.broadcast,
+              });
+            } catch (error) {
+              options.onError?.("watch node setup delivery-uncertain broadcast failed", error);
+            }
+          }
           closeSession(session, "connect response aborted");
           return;
         }
         if (bootstrapHandoff) {
           try {
-            broadcastSetupHandoffCompletion({
+            const confirmedHandoff = await confirmSetupHandoffDelivery({
               handoff: bootstrapHandoff,
-              broadcast: options.broadcast,
+              baseDir: options.pairingBaseDir,
             });
+            if (confirmedHandoff) {
+              broadcastSetupHandoffCompletion({
+                handoff: confirmedHandoff,
+                broadcast: options.broadcast,
+              });
+            } else {
+              broadcastSetupHandoffDeliveryUncertain({
+                handoff: bootstrapHandoff,
+                broadcast: options.broadcast,
+              });
+            }
           } catch (error) {
-            options.onError?.("watch node setup completion broadcast failed", error);
+            options.onError?.("watch node setup completion confirmation failed", error);
+            try {
+              broadcastSetupHandoffDeliveryUncertain({
+                handoff: bootstrapHandoff,
+                broadcast: options.broadcast,
+              });
+            } catch {
+              // The durable uncertain row remains the status-reconciliation path.
+            }
           }
         }
         options.rateLimiter?.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);

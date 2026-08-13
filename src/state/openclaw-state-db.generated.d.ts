@@ -557,6 +557,7 @@ export interface DeviceIdentities {
 export interface DevicePairSetupCompletions {
   access: string;
   completed_at_ms: number;
+  delivery_state: string;
   device_id: string;
   device_name: string | null;
   retain_until_ms: number;

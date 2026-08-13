@@ -11,6 +11,7 @@ import {
   type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { ensureDevicePairSetupCompletionSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   DevicePairingPaired,
@@ -262,6 +263,12 @@ const PAIRING_SETUP_ACCESS_VALUES = new Set(Object.keys(PAIRING_SETUP_ACCESS_MEM
 
 function fromSetupCompletionAccessColumn(value: string): PairingSetupAccess {
   return PAIRING_SETUP_ACCESS_VALUES.has(value) ? (value as PairingSetupAccess) : "limited";
+}
+
+function fromSetupCompletionDeliveryStateColumn(
+  value: string,
+): DevicePairSetupCompletionRecord["deliveryState"] {
+  return value === "confirmed" ? "confirmed" : "uncertain";
 }
 
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {
@@ -582,6 +589,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
           ...(deviceName ? { deviceName } : {}),
           access: resolvePairingSetupAccess(record.profile),
           completedAtMs: params.completedAtMs,
+          deliveryState: "uncertain",
           retainUntilMs: params.retainUntilMs,
         }
       : undefined;
@@ -610,12 +618,83 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
           device_name: completion.deviceName ?? null,
           access: completion.access,
           completed_at_ms: completion.completedAtMs,
+          delivery_state: completion.deliveryState,
           retain_until_ms: completion.retainUntilMs,
         }),
       );
     }
     return { record, ...(completion ? { completion } : {}) };
   }, resolveDevicePairingStateDbOptions(params.baseDir));
+}
+
+/** Mark one consumed setup handoff as delivered without reviving an expired or replaced row. */
+export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
+  setupId: string;
+  deviceId: string;
+  nowMs: number;
+  baseDir?: string;
+}): DevicePairSetupCompletionRecord | null {
+  const setupId = params.setupId.trim();
+  const deviceId = params.deviceId.trim();
+  if (!setupId || !deviceId) {
+    return null;
+  }
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    ensureDevicePairSetupCompletionSchema(db);
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("device_pair_setup_completions")
+        .set({ delivery_state: "confirmed" })
+        .where("setup_id", "=", setupId)
+        .where("device_id", "=", deviceId)
+        .where("retain_until_ms", ">", params.nowMs),
+    );
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("device_pair_setup_completions")
+        .selectAll()
+        .where("setup_id", "=", setupId)
+        .where("device_id", "=", deviceId)
+        .where("retain_until_ms", ">", params.nowMs),
+    );
+    return row
+      ? {
+          setupId: row.setup_id,
+          deviceId: row.device_id,
+          ...optional("deviceName", row.device_name),
+          access: fromSetupCompletionAccessColumn(row.access),
+          completedAtMs: row.completed_at_ms,
+          deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
+          retainUntilMs: row.retain_until_ms,
+        }
+      : null;
+  }, resolveDevicePairingStateDbOptions(params.baseDir));
+}
+
+/** Prune retained setup outcomes when the Gateway maintenance owner ticks. */
+export function pruneExpiredDevicePairSetupCompletionRecords(
+  nowMs: number,
+  baseDir?: string,
+): number {
+  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
+  const database = openOpenClawStateDatabase(databaseOptions);
+  if (!tableExists(database.db, "device_pair_setup_completions")) {
+    return 0;
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+      const result = executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("device_pair_setup_completions").where("retain_until_ms", "<=", nowMs),
+      );
+      return Number(result.numAffectedRows ?? 0);
+    },
+    { ...databaseOptions, database },
+  );
 }
 
 /** Prune elapsed setup completions, then read one live record. */
@@ -648,6 +727,7 @@ export function loadDevicePairSetupCompletionRecord(
             ...optional("deviceName", row.device_name),
             access: fromSetupCompletionAccessColumn(row.access),
             completedAtMs: row.completed_at_ms,
+            deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
             retainUntilMs: row.retain_until_ms,
           }
         : null;

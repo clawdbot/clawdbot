@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DevicePairSetupCodeResult,
   DevicePairSetupCompletedEvent,
+  DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 
@@ -20,6 +21,10 @@ export type DevicePairSetupAccess = "full" | "limited" | "node";
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
   deviceName?: string;
 };
+type DevicePairSetupDeliveryUncertain = Pick<
+  DevicePairSetupDeliveryUncertainEvent,
+  "setupId" | "access"
+> & { deviceName?: string };
 
 export type DevicePairSetupLifecycle =
   | { phase: "selection"; access: DevicePairSetupAccess }
@@ -36,6 +41,11 @@ export type DevicePairSetupLifecycle =
   | {
       phase: "success";
       access: DevicePairSetupCompletion["access"];
+      deviceName?: string;
+    }
+  | {
+      phase: "delivery-uncertain";
+      access: DevicePairSetupDeliveryUncertain["access"];
       deviceName?: string;
     }
   | { phase: "expired"; access: DevicePairSetupAccess };
@@ -132,6 +142,7 @@ function clearDevicePairSetupExpiry(state: DevicePairSetupState) {
 
 type DevicePairSetupCompletionLookup =
   | { status: "found"; completion: DevicePairSetupCompletion }
+  | { status: "delivery-uncertain"; outcome: DevicePairSetupDeliveryUncertain }
   | { status: "missing" }
   | { status: "unavailable"; message: string };
 
@@ -148,7 +159,13 @@ async function readGatewaySetupCompletion(
       setupId,
     });
     if (result?.completion === undefined) {
-      return { status: "missing" };
+      if (result?.deliveryUncertain === undefined) {
+        return { status: "missing" };
+      }
+      const outcome = parseDevicePairSetupDeliveryUncertain(result.deliveryUncertain);
+      return outcome?.setupId === setupId
+        ? { status: "delivery-uncertain", outcome }
+        : { status: "unavailable", message: "Invalid setup status response" };
     }
     const completion = parseDevicePairSetupCompletion(result.completion);
     return completion?.setupId === setupId
@@ -174,6 +191,10 @@ function applyDevicePairSetupCompletionLookup(
   }
   if (lookup.status === "found") {
     completeDevicePairSetup(state, lookup.completion);
+    return;
+  }
+  if (lookup.status === "delivery-uncertain") {
+    markDevicePairSetupDeliveryUncertain(state, lookup.outcome);
     return;
   }
   state.devicePairSetupLifecycle =
@@ -231,6 +252,12 @@ export function parseDevicePairSetupCompletion(payload: unknown): DevicePairSetu
   return { setupId, access, ...(label ? { deviceName: label } : {}) };
 }
 
+export function parseDevicePairSetupDeliveryUncertain(
+  payload: unknown,
+): DevicePairSetupDeliveryUncertain | null {
+  return parseDevicePairSetupCompletion(payload);
+}
+
 export function completeDevicePairSetup(
   state: DevicePairSetupState,
   completion: DevicePairSetupCompletion,
@@ -244,11 +271,36 @@ export function completeDevicePairSetup(
   if (!matchesActiveSetup) {
     return false;
   }
+  stopDevicePairSetupCountdown(state);
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupLifecycle = {
     phase: "success",
     access: completion.access,
     ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+  };
+  state.onDevicePairSetupChange();
+  return true;
+}
+
+export function markDevicePairSetupDeliveryUncertain(
+  state: DevicePairSetupState,
+  outcome: DevicePairSetupDeliveryUncertain,
+): boolean {
+  const lifecycle = state.devicePairSetupLifecycle;
+  const matchesActiveSetup =
+    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === outcome.setupId) ||
+    (lifecycle.phase === "error" &&
+      lifecycle.source === "status" &&
+      lifecycle.setupId === outcome.setupId);
+  if (!matchesActiveSetup) {
+    return false;
+  }
+  stopDevicePairSetupCountdown(state);
+  clearDevicePairSetupExpiry(state);
+  state.devicePairSetupLifecycle = {
+    phase: "delivery-uncertain",
+    access: outcome.access,
+    ...(outcome.deviceName ? { deviceName: outcome.deviceName } : {}),
   };
   state.onDevicePairSetupChange();
   return true;

@@ -538,6 +538,9 @@ export const en: TranslationMap = {
       review: "Review",
       waiting: "Official OpenClaw mobile apps connect automatically after scanning.",
       pairedTitle: "Device paired",
+      deliveryUncertainTitle: "Pairing delivery could not be confirmed",
+      deliveryUncertainHint:
+        "The setup code is retired, but the device may not have received its credential. Check Manage devices, remove the device if needed, then create a new code.",
       fullAccessSummary: "Full access",
       nodeAccessSummary: "Node access",
       done: "Done",

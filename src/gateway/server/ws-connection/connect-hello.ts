@@ -17,7 +17,9 @@ import {
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
 import {
+  broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
   consumeSetupHandoff,
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
@@ -66,6 +68,7 @@ export async function sendGatewayHello(
     role,
     scopes,
     device,
+    devicePublicKey,
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
@@ -173,6 +176,7 @@ export async function sendGatewayHello(
           const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
             deviceId: device.id,
+            pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
           if (!consumed) {
             await releasePendingNodePairingCleanup();
@@ -196,6 +200,18 @@ export async function sendGatewayHello(
   try {
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
+    if (bootstrapHandoff) {
+      try {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } catch (broadcastError) {
+        logGateway.warn(
+          `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
+        );
+      }
+    }
     await releasePendingNodePairingCleanup();
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
     close();
@@ -203,14 +219,30 @@ export async function sendGatewayHello(
   }
   if (bootstrapHandoff) {
     try {
-      broadcastSetupHandoffCompletion({
-        handoff: bootstrapHandoff,
-        broadcast: buildRequestContext().broadcast,
-      });
+      const confirmedHandoff = await confirmSetupHandoffDelivery({ handoff: bootstrapHandoff });
+      if (confirmedHandoff) {
+        broadcastSetupHandoffCompletion({
+          handoff: confirmedHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } else {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      }
     } catch (err) {
       logGateway.warn(
-        `setup completion broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
+        `setup completion confirmation failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
       );
+      try {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } catch {
+        // The durable uncertain row remains the status-reconciliation path.
+      }
     }
   }
   let authProvided = authMethod;

@@ -9,6 +9,7 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
@@ -91,6 +92,7 @@ export function startGatewayMaintenanceTimers(params: {
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
+  runDevicePairSetupCompletionGc?: (nowMs: number) => unknown;
   enableSkillCurator?: boolean;
   runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
@@ -186,6 +188,26 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDeliveryQueueMediaGc();
 
+  const runDevicePairSetupCompletionGc =
+    params.runDevicePairSetupCompletionGc ??
+    ((nowMs: number) => pruneExpiredDevicePairSetupCompletions({ nowMs }));
+  let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
+  const performDevicePairSetupCompletionGc = (nowMs: number) => {
+    if (devicePairSetupCompletionGcInFlight) {
+      return devicePairSetupCompletionGcInFlight;
+    }
+    devicePairSetupCompletionGcInFlight = Promise.resolve(runDevicePairSetupCompletionGc(nowMs))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+      })
+      .finally(() => {
+        devicePairSetupCompletionGcInFlight = null;
+      });
+    return devicePairSetupCompletionGcInFlight;
+  };
+  void performDevicePairSetupCompletionGc(Date.now());
+
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
     skillCuratorCleanup = startSkillCollectionMaintenance({
@@ -208,6 +230,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }

@@ -18210,16 +18210,20 @@ public struct DevicePairSetupStatusParams: Codable, Sendable {
 }
 
 public struct DevicePairSetupStatusResult: Codable, Sendable {
-    public let completion: DevicePairSetupCompletedEvent?
+    public let completion: [String: AnyCodable]?
+    public let deliveryuncertain: [String: AnyCodable]?
 
     public init(
-        completion: DevicePairSetupCompletedEvent? = nil)
+        completion: [String: AnyCodable]? = nil,
+        deliveryuncertain: [String: AnyCodable]? = nil)
     {
         self.completion = completion
+        self.deliveryuncertain = deliveryuncertain
     }
 
     private enum CodingKeys: String, CodingKey {
         case completion
+        case deliveryuncertain = "deliveryUncertain"
     }
 }
 
@@ -18486,6 +18490,36 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
 }
 
 public struct DevicePairSetupCompletedEvent: Codable, Sendable {
+    public let setupid: String
+    public let deviceid: String
+    public let devicename: String?
+    public let access: AnyCodable
+    public let ts: Int
+
+    public init(
+        setupid: String,
+        deviceid: String,
+        devicename: String? = nil,
+        access: AnyCodable,
+        ts: Int)
+    {
+        self.setupid = setupid
+        self.deviceid = deviceid
+        self.devicename = devicename
+        self.access = access
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case setupid = "setupId"
+        case deviceid = "deviceId"
+        case devicename = "deviceName"
+        case access
+        case ts
+    }
+}
+
+public struct DevicePairSetupDeliveryUncertainEvent: Codable, Sendable {
     public let setupid: String
     public let deviceid: String
     public let devicename: String?

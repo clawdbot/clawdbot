@@ -10,8 +10,10 @@ import {
   closeDevicePairSetup as closeDevicePairSetupState,
   completeDevicePairSetup,
   createDevicePairSetupState,
+  markDevicePairSetupDeliveryUncertain,
   openDevicePairSetup as openDevicePairSetupState,
   parseDevicePairSetupCompletion,
+  parseDevicePairSetupDeliveryUncertain,
   readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
@@ -360,6 +362,13 @@ export function createApplicationOverlays(
       const completion = parseDevicePairSetupCompletion(event.payload);
       if (completion) {
         completeDevicePairSetup(devicePairSetupState, completion);
+      }
+      return;
+    }
+    if (event.event === "device.pair.setup.deliveryUncertain") {
+      const outcome = parseDevicePairSetupDeliveryUncertain(event.payload);
+      if (outcome) {
+        markDevicePairSetupDeliveryUncertain(devicePairSetupState, outcome);
       }
       return;
     }

@@ -441,6 +441,44 @@ export function registerOverlayPairingAccessTests() {
       overlays.dispose();
     });
 
+    it("surfaces delivery uncertainty only for the active setup", async () => {
+      const request = vi.fn<RequestFn>((method) =>
+        Promise.resolve(
+          method === "device.pair.setupCode"
+            ? setupResult("setup-current")
+            : method === "device.pair.list"
+              ? { pending: [] }
+              : [],
+        ),
+      );
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+
+      await overlays.openDevicePairSetup();
+      await overlays.refreshDevicePairSetup();
+      harness.emitEvent("device.pair.setup.deliveryUncertain", {
+        setupId: "setup-stale",
+        deviceId: "phone-stale",
+        access: "full",
+        ts: 1,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle.phase).toBe("waiting");
+
+      harness.emitEvent("device.pair.setup.deliveryUncertain", {
+        setupId: "setup-current",
+        deviceId: "phone-current",
+        deviceName: "Phone",
+        access: "full",
+        ts: 2,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "delivery-uncertain",
+        deviceName: "Phone",
+        access: "full",
+      });
+      overlays.dispose();
+    });
+
     it.each(["reconnect", "access revocation", "dispose"] as const)(
       "retires the setup expiry timer on %s",
       async (boundary) => {
