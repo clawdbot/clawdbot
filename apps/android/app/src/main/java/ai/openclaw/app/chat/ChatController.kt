@@ -61,18 +61,27 @@ private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
-
-// The correction tag source reports 2026.7.1; its published npm artifact reports 2026.7.1-2.
-private val LEGACY_GATEWAY_VERSIONS_WITHOUT_SESSION_BRANCHES =
-  setOf(
-    "2026.7.1",
-    "2026.7.1-1",
-    "2026.7.1-2",
-  )
+private val GATEWAY_VERSION_PATTERN = Regex("^(\\d{4})\\.(\\d+)\\.(\\d+)(?:-([0-9A-Za-z.-]+))?$")
+private val GATEWAY_SESSION_BRANCH_BETA_PATTERN = Regex("^beta\\.(\\d+)$")
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
+
+/** Returns true only for a well-formed Gateway version known to predate session branches. */
+internal fun gatewayPredatesSessionBranches(rawVersion: String?): Boolean {
+  val match = GATEWAY_VERSION_PATTERN.matchEntire(rawVersion?.trim().orEmpty()) ?: return false
+  val year = match.groupValues[1].toIntOrNull() ?: return false
+  val month = match.groupValues[2].toIntOrNull() ?: return false
+  val patch = match.groupValues[3].toIntOrNull() ?: return false
+  when {
+    year != 2026 -> return year < 2026
+    month != 7 -> return month < 7
+    patch != 2 -> return patch < 2
+  }
+  val beta = GATEWAY_SESSION_BRANCH_BETA_PATTERN.matchEntire(match.groupValues[4]) ?: return false
+  return (beta.groupValues[1].toIntOrNull() ?: return false) < 4
+}
 
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
 internal data class ChatCacheScope(
@@ -699,7 +708,7 @@ class ChatController internal constructor(
       when {
         GatewayMethod.SessionsBranchesList.rawValue in gatewayMethods ->
           SessionBranchListingSupport.Available
-        gatewayVersion?.trim() in LEGACY_GATEWAY_VERSIONS_WITHOUT_SESSION_BRANCHES ->
+        gatewayPredatesSessionBranches(gatewayVersion) ->
           SessionBranchListingSupport.Unavailable
         else -> SessionBranchListingSupport.Unknown
       }

@@ -112,6 +112,39 @@ class ChatControllerBranchCoordinationTest {
     }
 
   @Test
+  fun sessionBranchVersionBoundaryFailsClosedOutsideKnownPreIntroductionVersions() {
+    val preIntroductionVersions =
+      listOf(
+        "2025.12.31",
+        "2026.6.10",
+        "2026.7.1",
+        "2026.7.1-1",
+        "2026.7.1-2",
+        "2026.7.1-beta.6",
+        "2026.7.2-beta.1",
+        "2026.7.2-beta.3",
+      )
+    for (version in preIntroductionVersions) {
+      assertTrue(version, gatewayPredatesSessionBranches(version))
+    }
+    val unknownOrCapableVersions =
+      listOf(
+        null,
+        "",
+        "unknown",
+        "v2026.7.1",
+        "2026.7.2-alpha.1",
+        "2026.7.2-beta.4",
+        "2026.7.2-beta.7",
+        "2026.7.2",
+        "2026.8.0",
+      )
+    for (version in unknownOrCapableVersions) {
+      assertFalse(version, gatewayPredatesSessionBranches(version))
+    }
+  }
+
+  @Test
   fun legacyGatewayWithoutBranchApiDrainsAnOrdinaryQueuedMessage() =
     runTest {
       enqueue("legacy queued")
