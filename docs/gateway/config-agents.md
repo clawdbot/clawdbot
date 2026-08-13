@@ -91,7 +91,7 @@ Skips creation of selected optional workspace files while still writing required
 Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
 
 - `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
-- `"never"`: disable workspace bootstrap and context-file injection on every turn. Use this only for agents that fully own their prompt lifecycle (custom context engines, native runtimes that build their own context, or specialized bootstrap-free workflows). Heartbeat and compaction-recovery turns also skip injection.
+- `"never"`: disable OpenClaw-managed workspace bootstrap and context-file injection on every turn. Native harnesses may still load their own project documents (for example, `AGENTS.md`) according to their SDK rules. Use this only for agents that fully own their prompt lifecycle (custom context engines, native runtimes that build their own context, or specialized bootstrap-free workflows). Heartbeat and compaction-recovery turns also skip OpenClaw-managed injection.
 
 ```json5
 {

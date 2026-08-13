@@ -147,6 +147,31 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryToolRouted).toBe(false);
   });
 
+  it("does not load OpenClaw-managed workspace context when injection is never", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-context-injection-never-"));
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "must not reach the prompt");
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        agentId: "main",
+        config: {
+          agents: {
+            defaults: { workspace: workspaceDir, contextInjection: "never" },
+          },
+        },
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      memoryToolNames: [],
+    });
+
+    expect(context).toEqual({ bootstrapFiles: [], contextFiles: [] });
+  });
+
   it("passes agent context to Codex memory collaboration guidance", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
     let observedContext:

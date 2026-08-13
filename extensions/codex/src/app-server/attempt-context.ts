@@ -8,6 +8,7 @@ import {
   buildBootstrapContextForFiles,
   buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
+  resolveContextInjectionMode,
   resolveBootstrapFilesForRun,
   type AgentMessage,
   type ContextEngineProjection,
@@ -176,6 +177,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
+    if (
+      resolveContextInjectionMode(
+        params.params.config,
+        params.params.agentId ?? params.sessionAgentId,
+      ) === "never"
+    ) {
+      return { bootstrapFiles: [], contextFiles: [] };
+    }
     const memoryToolsAvailable =
       params.memoryToolNames.length > 0 &&
       canRouteCodexWorkspaceMemoryThroughTools({

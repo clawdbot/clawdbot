@@ -162,7 +162,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
-    'Controls when workspace bootstrap files are injected into the system prompt: "always" (default), "continuation-skip" for safe continuation turns after a completed assistant response, or "never" to disable workspace bootstrap and context-file injection on every turn.',
+    'Controls when OpenClaw-managed workspace bootstrap files are injected into the system prompt: "always" (default), "continuation-skip" for safe continuation turns after a completed assistant response, or "never" to disable OpenClaw-managed workspace bootstrap and context-file injection on every turn. Native harness loaders may still apply their own project-document rules.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

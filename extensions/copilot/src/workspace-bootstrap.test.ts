@@ -55,6 +55,19 @@ describe("resolveCopilotWorkspaceBootstrapContext", () => {
     expect(result.instructions).toContain("Soul voice goes here.");
   });
 
+  it("does not load OpenClaw-managed workspace context when injection is never", async () => {
+    await writeFile(path.join(workspaceDir, "SOUL.md"), "must not reach the prompt");
+    const result = await resolveCopilotWorkspaceBootstrapContext({
+      attempt: makeAttempt({
+        workspaceDir,
+        config: { agents: { defaults: { contextInjection: "never" } } },
+      }),
+      effectiveWorkspaceDir: workspaceDir,
+    });
+
+    expect(result).toEqual({ bootstrapFiles: [], contextFiles: [] });
+  });
+
   it("orders persona context and renders the SOUL hint through the workspace boundary", async () => {
     await writeFile(path.join(workspaceDir, "USER.md"), "USER body");
     await writeFile(path.join(workspaceDir, "SOUL.md"), "SOUL body");

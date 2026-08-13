@@ -441,6 +441,7 @@ export {
 } from "../agents/sandbox/fs-paths.js";
 export {
   buildBootstrapContextForFiles,
+  resolveContextInjectionMode,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";

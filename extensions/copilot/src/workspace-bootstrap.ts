@@ -5,6 +5,7 @@ import type {
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  resolveContextInjectionMode,
   resolveBootstrapContextForRun,
   resolveUserPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -82,6 +83,9 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
   const { attempt } = params;
   const workspaceDir = readResolvedWorkspacePath(attempt.workspaceDir);
   if (!workspaceDir) {
+    return { bootstrapFiles: [], contextFiles: [] };
+  }
+  if (resolveContextInjectionMode(attempt.config, attempt.agentId) === "never") {
     return { bootstrapFiles: [], contextFiles: [] };
   }
   try {
