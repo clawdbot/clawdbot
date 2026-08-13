@@ -1,9 +1,5 @@
 // Provides shared replay-policy helpers for provider plugins.
-import {
-  preservesClaudeThinkingBlocks,
-  resolveClaudeModelIdentity,
-  resolveClaudeOpus5ModelIdentity,
-} from "@openclaw/llm-core";
+import { resolveClaudeModelIdentity, resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
@@ -107,7 +103,12 @@ export function shouldDropClaudeThinkingBlocks(
   const canonicalId = resolveClaudeModelIdentity(ref);
   const isClaude =
     canonicalId.startsWith("claude-") || resolveClaudeOpus5ModelIdentity(ref) !== undefined;
-  return isClaude && !preservesClaudeThinkingBlocks(ref);
+  const preservesThinking =
+    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
+    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+      canonicalId,
+    );
+  return isClaude && !preservesThinking;
 }
 
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
