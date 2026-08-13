@@ -8,6 +8,7 @@ import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js"
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -367,9 +368,12 @@ function validateConfigObjectWithPluginsBase(
       // Ownership must ignore a denied or disabled replacement, exactly as auto-enable does, or a
       // valid fallback config is checked against the replacement's schema and rejected.
       const eligibilityConfig = ensureCompatConfig();
+      // Policy lists accept a plugin's channel ids and legacy ids; Gateway startup canonicalizes
+      // them through the registry, so ownership has to resolve them the same way.
+      const resolvePluginAlias = createManifestPluginAliasResolver(info.registry);
       for (const entry of collectChannelSchemaMetadataWithOwnership(
         info.registry,
-        (pluginId) => !isPluginPolicyDisabled(eligibilityConfig, pluginId),
+        (pluginId) => !isPluginPolicyDisabled(eligibilityConfig, pluginId, resolvePluginAlias),
       )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {

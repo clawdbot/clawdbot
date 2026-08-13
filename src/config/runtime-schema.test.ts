@@ -306,56 +306,65 @@ describe("loadGatewayRuntimeConfigSchema", () => {
   // Codex review P2 on #123209: config validation filters denied replacements out of channel
   // schema ownership. The operator-facing runtime schema has to make the same choice, or config UI
   // offers the disabled plugin's fields and authors config that validation then rejects.
-  it("describes the fallback channel schema when the declared replacement is denied", () => {
-    mockLoadConfig.mockReturnValue({
-      ...explicitMainRoster(),
-      plugins: { deny: ["clickclack-plus"] },
-    });
-    mockLoadPluginManifestRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "clickclack-plus",
-          origin: "workspace",
-          channels: ["clickclack"],
-          channelConfigs: {
-            clickclack: {
-              preferOver: ["clickclack-core"],
-              schema: {
-                type: "object",
-                properties: { plusToken: { type: "string" } },
-                additionalProperties: false,
+  it.each([
+    { label: "its plugin id", denied: "clickclack-plus" },
+    // Gateway startup canonicalizes policy lists through the registry, so an operator may deny a
+    // plugin by any alias it declares.
+    { label: "one of its declared aliases", denied: "clickclack-legacy" },
+  ])(
+    "describes the fallback channel schema when the replacement is denied by $label",
+    ({ denied }) => {
+      mockLoadConfig.mockReturnValue({
+        ...explicitMainRoster(),
+        plugins: { deny: [denied] },
+      });
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          {
+            id: "clickclack-plus",
+            origin: "workspace",
+            channels: ["clickclack"],
+            legacyPluginIds: ["clickclack-legacy"],
+            channelConfigs: {
+              clickclack: {
+                preferOver: ["clickclack-core"],
+                schema: {
+                  type: "object",
+                  properties: { plusToken: { type: "string" } },
+                  additionalProperties: false,
+                },
               },
             },
           },
-        },
-        {
-          id: "clickclack-core",
-          origin: "workspace",
-          channels: ["clickclack"],
-          channelConfigs: {
-            clickclack: {
-              schema: {
-                type: "object",
-                properties: { coreToken: { type: "string" } },
-                additionalProperties: false,
+          {
+            id: "clickclack-core",
+            origin: "workspace",
+            channels: ["clickclack"],
+            channelConfigs: {
+              clickclack: {
+                schema: {
+                  type: "object",
+                  properties: { coreToken: { type: "string" } },
+                  additionalProperties: false,
+                },
               },
             },
           },
-        },
-      ],
-    });
+        ],
+      });
 
-    const result = loadGatewayRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
-    const clickclack = channels?.properties?.clickclack as {
-      properties?: Record<string, unknown>;
-    };
+      const result = loadGatewayRuntimeConfigSchema();
+      const schema = result.schema as { properties?: Record<string, unknown> };
+      const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+      const clickclack = channels?.properties?.clickclack as {
+        properties?: Record<string, unknown>;
+      };
 
-    expect(clickclack?.properties).toHaveProperty("coreToken");
-    expect(clickclack?.properties).not.toHaveProperty("plusToken");
-  });
+      expect(clickclack?.properties).toHaveProperty("coreToken");
+      expect(clickclack?.properties).not.toHaveProperty("plusToken");
+    },
+  );
 
   it("projects strict heartbeat visibility for external channels and their accounts", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({

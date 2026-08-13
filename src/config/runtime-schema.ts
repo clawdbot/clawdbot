@@ -1,4 +1,5 @@
 // Builds runtime config schema defaults from agent and workspace state.
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataCore,
@@ -23,8 +24,12 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
  * whose declared replacement is denied or disabled falls back to the replaced plugin, so config UI
  * would otherwise offer fields that `config validate` then rejects.
  */
-function canReplaceChannelOwner(config: OpenClawConfig): (pluginId: string) => boolean {
-  return (pluginId) => !isPluginPolicyDisabled(config, pluginId);
+function canReplaceChannelOwner(
+  config: OpenClawConfig,
+  registry: PluginManifestRegistry,
+): (pluginId: string) => boolean {
+  const resolveAlias = createManifestPluginAliasResolver(registry);
+  return (pluginId) => !isPluginPolicyDisabled(config, pluginId, resolveAlias);
 }
 
 /**
@@ -46,7 +51,7 @@ export function buildRuntimeConfigSchemaFromRegistry(
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
-  return buildRuntimeConfigSchemaFromRegistry(registry, canReplaceChannelOwner(config));
+  return buildRuntimeConfigSchemaFromRegistry(registry, canReplaceChannelOwner(config, registry));
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
@@ -57,6 +62,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
-    channels: collectChannelSchemaMetadataCore(registry, canReplaceChannelOwner(config)),
+    channels: collectChannelSchemaMetadataCore(registry, canReplaceChannelOwner(config, registry)),
   });
 }
