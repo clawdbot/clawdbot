@@ -155,6 +155,19 @@ export async function startGatewayCoreRuntime(input: {
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
+  const secretEgressProxy =
+    cfgAtStart.secrets?.egressProxy?.enabled === true
+      ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
+          egressRuntime.startGatewaySecretEgressProxy(
+            cfgAtStart.secrets?.egressProxy?.bypassHosts
+              ? { bypassHosts: cfgAtStart.secrets.egressProxy.bypassHosts }
+              : {},
+          ),
+        )
+      : undefined;
+  if (secretEgressProxy) {
+    kernel.addGatewayLifetimeSidecar(secretEgressProxy);
+  }
   let earlyRuntimePromise: ReturnType<
     Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
   > | null = null;
@@ -339,6 +352,9 @@ export async function startGatewayCoreRuntime(input: {
             delegatedAuthority: authority,
           }),
         onApprovalLifecycle: approvalSessionEvents.publish,
+        onAgentRunAuthorityClosed: (authority) => {
+          secretEgressProxy?.revokeRun(authority.operationalRunInstance);
+        },
       }),
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };

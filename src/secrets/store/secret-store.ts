@@ -16,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { mintSecretSentinel } from "../sentinel.js";
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
@@ -31,6 +32,11 @@ export type SecretStoreEntryMetadata = {
   createdAtMs: number;
   updatedBy: string | null;
   valuePreview?: string;
+};
+
+export type SecretStoreExecEnvironment = {
+  env?: Record<string, string>;
+  secretSentinels?: Record<string, string>;
 };
 
 type SecretStoreReadError =
@@ -138,6 +144,55 @@ export function listSecretStoreEntries(params: {
   } catch (error) {
     if (isMissingSecretStoreTableError(error)) {
       return [];
+    }
+    throw error;
+  }
+}
+
+/** Captures one coherent team-store snapshot for an agent run's exec environment. */
+export function readSecretStoreExecEnvironment(params: {
+  includeSecretSentinels: boolean;
+  database?: OpenClawStateDatabaseOptions;
+}): SecretStoreExecEnvironment {
+  try {
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const rows = executeSqliteQuerySync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select(["name", "value", "kind"])
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("deleted_at_ms", "is", null)
+            .orderBy("name", "asc"),
+        ).rows;
+        const env: Record<string, string> = {};
+        const secretSentinels: Record<string, string> = {};
+        for (const row of rows) {
+          if (row.kind === "env") {
+            env[row.name] = row.value;
+            continue;
+          }
+          registerSecretValueForRedaction(row.value);
+          if (params.includeSecretSentinels) {
+            // Named placeholders disclose the credential name. The existing sentinel
+            // is authenticated ciphertext, so an escaped value only fails vendor auth.
+            secretSentinels[row.name] = mintSecretSentinel(row.value, {
+              label: `exec-store:${row.name}`,
+            });
+          }
+        }
+        return {
+          ...(Object.keys(env).length > 0 ? { env } : {}),
+          ...(Object.keys(secretSentinels).length > 0 ? { secretSentinels } : {}),
+        };
+      }, params.database ?? {}) ?? {}
+    );
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return {};
     }
     throw error;
   }
