@@ -99,10 +99,9 @@ async function runHeadlessWorkerLeg(params: {
 }): Promise<CodeModeWorkerResult> {
   const remainingMs = remainingHeadlessMs(params.deadline);
   const timeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
-  const workerTimeoutMs = Math.max(
-    1,
-    Math.min(remainingMs, timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS),
-  );
+  // Let the headless abort scope own the wall-clock deadline. Capping the host
+  // watchdog to the same deadline makes its internal timeout message race the scope.
+  const workerTimeoutMs = timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS;
   return await runCodeModeWorker(
     {
       ...params.input,
