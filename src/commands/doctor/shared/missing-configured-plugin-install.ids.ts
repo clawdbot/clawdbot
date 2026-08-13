@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -16,7 +17,6 @@ import {
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
-import { asObjectRecord } from "./object.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -99,13 +99,13 @@ export function collectConfiguredPluginIds(
   env?: NodeJS.ProcessEnv,
 ): Set<string> {
   const ids = new Set<string>();
-  const plugins = asObjectRecord(cfg.plugins);
+  const plugins = asNullableRecord(cfg.plugins);
   if (plugins?.enabled === false) {
     return ids;
   }
-  const entries = asObjectRecord(plugins?.entries);
+  const entries = asNullableRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asObjectRecord(entry)?.enabled === false) {
+    if (asNullableRecord(entry)?.enabled === false) {
       continue;
     }
     addConfiguredPluginId(ids, pluginId);
@@ -144,9 +144,9 @@ export function collectBlockedPluginIds(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (pluginId.trim() && asObjectRecord(entry)?.enabled === false) {
+    if (pluginId.trim() && asNullableRecord(entry)?.enabled === false) {
       ids.add(pluginId.trim());
     }
   }
@@ -157,7 +157,7 @@ export function collectConfiguredChannelIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): Set<string> {
-  if (asObjectRecord(cfg.plugins)?.enabled === false) {
+  if (asNullableRecord(cfg.plugins)?.enabled === false) {
     return new Set();
   }
   const candidateChannelIds = listRawChannelPluginCatalogEntries({

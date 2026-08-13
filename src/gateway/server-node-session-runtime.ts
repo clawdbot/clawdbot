@@ -29,6 +29,7 @@ export function createGatewayNodeSessionRuntime(params: {
   resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
   isPairingStateCurrent?: NodeRegistryOptions["isPairingStateCurrent"];
   onPairingInvalidated?: NodeRegistryOptions["onPairingInvalidated"];
+  onPairingGenerationChanged?: NodeRegistryOptions["onPairingGenerationChanged"];
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
@@ -46,6 +47,7 @@ export function createGatewayNodeSessionRuntime(params: {
         ...change,
         preserveSubscriptions: change.preserveSessionState,
       });
+      params.onPairingGenerationChanged?.(change);
     },
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();

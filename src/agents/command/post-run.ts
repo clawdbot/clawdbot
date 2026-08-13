@@ -165,6 +165,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
         touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           fallbackExhausted ||
+          fallbackProvider !== provider ||
+          fallbackModel !== model ||
           isHeartbeatLifecycleRun ||
           params.preserveUserFacingSessionModelState,
         preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,

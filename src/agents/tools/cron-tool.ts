@@ -480,6 +480,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               if (typeof payload.text === "string" && payload.text.trim()) {
                 const contextLines = await buildReminderContextLines({
                   agentSessionKey: opts?.agentSessionKey,
+                  agentId: callerScope?.agentId,
                   gatewayOpts,
                   contextMessages,
                   callGatewayTool: callGateway,
@@ -669,7 +670,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
             const inferredAgentId = opts?.agentSessionKey
-              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              ? resolveSessionAgentId({
+                  sessionKey: opts.agentSessionKey,
+                  config: cfg,
+                  agentId: opts.agentId,
+                })
               : undefined;
             const sessionKey = explicitSessionKey ?? inferredSessionKey;
             // When a caller supplies an explicit cross-agent sessionKey without

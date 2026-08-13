@@ -495,7 +495,15 @@ describe("package-openclaw-for-docker", () => {
         outputDir,
         async (command: string, args: string[], cwd: string) => {
           expect({ args, command, cwd }).toEqual({
-            args: ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+            args: [
+              "--dir",
+              "packages/ai",
+              "pack",
+              "--loglevel=error",
+              "--use-stderr",
+              "--pack-destination",
+              outputDir,
+            ],
             command: "pnpm",
             cwd: sourceDir,
           });
@@ -546,6 +554,37 @@ describe("package-openclaw-for-docker", () => {
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps real AI runtime pack failures visible for installer diagnostics", async () => {
+    const sourceDir = tempDirs.make("openclaw-docker-ai-failure-source-");
+    const outputDir = tempDirs.make("openclaw-docker-ai-failure-output-");
+    const packageJsonPath = path.join(sourceDir, "package.json");
+    const originalPackageJson = `${JSON.stringify({
+      dependencies: { "@openclaw/ai": "workspace:*" },
+      name: "openclaw",
+    })}\n`;
+    fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDir, "packages", "ai", "package.json"),
+      '{"name":"@openclaw/ai"}\n',
+    );
+    fs.writeFileSync(packageJsonPath, originalPackageJson);
+    let stderr = "";
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr += String(chunk);
+      return true;
+    });
+
+    try {
+      await expect(prepareBundledAiRuntimePackage(sourceDir, outputDir)).rejects.toThrow(
+        "pnpm --dir packages/ai pack --loglevel=error --use-stderr",
+      );
+      expect(stderr).toContain("ERR_PNPM_PACKAGE_VERSION_NOT_FOUND");
+      expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);
+    } finally {
+      stderrWrite.mockRestore();
     }
   });
 

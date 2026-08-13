@@ -1,6 +1,5 @@
 // Persists managed task-flow records through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -18,7 +17,7 @@ import {
   type TaskFlowRecord,
   type TaskFlowSyncMode,
 } from "./task-flow-registry.types.js";
-import { parseDeliveryContextJson } from "./task-registry.sqlite.shared.js";
+import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import { parseTaskNotifyPolicy } from "./task-registry.types.js";
 
 type FlowRunsTable = OpenClawStateKyselyDatabase["flow_runs"];
@@ -42,13 +41,6 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
-function parseJsonValue(raw: string | null): JsonValue | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  return safeParseJson(raw) as JsonValue | undefined;
-}
-
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   // Older single_task rows did not persist sync_mode; preserve their mirrored semantics.
   const syncMode = parseOptionalTaskFlowSyncMode(row.sync_mode);
@@ -62,8 +54,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeSqliteNumber(row.ended_at);
   const cancelRequestedAt = normalizeSqliteNumber(row.cancel_requested_at);
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
-  const stateJson = parseJsonValue(row.state_json);
-  const waitJson = parseJsonValue(row.wait_json);
+  const stateJson = parseSqliteJsonValue<JsonValue>(row.state_json);
+  const waitJson = parseSqliteJsonValue<JsonValue>(row.wait_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),

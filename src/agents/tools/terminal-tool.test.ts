@@ -113,6 +113,7 @@ describe("terminal tool", () => {
     const sessionId = (opened.details as { sessionId: string }).sessionId;
     expect(backend.writes).toEqual(["echo ready\r"]);
     expect(callGateway).toHaveBeenCalledWith("ui.command", {
+      agentId: "main",
       command: {
         kind: "panel",
         panel: "terminal",
@@ -194,7 +195,7 @@ describe("terminal tool", () => {
     expect(firstBackend.killed).toBe(true);
     expect(secondBackend.killed).toBe(false);
     expect(persistentBackend.killed).toBe(false);
-    expect(manager.listAgent(agentSessionKey)).toHaveLength(2);
+    expect(manager.listAgent(agentSessionKey, "main")).toHaveLength(2);
   });
 
   it("maps a cron agent run to its detached task before terminal lookup", async () => {

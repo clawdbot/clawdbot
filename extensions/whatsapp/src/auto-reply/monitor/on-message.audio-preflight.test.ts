@@ -161,15 +161,6 @@ function makeBlockedDirectAudioMsg(): AdmittedWebInboundMessage {
   );
 }
 
-function makeEchoTracker() {
-  return {
-    has: () => false,
-    forget: () => {},
-    rememberText: () => {},
-    buildCombinedKey: (p: { combinedBody: string }) => p.combinedBody,
-  };
-}
-
 function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
   const call = mockFn.mock.calls.at(callIndex);
   if (!call) {
@@ -197,7 +188,6 @@ function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHand
     groupHistoryLimit: 20,
     groupHistories: new Map(),
     groupMemberNames: new Map(),
-    echoTracker: makeEchoTracker() as never,
     backgroundTasks: new Set(),
     replyResolver: vi.fn() as never,
     replyLogger: {

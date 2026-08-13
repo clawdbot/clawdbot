@@ -15,6 +15,9 @@ const resolveAgentWorkspaceDirMock = vi.fn<
 const resolveDefaultAgentIdMock = vi.fn<
   typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
 >(() => "default");
+const tryResolveConfiguredAgentWorkspaceDirMock = vi.fn<
+  typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+>(() => "/resolved-workspace");
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const metadataSnapshot = {
   configFingerprint: "fingerprint",
@@ -27,6 +30,10 @@ const metadataSnapshot = {
 };
 type MetadataSnapshotMock = typeof metadataSnapshot & { pluginIds?: readonly string[] };
 const loadPluginMetadataSnapshotMock = vi.fn((): MetadataSnapshotMock => metadataSnapshot);
+const rebasePluginMetadataSnapshotManifestRegistryMock = vi.fn(
+  (snapshot: MetadataSnapshotMock) => snapshot,
+);
+const resolveConfigWidePluginManifestRegistryMock = vi.fn(() => manifestRegistry);
 const isPluginMetadataSnapshotCompatibleMock = vi.fn(() => true);
 const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
@@ -54,11 +61,17 @@ vi.mock("../../config/plugin-auto-enable.apply.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  tryResolveConfiguredAgentWorkspaceDir: tryResolveConfiguredAgentWorkspaceDirMock,
+}));
+
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: resolveConfigWidePluginManifestRegistryMock,
 }));
 
 vi.mock("../plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  rebasePluginMetadataSnapshotManifestRegistry: rebasePluginMetadataSnapshotManifestRegistryMock,
   resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
@@ -84,10 +97,13 @@ describe("resolvePluginRuntimeLoadContext", () => {
     isPluginMetadataSnapshotCompatibleMock.mockReset();
     isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
+    rebasePluginMetadataSnapshotManifestRegistryMock.mockClear();
+    resolveConfigWidePluginManifestRegistryMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
+    tryResolveConfiguredAgentWorkspaceDirMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -153,8 +169,16 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       workspaceDir: "/resolved-workspace",
     });
-    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
-    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+    expect(tryResolveConfiguredAgentWorkspaceDirMock).toHaveBeenNthCalledWith(1, rawConfig, env);
+    expect(tryResolveConfiguredAgentWorkspaceDirMock).toHaveBeenNthCalledWith(
+      2,
+      resolvedConfig,
+      env,
+    );
+    expect(resolveConfigWidePluginManifestRegistryMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env,
+    });
   });
 
   it("reuses a prepared metadata snapshot without resolving metadata again", () => {
@@ -268,7 +292,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       ...metadataSnapshot,
       index: {
         installRecords: {
-          demo: { source: "registry", version: "1.0.0" },
+          demo: { source: "npm", version: "1.0.0" },
         },
         plugins: [],
         policyHash: "policy",
@@ -282,10 +306,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
 
     expect(context.installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
     expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
   });
 

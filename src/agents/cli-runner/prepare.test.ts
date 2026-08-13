@@ -2789,9 +2789,11 @@ describe("prepareCliRunContext", () => {
     );
     expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
       "agent:main:test",
+      "main",
     );
     expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
       "agent:main:test",
+      "main",
     );
   });
 
@@ -3144,7 +3146,8 @@ describe("prepareCliRunContext", () => {
       context: {
         sessionKey: "agent:main:telegram:group:chat123",
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        agentId: "worker",
+        runtimePolicyAgentId: "worker",
+        agentId: "main",
         sessionId: "session-test",
         runId: "run-test-room-event-tools",
         workspaceDir: context.workspaceDir,
@@ -3223,7 +3226,8 @@ describe("prepareCliRunContext", () => {
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        agentId: "worker",
+        runtimePolicyAgentId: "worker",
+        agentId: "main",
         modelProvider: "anthropic",
         modelId: "test-model",
         execOverrides: {

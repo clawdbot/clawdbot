@@ -1,11 +1,83 @@
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, vi } from "vitest";
-import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+
+type Listener = (...args: unknown[]) => void;
+
+export function createOpenAIRealtimeMockState() {
+  class MockWebSocket {
+    static readonly OPEN = 1;
+    static readonly CLOSED = 3;
+    static instances: MockWebSocket[] = [];
+
+    readonly listeners = new Map<string, Listener[]>();
+    readyState = 0;
+    sent: string[] = [];
+    closed = false;
+    terminated = false;
+    deferClose = false;
+    deferredClose: (() => void) | undefined;
+    args: unknown[];
+
+    constructor(...args: unknown[]) {
+      this.args = args;
+      MockWebSocket.instances.push(this);
+    }
+
+    on(event: string, listener: Listener): this {
+      const listeners = this.listeners.get(event) ?? [];
+      listeners.push(listener);
+      this.listeners.set(event, listeners);
+      return this;
+    }
+
+    emit(event: string, ...args: unknown[]): void {
+      for (const listener of this.listeners.get(event) ?? []) {
+        listener(...args);
+      }
+    }
+
+    send(payload: string): void {
+      this.sent.push(payload);
+    }
+
+    close(code?: number, reason?: string): void {
+      this.closed = true;
+      this.readyState = MockWebSocket.CLOSED;
+      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+      if (this.deferClose) {
+        this.deferredClose = emitClose;
+        return;
+      }
+      emitClose();
+    }
+
+    terminate(): void {
+      this.terminated = true;
+      this.close(1006, "terminated");
+    }
+
+    emitDeferredClose(): void {
+      const emitClose = this.deferredClose;
+      this.deferredClose = undefined;
+      emitClose?.();
+    }
+  }
+
+  return {
+    FakeWebSocket: MockWebSocket,
+    execFileSyncMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(),
+    isProviderAuthProfileConfiguredMock: vi.fn(),
+    resolveProviderAuthProfileApiKeyMock: vi.fn(),
+  };
+}
 
 type FakeWebSocketLike = {
   sent: string[];
@@ -19,11 +91,65 @@ type FakeWebSocketConstructor<T extends FakeWebSocketLike> = {
   instances: T[];
 };
 
+type InternalRealtimeVoiceProviderApi = {
+  isBrowserSessionConfigured: (ctx: {
+    cfg?: object;
+    providerConfig: Record<string, unknown>;
+    agentId?: string;
+  }) => boolean;
+  isGatewayRelayConfigured: (ctx: {
+    cfg?: object;
+    providerConfig: Record<string, unknown>;
+    agentId?: string;
+  }) => boolean | undefined;
+  resolveBrowserSessionCapabilities: (ctx: {
+    cfg?: object;
+    providerConfig: Record<string, unknown>;
+    model?: string;
+  }) => {
+    handlesAgentConsult?: boolean;
+    supportsToolCalls?: boolean;
+    supportsVideoFrames?: boolean;
+    supportsGatewayControl?: boolean;
+    transports?: string[];
+  };
+  resolveGatewayRelayCapabilities: (ctx: {
+    cfg?: object;
+    providerConfig: Record<string, unknown>;
+    model?: string;
+  }) => {
+    handlesAgentConsult?: boolean;
+    supportsToolCalls?: boolean;
+    transports?: string[];
+  };
+  validateGatewayRelayLaunch: (ctx: {
+    cfg?: object;
+    providerConfig: Record<string, unknown>;
+    model?: string;
+    autoRespondToAudio?: boolean;
+  }) => string | undefined;
+};
+
+const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
+const OPENAI_REALTIME_REJECTED_KEY_MESSAGE =
+  "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
+
 export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(deps: {
   FakeWebSocket: FakeWebSocketConstructor<T>;
+  execFileSyncMock: ReturnType<typeof vi.fn>;
   fetchWithSsrFGuardMock: ReturnType<typeof vi.fn>;
+  isProviderAuthProfileConfiguredMock: ReturnType<typeof vi.fn>;
+  resolveProviderAuthProfileApiKeyMock: ReturnType<typeof vi.fn>;
+  buildOpenAIRealtimeVoiceProvider: () => RealtimeVoiceProviderPlugin;
 }) {
-  const { FakeWebSocket, fetchWithSsrFGuardMock } = deps;
+  const {
+    FakeWebSocket,
+    execFileSyncMock,
+    fetchWithSsrFGuardMock,
+    isProviderAuthProfileConfiguredMock,
+    resolveProviderAuthProfileApiKeyMock,
+    buildOpenAIRealtimeVoiceProvider,
+  } = deps;
   type FakeWebSocketInstance = T;
   type SentRealtimeEvent = {
     type: string;
@@ -69,6 +195,31 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
   }
 
+  function resetTestState(): void {
+    FakeWebSocket.instances = [];
+    vi.stubEnv("OPENAI_API_KEY", "");
+    execFileSyncMock.mockReset();
+    fetchWithSsrFGuardMock.mockReset();
+    isProviderAuthProfileConfiguredMock.mockReset();
+    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    resolveProviderAuthProfileApiKeyMock.mockReset();
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+  }
+
+  function restoreTestEnvironment(): void {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  }
+
+  function readInternalRealtimeVoiceProviderApi(
+    provider: object,
+  ): InternalRealtimeVoiceProviderApi {
+    return Reflect.get(
+      provider,
+      INTERNAL_REALTIME_VOICE_PROVIDER,
+    ) as InternalRealtimeVoiceProviderApi;
+  }
+
   function createNativeBridge(
     overrides: Partial<RealtimeVoiceBridgeCreateRequest> = {},
   ): RealtimeVoiceBridge {
@@ -107,6 +258,21 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
 
   function emitSessionUpdated(socket: FakeWebSocketInstance): void {
     emitServerEvent(socket, { type: "session.updated" });
+  }
+
+  function emitAssistantPlayback(
+    socket: FakeWebSocketInstance,
+    overrides: { responseId?: string; itemId?: string; audio?: Buffer } = {},
+  ): void {
+    emitServerEvent(socket, {
+      type: "response.created",
+      response: { id: overrides.responseId ?? "resp_1" },
+    });
+    emitServerEvent(socket, {
+      type: "response.audio.delta",
+      item_id: overrides.itemId ?? "item_1",
+      delta: (overrides.audio ?? Buffer.from("assistant audio")).toString("base64"),
+    });
   }
 
   function emitCompletedToolCalls(
@@ -180,6 +346,61 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
         "Content-Type": "application/json",
       },
     });
+  }
+
+  function mockRealtimeClientSecretResponse(
+    overrides: { clientSecret?: string; expiresAt?: number } = {},
+  ): ReturnType<typeof vi.fn> {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: overrides.clientSecret ?? "client-secret-123" },
+        ...(overrides.expiresAt === undefined ? {} : { expires_at: overrides.expiresAt }),
+      }),
+      release,
+    });
+    return release;
+  }
+
+  function createQuicksilverBrowserBrokerFixture(
+    overrides: {
+      session?: {
+        provider?: "openai";
+        transport?: "webrtc";
+        clientSecret?: string;
+        offerUrl?: string;
+      };
+      capabilities?: {
+        handlesAgentConsult?: true;
+        supportsToolCalls?: boolean;
+        supportsVideoFrames?: boolean;
+        transports?: Array<"webrtc">;
+      };
+    } = {},
+  ) {
+    const session: RealtimeVoiceBrowserSession = {
+      provider: "openai" as const,
+      transport: "webrtc" as const,
+      clientSecret: "quicksilver-token",
+      offerUrl: "/plugins/openai/realtime/calls",
+      ...overrides.session,
+    };
+    const createBrowserSession = vi.fn(
+      async (_request: unknown, _auth: unknown): Promise<RealtimeVoiceBrowserSession> => session,
+    );
+    const cancelBrowserSession = vi.fn(async (_session: RealtimeVoiceBrowserSession) => undefined);
+    const broker = {
+      capabilities: {
+        transports: ["webrtc" as const],
+        handlesAgentConsult: true as const,
+        supportsToolCalls: false,
+        supportsVideoFrames: false,
+        ...overrides.capabilities,
+      },
+      createBrowserSession,
+      cancelBrowserSession,
+    };
+    return { broker, createBrowserSession, cancelBrowserSession };
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -286,6 +507,9 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
   }
 
   return {
+    resetTestState,
+    restoreTestEnvironment,
+    readInternalRealtimeVoiceProviderApi,
     parseSent,
     createNativeBridge,
     requireSocket,
@@ -293,6 +517,7 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     openSocket,
     emitServerEvent,
     emitSessionUpdated,
+    emitAssistantPlayback,
     emitCompletedToolCalls,
     emitFunctionOutputAdded,
     expectedFunctionOutput,
@@ -300,6 +525,9 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     expectedResponseCreateEvent,
     expectedResponseCancelEvent,
     createJsonResponse,
+    createQuicksilverBrowserBrokerFixture,
+    mockRealtimeClientSecretResponse,
+    rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
     requireRecord,
     requireNestedRecord,
     expectRecordFields,

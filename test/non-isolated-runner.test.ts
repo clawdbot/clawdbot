@@ -79,6 +79,7 @@ it("applies vi.mock factories after a sibling file fails during collection", asy
     await write(
       "vitest.config.ts",
       [
+        `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};`,
         'import { defineConfig } from "vitest/config";',
         'import { BaseSequencer } from "vitest/node";',
         "// Alphabetical order keeps a-crash collected before b-mock regardless of",
@@ -90,6 +91,7 @@ it("applies vi.mock factories after a sibling file fails during collection", asy
         "}",
         "export default defineConfig({",
         `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  resolve: sharedVitestConfig.resolve,",
         "  test: {",
         "    isolate: false,",
         "    fileParallelism: false,",
@@ -240,6 +242,7 @@ it("clears named plugin runtime slots between files", async () => {
     await write(
       "vitest.config.ts",
       [
+        `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};`,
         'import { defineConfig } from "vitest/config";',
         'import { BaseSequencer } from "vitest/node";',
         "class AlphabeticalSequencer extends BaseSequencer {",
@@ -249,6 +252,7 @@ it("clears named plugin runtime slots between files", async () => {
         "}",
         "export default defineConfig({",
         `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  resolve: sharedVitestConfig.resolve,",
         "  test: {",
         "    isolate: false,",
         "    fileParallelism: false,",

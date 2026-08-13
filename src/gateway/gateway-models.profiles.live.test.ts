@@ -72,7 +72,7 @@ import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../confi
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { redactSecrets } from "../logging/redact.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveRuntimeThinkingProfile } from "../plugins/provider-runtime.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
@@ -723,7 +723,7 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -752,7 +752,7 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -2456,7 +2456,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -4223,7 +4223,7 @@ function parseExplicitLiveModelRef(
     const rawModelId = trimmed.slice(slash + 1).trim();
     const modelId =
       provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGoogleModelId(rawModelId)
+        ? normalizeGooglePreviewModelId(rawModelId)
         : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }

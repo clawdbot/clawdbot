@@ -1217,6 +1217,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.wake).toHaveBeenCalledWith({
+      agentId: "main",
       mode: "now",
       text: "ping",
       sessionKey,
@@ -1238,6 +1239,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.wake).toHaveBeenCalledWith({
+      agentId: "main",
       mode: "now",
       text: "ping",
       sessionKey,
@@ -3945,6 +3947,14 @@ describe("cron method validation", () => {
   });
 
   describe("wake", () => {
+    beforeEach(() => {
+      setRuntimeConfig({
+        agents: {
+          entries: { main: {}, ops: {}, "agent-123": {}, "agent-456": {} },
+        },
+      });
+    });
+
     it("forwards sessionKey to context.cron.wake when provided", async () => {
       const { context, respond } = await invokeWake({
         mode: "now",
@@ -3952,6 +3962,7 @@ describe("cron method validation", () => {
         sessionKey: "agent:main:telegram:dm:42",
       });
       expect(context.cron.wake).toHaveBeenCalledWith({
+        agentId: "main",
         mode: "now",
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
@@ -4003,7 +4014,10 @@ describe("cron method validation", () => {
         agentId: "ops",
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
-      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "contradicts" });
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "does not match session key agent",
+      });
     });
 
     it("accepts an explicit agentId matching the agent that owns the sessionKey", async () => {
@@ -4030,7 +4044,7 @@ describe("cron method validation", () => {
       {
         name: "sessionKey",
         params: { sessionKey: "agent:agent-456:discord:thread-xyz" },
-        message: "wake sessionKey outside caller scope",
+        message: "does not match session key agent",
       },
     ])("rejects a cross-agent $name for agent-runtime callers", async ({ params, message }) => {
       const { context, respond } = await invokeWake(

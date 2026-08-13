@@ -1,6 +1,6 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type {
   HeartbeatRunResult,

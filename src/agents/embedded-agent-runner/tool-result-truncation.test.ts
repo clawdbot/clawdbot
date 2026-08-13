@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
@@ -17,7 +18,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {

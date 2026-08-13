@@ -30,6 +30,7 @@ import {
   type ChatRunPlanSnapshot,
   type ChatRunState,
 } from "./server-chat-state.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
   resolveSessionSubscriptionKeys,
@@ -504,22 +505,6 @@ export type ChatAbortOps = {
   onRunAborted?: (runId: string) => void;
 };
 
-type TrackedChatRunAbortOps = {
-  chatAbortControllers: ChatAbortOps["chatAbortControllers"];
-  chatRunState: ChatAbortOps["chatRunState"];
-  removeChatRun: ChatAbortOps["removeChatRun"];
-  agentRunSeq: ChatAbortOps["agentRunSeq"];
-  broadcast: ChatAbortOps["broadcast"];
-  nodeSendToSession: ChatAbortOps["nodeSendToSession"];
-};
-
-export function abortTrackedChatRunById(
-  ops: TrackedChatRunAbortOps,
-  params: Parameters<typeof abortChatRunById>[1],
-) {
-  return abortChatRunById(ops, params);
-}
-
 function resolveChatAbortDeliverySessionKeys(
   ops: ChatAbortOps,
   sessionKey: string,
@@ -553,12 +538,13 @@ function broadcastChatAborted(
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
   const errorMessage = readToolValidationErrorSummary(params.errorMessage);
+  const explicitAgentId = normalizeActiveAgentId(params.agentId);
   const defaultGlobalAgentId =
-    sessionKey === "global" ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops)) : undefined;
+    sessionKey === "global" && !explicitAgentId
+      ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops))
+      : undefined;
   const payloadAgentId =
-    sessionKey === "global"
-      ? (normalizeActiveAgentId(params.agentId) ?? defaultGlobalAgentId)
-      : normalizeActiveAgentId(params.agentId);
+    sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
   const payload = {
     runId,
     sessionKey,
@@ -584,7 +570,11 @@ function broadcastChatAborted(
 
 function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   const cfg = ops.getRuntimeConfig?.();
-  return cfg ? resolveDefaultAgentId(cfg) : undefined;
+  if (!cfg) {
+    return undefined;
+  }
+  const resolved = resolveRequestedSessionAgentId(cfg, "global");
+  return resolved.ok ? resolved.agentId : undefined;
 }
 
 export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {

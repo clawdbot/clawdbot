@@ -585,6 +585,28 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
+  it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
+    const onMessage = vi.fn(async (_message: WebInboundMessage) => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    for (const [index, id] of ["in-2", "in-3"].entries()) {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id,
+          remoteJid: "999@s.whatsapp.net",
+          text: "Done.",
+          timestamp: 1_700_000_000 + index,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, index + 1);
+    }
+
+    expect(onMessage.mock.calls.map(([message]) => message.event.id)).toEqual(["in-2", "in-3"]);
+    await listener.close();
+  });
+
   it("delivery coordinator retries redelivery after an explicit retryable failure", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {

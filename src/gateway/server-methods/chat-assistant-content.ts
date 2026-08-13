@@ -12,6 +12,7 @@ import {
   cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { hasRegisteredChatRunForSessionKey } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -269,7 +270,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       for (const [groupIndex, mediaUrl] of mediaGroup.mediaUrls.entries()) {
         const mediaBlocks = await createManagedOutgoingMediaBlocks({
           sessionKey: params.sessionKey,
-          ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           mediaUrls: [mediaUrl],
           attachments: [mediaGroup.attachments[groupIndex] ?? {}],
           localRoots: params.managedMediaLocalRoots,
@@ -427,20 +428,25 @@ export function hasManagedOutgoingAssistantContent(
 export function scheduleChatHistoryManagedMediaCleanup(params: {
   sessionKey: string;
   agentId?: string;
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
 }) {
-  const cleanupKey =
-    params.sessionKey === "global" && params.agentId
-      ? `agent:${params.agentId}:global`
-      : params.sessionKey;
+  const cleanupKey = params.agentId
+    ? `agent:${params.agentId}:${params.sessionKey}`
+    : params.sessionKey;
   if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
     return;
   }
   const pending = cleanupManagedOutgoingMediaRecords({
     sessionKey: params.sessionKey,
-    ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     hasActiveSessionRun: (sessionKey, agentId) =>
-      hasRegisteredChatRunForSessionKey({ context: params.context, sessionKey, agentId }),
+      hasRegisteredChatRunForSessionKey({
+        context: params.context,
+        sessionKey,
+        agentId,
+        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey),
+      }),
   })
     .then(() => undefined)
     .catch((error: unknown) => {

@@ -175,6 +175,53 @@ afterEach(async () => {
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
+  it("migrates the inherited auth owner after it leaves the explicit roster", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(
+      state,
+      {
+        version: 1,
+        profiles: {
+          "openai:retired-owner": {
+            type: "oauth",
+            provider: "openai",
+            access: "retired-owner-access",
+            refresh: "retired-owner-refresh",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      "retired-ops",
+    );
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "retired-ops" } },
+          entries: { research: {}, writer: {} },
+        },
+      },
+      prompter: makePrompter(true),
+      env: state.env,
+      now: () => Date.parse("2026-08-09T12:00:00.000Z"),
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(loadPersistedAuthProfileStore(state.agentDir("retired-ops"))).toMatchObject({
+      profiles: {
+        "openai:retired-owner": {
+          type: "oauth",
+          provider: "openai",
+          access: "retired-owner-access",
+          refresh: "retired-owner-refresh",
+        },
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+  });
+
   it("imports shared oauth.json into shared-main only and records its archive", async () => {
     const state = await makeTestState();
     const oauthPath = await state.writeJson("credentials/oauth.json", {

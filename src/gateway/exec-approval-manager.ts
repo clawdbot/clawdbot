@@ -2,7 +2,10 @@
 // Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
@@ -11,7 +14,6 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import {

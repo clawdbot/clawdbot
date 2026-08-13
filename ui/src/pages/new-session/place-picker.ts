@@ -7,7 +7,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
+import {
+  renderCloudProfileMenuItems,
+  renderConnectMachineMenuItem,
+  renderSessionMenuItem,
+} from "./cloud-target.ts";
 import type {
   BrowserTarget,
   DraftBranches,
@@ -16,6 +20,7 @@ import type {
   DraftNode,
 } from "./discovery.ts";
 import { folderDisplayName } from "./path.ts";
+import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
@@ -36,133 +41,6 @@ export function projectCloneInput(value: string): string | null {
     return null;
   }
   return /^(?:https:\/\/|ssh:\/\/git@|git@[^:]+:)/iu.test(trimmed) ? trimmed : null;
-}
-
-function renderBrowseView(params: {
-  listing: FsListDirResult | null;
-  target: BrowserTarget;
-  loading: boolean;
-  error: string | null;
-  pathDraft: string;
-  usablePath: string | null;
-  registerProjectPath: string | null;
-  registeringProject: boolean;
-  onPathDraftChange: (value: string) => void;
-  onNavigate: (path: string | undefined) => void;
-  onBack: () => void;
-  onRegisterProject: (path: string) => void;
-  onClose: () => void;
-  onApplyFolder: (path: string, nodeId: string) => void;
-}) {
-  const entries = params.listing?.entries ?? [];
-  const registerProjectPath = params.registerProjectPath;
-  return html`
-    <div
-      class="new-session-page__browser"
-      @keydown=${(event: KeyboardEvent) => {
-        if (event.key !== "Escape") {
-          return;
-        }
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        params.onBack();
-      }}
-    >
-      <div class="new-session-page__browser-head">
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("newSession.browserUp")}
-          aria-label=${t("newSession.browserUp")}
-          @click=${() => {
-            if (params.listing?.parent) {
-              params.onNavigate(params.listing.parent);
-            } else {
-              params.onBack();
-            }
-          }}
-        >
-          ${icons.arrowLeft}
-        </button>
-        <input
-          class="new-session-page__browser-path"
-          type="text"
-          aria-label=${t("newSession.folder")}
-          placeholder=${params.target.label}
-          .value=${params.pathDraft}
-          @input=${(event: Event) => {
-            params.onPathDraftChange((event.target as HTMLInputElement).value);
-          }}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              params.onNavigate(params.pathDraft.trim() || undefined);
-            }
-          }}
-        />
-        ${params.loading
-          ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("common.close")}
-          aria-label=${t("common.close")}
-          @click=${params.onClose}
-        >
-          ${icons.x}
-        </button>
-      </div>
-      ${params.error ? html`<div class="new-session-page__error">${params.error}</div>` : nothing}
-      <div class="new-session-page__browser-list" role="group" aria-label=${t("newSession.folder")}>
-        ${params.listing && entries.length === 0 && !params.loading
-          ? html`<div class="new-session-page__browser-empty">${t("newSession.browserEmpty")}</div>`
-          : nothing}
-        ${entries.map(
-          (entry) => html`
-            <button
-              type="button"
-              class="new-session-page__browser-entry ${entry.hidden
-                ? "new-session-page__browser-entry--hidden"
-                : ""}"
-              title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-              @click=${() => params.onNavigate(entry.path)}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-              <span>${entry.name}</span>
-            </button>
-          `,
-        )}
-      </div>
-      <div class="new-session-page__browser-actions">
-        ${registerProjectPath
-          ? html`
-              <button
-                type="button"
-                class="new-session-page__browser-register"
-                ?disabled=${params.registeringProject}
-                @click=${() => params.onRegisterProject(registerProjectPath)}
-              >
-                ${t("newSession.registerProject")}
-              </button>
-            `
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-use"
-          ?disabled=${params.usablePath === null || params.registeringProject}
-          @click=${() => {
-            if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath, params.target.nodeId);
-              params.onClose();
-            }
-          }}
-        >
-          ${t("newSession.browserUse")}
-        </button>
-      </div>
-    </div>
-  `;
 }
 
 export function renderPlaceSelect(params: {
@@ -257,7 +135,7 @@ export function renderPlaceSelect(params: {
   const activeProfile = params.cloudProfiles.find(
     (profile) => profile.id === params.cloudProfileId,
   );
-  const { deviceNodes, cloudProfiles } = resolvePlacePickerSections(params);
+  const { deviceNodes, deviceFacts, cloudProfiles } = resolvePlacePickerSections(params);
   const gatewayLabel = params.gatewayName
     ? t("newSession.gatewayNamed", { name: params.gatewayName })
     : t("newSession.gateway");
@@ -306,6 +184,28 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
+        params.onBrowse(browseTarget);
+      }
+    }}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -355,7 +255,7 @@ export function renderPlaceSelect(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       ${params.browserTarget
-        ? renderBrowseView({
+        ? renderPlaceBrowser({
             listing: params.browserListing,
             target: params.browserTarget,
             loading: params.browserLoading,
@@ -515,23 +415,11 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
@@ -559,6 +447,7 @@ export function renderPlaceSelect(params: {
                                   ? icons.monitorSmartphone
                                   : icons.monitor,
                                 sub: nodeSuffixes[index],
+                                facts: deviceFacts.get(node.nodeId),
                                 checked: params.execNode === node.nodeId,
                                 title: nodeTooltip(node),
                                 onSelect: () => params.onSelectExecNode(node.nodeId),
@@ -678,20 +567,10 @@ export function renderPlaceSelect(params: {
                     ${t("newSession.runsOn", { place: gatewayLabel })}
                   </div>`}
               ${params.isAdmin
-                ? html`
-                    <div class="session-menu__separator" role="separator"></div>
-                    <button
-                      type="button"
-                      class="session-menu__item new-session-page__connect-machine"
-                      data-value="connect-machine"
-                      aria-pressed="false"
-                      ?disabled=${params.submitting || params.pendingCloud}
-                      @click=${params.onConnectMachine}
-                    >
-                      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
-                      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
-                    </button>
-                  `
+                ? renderConnectMachineMenuItem({
+                    disabled: params.submitting || params.pendingCloud,
+                    onSelect: params.onConnectMachine,
+                  })
                 : nothing}
             </div>
           `}

@@ -184,17 +184,14 @@ class NewSessionPage extends OpenClawLightDomElement {
             if (this.context?.gateway !== gateway) {
               return;
             }
-            if (event.event === "config.changed") {
-              void this.gateway.refreshCloudProfiles();
-              return;
-            }
             if (
+              event.event === "config.changed" ||
               event.event === "node.pair.requested" ||
               event.event === "node.pair.resolved" ||
               event.event === "device.pair.requested" ||
               event.event === "device.pair.resolved"
             ) {
-              void this.place.refreshNodes();
+              this.refreshPlaceTopology();
               return;
             }
             const presence = event.event === "presence" ? readPresence(event.payload) : null;
@@ -204,7 +201,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             const signature = presenceConnectivitySignature(presence);
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
-              void this.place.refreshNodes();
+              this.refreshPlaceTopology();
             }
           });
         },
@@ -221,6 +218,12 @@ class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );
+  }
+
+  // Device visibility intersects both catalogs, so topology changes must refresh them together.
+  private refreshPlaceTopology() {
+    void this.place.refreshNodes();
+    void this.gateway.refreshCloudProfiles();
   }
 
   handleEvent(event: Event) {

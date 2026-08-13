@@ -5,17 +5,21 @@ import {
   errorShape,
   validateSessionsDeleteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   deleteSessionEntryLifecycle,
-  resolveMainSessionKey,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -32,6 +36,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
+  isAgentMainSessionKey,
   rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
@@ -71,16 +76,28 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    const mainKey = resolveMainSessionKey(cfg);
+    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+    const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
+    const protectedGlobalAgentId =
+      persistedStoreOwner.kind === "configured"
+        ? persistedStoreOwner.agentId
+        : compatibilityDefaultAgentId;
+    const explicitlySelectedGlobalAgentId =
+      normalizeOptionalString(p.agentId) ?? parseAgentSessionKey(key)?.agentId;
     const isSelectedNonDefaultGlobal =
       target.canonicalKey === "global" &&
-      requestedAgentId !== undefined &&
-      requestedAgentId !== resolveDefaultAgentId(cfg);
-    if (target.canonicalKey === mainKey && !isSelectedNonDefaultGlobal) {
+      explicitlySelectedGlobalAgentId !== undefined &&
+      normalizeAgentId(explicitlySelectedGlobalAgentId) !== protectedGlobalAgentId;
+    const isMainSession =
+      target.canonicalKey !== "global" && isAgentMainSessionKey(cfg, target.canonicalKey);
+    if ((target.canonicalKey === "global" || isMainSession) && !isSelectedNonDefaultGlobal) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `Cannot delete the main session (${mainKey}).`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Cannot delete the main session (${target.canonicalKey}).`,
+        ),
       );
       return;
     }

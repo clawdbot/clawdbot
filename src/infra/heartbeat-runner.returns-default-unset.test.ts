@@ -457,10 +457,21 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("falls back to default agent when no heartbeat config exists", () => {
+  it("uses the configured ambient heartbeat owner when one is explicit", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        defaults: { heartbeat: { agentId: "ops", every: "30m" } },
         list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("falls back to the sole agent when no heartbeat config exists", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }],
       },
     };
     expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);

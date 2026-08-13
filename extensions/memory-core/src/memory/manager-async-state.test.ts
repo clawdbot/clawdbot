@@ -21,28 +21,26 @@ describe("memory manager async state", () => {
     await closePromise;
   });
 
-  it("reports pending sync failures during close", async () => {
+  it.each([
+    {
+      name: "pending sync",
+      pendingKey: "pendingSync" as const,
+      error: new Error("sync failed"),
+    },
+    {
+      name: "pending provider initialization",
+      pendingKey: "pendingProviderInit" as const,
+      error: new Error("provider init failed"),
+    },
+  ])("reports $name failures during close", async ({ pendingKey, error }) => {
     const onError = vi.fn();
-    const syncError = new Error("sync failed");
 
     await awaitPendingManagerWork({
-      pendingSync: Promise.reject(syncError),
+      [pendingKey]: Promise.reject(error),
       onError,
     });
 
-    expect(onError).toHaveBeenCalledWith(syncError);
-  });
-
-  it("reports pending provider initialization failures during close", async () => {
-    const onError = vi.fn();
-    const providerError = new Error("provider init failed");
-
-    await awaitPendingManagerWork({
-      pendingProviderInit: Promise.reject(providerError),
-      onError,
-    });
-
-    expect(onError).toHaveBeenCalledWith(providerError);
+    expect(onError).toHaveBeenCalledWith(error);
   });
 
   it("does not report errors for completed pending close work", async () => {

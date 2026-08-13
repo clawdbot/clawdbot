@@ -653,6 +653,7 @@ jobs:
           const compactPlan =
             isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
           let changedNodeTestShards = null;
+          let changedExtensionFallbackShards = [];
           if (
             compactPullRequest &&
             changedPaths &&
@@ -662,6 +663,18 @@ jobs:
               changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
             } catch (error) {
               console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+            }
+            if (
+              changedNodeTestShards === null &&
+              typeof changedNodeTestPlan.createChangedExtensionFallbackShards === "function"
+            ) {
+              try {
+                changedExtensionFallbackShards =
+                  changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
+              } catch (error) {
+                console.warn(`Changed extension fallback planning failed; using compact full suite: ${error}`);
+                changedExtensionFallbackShards = [];
+              }
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -706,10 +719,13 @@ jobs:
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
-              : createNodeTestPlan({
-                  includeReleaseOnlyPluginShards: false,
-                  compact: compactPlan,
-                })
+              : [
+                  ...createNodeTestPlan({
+                    includeReleaseOnlyPluginShards: false,
+                    compact: compactPlan,
+                  }),
+                  ...changedExtensionFallbackShards,
+                ]
             : [];
           const assignVitestFsCacheWriter =
             typeof nodeTestPlan.assignVitestFsCacheWriter === "function"

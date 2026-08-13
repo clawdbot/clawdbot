@@ -11,6 +11,29 @@ import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+type OpenClawStateDatabaseLifecycleEvent =
+  | { kind: "opened"; database: OpenClawStateDatabase }
+  | { kind: "closed"; path: string }
+  | { kind: "open-error"; path: string; error: unknown };
+const databaseLifecycleListeners = new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>();
+
+function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecycleEvent): void {
+  for (const listener of databaseLifecycleListeners) {
+    listener(event);
+  }
+}
+
+export function registerOpenClawStateDatabaseLifecycleListener(
+  listener: (event: OpenClawStateDatabaseLifecycleEvent) => void,
+): () => void {
+  databaseLifecycleListeners.add(listener);
+  for (const database of cachedDatabases.values()) {
+    if (database.db.isOpen) {
+      listener({ kind: "opened", database });
+    }
+  }
+  return () => databaseLifecycleListeners.delete(listener);
+}
 
 type OpenClawStateDatabaseCloseResult = {
   caught: boolean;
@@ -48,6 +71,7 @@ function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): bool
   // Remove ownership before cleanup. A poisoned native handle can reject close,
   // but it must never remain discoverable as the process-wide shared handle.
   cachedDatabases.delete(database.path);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
   // Eviction is best-effort; the triggering database error remains authoritative.
   closeOpenClawStateDatabaseHandle(database);
   return true;
@@ -74,6 +98,7 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
 function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
   const { db, path: pathname } = database;
   cachedDatabases.set(pathname, database);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "opened", database });
   registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
     // Write transactions own rollback and evict at their outer boundary.
     if (!db.isTransaction && isSqliteCorruptionError(error)) {
@@ -101,6 +126,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   database.walMaintenance.close();
   clearNodeSqliteKyselyCacheForDatabase(database.db);
   cachedDatabases.delete(database.path);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
 }
 
 /** Latch background verification damage so later opens fail without rescanning. */
@@ -123,6 +149,10 @@ function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
   if (terminalFailure) {
     throw terminalFailure;
   }
+}
+
+function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: unknown): void {
+  notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: path.resolve(pathname), error });
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
@@ -162,6 +192,7 @@ function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
     database.db.close();
   }
   cachedDatabases.delete(resolvedPath);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: resolvedPath });
   return true;
 }
 
@@ -172,6 +203,7 @@ function closeOpenClawStateDatabase(): void {
     if (database.db.isOpen) {
       database.db.close();
     }
+    notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
   }
   cachedDatabases.clear();
 }
@@ -204,4 +236,5 @@ export const openClawStateDatabaseCache = {
   isOpenClawStateDatabaseOpen,
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
+  recordOpenClawStateDatabaseLifecycleOpenError,
 };

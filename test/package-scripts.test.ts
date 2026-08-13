@@ -152,9 +152,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("exposes the strict production plugin normalization boundary command", () => {
-    expect(readPackageJson().scripts["lint:extensions:no-normalization-core-bypass"]).toBe(
-      "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
+  it("runs dead-code reports fail-fast", () => {
+    expect(readPackageJson().scripts["deadcode:report"]).toBe(
+      "pnpm deadcode:full && pnpm deadcode:exports",
     );
   });
 

@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -28,7 +29,6 @@ import {
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,

@@ -1,6 +1,6 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Hidden machine-facing gateway restart-handoff commands for external supervisors.
 import type { Command } from "commander";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   createGatewayRestartHandoffCapabilities,
   GATEWAY_RESTART_HANDOFF_PROTOCOL,

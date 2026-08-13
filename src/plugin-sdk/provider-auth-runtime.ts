@@ -4,13 +4,13 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProviderCore as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { escapeHtml } from "../shared/html-escape.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export {

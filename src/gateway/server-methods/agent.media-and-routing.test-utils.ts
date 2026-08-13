@@ -1296,7 +1296,10 @@ describe("gateway agent handler", () => {
       status: "running",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
-    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
+    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
+      agentId: "main",
+      dropIfSlow: true,
+    });
   });
 
   it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
