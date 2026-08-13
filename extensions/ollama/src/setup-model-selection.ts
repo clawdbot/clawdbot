@@ -82,17 +82,25 @@ export function selectAppGuidedOllamaModelId(
     id: string;
     contextWindow?: number;
     supportsTools?: boolean;
+    reasoning?: boolean;
+    size?: number;
   }>,
 ): string | undefined {
-  const eligibleIds = [...models]
-    .filter(
-      (model) =>
-        model.supportsTools === true &&
-        model.contextWindow !== undefined &&
-        model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
-    )
-    .map((model) => model.id);
-  return orderPreferredOllamaModelIds(eligibleIds)[0];
+  const eligible = [...models].filter(
+    (model) =>
+      model.supportsTools === true &&
+      model.contextWindow !== undefined &&
+      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
+  );
+  const nonReasoning = eligible.filter((model) => model.reasoning !== true);
+  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
+  const measuredSizes = pool
+    .map((model) => model.size)
+    .filter((size): size is number => typeof size === "number" && size > 0);
+  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
+  const fastest =
+    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
+  return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
 }
 
 export function buildOllamaModelsConfig(

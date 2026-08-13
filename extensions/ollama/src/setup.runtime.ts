@@ -10,7 +10,6 @@ import {
   isNonSecretApiKeyMarker,
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -25,12 +24,14 @@ import {
   OLLAMA_DEFAULT_MODEL,
   resolveOllamaSetupDefaultBaseUrl,
 } from "./defaults.js";
+import { OLLAMA_DEFAULT_API_KEY } from "./discovery-shared.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   buildOllamaProvider,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isReasoningModelHeuristic,
   isOllamaCloudModel,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -66,7 +67,7 @@ type OllamaSetupOptions = {
 
 type OllamaSetupResult = {
   config: OpenClawConfig;
-  credential: SecretInput;
+  credential?: SecretInput;
   credentialMode?: SecretInputMode;
   defaultModel?: string;
 };
@@ -202,7 +203,7 @@ function applyOllamaProviderConfig(
   baseUrl: string,
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
-  apiKey: SecretInput = "OLLAMA_API_KEY",
+  apiKey: SecretInput = OLLAMA_DEFAULT_API_KEY,
   defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ): OpenClawConfig {
   return {
@@ -221,14 +222,6 @@ function applyOllamaProviderConfig(
       },
     },
   };
-}
-
-async function storeOllamaCredential(agentDir?: string): Promise<void> {
-  await upsertAuthProfileWithLock({
-    profileId: "ollama:default",
-    credential: { type: "api_key", provider: "ollama", key: "ollama-local" },
-    agentDir,
-  });
 }
 
 async function promptForOllamaBaseUrl(
@@ -378,13 +371,15 @@ async function promptAndConfigureHostBackedOllama(params: {
       id: model.name,
       contextWindow: model.contextWindow,
       supportsTools: model.capabilities?.includes("tools") === true,
+      reasoning:
+        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      size: model.size,
     })),
   );
   const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
   const defaultModelId = localDefaultModelId ?? cloudDefaultModelId;
 
   return {
-    credential: "ollama-local",
     ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
     config: applyOllamaProviderConfig(
       params.cfg,
@@ -553,9 +548,6 @@ export async function configureOllamaNonInteractive(params: {
     );
     discoveredModelsByName.set(defaultModelId, selectedModel);
   }
-
-  // Failed setup must not leave a durable local profile behind.
-  await storeOllamaCredential(params.agentDir);
 
   const config = applyOllamaProviderConfig(
     params.nextConfig,

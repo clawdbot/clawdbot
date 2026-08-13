@@ -13,13 +13,6 @@ export const desktopPanelStyles = css`
   }
   .bp-title {
     min-width: 0;
-    padding-left: 8px;
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .bp-icon.is-active {
-    color: var(--accent, #ff5c5c);
-    background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
   }
   .desktop-content {
     display: flex;

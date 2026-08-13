@@ -6,6 +6,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createDispatcher,
   emptyConfig,
+  hookMocks,
   replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -14,7 +15,6 @@ import {
   automaticGroupReplyConfig,
   messageToolGroupReplyConfig,
   dispatchReplyFromConfig,
-  dispatchFromConfigTesting,
   setNoAbort,
   firstMockArg,
   firstToolResultPayload,
@@ -354,15 +354,42 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("exposes live tool-summary state to reply_dispatch hooks", () => {
-    let shouldSendToolSummaries = false;
-    const event = dispatchFromConfigTesting.createReplyDispatchEvent({
-      shouldSendToolSummaries: () => shouldSendToolSummaries,
-    } as never) as { shouldSendToolSummaries: boolean };
+  it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      ChatType: "group",
+      From: "matrix:!room:test",
+      SessionKey: "agent:main:matrix:group:!room:test",
+    });
+    let initialHookState: boolean | undefined;
+    let updatedHookState: boolean | undefined;
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
+      const replyDispatchEvent = event as { shouldSendToolSummaries: boolean };
+      initialHookState = replyDispatchEvent.shouldSendToolSummaries;
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "on",
+      };
+      updatedHookState = replyDispatchEvent.shouldSendToolSummaries;
+      return undefined;
+    });
 
-    expect(event.shouldSendToolSummaries).toBe(false);
-    shouldSendToolSummaries = true;
-    expect(event.shouldSendToolSummaries).toBe(true);
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(initialHookState).toBe(false);
+    expect(updatedHookState).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("forwards direct native progress callbacks while verbose is off", async () => {

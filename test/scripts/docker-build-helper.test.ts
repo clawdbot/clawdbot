@@ -3287,6 +3287,8 @@ if (starts === 1) {
     expectTextToIncludeAll(runner, [
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.err",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.json",
@@ -3297,6 +3299,8 @@ if (starts === 1) {
 
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-update.err");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-update.json");
+    expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-post-update-validate.err");
+    expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-post-update-validate.json");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-doctor.log");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-status.err");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-status.json");

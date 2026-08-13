@@ -2,6 +2,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionsListResult } from "../session-utils.types.js";
@@ -11,9 +12,11 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  lifecyclePersistenceVersion: number;
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
   titleProjectionUnavailableVersion: number;
+  workerPlacementDiskSpaceVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -29,18 +32,22 @@ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListStat
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
-    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );
 }
 

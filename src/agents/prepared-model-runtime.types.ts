@@ -84,6 +84,8 @@ export type PreparedModelRuntimeInput = {
   workspaceDir?: string;
   preserveWorkspaceDirOnRefresh?: boolean;
   readOnly?: boolean;
+  /** Load the exact runtime plugin generation for an isolated executable probe. */
+  loadRuntimePlugins?: boolean;
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
