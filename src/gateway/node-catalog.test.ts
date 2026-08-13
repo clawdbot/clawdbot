@@ -143,6 +143,7 @@ describe("gateway/node-catalog", () => {
           presenceUpdatedAtMs: 125,
         },
       ],
+      sessionHostNodeIds: new Set(["mac-1"]),
     });
 
     expect(getKnownNode(catalog, "mac-1")).toMatchObject({
@@ -162,6 +163,7 @@ describe("gateway/node-catalog", () => {
       lastSeenReason: "connect",
       paired: true,
       connected: true,
+      sessionHost: true,
     });
   });
 

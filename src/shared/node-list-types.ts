@@ -12,6 +12,8 @@ export type NodeListNode = {
   clientMode?: string;
   /** This node host runs from the Gateway's own canonical node-host installation. */
   gatewayLocal?: boolean;
+  /** Current private runner inventory includes an exact worker build identity. */
+  sessionHost?: boolean;
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;

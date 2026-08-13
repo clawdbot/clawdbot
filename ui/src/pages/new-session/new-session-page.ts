@@ -32,6 +32,7 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
+  isPlaceTopologyEvent,
   presenceStateSignature,
   readPresenceEntries,
 } from "./new-session-runtime.ts";
@@ -159,13 +160,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             if (this.context?.gateway !== gateway) {
               return;
             }
-            if (
-              event.event === "config.changed" ||
-              event.event === "node.pair.requested" ||
-              event.event === "node.pair.resolved" ||
-              event.event === "device.pair.requested" ||
-              event.event === "device.pair.resolved"
-            ) {
+            if (isPlaceTopologyEvent(event.event)) {
               this.refreshPlaceTopology();
               return;
             }

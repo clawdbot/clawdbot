@@ -218,8 +218,9 @@ function buildEffectiveKnownNode(entry: {
   nodePairing?: KnownNodeApprovedSource;
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
+  sessionHost: boolean;
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live } = entry;
+  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
@@ -262,6 +263,7 @@ function buildEffectiveKnownNode(entry: {
       devicePairing?.clientMode,
       pendingNodePairing?.clientMode,
     ),
+    ...(sessionHost ? { sessionHost: true } : {}),
     deviceFamily: firstNormalizedString(
       live?.deviceFamily,
       nodePairing?.deviceFamily,
@@ -329,6 +331,7 @@ export function createKnownNodeCatalog(params: {
   pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
+  sessionHostNodeIds?: ReadonlySet<string>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -381,6 +384,7 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
+        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
       }),
     });
   }

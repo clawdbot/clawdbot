@@ -27,7 +27,7 @@ import {
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
 import {
-  forgetNodeWorkerSupervisorProtocolFeatures,
+  forgetNodeRunnerInventory,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
   registerNodeRegistryPrivateRuntime,
@@ -520,7 +520,7 @@ export class NodeRegistry {
       connectedAtMs: Date.now(),
     };
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
-    forgetNodeWorkerSupervisorProtocolFeatures(this, client.connId);
+    forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
     if (previousSession && previousSession.connId !== client.connId) {
@@ -566,7 +566,7 @@ export class NodeRegistry {
     }
     this.nodesByConn.delete(connId);
     this.eventTransportsByConn.delete(connId);
-    forgetNodeWorkerSupervisorProtocolFeatures(this, connId);
+    forgetNodeRunnerInventory(this, connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
       const hadPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
@@ -664,7 +664,7 @@ export class NodeRegistry {
     }
     node.client.invalidated = true;
     node.client.invalidatedReason ??= reason;
-    forgetNodeWorkerSupervisorProtocolFeatures(this, node.connId);
+    forgetNodeRunnerInventory(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
     this.invokeStreams.handleDisconnect(node.connId);
     for (const [key, event] of this.authorizedSystemRunEvents) {

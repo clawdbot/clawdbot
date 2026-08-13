@@ -3,9 +3,13 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 
-export function createWorkerSupervisorNodeClient(connId = "conn-1"): GatewayWsClient {
+export function createWorkerSupervisorNodeClient(
+  connId = "conn-1",
+  workerRuns?: WorkerAdmissionHandshake,
+): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
@@ -27,6 +31,7 @@ export function createWorkerSupervisorNodeClient(connId = "conn-1"): GatewayWsCl
       device: { id: "node-1" },
       caps: [],
       commands: ["system.run"],
+      ...(workerRuns ? { workerRuns } : {}),
     } as unknown as GatewayWsClient["connect"],
   };
 }
