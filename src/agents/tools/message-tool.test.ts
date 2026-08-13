@@ -3217,6 +3217,25 @@ describe("message tool schema scoping", () => {
     );
   });
 
+  it("scopes the buffer field description to send and away from upload-file", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "upload-file"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const properties = getToolProperties(
+      createMessageTool({ config: {} as never, currentChannelProvider: "discord" }),
+    );
+
+    const bufferDescription = (properties.buffer as { description?: string }).description;
+    expect(bufferDescription).toContain('action="send"');
+    expect(bufferDescription).toContain("upload-file");
+  });
+
   it("filters scoped schemas through the per-agent message action allowlist", () => {
     const plugin = createChannelPlugin({
       id: "discord",
