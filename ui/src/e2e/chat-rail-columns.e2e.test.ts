@@ -668,9 +668,9 @@ suite.define(() => {
             desktop.locator(".bp-header"),
           ]);
           await expectSingleRailSeparator(page, "openclaw-desktop-panel .bp-resizer--right");
+          // Desktop is a fixed overlay, so covered rail controls cannot receive a
+          // real pointer hover. Their interactive states were exercised above.
           await expectSharedRailActions(page, [
-            changes.locator(".sidebar-column__actions button").last(),
-            companion.getByRole("button", { name: "Close session companion" }),
             desktop.getByRole("button", { name: "Hide desktop panel" }),
           ]);
           await expectSharedActiveRailActions(
