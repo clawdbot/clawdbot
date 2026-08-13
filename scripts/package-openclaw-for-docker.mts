@@ -723,7 +723,15 @@ export async function prepareBundledAiRuntimePackage(
   try {
     await runCaptureImpl(
       "pnpm",
-      ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+      [
+        "--dir",
+        "packages/ai",
+        "pack",
+        "--loglevel=error",
+        "--use-stderr",
+        "--pack-destination",
+        outputDir,
+      ],
       sourceDir,
       {
         deferForwardedSignalExit: true,
