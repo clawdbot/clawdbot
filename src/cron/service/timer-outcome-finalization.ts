@@ -168,6 +168,9 @@ export async function finalizeCompletedCronRunOutcomes(
               ...(outcome.triggerEval ? { triggerFired: outcome.triggerEval.fired } : {}),
               finishedAtMs: outcome.endedAt,
               error: outcome.error,
+              ...(outcome.receiptSettlementDisposition
+                ? { disposition: outcome.receiptSettlementDisposition }
+                : {}),
             },
           }),
         );

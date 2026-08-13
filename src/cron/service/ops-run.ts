@@ -28,7 +28,10 @@ import {
   runWithCronAdmission,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
-import { cronRunReceiptPersistHooks } from "./run-receipts.js";
+import {
+  cronRunReceiptPersistHooks,
+  type CronRunReceiptSettlementDisposition,
+} from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
@@ -138,6 +141,7 @@ async function finishPreparedManualRun(
   let finalized = false;
   let supersedeReason: string | undefined;
   let supersedeCleanupOwnsReceipt = false;
+  let receiptSettlementDisposition: CronRunReceiptSettlementDisposition | undefined;
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -152,6 +156,9 @@ async function finishPreparedManualRun(
         runReceipt: prepared.runReceipt,
       });
     } catch (err) {
+      if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
+        receiptSettlementDisposition = "owner-unavailable";
+      }
       coreResult = {
         status: "error",
         error:
@@ -288,6 +295,9 @@ async function finishPreparedManualRun(
               status: triggerSkipped ? "skipped" : coreResult.status,
               finishedAtMs: endedAt,
               error: coreResult.error,
+              ...(receiptSettlementDisposition
+                ? { disposition: receiptSettlementDisposition }
+                : {}),
             },
           }),
           mutate: ({ jobs }) => {

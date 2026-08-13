@@ -103,6 +103,52 @@ describe("cron service run admission cleanup", () => {
     expect(receipt?.status).toBe("superseded");
   });
 
+  it("does not trust an unavailable-agent execution error as a settlement guard", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:01.750Z");
+    const job = createDueIsolatedJob({
+      id: "manual-unavailable-error-is-not-authorization",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    job.agentId = "main";
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runnerStarted = createDeferred();
+    const releaseRun = createDeferred<{ status: "error"; error: string }>();
+    let ownerAvailable = true;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      isAgentAvailable: () => ownerAvailable,
+      runIsolatedAgentJob: vi.fn(async () => {
+        runnerStarted.resolve();
+        return await releaseRun.promise;
+      }),
+    });
+
+    const activeRun = run(state, job.id, "force");
+    await runnerStarted.promise;
+    ownerAvailable = false;
+    releaseRun.resolve({
+      status: "error",
+      error: "cron job agent is unavailable: main",
+    });
+    await expect(activeRun).resolves.toEqual({ ok: true, ran: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastRunStatus).toBeUndefined();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("superseded");
+  });
+
   it("rejects queued manual reservation after caller authority closes", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

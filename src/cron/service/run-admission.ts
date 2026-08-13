@@ -635,6 +635,10 @@ export async function executeQueuedCronRun(params: {
       });
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {
+      const receiptSettlementDisposition =
+        error instanceof CronRunReceiptRevisionError && error.reason === "owner-unavailable"
+          ? "owner-unavailable"
+          : undefined;
       const errorText =
         error instanceof CronRunReceiptRevisionError
           ? error.message
@@ -647,6 +651,7 @@ export async function executeQueuedCronRun(params: {
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
           nowMs: state.deps.nowMs,
         }),
+        ...(receiptSettlementDisposition ? { receiptSettlementDisposition } : {}),
         endedAt: state.deps.nowMs(),
       };
     }

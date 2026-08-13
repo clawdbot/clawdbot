@@ -15,6 +15,7 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
@@ -49,6 +50,7 @@ export type TimedCronRunOutcome = CronRunOutcome &
     activeJobMarker?: CronActiveJobMarker;
     reservationIdentity?: object;
     runReceipt?: CronRunReceiptHandle;
+    receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;

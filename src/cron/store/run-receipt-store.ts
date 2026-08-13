@@ -130,6 +130,7 @@ export class CronRunReceiptRevisionError extends Error {
   constructor(
     readonly receiptId: string,
     message = "cron run configuration changed",
+    readonly reason: "revision-changed" | "owner-unavailable" = "revision-changed",
   ) {
     super(message);
     this.name = "CronRunReceiptRevisionError";
@@ -568,6 +569,7 @@ export function assertCronRunReceiptCurrent(params: {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
       `cron job agent is unavailable: ${params.handle.agentId}`,
+      "owner-unavailable",
     );
   }
   withReceiptWrite(

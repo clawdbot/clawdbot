@@ -22,6 +22,8 @@ import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
+export type CronRunReceiptSettlementDisposition = "owner-unavailable";
+
 function currentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
@@ -161,6 +163,7 @@ export function cronRunReceiptPersistHooks(params: {
     triggerFired?: boolean;
     finishedAtMs: number;
     error?: string;
+    disposition?: CronRunReceiptSettlementDisposition;
   };
 }): CronStoreTransactionHooks {
   const terminal = params.terminal
@@ -179,12 +182,16 @@ export function cronRunReceiptPersistHooks(params: {
     beforeWrite: (database) => {
       const unavailableError = `cron job agent is unavailable: ${params.handle.agentId}`;
       const recordsUnavailableGuard =
-        terminal?.status === "error" && terminal.error === unavailableError;
+        terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (
         params.state.deps.isAgentAvailable?.(params.handle.agentId) === false &&
         !recordsUnavailableGuard
       ) {
-        throw new CronRunReceiptRevisionError(params.handle.receiptId, unavailableError);
+        throw new CronRunReceiptRevisionError(
+          params.handle.receiptId,
+          unavailableError,
+          "owner-unavailable",
+        );
       }
       if (params.allowMissingJob) {
         assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
