@@ -6,6 +6,7 @@ import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   generateAttachmentId,
   getChatAttachmentDataUrl,
@@ -295,14 +296,28 @@ async function appendAttachmentFiles(files: readonly File[], props: ChatAttachme
   }
   props.onPendingReadsChange?.(1);
   try {
-    const additions = (
-      await Promise.all(files.map((file) => readAttachmentFile(file, props)))
-    ).filter((attachment): attachment is ChatAttachment => attachment !== null);
+    const results = await Promise.all(files.map((file) => readAttachmentFile(file, props)));
+    const additions = results.filter(
+      (attachment): attachment is ChatAttachment => attachment !== null,
+    );
     if (props.readSignal?.aborted) {
       for (const attachment of additions) {
         releaseChatAttachmentPayload(attachment.id);
       }
       return;
+    }
+    // Unreadable drops (folders, permission-denied files) must not vanish
+    // silently: name what was skipped so the user knows it never attached.
+    const failed = results
+      .map((attachment, index) => (attachment === null ? files[index]?.name : undefined))
+      .filter((name): name is string => Boolean(name));
+    if (failed.length > 0) {
+      showToast({
+        message: t("chat.attachments.readFailed", {
+          names: failed.slice(0, 3).join(", "),
+          more: failed.length > 3 ? ` +${failed.length - 3}` : "",
+        }),
+      });
     }
     if (additions.length === 0) {
       return;
