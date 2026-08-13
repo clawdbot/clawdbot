@@ -1,6 +1,6 @@
 // Media parse helpers normalize media references from user and channel input.
 import {
-  extractEmbeddedIpv4FromIpv6,
+  extractEmbeddedIpv4CandidatesFromIpv6,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
@@ -139,8 +139,9 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
     if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
-    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
-    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
+    return extractEmbeddedIpv4CandidatesFromIpv6(strictIp).some((ipv4) =>
+      isBlockedSpecialUseIpv4Address(ipv4),
+    );
   }
 
   if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {

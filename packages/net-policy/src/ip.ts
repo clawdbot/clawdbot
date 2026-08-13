@@ -208,8 +208,9 @@ export function isLinkLocalIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return normalized.range() === "linkLocal";
   }
-  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
-  if (embeddedIpv4?.range() === "linkLocal") {
+  if (
+    extractEmbeddedIpv4CandidatesFromIpv6(normalized).some((ipv4) => ipv4.range() === "linkLocal")
+  ) {
     return true;
   }
   return normalized.range() === "linkLocal";
@@ -223,8 +224,11 @@ export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
   if (isIpv6Address(normalized)) {
-    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
-    if (embeddedIpv4 && CLOUD_METADATA_IP_ADDRESSES.has(embeddedIpv4.toString())) {
+    if (
+      extractEmbeddedIpv4CandidatesFromIpv6(normalized).some((ipv4) =>
+        CLOUD_METADATA_IP_ADDRESSES.has(ipv4.toString()),
+      )
+    ) {
       return true;
     }
   }
@@ -241,7 +245,12 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(normalized.range());
   }
-  return isBlockedSpecialUseIpv6Address(normalized);
+  if (isBlockedSpecialUseIpv6Address(normalized)) {
+    return true;
+  }
+  return extractEmbeddedIpv4CandidatesFromIpv6(normalized).some((ipv4) =>
+    PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(ipv4.range()),
+  );
 }
 
 /** Applies the SSRF block policy for parsed IPv6 special-use ranges. */
@@ -298,25 +307,52 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
   return ipaddr.IPv4.parse(octets.join("."));
 }
 
-/** Extracts embedded IPv4 addresses from mapped and transition IPv6 prefixes. */
-export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
+function decodeRfc6052Candidate(parts: Ipv6Hextets, prefixLength: 48 | 56 | 64 | 96): ipaddr.IPv4 {
+  const bytes = parts.flatMap((part) => [(part >>> 8) & 0xff, part & 0xff]);
+  const indexesByPrefixLength = {
+    48: [6, 7, 9, 10],
+    56: [7, 9, 10, 11],
+    64: [9, 10, 11, 12],
+    96: [12, 13, 14, 15],
+  } as const;
+  return ipaddr.IPv4.parse(
+    indexesByPrefixLength[prefixLength].map((index) => bytes[index]).join("."),
+  );
+}
+
+function uniqueIpv4Candidates(candidates: ipaddr.IPv4[]): ipaddr.IPv4[] {
+  return Array.from(
+    new Map(candidates.map((candidate) => [candidate.toString(), candidate])).values(),
+  );
+}
+
+/** Extracts embedded IPv4 candidates from mapped and transition IPv6 prefixes. */
+export function extractEmbeddedIpv4CandidatesFromIpv6(
+  address: ipaddr.IPv6,
+): readonly ipaddr.IPv4[] {
   const parts = expectIpv6Hextets(address.parts);
   switch (address.range()) {
     case "ipv4Mapped":
-      return address.toIPv4Address();
+      return [address.toIPv4Address()];
     case "rfc6145":
-      return decodeIpv4FromHextets(parts[6], parts[7]);
+      return [decodeIpv4FromHextets(parts[6], parts[7])];
     case "rfc6052":
       if (parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001) {
-        // RFC8215 /48 embeds IPv4 around RFC6052's null octet; trailing bits are suffix.
-        // Reading the suffix lets a public decoy bypass SSRF embedded-IPv4 policy.
-        return decodeIpv4FromHextets(parts[3], ((parts[4] & 0xff) << 8) | (parts[5] >>> 8));
+        // RFC8215 reserves a local-use block, not one fixed prefix length.
+        // Check supported more-specific RFC6052 layouts so a public decoy in
+        // another layout cannot bypass embedded-IPv4 policy.
+        return uniqueIpv4Candidates([
+          decodeRfc6052Candidate(parts, 48),
+          decodeRfc6052Candidate(parts, 56),
+          decodeRfc6052Candidate(parts, 64),
+          decodeRfc6052Candidate(parts, 96),
+        ]);
       }
-      return decodeIpv4FromHextets(parts[6], parts[7]);
+      return [decodeIpv4FromHextets(parts[6], parts[7])];
     case "6to4":
-      return decodeIpv4FromHextets(parts[1], parts[2]);
+      return [decodeIpv4FromHextets(parts[1], parts[2])];
     case "teredo":
-      return decodeIpv4FromHextets(parts[6] ^ 0xffff, parts[7] ^ 0xffff);
+      return [decodeIpv4FromHextets(parts[6] ^ 0xffff, parts[7] ^ 0xffff)];
     default:
       break;
   }
@@ -331,9 +367,14 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
     parts[5] === 0;
   const isIsatap = (parts[4] & 0xfcff) === 0 && parts[5] === 0x5efe;
   if (isIpv4Compatible || isIsatap) {
-    return decodeIpv4FromHextets(parts[6], parts[7]);
+    return [decodeIpv4FromHextets(parts[6], parts[7])];
   }
-  return undefined;
+  return [];
+}
+
+/** Extracts the primary embedded IPv4 address from mapped and transition IPv6 prefixes. */
+export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
+  return extractEmbeddedIpv4CandidatesFromIpv6(address)[0];
 }
 
 /** Checks an IP literal against an exact IP or CIDR range, normalizing mapped IPv4. */
