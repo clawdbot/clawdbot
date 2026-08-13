@@ -181,7 +181,6 @@ describe("iMessage approval reaction poller", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
-      accountId,
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -415,7 +414,6 @@ describe("iMessage approval reaction poller", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
-      accountId,
       senderId: "+15551239999",
       gatewayUrl: undefined,
     });
@@ -466,7 +464,6 @@ describe("iMessage approval reaction poller", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
-      accountId,
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -575,7 +572,6 @@ describe("iMessage approval reaction poller", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
-      accountId,
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });

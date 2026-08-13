@@ -130,14 +130,11 @@ describe("registerPolicyDoctorChecks", () => {
           source: "oc://openclaw.config/session/maintenance/mode",
           value: "warn",
         }),
-        {
-          id: "agents-defaults-memory-session-transcripts",
+        expect.objectContaining({
           kind: "memorySessionTranscriptIndexing",
-          scope: "global",
           source: "oc://openclaw.config/memory/search/rememberAcrossConversations",
-          value: false,
-          explicit: true,
-        },
+          value: true,
+        }),
       ]),
     );
     expect(result.findings).toEqual(
@@ -151,6 +148,11 @@ describe("registerPolicyDoctorChecks", () => {
           checkId: "policy/data-handling-session-retention-not-enforced",
           ocPath: "oc://openclaw.config/session/maintenance/mode",
           requirement: "oc://policy.jsonc/dataHandling/retention/requireSessionMaintenance",
+        }),
+        expect.objectContaining({
+          checkId: "policy/data-handling-session-transcript-memory-enabled",
+          ocPath: "oc://openclaw.config/memory/search/rememberAcrossConversations",
+          requirement: "oc://policy.jsonc/dataHandling/memory/denySessionTranscriptIndexing",
         }),
       ]),
     );
