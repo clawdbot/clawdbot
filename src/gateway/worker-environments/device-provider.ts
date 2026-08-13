@@ -46,7 +46,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.commands.includes("system.run");
+  return node.workerRuns !== undefined;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {

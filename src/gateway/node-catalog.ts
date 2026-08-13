@@ -282,6 +282,7 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
+    sessionHost: live?.workerRuns !== undefined,
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,

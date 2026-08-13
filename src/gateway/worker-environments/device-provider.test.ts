@@ -10,6 +10,11 @@ import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js"
 import { createDeviceWorkerRuntime } from "./device-provider.js";
 
 const DEVICE_ID = "device-session-host";
+const WORKER_BUILD = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.8.12",
+  protocolFeatures: ["worker-heartbeat-v1"],
+};
 
 function pairedDevice(deviceId = DEVICE_ID): PairedDevice {
   return {
@@ -32,7 +37,7 @@ function pairedDevice(deviceId = DEVICE_ID): PairedDevice {
 
 function connectedNode(
   deviceId = DEVICE_ID,
-  commands: readonly string[] = ["system.run"],
+  workerRuns: NodeWorkerSupervisorNodeProof["workerRuns"] | null = WORKER_BUILD,
 ): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
@@ -42,7 +47,8 @@ function connectedNode(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    commands,
+    commands: ["system.run"],
+    ...(workerRuns ? { workerRuns } : {}),
   };
 }
 
@@ -92,9 +98,9 @@ describe("device worker provider", () => {
       listCurrentNodes: async () => [],
     },
     {
-      name: "connected node without session execution",
+      name: "connected node without worker session hosting",
       getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [connectedNode(DEVICE_ID, [])],
+      listCurrentNodes: async () => [connectedNode(DEVICE_ID, null)],
     },
   ])("rejects $name during provision", async ({ getPairedDevice, listCurrentNodes }) => {
     const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_SUPERVISOR_COMMANDS,
@@ -24,6 +25,7 @@ type NodeRegistryPrivateSession = {
   clientId?: string;
   clientMode?: string;
   commands: string[];
+  workerRuns?: WorkerAdmissionHandshake;
 };
 
 type NodeInvokeResult = {
@@ -66,6 +68,7 @@ export type NodeWorkerSupervisorNodeProof = {
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
   commands: readonly string[];
+  workerRuns?: WorkerAdmissionHandshake;
 };
 
 export type NodeWorkerSupervisorTransport = {
@@ -84,7 +87,7 @@ export type NodeWorkerSupervisorTransport = {
 
 type NodeProtocolFeatureDeclaration = Omit<
   NodeWorkerSupervisorNodeProof,
-  "commands" | "pairingGeneration"
+  "commands" | "pairingGeneration" | "workerRuns"
 > & {
   protocolFeatures: readonly string[];
 };
@@ -204,6 +207,7 @@ function resolveWorkerSupervisorProof(
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     commands: [...node.commands],
+    ...(node.workerRuns ? { workerRuns: structuredClone(node.workerRuns) } : {}),
   };
 }
 

@@ -1993,6 +1993,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   bootstrap_bundle_hash TEXT,
   bootstrap_openclaw_version TEXT,
   bootstrap_protocol_features_json TEXT,
+  bootstrap_install_kind TEXT,
   owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
   teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
   attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
