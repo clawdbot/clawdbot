@@ -47,6 +47,11 @@ function dmRoomPeer(id = "!dm:example.org"): RoutePeer {
   return { kind: "channel", id };
 }
 
+const threadCfg = {
+  ...baseCfg,
+  bindings: [matrixBinding("main")],
+} satisfies OpenClawConfig;
+
 function resolveDmRoute(
   cfg: OpenClawConfig,
   opts: {
