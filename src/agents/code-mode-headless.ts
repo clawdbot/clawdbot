@@ -16,8 +16,8 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceOutputLimit,
-  enforceResultLimit,
+  boundOutputToLimit,
+  boundResultToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   readPositiveInteger,
@@ -253,10 +253,15 @@ export async function runCodeModeScriptHeadless(params: {
 
     while (true) {
       output.push(...result.output);
-      enforceOutputLimit(output, config);
+      boundOutputToLimit(output, config);
       if (result.status === "completed") {
-        enforceResultLimit({ output, value: result.value, config });
-        return { status: "completed", value: result.value, output, toolCallCount };
+        const bounded = boundResultToLimit({ output, value: result.value, config });
+        return {
+          status: "completed",
+          value: bounded.value,
+          output: bounded.output,
+          toolCallCount,
+        };
       }
       if (result.status === "failed") {
         return headlessFailure({
@@ -292,6 +297,7 @@ export async function runCodeModeScriptHeadless(params: {
       pending.push(
         ...createPendingBridgeStates({
           pendingRequests: newRequests,
+          config,
           runtime,
           namespaceRuntime,
           parentToolCallId,

@@ -5,7 +5,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import { toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeResult, toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import type {
   CodeModeConfig,
@@ -229,16 +229,20 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function enforceWorkerOutputLimit(
-  value: unknown,
-  config: CodeModeConfig,
-  consumedBytes = 0,
-): number {
-  const bytes = Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
-  if (consumedBytes + bytes > config.maxOutputBytes) {
-    throw new CodeModeWorkerFailure("output_limit_exceeded", "code mode output limit exceeded");
+function boundWorkerResult(params: { output: unknown[]; value?: unknown; config: CodeModeConfig }) {
+  try {
+    return boundCodeModeResult({
+      output: params.output,
+      ...(Object.hasOwn(params, "value") ? { value: params.value } : {}),
+      maxOutputBytes: params.config.maxOutputBytes,
+    });
+  } catch (error) {
+    throw new CodeModeWorkerFailure(
+      "output_limit_exceeded",
+      "code mode output could not be serialized within the output limit",
+      { cause: error },
+    );
   }
-  return bytes;
 }
 
 function throwWorkerFailureWithOutput(params: {
@@ -250,27 +254,12 @@ function throwWorkerFailureWithOutput(params: {
 }): never {
   const timedOut = params.didTimeout() || isQuickJsInterruptedError(params.error);
   const failureOutput = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
-  if (
-    params.error instanceof CodeModeWorkerFailure &&
-    params.error.code === "output_limit_exceeded"
-  ) {
-    throw new CodeModeWorkerFailureWithOutput(params.error.code, params.error.message, [], {
-      cause: params.error,
-    });
-  }
-  try {
-    enforceWorkerOutputLimit(failureOutput, params.config);
-  } catch (error) {
-    if (error instanceof CodeModeWorkerFailure) {
-      throw new CodeModeWorkerFailureWithOutput(error.code, error.message, [], { cause: error });
-    }
-    throw error;
-  }
+  const boundedOutput = boundWorkerResult({ output: failureOutput, config: params.config }).output;
   if (timedOut) {
     throw new CodeModeWorkerFailureWithOutput(
       "timeout",
       "code mode timeout exceeded",
-      failureOutput,
+      boundedOutput,
       { cause: params.error },
     );
   }
@@ -278,15 +267,15 @@ function throwWorkerFailureWithOutput(params: {
     throw new CodeModeWorkerFailureWithOutput(
       params.error.code,
       params.error.message,
-      failureOutput,
+      boundedOutput,
       { cause: params.error },
     );
   }
-  if (failureOutput.length > 0) {
+  if (boundedOutput.length > 0) {
     throw new CodeModeWorkerFailureWithOutput(
       "internal_error",
       errorMessage(params.error),
-      failureOutput,
+      boundedOutput,
       { cause: params.error },
     );
   }
@@ -355,8 +344,7 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
-    output = takeOutput(params.vm);
-    const outputBytes = enforceWorkerOutputLimit(output, params.config);
+    output = boundWorkerResult({ output: takeOutput(params.vm), config: params.config }).output;
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       const promisePending = resultHandle.isPromise && resultHandle.promiseState === 0;
@@ -378,11 +366,11 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
-      enforceWorkerOutputLimit(value, params.config, output.length > 0 ? outputBytes : 0);
+      const bounded = boundWorkerResult({ output, value, config: params.config });
       return {
         status: "completed",
-        value,
-        output,
+        value: bounded.value,
+        output: bounded.output,
       };
     } finally {
       resultHandle.dispose();

@@ -6,7 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   buildCodeModeScriptParseSource,
@@ -267,10 +267,6 @@ export function resolveCodeModeHeadlessConfig(
   };
 }
 
-function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(toCodeModeJsonSafe(value)) ?? "null", "utf8");
-}
-
 class CodeModeLimitError extends ToolInputError {
   readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
 
@@ -304,28 +300,22 @@ export function codeModeFailureMessage(error: unknown): string {
     : formatErrorMessage(error);
 }
 
-export function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
-  if (jsonByteLength(output) > config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
+export function boundOutputToLimit(output: unknown[], config: CodeModeConfig): boolean {
+  const bounded = boundCodeModeResult({ output, maxOutputBytes: config.maxOutputBytes });
+  output.splice(0, output.length, ...bounded.output);
+  return bounded.truncated;
 }
 
-export function enforceResultLimit(params: {
+export function boundResultToLimit(params: {
   output: unknown[];
   value?: unknown;
   config: CodeModeConfig;
-}): void {
-  const serializedOutputBytes = jsonByteLength(params.output);
-  if (serializedOutputBytes > params.config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
-  if (
-    params.value !== undefined &&
-    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
-  ) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
+}): { output: unknown[]; value?: unknown; truncated: boolean } {
+  return boundCodeModeResult({
+    output: params.output,
+    ...(Object.hasOwn(params, "value") ? { value: params.value } : {}),
+    maxOutputBytes: params.config.maxOutputBytes,
+  });
 }
 
 export function readCode(args: unknown): {
@@ -643,7 +633,7 @@ export function enforceSnapshotPayloadLimits(params: {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
-  enforceOutputLimit(params.output, params.config);
+  boundOutputToLimit(params.output, params.config);
 }
 
 export const codeModeRuntimeTesting = {

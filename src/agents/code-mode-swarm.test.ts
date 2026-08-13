@@ -245,6 +245,7 @@ describe("Code Mode swarm host bridge", () => {
       namespaceRuntime: {},
       parentToolCallId: "parent",
       codeModeRunId: "cm-note",
+      maxOutputBytes: 64 * 1024,
       ctx: swarmContext(),
       request: {
         id: "bridge:1",
@@ -333,6 +334,7 @@ describe("Code Mode swarm host bridge", () => {
       namespaceRuntime: {},
       parentToolCallId: "parent",
       codeModeRunId: restoredReplayId,
+      maxOutputBytes: 64 * 1024,
       ctx: globalAliasContext,
     };
 
@@ -408,6 +410,7 @@ describe("Code Mode swarm host bridge", () => {
       runtime,
       namespaceRuntime: {},
       parentToolCallId: "parent",
+      maxOutputBytes: 64 * 1024,
       ctx,
       request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
     };
@@ -451,6 +454,7 @@ describe("Code Mode swarm host bridge", () => {
       namespaceRuntime: {},
       parentToolCallId: "parent",
       codeModeRunId: "cm-restart",
+      maxOutputBytes: 64 * 1024,
       ctx: swarmContext(),
     };
     const first = await testing.runBridgeRequest({
@@ -496,6 +500,7 @@ describe("Code Mode swarm host bridge", () => {
       namespaceRuntime: {},
       parentToolCallId: "parent",
       codeModeRunId: "cm-restart",
+      maxOutputBytes: 64 * 1024,
       ctx: swarmContext(),
     };
     await testing.runBridgeRequest({
@@ -553,6 +558,7 @@ describe("Code Mode swarm host bridge", () => {
       namespaceRuntime: {},
       parentToolCallId: "parent",
       codeModeRunId: "cm-restart",
+      maxOutputBytes: 64 * 1024,
       ctx: swarmContext(),
       request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
     });
