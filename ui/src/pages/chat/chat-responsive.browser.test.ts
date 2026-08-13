@@ -700,7 +700,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <html>
           <head><style>${readUiCss()}</style></head>
           <body>
-            <section class="chat">
+            <section class="card chat">
               <div class="agent-chat__search-bar">
                 ${iconSvg()}
                 <input type="text" placeholder="Search messages" />
@@ -713,8 +713,28 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
       const icons = await page.locator(".agent-chat__search-bar svg").all();
       const input = page.locator(".agent-chat__search-bar input");
+      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
+        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
+        if (!search) {
+          throw new Error("Expected transcript search bar");
+        }
+        const radii = (element: Element) => {
+          const style = getComputedStyle(element);
+          return [
+            style.borderTopLeftRadius,
+            style.borderTopRightRadius,
+            style.borderBottomRightRadius,
+            style.borderBottomLeftRadius,
+          ];
+        };
+        return { chat: radii(chat), search: radii(search) };
+      });
 
       expect(searchBar.height).toBeLessThan(64);
+      expect(cornerRadii).toEqual({
+        chat: ["0px", "0px", "0px", "0px"],
+        search: ["0px", "0px", "14px", "14px"],
+      });
       expect(icons).toHaveLength(2);
       for (const icon of icons) {
         const box = await icon.boundingBox();
