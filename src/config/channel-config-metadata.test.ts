@@ -98,17 +98,17 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(ownerOf([replacement, core])).toBe("clickclack-plus");
   });
 
-  // Codex review P2 on #123209: a closer claimant that ships no channel config lowers the entry's
-  // origin rank for label precedence while the schema stays with the farther plugin. Ranking the
-  // tie-break on the entry rank read those two as same-origin and kept the farther schema.
+  // Codex review P2 on #123209: `shouldSkipPreferredPluginAutoEnable` applies a declaration with
+  // no origin restriction, so ranking install origin above it would activate the replacement while
+  // validating against the plugin it replaced. Order must not decide either.
   it.each([
     { order: "farther first", plugins: ["clickclack-plus", "clickclack-core"] },
     { order: "closer first", plugins: ["clickclack-core", "clickclack-plus"] },
   ])(
-    "keeps the closer origin when a farther plugin declares the replacement ($order)",
+    "gives a farther-origin replacement the schema over a closer fallback ($order)",
     ({ plugins }) => {
       const byId = {
-        "clickclack-core": claimant({ id: "clickclack-core", origin: "global" }),
+        "clickclack-core": claimant({ id: "clickclack-core", origin: "workspace" }),
         "clickclack-plus": claimant({
           id: "clickclack-plus",
           origin: "bundled",
@@ -116,7 +116,7 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         }),
       };
 
-      expect(ownerOf(plugins.map((id) => byId[id as keyof typeof byId]))).toBe("clickclack-core");
+      expect(ownerOf(plugins.map((id) => byId[id as keyof typeof byId]))).toBe("clickclack-plus");
     },
   );
 
@@ -134,16 +134,13 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(ownerOf([ghost, core])).toBe("clickclack-core");
   });
 
-  it("keeps a closer origin ahead of a farther plugin that claims to replace it", () => {
+  it("keeps the closer origin when neither claimant declares a replacement", () => {
     const workspace = claimant({ id: "clickclack-core", origin: "workspace" });
-    const bundled = claimant({
-      id: "clickclack-plus",
-      origin: "bundled",
-      preferOver: ["clickclack-core"],
-    });
+    const bundled = claimant({ id: "clickclack-plus", origin: "bundled" });
 
-    // Origin rank still decides across origins; `preferOver` only settles same-origin ties.
+    // Origin still decides once operator policy and the declaration leave the claimants tied.
     expect(ownerOf([workspace, bundled])).toBe("clickclack-core");
+    expect(ownerOf([bundled, workspace])).toBe("clickclack-core");
   });
 
   // Codex review P1 on #123209: auto-enable ignores a denied or explicitly disabled replacement
@@ -239,6 +236,27 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(entry?.schemaPluginId).toBe("clickclack-core");
     expect(entry?.label).toBe("ClickClack");
     expect(entry?.description).toBe("the active one");
+  });
+
+  // Codex review P2 on #123209: with plugins switched off globally every claimant is inactive, so
+  // dropping every declaration would leave registry order picking a winner. Nothing activates in
+  // that state, so ownership answers what the operator would get once plugins come back.
+  it.each([
+    { order: "replacement last", plugins: ["clickclack-core", "clickclack-plus"] },
+    { order: "replacement first", plugins: ["clickclack-plus", "clickclack-core"] },
+  ])("still follows the declaration when no claimant is active ($order)", ({ plugins }) => {
+    const byId = {
+      "clickclack-core": claimant({ id: "clickclack-core" }),
+      "clickclack-plus": claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] }),
+    };
+    const policy = policyFor({ isPluginActive: () => false });
+
+    expect(
+      ownerOf(
+        plugins.map((id) => byId[id as keyof typeof byId]),
+        policy,
+      ),
+    ).toBe("clickclack-plus");
   });
 
   // Codex review P2 on #123209: auto-enable falls back to the built-in channel registration and an

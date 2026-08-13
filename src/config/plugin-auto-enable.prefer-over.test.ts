@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
 
 const tempRoots: string[] = [];
@@ -52,6 +53,31 @@ describe("resolveChannelPreferOverIds", () => {
     expect(
       resolveChannelPreferOverIds({ record: undefined, channelId: "clickclack", env }),
     ).toEqual(["clickclack-core"]);
+  });
+
+  // Codex review P2 on #123209: an install, reload, or doctor flow can rewrite a catalog at the
+  // same path, which leaves the paths key unchanged. The snapshot has to drop with the rest of the
+  // plugin metadata caches or an owner-triggered refresh keeps serving stale preferences.
+  it("drops the snapshot when the plugin metadata lifecycle clears", () => {
+    const catalogPath = writeCatalog({ id: "clickclack", preferOver: ["clickclack-core"] });
+    const env = { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath };
+
+    expect(
+      resolveChannelPreferOverIds({ record: undefined, channelId: "clickclack", env }),
+    ).toEqual(["clickclack-core"]);
+
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [{ openclaw: { channel: { id: "clickclack", preferOver: ["reinstalled"] } } }],
+      }),
+      "utf-8",
+    );
+    clearPluginMetadataLifecycleCaches();
+
+    expect(
+      resolveChannelPreferOverIds({ record: undefined, channelId: "clickclack", env }),
+    ).toEqual(["reinstalled"]);
   });
 
   it("prefers the manifest declaration over the catalog", () => {

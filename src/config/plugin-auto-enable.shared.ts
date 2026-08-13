@@ -34,7 +34,10 @@ import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.j
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { isChannelConfigured } from "./channel-configured.js";
-import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
+import {
+  resolveChannelPreferOverIds,
+  shouldSkipPreferredPluginAutoEnable,
+} from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -241,16 +244,10 @@ function normalizeManifestChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
 }
 
-function getManifestChannelPreferOver(
-  plugin: PluginManifestRecord,
-  channelId: string,
-): readonly string[] {
-  return plugin.channelConfigs?.[channelId]?.preferOver ?? [];
-}
-
 function collectPluginIdsForConfiguredChannel(
   channelId: string,
   registry: PluginManifestRegistry,
+  env: NodeJS.ProcessEnv,
 ): string[] {
   const normalizedChannelId = normalizeManifestChannelId(channelId);
   const builtInId = normalizeChatChannelId(normalizedChannelId);
@@ -261,7 +258,14 @@ function collectPluginIdsForConfiguredChannel(
     ) {
       claims.push({
         plugin: record,
-        preferOver: getManifestChannelPreferOver(record, normalizedChannelId),
+        // Every source auto-enable honors, not just `channelConfigs`: a catalog-declared
+        // replacement has to reach the preferOver filter below or it is never a candidate, and
+        // channel schema ownership resolves the same facts.
+        preferOver: resolveChannelPreferOverIds({
+          record,
+          channelId: normalizedChannelId,
+          env,
+        }),
       });
     }
   }
@@ -655,7 +659,11 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   const changes: PluginAutoEnableCandidate[] = [];
   for (const channelId of params.configuredChannelIds ??
     collectConfiguredChannelIds(params.config, params.env)) {
-    for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+    for (const pluginId of collectPluginIdsForConfiguredChannel(
+      channelId,
+      params.registry,
+      params.env,
+    )) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }

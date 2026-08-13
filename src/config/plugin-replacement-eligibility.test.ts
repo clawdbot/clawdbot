@@ -68,6 +68,16 @@ describe("isPluginPolicyDisabled", () => {
     ).toBe(true);
   });
 
+  // Codex review P2 on #123209: `normalizePluginEntries` merges colliding keys and keeps an
+  // earlier boolean when the later entry omits one, so an alias entry must not erase it.
+  it("keeps a disabled entry when a colliding alias entry omits enabled", () => {
+    const config = {
+      plugins: { entries: { modern: { enabled: false }, MODERN: { config: {} } } },
+    } as unknown as OpenClawConfig;
+
+    expect(isPluginPolicyDisabled(config, "modern")).toBe(true);
+  });
+
   it("leaves an untouched plugin enabled", () => {
     const config = {
       plugins: { deny: ["other"], entries: { modern: { enabled: true } } },

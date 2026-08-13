@@ -389,7 +389,36 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes).toStrictEqual([]);
     });
 
-    it("prefers an external plugin that declares preferOver for a bundled channel", () => {
+    // Codex review P1 on #123209: candidate discovery read `channelConfigs.<id>.preferOver` only,
+    // so a catalog-declared replacement never reached the preferOver filter and the fallback was
+    // activated while channel schema ownership had already selected the replacement.
+    it.each([
+      {
+        source: "its channel config",
+        declaration: {
+          channelConfigs: {
+            "legacy-bundled-chat": {
+              schema: { type: "object" },
+              label: "Modern Chat",
+              preferOver: ["legacy-bundled-chat"],
+            },
+          },
+        },
+      },
+      {
+        source: "its package channel catalog metadata",
+        declaration: {
+          channelCatalogMeta: {
+            id: "legacy-bundled-chat",
+            label: "Modern Chat",
+            preferOver: ["legacy-bundled-chat"],
+          },
+          channelConfigs: {
+            "legacy-bundled-chat": { schema: { type: "object" }, label: "Modern Chat" },
+          },
+        },
+      },
+    ])("prefers an external plugin that declares preferOver through $source", ({ declaration }) => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "legacy-bundled-chat": { token: "legacy" } },
@@ -410,13 +439,7 @@ describe("applyPluginAutoEnable channels", () => {
           {
             id: "openclaw-modern-chat",
             channels: ["legacy-bundled-chat"],
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Modern Chat",
-                preferOver: ["legacy-bundled-chat"],
-              },
-            },
+            ...declaration,
           },
         ]),
       });

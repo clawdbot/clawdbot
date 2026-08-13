@@ -165,27 +165,31 @@ function normalizeClaimedChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
 }
 
-/** Displaced plugin ids per claimed channel, then per origin rank of the record declaring it. */
-type DisplacedChannelOwners = Map<string, Map<number, Set<string>>>;
+/** Plugin ids some other claimant declares it replaces, per claimed channel. */
+type DisplacedChannelOwners = Map<string, Set<string>>;
 
 function isDisplacedChannelOwner(
   displaced: DisplacedChannelOwners,
   channelId: string,
-  originRank: number,
   pluginId: string,
 ): boolean {
-  return displaced.get(channelId)?.get(originRank)?.has(pluginId) === true;
+  return displaced.get(channelId)?.has(pluginId) === true;
 }
 
 /**
- * Plugin ids that an active same-origin claimant declares it replaces, keyed per channel and
- * origin. Built across the whole registry before any schema is chosen, because comparing each
- * record only against the current owner lets an A-replaces-B-replaces-C chain settle differently
- * per registry order, while `shouldSkipPreferredPluginAutoEnable` scans every configured candidate
- * and drops both B and C. Only a record listed in `record.channels` contributes: auto-enable and
- * the read-only channel facade build claimants from that list alone, so a preference declared for
- * a channel the record never claims decides nothing. Contested channels only, since resolving a
- * preference can read an external plugin catalog from disk.
+ * Records, per channel, which claimants another claimant declares it replaces.
+ *
+ * Built across the whole registry before any schema is chosen, because comparing each record only
+ * against the current owner lets an A-replaces-B-replaces-C chain settle differently per registry
+ * order, while `shouldSkipPreferredPluginAutoEnable` scans every configured candidate and drops
+ * both B and C. Only a record listed in `record.channels` contributes: auto-enable and the
+ * read-only channel facade build claimants from that list alone. Contested channels only, since
+ * resolving a preference can read an external plugin catalog from disk.
+ *
+ * Inactive claimants normally declare nothing, so a denied replacement cannot take a channel from
+ * the plugin activation would run instead. When no claimant is active there is no such plugin, and
+ * dropping every declaration would leave registry order picking a winner; the declarations are
+ * read from the whole claimant set in that case so the answer stays deterministic.
  */
 function collectDisplacedChannelOwners(
   registry: PluginManifestRegistry,
@@ -199,27 +203,58 @@ function collectDisplacedChannelOwners(
     }
   }
 
-  const displaced: DisplacedChannelOwners = new Map();
+  const claimantsByChannel = new Map<string, PluginManifestRecord[]>();
   for (const record of registry.plugins) {
-    if (!policy.isPluginActive(record.id)) {
-      continue;
-    }
-    const originRank = resolveOriginRank(record.origin);
     for (const channelId of record.channels) {
       const claimedId = normalizeClaimedChannelId(channelId);
       if ((schemaClaimantCounts.get(claimedId) ?? 0) < 2) {
         continue;
       }
+      const claimants = claimantsByChannel.get(claimedId) ?? [];
+      claimantsByChannel.set(claimedId, claimants);
+      claimants.push(record);
+    }
+  }
+
+  const displaced: DisplacedChannelOwners = new Map();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    const activeClaimants = claimants.filter((record) => policy.isPluginActive(record.id));
+    const declarants = activeClaimants.length > 0 ? activeClaimants : claimants;
+    for (const record of declarants) {
       for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
-        const byOriginRank = displaced.get(claimedId) ?? new Map<number, Set<string>>();
-        displaced.set(claimedId, byOriginRank);
-        const replacedIds = byOriginRank.get(originRank) ?? new Set<string>();
-        byOriginRank.set(originRank, replacedIds);
+        const replacedIds = displaced.get(claimedId) ?? new Set<string>();
+        displaced.set(claimedId, replacedIds);
         replacedIds.add(replacedId);
       }
     }
   }
   return displaced;
+}
+
+/**
+ * Which of two records supplying a schema for the same channel owns it. Operator policy first,
+ * then the declared replacement, then install origin, and registry order only when nothing else
+ * separates them. Auto-enable applies the declaration with no origin restriction, so ranking
+ * origin above it would activate one plugin and validate against another.
+ */
+function decideChannelSchemaOwnership(params: {
+  currentActive: boolean;
+  incomingActive: boolean;
+  currentDisplaced: boolean;
+  incomingDisplaced: boolean;
+  currentOriginRank: number;
+  incomingOriginRank: number;
+}): "keepCurrent" | "takeChannel" {
+  if (params.currentActive !== params.incomingActive) {
+    return params.incomingActive ? "takeChannel" : "keepCurrent";
+  }
+  if (params.currentDisplaced !== params.incomingDisplaced) {
+    return params.incomingDisplaced ? "keepCurrent" : "takeChannel";
+  }
+  if (params.currentOriginRank !== params.incomingOriginRank) {
+    return params.currentOriginRank < params.incomingOriginRank ? "keepCurrent" : "takeChannel";
+  }
+  return "takeChannel";
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
@@ -314,47 +349,22 @@ export function collectChannelSchemaMetadataWithOwnership(
       const currentOwnsSchema =
         current !== undefined &&
         (current.configSchema !== undefined || current.configUiHints !== undefined);
-      const currentActive =
-        current?.schemaPluginId === undefined || policy.isPluginActive(current.schemaPluginId);
-      const incomingActive = recordActive;
-      // Operator policy outranks install origin. Auto-enable activates whichever claimant is still
-      // enabled, so an inactive plugin must neither take the channel from an active one nor keep
-      // it once an active claimant appears, however close its origin sits.
-      if (currentOwnsSchema && currentActive && !incomingActive) {
-        continue;
-      }
-      const replacesInactiveOwner = currentOwnsSchema && !currentActive && incomingActive;
-      if (!replacesInactiveOwner) {
-        if (currentOwnsSchema && current.originRank < originRank) {
-          // A closer-origin channel config owns schema/UI hints even if a farther plugin also
-          // advertises the same channel id.
+      if (currentOwnsSchema) {
+        const claimedId = normalizeClaimedChannelId(channelId);
+        const ownerId = current.schemaPluginId;
+        const decision = decideChannelSchemaOwnership({
+          currentActive: ownerId === undefined || policy.isPluginActive(ownerId),
+          incomingActive: recordActive,
+          currentDisplaced:
+            ownerId !== undefined && isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
+          incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
+          // The entry rank, not the schema owner's: a nearer claimant that ships no channel config
+          // still shields the schema it adopted from farther records.
+          currentOriginRank: current.originRank,
+          incomingOriginRank: originRank,
+        });
+        if (decision === "keepCurrent") {
           continue;
-        }
-        // Equal-origin claimants would otherwise be decided by iteration order. Auto-enable already
-        // skips a candidate that another configured plugin lists in `preferOver`, so schema
-        // ownership has to follow the same declaration or config validation rejects the very
-        // plugin the runtime activates. Mutual declarations stay order-dependent, as before.
-        if (
-          currentOwnsSchema &&
-          current.schemaOriginRank === originRank &&
-          current.schemaPluginId
-        ) {
-          const claimedId = normalizeClaimedChannelId(channelId);
-          const ownerDisplaced = isDisplacedChannelOwner(
-            displacedOwners,
-            claimedId,
-            originRank,
-            current.schemaPluginId,
-          );
-          const incomingDisplaced = isDisplacedChannelOwner(
-            displacedOwners,
-            claimedId,
-            originRank,
-            record.id,
-          );
-          if (incomingDisplaced && !ownerDisplaced) {
-            continue;
-          }
         }
       }
       const coreOwnedSchema =

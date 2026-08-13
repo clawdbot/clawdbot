@@ -47,11 +47,14 @@ export function isPluginPolicyDisabled(
   if (Array.isArray(deny) && deny.some(matchesPolicyId)) {
     return true;
   }
-  // Normalization keeps the last colliding key, so read every match rather than the first.
-  let entryEnabled: unknown;
+  // Colliding keys merge rather than replace: `normalizePluginEntries` keeps an earlier boolean
+  // when the later entry omits one, so an alias entry with no `enabled` must not erase a canonical
+  // `enabled: false`. Read every match and let only a boolean overwrite.
+  let entryEnabled: boolean | undefined;
   for (const [key, entry] of Object.entries(asOptionalObjectRecord(cfg.plugins?.entries) ?? {})) {
-    if (matchesPolicyId(key)) {
-      entryEnabled = asOptionalRecord(entry)?.enabled;
+    const enabled = asOptionalRecord(entry)?.enabled;
+    if (typeof enabled === "boolean" && matchesPolicyId(key)) {
+      entryEnabled = enabled;
     }
   }
   if (entryEnabled === false) {

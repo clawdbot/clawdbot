@@ -53,6 +53,7 @@ export function makeRegistry(
       string,
       { schema: Record<string, unknown>; label?: string; preferOver?: string[] }
     >;
+    channelCatalogMeta?: { id: string; label?: string; blurb?: string; preferOver?: string[] };
   }>,
 ): PluginManifestRegistry {
   return {
@@ -65,6 +66,7 @@ export function makeRegistry(
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
+      channelCatalogMeta: plugin.channelCatalogMeta,
       providers: plugin.providers ?? [],
       cliBackends: plugin.cliBackends ?? [],
       skills: [],

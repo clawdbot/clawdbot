@@ -8,6 +8,7 @@ import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
@@ -124,6 +125,12 @@ function readExternalCatalogChannels(
  */
 let externalCatalogSnapshot: { pathsKey: string; channels: ExternalCatalogChannelEntry[] } | null =
   null;
+
+// An install, reload, or doctor flow can rewrite a catalog at the same path, which leaves the
+// paths key unchanged; the owner-triggered metadata refresh has to drop this slot with the rest.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  externalCatalogSnapshot = null;
+});
 
 function resolveExternalCatalogPreferOver(
   channelId: string,
