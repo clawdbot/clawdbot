@@ -243,7 +243,10 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 });
 
 describe("gateway server models + voicewake", () => {
-  const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
+  const listModels = async (params?: {
+    view?: "default" | "configured" | "all";
+    preparedOnly?: boolean;
+  }) =>
     withEnvAsync(
       {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -486,8 +489,8 @@ describe("gateway server models + voicewake", () => {
     await withModelsConfig(fullCatalogProviderConfig(), async () => {
       await seedAgentModelCatalog();
 
-      const res1 = await listModels({ view: "all" });
-      const res2 = await listModels({ view: "all" });
+      const res1 = await listModels({ view: "all", preparedOnly: true });
+      const res2 = await listModels({ view: "all", preparedOnly: true });
 
       expect(res1.ok).toBe(true);
       expect(res2.ok).toBe(true);
@@ -622,7 +625,7 @@ describe("gateway server models + voicewake", () => {
       },
       async () => {
         await seedAgentModelCatalog();
-        const res = await listModels({ view: "all" });
+        const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
       },
