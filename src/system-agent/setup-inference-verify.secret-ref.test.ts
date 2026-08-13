@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
-import { resolveApiKeyForProvider } from "../agents/model-auth-provider.js";
+import { afterEach, expect, test, vi } from "vitest";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import {
   resetConfigRuntimeState,
@@ -12,7 +12,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { projectInferenceRoute } from "./inference-route.js";
+import { executeSystemAgentOperation } from "./operations.js";
 import { verifySetupInference } from "./setup-inference-verify.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 const PROVIDER = "volcengine-plan";
 const MODEL = "ark-code-latest";
@@ -55,12 +57,21 @@ function writeSecretRefConfig(): { root: string } {
   );
 
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+  // Persistent-setup tests reach the audit writer, which opens a SQLite store
+  // under the shared state dir; isolate it so tests never touch real state.
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   cleanups.push(() => {
     if (previousConfigPath === undefined) {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -89,7 +100,7 @@ test("the setup-inference probe keeps a SecretRef provider key the Gateway resol
     provider: string;
     agentDir?: string;
   }) => {
-    const auth = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProviderCore({
       provider: params.provider,
       cfg: params.config,
       ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -131,4 +142,70 @@ test("the applied-config selection projects an identical inference route", async
   );
 
   expect(revalidationProjection).toEqual(appliedProjection);
+});
+
+test("persistent setup succeeds when the post-probe re-read keeps an unchanged file SecretRef", async () => {
+  const { root } = writeSecretRefConfig();
+  await publishAppliedRuntimeConfig();
+  const { runtime } = createSystemAgentTestRuntime();
+  const modelRef = `${PROVIDER}/${MODEL}`;
+  const applySetup = vi.fn(async () => ({
+    configPath: path.join(root, "openclaw.json"),
+    configHashBefore: "before",
+    configHashAfter: "after",
+    bootstrapPending: false,
+    workspaceReady: true,
+    gateway: { status: "ready" as const, action: "reused" as const },
+    lines: [],
+  }));
+
+  // Before this fix, verifyCurrentSetupInference's post-probe comparison read
+  // the config file raw instead of through resolveAppliedSnapshotConfig, so an
+  // untouched file SecretRef looked like route drift and setup was refused.
+  const result = await executeSystemAgentOperation(
+    { kind: "setup", workspace: path.join(root, "work") },
+    runtime,
+    {
+      approved: true,
+      deps: {
+        applySetup,
+        loadOverview: async () => ({ defaultModel: modelRef }) as never,
+        verifyInferenceConfig: async () => ({ ok: true as const, modelRef, latencyMs: 5 }),
+      },
+    },
+  );
+
+  expect(result.applied).toBe(true);
+  expect(applySetup).toHaveBeenCalledOnce();
+});
+
+test("persistent setup still fails closed when the route genuinely changes mid-verification", async () => {
+  const { root } = writeSecretRefConfig();
+  await publishAppliedRuntimeConfig();
+  const { runtime } = createSystemAgentTestRuntime();
+  const modelRef = `${PROVIDER}/${MODEL}`;
+  const configPath = path.join(root, "openclaw.json");
+  const applySetup = vi.fn();
+
+  await expect(
+    executeSystemAgentOperation({ kind: "setup", workspace: path.join(root, "work") }, runtime, {
+      approved: true,
+      deps: {
+        applySetup,
+        loadOverview: async () => ({ defaultModel: modelRef }) as never,
+        verifyInferenceConfig: async () => {
+          // A real concurrent edit during the probe: rotate the auth profile
+          // order for the active provider. The applied-snapshot selector must
+          // not mask this as "still resolved"; the disk source no longer
+          // matches the source captured when the runtime snapshot was applied.
+          const current = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          current.auth = { order: { [PROVIDER]: ["rotated-profile"] } };
+          fs.writeFileSync(configPath, JSON.stringify(current));
+          return { ok: true as const, modelRef, latencyMs: 5 };
+        },
+      },
+    }),
+  ).rejects.toThrow("changed during setup verification");
+
+  expect(applySetup).not.toHaveBeenCalled();
 });

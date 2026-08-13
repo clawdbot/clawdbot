@@ -418,7 +418,10 @@ async function verifyCurrentSetupInference(
       "The default-agent inference route changed during setup verification, so setup was not applied. Review the current config and retry.",
     );
   }
-  const afterConfig = after.runtimeConfig ?? after.config;
+  // Same selection as beforeConfig: a fresh disk read still carries unresolved
+  // file SecretRefs, so comparing it raw against the pre-probe applied config
+  // would report an untouched provider key as route drift and block setup.
+  const afterConfig = resolveAppliedSnapshotConfig(after);
   const afterRoute = await projectDefaultInferenceRoute(afterConfig);
   if (
     !sameDefaultInferenceRoute(beforeRoute, afterRoute) ||
@@ -694,7 +697,11 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
   if (!snapshot.exists || !snapshot.valid) {
     return true;
   }
-  const config = snapshot.runtimeConfig ?? snapshot.config;
+  // Same applied-snapshot selection as the setup probe: this guard decides
+  // whether a plugin-uninstall or config write may proceed, so a fresh disk
+  // read with an unresolved file SecretRef must not misclassify the active
+  // default-route plugin.
+  const config = resolveAppliedSnapshotConfig(snapshot);
   const route = (await projectDefaultInferenceRoute(config ?? {})).route;
   if (!route) {
     return false;
