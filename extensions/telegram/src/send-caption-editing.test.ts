@@ -46,4 +46,21 @@ describe("Telegram caption edits", () => {
       });
     },
   );
+
+  it("rejects over-limit captions locally without calling the Bot API", async () => {
+    loadConfig.mockReturnValue({ channels: { telegram: { botToken: "tok" } } });
+    const longCaption = "x".repeat(1500);
+
+    await expect(
+      editMessageTelegram("123456", 321, longCaption, {
+        cfg: { channels: { telegram: { botToken: "tok" } } },
+        token: "tok",
+        accountId: "default",
+        editMode: "caption",
+      }),
+    ).rejects.toThrow("Telegram captions are limited to 1024 characters (got 1500)");
+
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).not.toHaveBeenCalled();
+  });
 });

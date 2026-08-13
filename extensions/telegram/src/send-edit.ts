@@ -2,7 +2,12 @@ import type { Message } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import { TELEGRAM_MAX_CAPTION_LENGTH } from "./caption.js";
+import {
+  countTelegramHtmlVisibleCharacters,
+  renderTelegramHtmlText,
+  telegramHtmlToPlainTextFallback,
+} from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { isRecoverableTelegramNetworkError, isTelegramServerError } from "./network-errors.js";
 import {
@@ -215,8 +220,18 @@ async function editMessageTelegramWithContext(
     return accepted!.result;
   };
 
-  const performCaptionEdit = () =>
-    withTelegramPlainFallback({
+  const performCaptionEdit = () => {
+    // Telegram rejects captions over 1024 visible characters with
+    // "Bad Request: caption is too long". Fail locally with an actionable
+    // message instead of burning an API call that is guaranteed to fail; the
+    // send path already routes oversized captions through splitTelegramCaption.
+    const visibleCaptionLength = countTelegramHtmlVisibleCharacters(htmlText);
+    if (visibleCaptionLength > TELEGRAM_MAX_CAPTION_LENGTH || plainText.length > TELEGRAM_MAX_CAPTION_LENGTH) {
+      throw new Error(
+        `Telegram captions are limited to ${TELEGRAM_MAX_CAPTION_LENGTH} characters (got ${Math.max(visibleCaptionLength, plainText.length)}). Shorten the text or send it as a regular message instead.`,
+      );
+    }
+    return withTelegramPlainFallback({
       kind: "html",
       context: "editMessageCaption",
       plainText,
@@ -234,6 +249,7 @@ async function editMessageTelegramWithContext(
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
     });
+  };
 
   let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
   try {
