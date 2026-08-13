@@ -3909,9 +3909,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
-   when the gateway refuses or lacks the terminal surface. */
-.terminal-view-unavailable {
+/* Standalone terminal/desktop documents: centered notice when the gateway
+   refuses or lacks the requested surface. */
+.terminal-view-unavailable,
+.desktop-view-unavailable {
   position: fixed;
   inset: 0;
   display: flex;
