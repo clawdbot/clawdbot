@@ -17,7 +17,6 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { leasePublishedSyncedSkillsGeneration } from "../../skills/loading/workspace-skill-sync-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -56,6 +55,7 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import { releasePublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   filterProviderNormalizableTools,
@@ -101,7 +101,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveSkillAgentId,
   } = prepared;
   let restoreSkillEnv: (() => void) | undefined;
-  let releasePublishedGeneration = () => {};
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolRuntimesDisposed = false;
@@ -130,7 +129,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     try {
       restoreSkillEnv?.();
     } finally {
-      releasePublishedGeneration();
+      releasePublishedSandboxSkills(sandbox);
     }
   };
   const dispose = async () => {
@@ -149,10 +148,8 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       sandbox,
       effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
+      publishedSkillsOwner: sandbox,
     });
-    // Same-tick lease as embedded attempts: compaction keeps captured skill
-    // locations until restoreSkillEnvironment runs.
-    releasePublishedGeneration = leasePublishedSyncedSkillsGeneration(effectiveSkillsWorkspace);
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveSkillsWorkspace,
       config: params.config,

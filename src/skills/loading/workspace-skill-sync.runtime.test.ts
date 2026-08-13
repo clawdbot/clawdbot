@@ -8,14 +8,12 @@ import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-import {
-  peekPublishedSyncedSkillsSnapshot,
-  dropSyncedSkillsUsageCacheForTests,
-} from "./workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
   createWorkspaceSkillSyncFixtures,
+  dropSyncedSkillsUsageCacheForTests,
   pathExists,
+  peekPublishedSyncedSkillsSnapshot,
   publishedSkillFilePath,
   sortedSkillNames,
 } from "./workspace-skill-sync.test-support.js";

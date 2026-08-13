@@ -9,11 +9,6 @@ import {
   formatSkillsForPromptCore,
 } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import {
-  peekPublishedSyncedSkillsSnapshot,
-  resolveSyncedSkillsCacheKey,
-  writeSyncedSkillsUsageCache,
-} from "../../skills/loading/workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.runtime.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
@@ -110,7 +105,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         name: "demo",
         description: "Demo skill",
       });
-      await syncWorkspaceSkills({
+      const synced = await syncWorkspaceSkills({
         sourceWorkspaceDir: sourceWorkspace,
         targetWorkspaceDir: targetWorkspace,
         bundledSkillsDir,
@@ -126,6 +121,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           workspaceAccess: "rw",
         },
         effectiveWorkspace: path.join(root, "workspace"),
+        publishedSkillsSnapshot: synced.skillsSnapshot,
         skillsSnapshot: snapshot,
       });
 
@@ -161,7 +157,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         name: "demoalpha",
         description: "Demo and alpha",
       });
-      await syncWorkspaceSkills({
+      const synced = await syncWorkspaceSkills({
         sourceWorkspaceDir: sourceWorkspace,
         targetWorkspaceDir: targetWorkspace,
         bundledSkillsDir,
@@ -169,9 +165,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         pluginSkillsDir: path.join(sourceWorkspace, ".plugin-skills"),
       });
       const hostFilePath =
-        peekPublishedSyncedSkillsSnapshot(targetWorkspace)?.resolvedSkills?.find(
-          (skill) => skill.name === "demoalpha",
-        )?.filePath ?? "";
+        synced.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "demoalpha")
+          ?.filePath ?? "";
       const resolved = resolveSandboxSkillRuntimeInputs({
         sandbox: {
           enabled: true,
@@ -180,6 +175,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           workspaceAccess: "rw",
         },
         effectiveWorkspace: path.join(root, "workspace"),
+        publishedSkillsSnapshot: synced.skillsSnapshot,
         skillsSnapshot: snapshot,
       });
       const prompt = resolveSkillsPrompt({
@@ -226,16 +222,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       }),
       disableModelInvocation: false,
     };
-    writeSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspace), {
-      manifestKey: "prose-remap",
-      skillUsagePaths: [],
-      skillsSnapshot: {
-        prompt: formatSkillsForPromptCore([skill]),
-        skills: [{ name: "demo" }],
-        resolvedSkills: [skill],
-        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-      },
-    });
+    const skillsSnapshot = {
+      prompt: formatSkillsForPromptCore([skill]),
+      skills: [{ name: "demo" }],
+      resolvedSkills: [skill],
+      promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+    };
 
     const resolved = resolveSandboxSkillRuntimeInputs({
       sandbox: {
@@ -245,6 +237,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         workspaceAccess: "rw",
       },
       effectiveWorkspace: "/workspace",
+      publishedSkillsSnapshot: skillsSnapshot,
     });
     const prompt = resolved.skillsSnapshot?.prompt ?? "";
 

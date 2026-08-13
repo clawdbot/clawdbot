@@ -6,13 +6,13 @@
  */
 import path from "node:path";
 import { escapeSkillXml, type Skill } from "../../skills/loading/skill-contract.js";
-import { peekPublishedSyncedSkillsSnapshot } from "../../skills/loading/workspace-skill-sync-cache.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
   SkillSnapshot,
   SkillUsagePath,
 } from "../../skills/types.js";
+import { readPublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -201,6 +201,8 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
   effectiveWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
+  publishedSkillsOwner?: object | null;
+  publishedSkillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
   skillsPromptWorkspaceDir: string;
@@ -219,11 +221,14 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    // Prefer the sync-published materialized catalog over a live rescan of the
-    // shared skills directory. Host-path snapshots remain suppressed. A miss
-    // still live-scans (first publish only); refresh races keep the previous
-    // catalog and its generation directory.
-    const publishedSnapshot = peekPublishedSyncedSkillsSnapshot(skillsWorkspaceDir);
+    // Use the catalog attached to this sandbox/run, not the workspace-global
+    // publisher cache. Concurrent sessions can publish different eligibility
+    // snapshots into the same skills directory; peeking the last writer would
+    // inject the wrong catalog into this run's prompt.
+    const publishedSnapshot =
+      params.publishedSkillsSnapshot ??
+      readPublishedSandboxSkills(params.publishedSkillsOwner)?.skillsSnapshot ??
+      readPublishedSandboxSkills(params.sandbox)?.skillsSnapshot;
     const materializedSnapshot = publishedSnapshot
       ? remapMaterializedSkillsSnapshotForPrompt({
           skillsSnapshot: publishedSnapshot,

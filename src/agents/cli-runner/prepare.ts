@@ -112,6 +112,7 @@ import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
+import { releasePublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -253,67 +254,79 @@ async function resolveCliSkillsPrompt(params: {
   sessionKey: string;
   skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
   workspaceDir: string;
-}): Promise<string> {
+}): Promise<{ prompt: string; publishedSkillsOwner?: object }> {
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
     config: params.config,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
+    retainPublishedSkills: true,
   });
   if (!sandboxWorkspace) {
-    return resolveSkillsPrompt({
-      skillsSnapshot: params.skillsSnapshot,
-      workspaceDir: params.workspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-    });
+    return {
+      prompt: resolveSkillsPrompt({
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+      }),
+    };
   }
 
-  const {
-    skillsEligibility,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot: skillsSnapshotForRun,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: {
-      enabled: true,
-      ...(sandboxWorkspace.containerWorkdir
-        ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
-        : {}),
-      ...(sandboxWorkspace.skillsEligibility
-        ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-        : {}),
-      ...(sandboxWorkspace.skillsWorkspaceDir
-        ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-        : {}),
-      ...(sandboxWorkspace.workspaceAccess
-        ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-        : {}),
-    },
-    effectiveWorkspace: sandboxWorkspace.workspaceDir,
-    skillsSnapshot: params.skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot: skillsSnapshotForRun,
-    workspaceOnly,
-  });
-  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  return resolveSkillsPrompt({
-    skillsSnapshot: skillsSnapshotForRun,
-    entries: promptSkillEntries,
-    workspaceDir: skillsPromptWorkspaceDir,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: skillsEligibility,
-  });
+  try {
+    const {
+      skillsEligibility,
+      skillsPromptWorkspaceDir,
+      skillsSnapshot: skillsSnapshotForRun,
+      skillsWorkspaceDir,
+      workspaceOnly,
+    } = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        ...(sandboxWorkspace.containerWorkdir
+          ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
+          : {}),
+        ...(sandboxWorkspace.skillsEligibility
+          ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
+          : {}),
+        ...(sandboxWorkspace.skillsWorkspaceDir
+          ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
+          : {}),
+        ...(sandboxWorkspace.workspaceAccess
+          ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
+          : {}),
+      },
+      effectiveWorkspace: sandboxWorkspace.workspaceDir,
+      publishedSkillsOwner: sandboxWorkspace,
+      skillsSnapshot: params.skillsSnapshot,
+    });
+    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly,
+    });
+    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir,
+      skillsPromptWorkspaceDir,
+    });
+    return {
+      prompt: resolveSkillsPrompt({
+        skillsSnapshot: skillsSnapshotForRun,
+        entries: promptSkillEntries,
+        workspaceDir: skillsPromptWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        eligibility: skillsEligibility,
+      }),
+      publishedSkillsOwner: sandboxWorkspace,
+    };
+  } catch (error) {
+    releasePublishedSandboxSkills(sandboxWorkspace);
+    throw error;
+  }
 }
 
 /** Overrides preparation dependencies for CLI runner tests. */
@@ -1343,7 +1356,7 @@ export async function prepareCliRunContext(
       const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
       return backend;
     })();
-    const preparedBackendFinal = {
+    let preparedBackendFinal = {
       ...preparedBackend,
       backend: {
         ...(isSideQuestion
@@ -1460,9 +1473,9 @@ export async function prepareCliRunContext(
           cwd,
           moduleUrl: import.meta.url,
         });
-    const systemPromptSkillsPrompt =
+    const cliSkillsPrompt =
       isSideQuestion || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
-        ? ""
+        ? { prompt: "", publishedSkillsOwner: undefined }
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
             workspaceDir,
@@ -1470,6 +1483,20 @@ export async function prepareCliRunContext(
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
+    const systemPromptSkillsPrompt = cliSkillsPrompt.prompt;
+    if (cliSkillsPrompt.publishedSkillsOwner) {
+      const publishedSkillsOwner = cliSkillsPrompt.publishedSkillsOwner;
+      const previousCleanup = preparedBackendFinal.cleanup ?? cleanupPreparedResources;
+      const cleanup = async () => {
+        try {
+          await previousCleanup?.();
+        } finally {
+          releasePublishedSandboxSkills(publishedSkillsOwner);
+        }
+      };
+      preparedBackendFinal = { ...preparedBackendFinal, cleanup };
+      cleanupPreparedResources = cleanup;
+    }
     const runtimeChannel = isSideQuestion
       ? undefined
       : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);

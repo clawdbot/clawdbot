@@ -1,8 +1,10 @@
 /**
  * Process-local published sandbox skill catalogs.
  *
- * Lives apart from the sync runtime so prompt readers can peek a complete
- * generation without importing the deferred sandbox copy path.
+ * The sync runtime writes the latest complete generation here. Prompt readers
+ * must bind that snapshot onto a per-run owner; they must not peek this cache
+ * as a shared catalog, because concurrent sessions can publish different
+ * eligibility snapshots into the same skills directory.
  */
 import path from "node:path";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -23,9 +25,7 @@ export function resolveSyncedSkillsCacheKey(targetWorkspaceDir: string): string 
   return path.join(resolveUserPath(targetWorkspaceDir), "skills");
 }
 
-export function peekPublishedSyncedSkillsSnapshot(
-  targetWorkspaceDir: string,
-): SkillSnapshot | undefined {
+function peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir: string): SkillSnapshot | undefined {
   return readSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspaceDir))
     ?.skillsSnapshot;
 }
@@ -106,8 +106,15 @@ export function collectRetainedSyncedSkillGenerations(params: {
   return retained;
 }
 
-export function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {
+function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {
   const targetSkillsDir = resolveSyncedSkillsCacheKey(targetWorkspaceDir);
   syncedSkillsUsageCache.delete(targetSkillsDir);
   leasedGenerationCounts.delete(targetSkillsDir);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.syncedSkillsCacheTestApi")] = {
+    dropSyncedSkillsUsageCacheForTests,
+    peekPublishedSyncedSkillsSnapshot,
+  };
 }

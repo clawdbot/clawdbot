@@ -10,6 +10,7 @@ import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
+import { attachPublishedSandboxSkills } from "../../agents/sandbox/published-skills-handoff.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -342,6 +343,46 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("releases published sandbox skill generations after command prompt inspection", async () => {
+    const sandboxWorkspace = {
+      workspaceDir: "/tmp/workspace",
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir: "/tmp/sandbox-skills",
+      workspaceAccess: "rw" as const,
+    };
+    const generationLocation =
+      "/workspace/.openclaw/sandbox-skills/skills/.openclaw-generations/1/gog/SKILL.md";
+    const releaseGeneration = vi.fn();
+    attachPublishedSandboxSkills(sandboxWorkspace, {
+      skillsSnapshot: {
+        prompt: [
+          "<available_skills>",
+          "  <skill>",
+          "    <name>gog</name>",
+          `    <location>${generationLocation}</location>`,
+          "  </skill>",
+          "</available_skills>",
+        ].join("\n"),
+        skills: [{ name: "gog" }],
+        resolvedSkills: [],
+      },
+      releaseGeneration,
+    });
+    vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
+      sandboxed: true,
+      mode: "workspace-write",
+    } as never);
+    vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(sandboxWorkspace as never);
+
+    const result = await resolveCommandsSystemPromptBundle(makeParams());
+
+    expect(result.skillsPrompt).toContain(generationLocation);
+    expect(releaseGeneration).toHaveBeenCalledOnce();
+    expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith(
+      expect.objectContaining({ retainPublishedSkills: true }),
+    );
   });
 
   it("preserves host skill snapshots for custom backends without a declared workdir", async () => {

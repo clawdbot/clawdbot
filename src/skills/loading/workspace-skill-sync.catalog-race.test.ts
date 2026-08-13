@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
+import {
+  attachPublishedSandboxSkills,
+  releasePublishedSandboxSkills,
+} from "../../agents/sandbox/published-skills-handoff.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { recordRemoteSkillNodeInfo, replaceRemoteNodeSkills } from "../runtime/remote-skills.js";
@@ -127,7 +131,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
       expect(oldCatalog.some((name) => !liveNameSet.has(name))).toBe(true);
       expect(newCatalog.every((name) => liveNameSet.has(name))).toBe(false);
 
-      // Sandbox prompt readers peek the sync-published generation instead.
+      // Sandbox prompt readers use the catalog bound to this run, not a live scan.
       const {
         skillsSnapshot: skillsSnapshotForRun,
         skillsPromptWorkspaceDir,
@@ -141,6 +145,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
           workspaceAccess: "rw",
         },
         effectiveWorkspace: targetWorkspace,
+        publishedSkillsSnapshot: first.skillsSnapshot,
       });
       const { shouldLoadSkillEntries } = resolveEmbeddedRunSkillEntries({
         workspaceDir: skillsWorkspaceDir,
@@ -207,6 +212,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
           workspaceAccess: "rw",
         },
         effectiveWorkspace: targetWorkspace,
+        publishedSkillsSnapshot: second.skillsSnapshot,
       });
       const newPrompt = resolveSkillsPrompt({
         skillsSnapshot: publishedAfter.skillsSnapshot,
@@ -307,6 +313,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
           workspaceAccess: "rw",
         },
         effectiveWorkspace: targetWorkspace,
+        publishedSkillsSnapshot: synced.skillsSnapshot,
       });
       expect(resolved.skillsSnapshot?.prompt).toContain(nodeLocation);
       expect(resolved.skillsSnapshot?.prompt).toContain(
@@ -350,6 +357,11 @@ describe("syncWorkspaceSkills catalog generations", () => {
     const first = await publish("generation-one");
     const firstFilePath = first.skillsSnapshot.resolvedSkills?.[0]?.filePath;
     expect(firstFilePath).toBeTruthy();
+    const owner = {};
+    attachPublishedSandboxSkills(owner, {
+      skillsSnapshot: first.skillsSnapshot,
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+    });
     const published = resolveSandboxSkillRuntimeInputs({
       sandbox: {
         enabled: true,
@@ -358,6 +370,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
         workspaceAccess: "rw",
       },
       effectiveWorkspace: targetWorkspace,
+      publishedSkillsOwner: owner,
     });
     const bridge = createMaterializedSkillsBridge(targetWorkspace);
     const codeModeSkills = resolveCodeModeSkills({
@@ -380,7 +393,9 @@ describe("syncWorkspaceSkills catalog generations", () => {
     if (!capturedSkill) {
       throw new Error("expected a captured sandbox skill from the first generation");
     }
-    const releasePublishedGeneration = leasePublishedSyncedSkillsGeneration(targetWorkspace);
+    const releasePublishedGeneration = () => {
+      releasePublishedSandboxSkills(owner);
+    };
 
     try {
       bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
@@ -397,5 +412,79 @@ describe("syncWorkspaceSkills catalog generations", () => {
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
     await publish("generation-four");
     expect(await pathExists(firstFilePath ?? "")).toBe(false);
+  });
+
+  it("keeps concurrent sandbox owners on their own published catalogs", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const publish = async (name: string) => {
+      await fs.rm(path.join(sourceWorkspace, "skills"), { recursive: true, force: true });
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
+      });
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    const first = await publish("alpha");
+    const ownerA = {};
+    attachPublishedSandboxSkills(ownerA, {
+      skillsSnapshot: first.skillsSnapshot,
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+    });
+
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const second = await publish("beta");
+    const ownerB = {};
+    attachPublishedSandboxSkills(ownerB, {
+      skillsSnapshot: second.skillsSnapshot,
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+    });
+
+    try {
+      const catalogA = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          workspaceAccess: "rw",
+        },
+        effectiveWorkspace: targetWorkspace,
+        publishedSkillsOwner: ownerA,
+      });
+      const catalogB = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          workspaceAccess: "rw",
+        },
+        effectiveWorkspace: targetWorkspace,
+        publishedSkillsOwner: ownerB,
+      });
+      expect(
+        sortedSkillNames(catalogA.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
+      ).toEqual(["alpha"]);
+      expect(
+        sortedSkillNames(catalogB.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
+      ).toEqual(["beta"]);
+    } finally {
+      releasePublishedSandboxSkills(ownerA);
+      releasePublishedSandboxSkills(ownerB);
+    }
   });
 });

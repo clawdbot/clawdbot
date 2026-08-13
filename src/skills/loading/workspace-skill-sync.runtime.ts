@@ -106,8 +106,8 @@ function buildSyncedSkillsSnapshot(params: {
   const syncedNames = new Set(params.skillUsagePaths.map((entry) => entry.skillName));
   const materializedEntries = params.plans.flatMap((plan) => {
     // Non-filesystem locators (node://) are planned without a destination and
-    // must stay in the published catalog. Dropping them makes peek suppress
-    // live loading and omit those skills from sandbox prompts.
+    // must stay in the published catalog. Dropping them makes the attached
+    // snapshot suppress live loading and omit those skills from sandbox prompts.
     if (!plan.destinationPath) {
       return [plan.entry];
     }

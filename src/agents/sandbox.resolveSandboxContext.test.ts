@@ -8,6 +8,10 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import {
+  readPublishedSandboxSkills,
+  releasePublishedSandboxSkills,
+} from "./sandbox/published-skills-handoff.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -296,6 +300,12 @@ describe("resolveSandboxContext", () => {
       expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({ skillsSnapshot }),
       );
+      expect(readPublishedSandboxSkills(result)?.skillsSnapshot).toEqual({
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+      });
+      expect(result).not.toHaveProperty("skillsSnapshot");
 
       const workspace = await ensureSandboxWorkspaceForSession({
         config: cfg,
@@ -804,6 +814,47 @@ describe("resolveSandboxContext", () => {
       remote: { note: "test-remote" },
     });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
+    expect(readPublishedSandboxSkills(result)).toBeUndefined();
+  }, 15_000);
+
+  it("retains the published catalog on session workspace objects when requested", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const skillsSnapshot = {
+      prompt: "<available_skills></available_skills>",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    } satisfies SkillSnapshot;
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({ skillUsagePaths: [], skillsSnapshot });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+      retainPublishedSkills: true,
+    });
+
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
+    expect(readPublishedSandboxSkills(result)?.skillsSnapshot).toEqual(skillsSnapshot);
+    expect(result).not.toHaveProperty("skillsSnapshot");
+    releasePublishedSandboxSkills(result);
+    expect(readPublishedSandboxSkills(result)).toBeUndefined();
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {

@@ -2,7 +2,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createSandboxFsBridgeFromResolver } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
-import { peekPublishedSyncedSkillsSnapshot } from "./workspace-skill-sync-cache.js";
+import type { SkillSnapshot } from "../types.js";
+import "./workspace-skill-sync-cache.js";
+
+type SyncedSkillsCacheTestApi = {
+  dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void;
+  peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir: string): SkillSnapshot | undefined;
+};
+
+function getSyncedSkillsCacheTestApi(): SyncedSkillsCacheTestApi {
+  return (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.syncedSkillsCacheTestApi")
+  ] as SyncedSkillsCacheTestApi;
+}
+
+export function peekPublishedSyncedSkillsSnapshot(
+  targetWorkspaceDir: string,
+): SkillSnapshot | undefined {
+  return getSyncedSkillsCacheTestApi().peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir);
+}
+
+export function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {
+  getSyncedSkillsCacheTestApi().dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir);
+}
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
