@@ -309,7 +309,7 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
     return true;
   }
   return (
-    block.data !== undefined ||
+    typeof block.data === "string" ||
     Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
 }

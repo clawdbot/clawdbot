@@ -453,6 +453,23 @@ describe("artifacts RPC handlers", () => {
     expectFields(downloadPayload.artifact?.download, { mode: "bytes" });
   });
 
+  it.each([null, 0, false, {}])(
+    "does not discover untyped non-string data as an artifact: %j",
+    async (data) => {
+      mockedMessages([
+        {
+          role: "assistant",
+          content: [{ data }],
+          __openclaw: { seq: 2 },
+        },
+      ]);
+
+      const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+
+      expect(expectArtifactList(listed.calls)).toEqual({ artifacts: [] });
+    },
+  );
+
   it("preserves managed artifact identity and returns a ticketed download URL", async () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
     mockedMessages([
