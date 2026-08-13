@@ -84,6 +84,20 @@ type DeadClassFinding = {
   testOnlyFiles: string[];
 };
 
+function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]> {
+  const groups = new Map<K, T[]>();
+  for (const value of values) {
+    const key = keyFor(value);
+    const group = groups.get(key);
+    if (group) {
+      group.push(value);
+    } else {
+      groups.set(key, [value]);
+    }
+  }
+  return groups;
+}
+
 function walkFiles(rootDir: string, accepts: (fileName: string) => boolean): string[] {
   const files: string[] = [];
   const pending = [rootDir];
@@ -201,6 +215,18 @@ function declarationName(node: ts.FunctionLikeDeclaration): string | null {
   return null;
 }
 
+function isFunctionLikeDeclaration(node: ts.Node): node is ts.FunctionLikeDeclaration {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node)
+  );
+}
+
 function callName(node: ts.CallExpression): string | null {
   if (ts.isIdentifier(node.expression)) {
     return node.expression.text;
@@ -259,9 +285,10 @@ function collectDynamicClassBuilderData(
       }
     }
 
-    if (ts.isFunctionLike(node) && node.body) {
+    if (isFunctionLikeDeclaration(node) && node.body) {
       const name = declarationName(node);
       if (name) {
+        const builderName: string = name;
         const parameters = new Map<string, { defaultValue: string | null; index: number }>();
         node.parameters.forEach((parameter, index) => {
           if (ts.isIdentifier(parameter.name)) {
@@ -282,7 +309,7 @@ function collectDynamicClassBuilderData(
                   builders.push({
                     ...pattern,
                     defaultValue: parameter.defaultValue,
-                    name,
+                    name: builderName,
                     parameterIndex: parameter.index,
                   });
                 }
@@ -308,7 +335,7 @@ function addDynamicClassBuilderReferences(
   builders: DynamicClassBuilder[],
   calls: DynamicClassBuilderCall[],
 ): void {
-  const callsByName = Map.groupBy(calls, (call) => call.name);
+  const callsByName = groupBy(calls, (call) => call.name);
   for (const builder of builders) {
     const values = new Set<string>();
     if (builder.defaultValue !== null) {
@@ -393,7 +420,9 @@ function externalProducer(className: string): string | null {
 
 function selectorClasses(selector: Selector): ClassName[] {
   const classes: ClassName[] = [];
-  selector.walkClasses((classNode) => classes.push(classNode));
+  selector.walkClasses((classNode) => {
+    classes.push(classNode);
+  });
   return classes;
 }
 
@@ -468,7 +497,7 @@ function formatReport(findings: DeadClassFinding[]): string {
   if (findings.length === 0) {
     return "Control UI dead-CSS audit: 0 dead class selectors.";
   }
-  const byFile = Map.groupBy(findings, (finding) => finding.file);
+  const byFile = groupBy(findings, (finding) => finding.file);
   const lines = ["Control UI dead-CSS audit (advisory):"];
   for (const [file, fileFindings] of byFile) {
     lines.push(`\n${file}`);
