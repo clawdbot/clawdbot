@@ -84,7 +84,7 @@ export async function installScriptedRfbServer(page: Page): Promise<void> {
     (
       window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
     ).triggerDesktopRfbDisconnect = (reason) => {
-      for (const socket of [...sockets]) {
+      for (const socket of sockets) {
         socket.close(1006, reason);
       }
     };

@@ -195,10 +195,10 @@ suite.define(() => {
           if (!stageBox || !screenBox) {
             throw new Error("Desktop fullscreen geometry is unavailable");
           }
-          const framebuffer = await screen.evaluate((canvas) => ({
-            height: canvas.height,
-            width: canvas.width,
-          }));
+          const framebuffer = await screen.evaluate((element) => {
+            const canvas = element as HTMLCanvasElement;
+            return { height: canvas.height, width: canvas.width };
+          });
           expect(framebuffer.width).toBeGreaterThan(0);
           expect(framebuffer.height).toBeGreaterThan(0);
           expect(
