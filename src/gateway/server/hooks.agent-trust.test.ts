@@ -16,6 +16,10 @@ const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
 const runCronIsolatedAgentTurnMock = vi.fn();
 const resolveMainSessionKeyMock = vi.fn(() => "main-session");
+const resolveAgentMainSessionKeyMock = vi.fn(
+  (params: { cfg?: { session?: { mainKey?: string } }; agentId: string }) =>
+    `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+);
 const mainRosterConfig = (): OpenClawConfig => ({
   agents: { entries: { main: {} } },
 });
@@ -51,10 +55,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKey: vi.fn((cfg?: { session?: { mainKey?: string; scope?: string } }) =>
     cfg?.session?.scope === "global" ? "global" : `agent:main:${cfg?.session?.mainKey ?? "main"}`,
   ),
-  resolveAgentMainSessionKey: vi.fn(
-    (params: { cfg?: { session?: { mainKey?: string } }; agentId: string }) =>
-      `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
-  ),
+  resolveAgentMainSessionKey: resolveAgentMainSessionKeyMock,
 }));
 vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
@@ -218,6 +219,33 @@ describe("dispatchAgentHook trust handling", () => {
       intent: "immediate",
       reason: "hook:wake",
       agentId: "hooks",
+    });
+  });
+
+  it("keeps the resolved owner when a multi-agent wake omits agentId", () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, molty: {} },
+      },
+    });
+
+    dispatchWakeHook({ text: "Mapped wake", mode: "now" }, "molty");
+
+    expect(resolveAgentMainSessionKeyMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentId: "molty",
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Mapped wake", {
+      sessionKey: "agent:molty:main",
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "hook",
+      intent: "immediate",
+      reason: "hook:wake",
+      agentId: "molty",
+      sessionKey: "agent:molty:main",
     });
   });
 
@@ -890,10 +918,9 @@ describe("dispatchAgentHook trust handling", () => {
     expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
   });
 
-  it("omits the default agentId from the announce wake when no agent is named", async () => {
-    // An unnamed hook resolves its event session from fresh config at announce
-    // time; pairing the dispatch-time default agent with that session could
-    // wake a stale agent after a default-agent reload.
+  it("carries the accepted owner on an unnamed hook announce wake", async () => {
+    // Admission freezes the effective owner. Keep it paired with the scoped
+    // event session instead of rediscovering an ambient default at completion.
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "ok",
       summary: "done",
@@ -913,9 +940,9 @@ describe("dispatchAgentHook trust handling", () => {
       source: "hook",
       intent: "immediate",
       reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "main",
       sessionKey: "agent:main:main",
     });
-    expect(wake.agentId).toBeUndefined();
   });
 
   it("keeps global-scope error events and wakes on the selected agent", async () => {

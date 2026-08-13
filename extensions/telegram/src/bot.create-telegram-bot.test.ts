@@ -2259,7 +2259,7 @@ describe("createTelegramBot", () => {
         defaults: {
           model: "openai/gpt-4.1",
         },
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -3689,7 +3689,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {
@@ -3763,8 +3763,9 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "topic-a" }, { id: "topic-b" }],
+        list: [{ id: "topic-a", default: true }, { id: "topic-b" }],
       },
+      bindings: [{ agentId: "topic-a", match: { channel: "telegram", accountId: "default" } }],
     });
     loadConfig.mockImplementation(configForTopicAgent);
 
@@ -5052,7 +5053,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {

@@ -76,6 +76,8 @@ export class CodexAppServerEventProjector {
   private readonly toolProgressProjection: CodexToolProgressProjection;
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
+  /** Structured overloads may continue once the exact settled transcript is captured. */
+  settledTurnFailureFinalizationAllowed = false;
   private promptError: unknown;
   private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
@@ -284,6 +286,9 @@ export class CodexAppServerEventProjector {
         if (params.willRetry === true) {
           break;
         }
+        this.settledTurnFailureFinalizationAllowed =
+          (isJsonObject(params.error) ? params.error.codexErrorInfo : undefined) ===
+          "serverOverloaded";
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
@@ -493,6 +498,8 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.completedTurn = turn;
+    this.settledTurnFailureFinalizationAllowed =
+      turn.status === "failed" && turn.error?.codexErrorInfo === "serverOverloaded";
     if (turn.status !== "completed") {
       this.responseCompletions.clear();
     }

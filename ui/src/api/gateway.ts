@@ -315,9 +315,8 @@ export class GatewayBrowserClient {
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
-  private recoveryScopeValue = "";
-  private recoveryScopeResolved = false;
-  private recoveryScopeGeneration = 0;
+  // Close/stop advances this generation before another socket can make stale hello work look active.
+  private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
@@ -345,6 +344,7 @@ export class GatewayBrowserClient {
       },
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
+        this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
         this.stopTickWatch();
         this.scopeUpgradeBinding = null;
         const error = context.connectFailure?.error;
@@ -399,6 +399,7 @@ export class GatewayBrowserClient {
 
   stop() {
     this.stopTickWatch();
+    this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };
     this.client.stop();
     this.cancelScopeUpgrade();
     this.scopeUpgradeBinding = null;
@@ -411,11 +412,11 @@ export class GatewayBrowserClient {
   }
 
   get recoveryScope() {
-    return this.recoveryScopeValue;
+    return this.recovery.value;
   }
 
   get recoveryScopeReady() {
-    return this.recoveryScopeResolved;
+    return this.recovery.resolved;
   }
 
   get scopeUpgradeReady() {
@@ -441,8 +442,7 @@ export class GatewayBrowserClient {
     connectChallengeTs: number | null | undefined,
     generation: number,
   ): Promise<ConnectPlan> {
-    this.recoveryScopeGeneration = generation;
-    this.recoveryScopeResolved = false;
+    this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
     const client: GatewayConnectClientInfo = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -565,12 +565,12 @@ export class GatewayBrowserClient {
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
         ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
         : undefined;
-    if (plan.generation !== this.recoveryScopeGeneration || !this.client.connected) {
+    if (plan.generation !== this.recovery.generation || !this.client.connected) {
       return;
     }
     migrateRecoveryScope?.(this.opts.url, legacyScope, serverScope!);
-    this.recoveryScopeValue = serverScope ?? legacyScope;
-    this.recoveryScopeResolved = true;
+    this.recovery.value = serverScope ?? legacyScope;
+    this.recovery.resolved = true;
     this.opts.onRecoveryScopeChange?.();
   }
 

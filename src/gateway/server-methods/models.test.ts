@@ -2,7 +2,7 @@
 // validation errors, and protocol response shapes.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -11,10 +11,142 @@ import {
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const modelPluginMetadataSnapshot = vi.hoisted(() => {
+  const plugins = [
+    {
+      id: "anthropic",
+      channels: [],
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      syntheticAuthRefs: ["claude-cli"],
+      providerAuthChoices: [
+        {
+          provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          deprecatedChoiceIds: ["claude-cli"],
+        },
+        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
+        { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
+      ],
+      modelSupport: { modelPrefixes: ["claude-"] },
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/anthropic",
+      source: "/test/anthropic/index.js",
+      manifestPath: "/test/anthropic/openclaw.plugin.json",
+    },
+    {
+      id: "byteplus",
+      channels: [],
+      providers: ["byteplus", "byteplus-plan"],
+      syntheticAuthRefs: [],
+      providerAuthAliases: { "byteplus-plan": "byteplus" },
+      providerAuthChoices: [
+        { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
+      ],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/byteplus",
+      source: "/test/byteplus/index.js",
+      manifestPath: "/test/byteplus/openclaw.plugin.json",
+    },
+    {
+      id: "github-copilot",
+      channels: [],
+      providers: ["github-copilot"],
+      syntheticAuthRefs: [],
+      providerAuthChoices: [
+        { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
+        {
+          provider: "github-copilot",
+          method: "device-enterprise",
+          choiceId: "github-copilot-enterprise",
+        },
+      ],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/github-copilot",
+      source: "/test/github-copilot/index.js",
+      manifestPath: "/test/github-copilot/openclaw.plugin.json",
+    },
+  ];
+  return {
+    policyHash: "models-test-plugin-policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "models-test-plugin-policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      // A real isolated bundled snapshot has no installed-index rows; bundled
+      // manifest records remain the authoritative graph for this fixture.
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
+    plugins,
+    diagnostics: [],
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map([
+        ["anthropic", ["anthropic"]],
+        ["byteplus", ["byteplus"]],
+        ["byteplus-plan", ["byteplus"]],
+        ["github-copilot", ["github-copilot"]],
+      ]),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map([["claude-cli", ["anthropic"]]]),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: plugins.length,
+    },
+  };
+});
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: () => undefined,
+}));
 
 const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync(
@@ -28,6 +160,35 @@ const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
     },
     run,
   );
+
+let modelsTestState: OpenClawTestState;
+
+beforeAll(async () => {
+  assertPluginMetadataSnapshotConsistency(modelPluginMetadataSnapshot as PluginMetadataSnapshot);
+  modelsTestState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-models-list-",
+    agentEnv: "main",
+  });
+});
+
+afterAll(async () => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  await modelsTestState.cleanup();
+});
+
+async function withModelsTestState<T>(
+  options: NonNullable<Parameters<typeof createOpenClawTestState>[0]>,
+  run: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  clearRuntimeAuthProfileStoreSnapshots();
+  await modelsTestState.writeAuthProfiles({ version: 1, profiles: {} });
+  try {
+    return await withEnvAsync(options.env ?? {}, () => run(modelsTestState));
+  } finally {
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+}
 
 function createDemoOAuthStore(params: { access: string; expires: number }) {
   return {
@@ -779,7 +940,7 @@ describe("models.list", () => {
 
   it("keeps keyless local provider wildcard discoveries visible with unknown availability", async () => {
     await withoutOpenAIEnvAuth(async () => {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-local-wildcard-",
@@ -849,7 +1010,7 @@ describe("models.list", () => {
 
   it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
     await withoutOpenAIEnvAuth(async () => {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-codex-alias-",
@@ -908,7 +1069,7 @@ describe("models.list", () => {
 
   it("marks catalog models available through their configured CLI runtime", async () => {
     await withEnvAsync({ ANTHROPIC_API_KEY: undefined }, async () => {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-cli-runtime-",
@@ -1127,7 +1288,7 @@ describe("models.list", () => {
   });
 
   it("does not mark catalog rows available from expired OAuth profiles", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-expired-profile-",
@@ -1169,7 +1330,7 @@ describe("models.list", () => {
   });
 
   it("uses refreshed persisted OAuth when the runtime auth snapshot is stale", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-stale-runtime-profile-",
@@ -1227,7 +1388,7 @@ describe("models.list", () => {
   });
 
   it("marks env SecretRef-backed auth profiles available", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-env-profile-",
@@ -1281,7 +1442,7 @@ describe("models.list", () => {
   });
 
   it("keeps non-env SecretRef-backed auth profile availability unknown", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-file-profile-",
@@ -1346,7 +1507,7 @@ describe("models.list", () => {
     // Regression: the models.list availability checker loaded the auth store
     // for profile checks but did not pass it to the runtime availability check,
     // so inline provider keys in billing cooldown stayed browseable.
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-inline-cooldown-",
@@ -1420,7 +1581,7 @@ describe("models.list", () => {
   });
 
   it("uses an exact hydrated runtime profile SecretRef as read-only proof", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-hydrated-file-profile-",
@@ -1514,7 +1675,7 @@ describe("models.list", () => {
       },
       { name: "managed-marker", apiKey: "secretref-managed" },
     ] as const) {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: `openclaw-models-list-provider-${fixture.name}-profile-`,

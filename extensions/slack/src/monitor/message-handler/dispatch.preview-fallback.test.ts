@@ -439,7 +439,7 @@ async function dispatchNativeProgressScenario(params: {
       accountConfig: {
         streaming: {
           mode: "progress",
-          progress: params.progress ?? { nativeTaskCards: true, render: "rich" },
+          progress: params.progress ?? { nativeTaskCards: true },
         },
       },
     }),
@@ -1980,7 +1980,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       createPreparedSlackMessage({
         cfg: { messages: { statusReactions: { enabled: true } } },
         accountConfig: {
-          streaming: { mode: "progress", progress: { nativeTaskCards: true, render: "rich" } },
+          streaming: { mode: "progress", progress: { nativeTaskCards: true } },
         },
         ackReactionMessageTs: "171234.111",
         ackReactionPromise: Promise.resolve(true),
@@ -3247,7 +3247,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it("starts native Slack progress from a retained headline when tool rows are hidden", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
-      progress: { label: false, nativeTaskCards: true, render: "rich", toolProgress: false },
+      progress: { label: false, nativeTaskCards: true, toolProgress: false },
       events: [
         {
           kind: "item",
@@ -3556,7 +3556,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         accountConfig: {
           streaming: {
             mode: "progress",
-            progress: { nativeTaskCards: true, render: "rich" },
+            progress: { nativeTaskCards: true },
           },
         },
       }),
@@ -3614,7 +3614,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         accountConfig: {
           streaming: {
             mode: "progress",
-            progress: { nativeTaskCards: true, render: "rich" },
+            progress: { nativeTaskCards: true },
           },
         },
       }),
@@ -3691,7 +3691,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it("mandatory E2E: preserves an explicit configured native Slack progress plan title", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
-      progress: { label: "Shelling", nativeTaskCards: true, render: "rich" },
+      progress: { label: "Shelling", nativeTaskCards: true },
       events: [
         { kind: "item", progressText: "tool one" },
         { kind: "item", progressText: "tool two" },
@@ -3719,7 +3719,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
-      progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, render: "rich" },
+      progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true },
       events: [
         {
           kind: "tool_start",

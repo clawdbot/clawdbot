@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
 
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -23,20 +22,12 @@ function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
   return quickJsWasmModulePromise;
 }
 
-export function resolveCodeModeWorkerUrl(currentModuleUrl: string): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const distMarker = `${path.sep}dist${path.sep}`;
-  const distIndex = currentPath.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length - 1);
-    return pathToFileURL(path.join(distRoot, "agents", "code-mode.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./code-mode.worker${extension}`, currentModuleUrl);
-}
-
 function codeModeWorkerUrl(): URL {
-  return resolveCodeModeWorkerUrl(import.meta.url);
+  return resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "code-mode.worker",
+    distWorkerPath: "agents/code-mode.worker.js",
+  });
 }
 
 function failedCodeModeWorkerResult(

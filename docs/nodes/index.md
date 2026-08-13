@@ -406,6 +406,29 @@ Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
 
+### Host OpenClaw sessions
+
+A headless node host can separately opt into full OpenClaw session hosting from
+its local installation:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: { enabled: true },
+  },
+}
+```
+
+Restart the node host after enabling this setting. At startup it advertises the
+exact OpenClaw version, worker-bundle hash, and worker protocol features of its
+own installation. The Gateway offers the device as a session host only while
+that advertisement is live, and provisioning requires the node and Gateway
+versions to match exactly. If they differ, update the node before retrying.
+
+This setting completes device-environment provisioning but does not yet enable
+turn launch on the device. The local-install chain adds supervised launch and
+workspace transport in subsequent steps.
+
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 

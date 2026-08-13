@@ -21,7 +21,7 @@ OpenClaw + Litestream container :8080
         +--> R2 S3 API (SQLite replicas)
 ```
 
-Every HTTP and WebSocket request is forwarded to port `8080`. The Container helper checks `GET /startupz` before admitting traffic. `max_instances: 1` and the single Durable Object name are the installation's outer single-writer fence.
+Every HTTP and WebSocket request is forwarded to port `8080`. The Container helper polls `GET /healthz`, which every published image serves, before admitting traffic. `max_instances: 1` and the single Durable Object name are the installation's outer single-writer fence.
 
 ## Prerequisites
 
@@ -125,9 +125,22 @@ node openclaw.mjs doctor --json
 
 Keep the exact bootstrap recipe in a private, reproducible runbook. Litestream does not replicate `openclaw.json`, credential files, installed plugin files, or workspaces.
 
+## 5. Verify before relying on it
+
+```bash
+curl -sS https://<worker-subdomain>.workers.dev/healthz
+npx wrangler tail
+```
+
+Then rehearse recovery, because an untested restore path is not a backup: send one message, wait about ten seconds for replication, force a Container replacement, and confirm the conversation survives. Fix replication before connecting production channels if it does not.
+
+Measured on this template against a real R2 bucket: about 2.4 s write-to-replica, about 9 s to restore both databases, and a healthy Gateway about 13 s after a fresh start.
+
 ## Scale-to-zero policy
 
 The template defaults `OPENCLAW_WEBHOOK_ONLY` to `false`. This keeps the Container alive across idle periods for Discord, Slack Socket Mode, WhatsApp, and every other channel that maintains a socket or polling process.
+
+Cost follows directly from that choice. Memory and disk bill on provisioned instance resources for as long as the Container is awake, so an always-on `standard-2` is dominated by its 6 GiB of provisioned memory rather than by agent activity -- roughly 40 to 50 US dollars per month at published rates, where a small always-on VM is often cheaper. A sleeping webhook-only Container bills nothing. Check [current rates](https://developers.cloudflare.com/containers/pricing/) before committing.
 
 Set `OPENCLAW_WEBHOOK_ONLY` to `true` only when every enabled channel receives traffic through HTTP webhooks. The Container then stops after ten idle minutes and cold-starts on the next request. Because its disk is fresh after sleep, enable this only when an external process can reapply the declarative bootstrap above; Litestream alone restores SQLite, not the config files needed to activate channels.
 
@@ -153,6 +166,19 @@ npm run deploy
 ```
 
 Treat rollbacks like restores: stop traffic where possible, preserve the current state first, and review credentials, approvals, and delivery state before activating older database bytes.
+
+## Troubleshooting
+
+- **Container never becomes ready:** the image must be `linux/amd64` and pulled from a public registry, referenced by digest rather than a moving tag.
+- **Requests time out after a successful deploy:** the Container helper waits for `GET /healthz` on port `8080`; confirm the Gateway still binds that port.
+- **A probe passes but nothing serves:** the Control UI answers unknown paths with a catch-all `200`, so probing a route the image does not serve looks healthy forever; assert the JSON body, not just the status.
+- **Litestream authentication or signature errors:** Litestream needs R2 _S3 API_ credentials, not a Cloudflare API token, and `LITESTREAM_ENDPOINT` must contain the account ID.
+- **First boot reports no databases to restore:** expected on an empty bucket; the entrypoint treats that as a fresh installation.
+- **`/readyz` is 503 while `/startupz` is 200:** by design. Startup finished and a channel account is unhealthy; inspect channel status instead of restarting.
+- **`wrangler containers ssh` rejected:** SSH ships disabled; add `"ssh": { "enabled": true }`, redeploy, then connect.
+- **Config missing after sleep or redeploy:** Litestream restores SQLite only. Reapply the bootstrap runbook or stay always-on and take full archives.
+
+Full operator guide: <https://docs.openclaw.ai/install/cloudflare>.
 
 ## Files
 

@@ -146,6 +146,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
         cfg,
+        agentDir,
         contextTokensOverride: agentCfg?.contextTokens,
         sessionId: effectiveSessionId,
         sessionKey,
@@ -165,6 +166,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
         touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           fallbackExhausted ||
+          fallbackProvider !== provider ||
+          fallbackModel !== model ||
           isHeartbeatLifecycleRun ||
           params.preserveUserFacingSessionModelState,
         preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,

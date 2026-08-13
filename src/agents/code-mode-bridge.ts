@@ -30,20 +30,6 @@ import { ToolInputError } from "./tools/common.js";
 import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
-type CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent: typeof emitSessionLifecycleEvent;
-  getSwarmRunByLaunchReplayKey: typeof getSwarmRunByLaunchReplayKey;
-  initSubagentRegistry: typeof initSubagentRegistry;
-  waitForCollectorCompletion: typeof waitForCollectorCompletion;
-};
-
-const defaultCodeModeSwarmDeps: CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent,
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-  waitForCollectorCompletion,
-};
-
 const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 type CodeModeNode = {
@@ -161,8 +147,6 @@ async function runNodesBridge(params: {
   }
   throw new ToolInputError("unsupported nodes bridge action.");
 }
-
-let codeModeSwarmDeps = defaultCodeModeSwarmDeps;
 
 export function codeModeReplayIdForToolCall(
   ctx: ToolSearchToolContext,
@@ -285,7 +269,7 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
+  let existing = getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
     params.ctx.agentId,
@@ -299,13 +283,10 @@ async function runAgentSpawnBridge(params: {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      codeModeSwarmDeps.initSubagentRegistry();
+      initSubagentRegistry();
       existing =
-        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
-          idempotencyKey,
-          requesterSessionKey,
-          params.ctx.agentId,
-        ) ?? existing;
+        getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
+        existing;
       if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
@@ -350,7 +331,7 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  return await codeModeSwarmDeps.waitForCollectorCompletion({
+  return await waitForCollectorCompletion({
     runId: runId.trim(),
     currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
     currentAgentId: params.ctx.agentId,
@@ -374,7 +355,7 @@ function runSwarmNoteBridge(params: {
   if (!sessionKey) {
     throw new ToolInputError("swarmNote requires session identity.");
   }
-  codeModeSwarmDeps.emitSessionLifecycleEvent({
+  emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
@@ -551,10 +532,4 @@ export async function runBridgeRequest(params: {
   } catch (error) {
     return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
   }
-}
-
-export function setCodeModeSwarmDepsForTest(overrides?: Partial<CodeModeSwarmDeps>): void {
-  codeModeSwarmDeps = overrides
-    ? { ...defaultCodeModeSwarmDeps, ...overrides }
-    : defaultCodeModeSwarmDeps;
 }

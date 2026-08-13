@@ -618,80 +618,6 @@ function formatMissingAuthProfileSqliteVerification(params: {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
-function filterRawAuthProfileState(
-  raw: Record<string, unknown>,
-  shouldKeepProfileId: (profileId: string) => boolean,
-): void {
-  if (isRecord(raw.order)) {
-    for (const [provider, profileIds] of Object.entries(raw.order)) {
-      if (!Array.isArray(profileIds)) {
-        continue;
-      }
-      const kept = profileIds.filter(
-        (profileId): profileId is string =>
-          typeof profileId === "string" && shouldKeepProfileId(profileId),
-      );
-      if (kept.length > 0) {
-        raw.order[provider] = kept;
-      } else {
-        delete raw.order[provider];
-      }
-    }
-    if (Object.keys(raw.order).length === 0) {
-      delete raw.order;
-    }
-  }
-  if (isRecord(raw.lastGood)) {
-    for (const [provider, profileId] of Object.entries(raw.lastGood)) {
-      if (typeof profileId !== "string" || !shouldKeepProfileId(profileId)) {
-        delete raw.lastGood[provider];
-      }
-    }
-    if (Object.keys(raw.lastGood).length === 0) {
-      delete raw.lastGood;
-    }
-  }
-  if (isRecord(raw.usageStats)) {
-    for (const profileId of Object.keys(raw.usageStats)) {
-      if (!shouldKeepProfileId(profileId)) {
-        delete raw.usageStats[profileId];
-      }
-    }
-    if (Object.keys(raw.usageStats).length === 0) {
-      delete raw.usageStats;
-    }
-  }
-}
-
-function pruneRawAuthProfileIds(raw: unknown, profileIds: ReadonlySet<string>): void {
-  if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
-  filterRawAuthProfileState(raw, (profileId) => !profileIds.has(profileId));
-}
-
-function pickRawAuthProfileIds(
-  raw: unknown,
-  profileIds: ReadonlySet<string>,
-): Record<string, unknown> | null {
-  if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return null;
-  }
-  const profiles = Object.fromEntries(
-    Object.entries(raw.profiles).filter(([profileId]) => profileIds.has(profileId)),
-  );
-  if (Object.keys(profiles).length === 0) {
-    return null;
-  }
-  const next = structuredClone(raw);
-  next.profiles = profiles;
-  filterRawAuthProfileState(next, (profileId) => profileIds.has(profileId));
-  return next;
-}
-
 function collectUnresolvedLegacyOAuthSidecarProfileIds(raw: unknown): string[] {
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return [];
@@ -971,7 +897,7 @@ function migrateLockedLegacyOAuthFile(params: {
  * Imports legacy auth profile JSON and state files into the per-agent SQLite store.
  *
  * JSON files are verified and atomically renamed to timestamped archives only after import.
- * OAuth profiles that still depend on unresolved sidecar secrets remain as a migration input.
+ * OAuth profiles that still depend on missing sidecar secrets migrate as unavailable ref-only rows.
  */
 export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   cfg: OpenClawConfig;
@@ -1099,17 +1025,10 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const unresolvedSidecarProfileIds = new Set(
         collectUnresolvedLegacyOAuthSidecarProfileIds(rawStore),
       );
-      const unresolvedSidecarRawStore =
+      const unresolvedSidecarWarning =
         unresolvedSidecarProfileIds.size > 0
-          ? pickRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds)
-          : null;
-      if (unresolvedSidecarProfileIds.size > 0) {
-        // Sidecar-backed OAuth entries cannot move into SQLite until their secret material exists.
-        pruneRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds);
-        result.warnings.push(
-          `Left ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} in ${shortenHomePath(candidate.authPath)}; rerun ${formatCliCommand("openclaw doctor --fix")} after sidecar migration or re-authenticate those profiles.`,
-        );
-      }
+          ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
+          : undefined;
       const awsSdkMarkerStore =
         isRecord(rawStore) && isRecord(rawStore.profiles)
           ? resolveAwsSdkAuthProfileMarkerStore(candidate)
@@ -1154,7 +1073,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         !hasAuthProfileState(state) &&
         !awsSdkMarkerStore
       ) {
-        if (!unresolvedSidecarRawStore && sourceReceipts.length > 0) {
+        if (sourceReceipts.length > 0) {
           const archived = sourceReceipts.map((receipt) => {
             finalizeAuthProfileMigrationSource(receipt, "archived-unparsed", {
               sourceLocked: true,
@@ -1162,7 +1081,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
             return receipt.archivePath;
           });
           result.warnings.push(
-            `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}).`,
+            unresolvedSidecarWarning ??
+              `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}).`,
           );
           continue;
         }
@@ -1354,11 +1274,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           receipt.expectedStateSha256 = expectedStateSha256;
         }
       }
-      const archivalReceipts = unresolvedSidecarRawStore
-        ? sourceReceipts.filter((receipt) => receipt.sourcePath !== candidate.authPath)
-        : sourceReceipts;
       assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
-      const archives = archivalReceipts.map((receipt) =>
+      const archives = sourceReceipts.map((receipt) =>
         archiveVerifiedAuthProfileSource(receipt, true),
       );
       const archiveText =
@@ -1368,6 +1285,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       result.changes.push(
         `Migrated auth profile JSON for ${shortenHomePath(candidate.authPath)} into SQLite (${archiveText}).`,
       );
+      if (unresolvedSidecarWarning) {
+        result.warnings.push(unresolvedSidecarWarning);
+      }
       if (openAIProviderRepair !== null) {
         result.changes.push(
           `Migrated ${openAIProviderRepair} OpenAI Codex auth profile(s) in ${shortenHomePath(candidate.authPath)} to provider "openai".`,

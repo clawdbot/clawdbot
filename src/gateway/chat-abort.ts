@@ -505,22 +505,6 @@ export type ChatAbortOps = {
   onRunAborted?: (runId: string) => void;
 };
 
-type TrackedChatRunAbortOps = {
-  chatAbortControllers: ChatAbortOps["chatAbortControllers"];
-  chatRunState: ChatAbortOps["chatRunState"];
-  removeChatRun: ChatAbortOps["removeChatRun"];
-  agentRunSeq: ChatAbortOps["agentRunSeq"];
-  broadcast: ChatAbortOps["broadcast"];
-  nodeSendToSession: ChatAbortOps["nodeSendToSession"];
-};
-
-export function abortTrackedChatRunById(
-  ops: TrackedChatRunAbortOps,
-  params: Parameters<typeof abortChatRunById>[1],
-) {
-  return abortChatRunById(ops, params);
-}
-
 function resolveChatAbortDeliverySessionKeys(
   ops: ChatAbortOps,
   sessionKey: string,

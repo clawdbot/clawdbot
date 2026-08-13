@@ -191,17 +191,17 @@ local server returns context-length errors.
 
 ## Recall and capture limits
 
-| Setting           | Default | Range                        | Applies to                                                 |
-| ----------------- | ------- | ---------------------------- | ---------------------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000                    | Text sent to the embedding API for recall.                 |
-| `captureMaxChars` | `500`   | 100-10000                    | Message length eligible for auto-capture.                  |
-| `customTriggers`  | `[]`    | 0-50 items, each <=100 chars | Literal phrases that make auto-capture consider a message. |
+| Setting           | Default | Range                       | Applies to                                                 |
+| ----------------- | ------- | --------------------------- | ---------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000                   | Text sent to the embedding API for recall.                 |
+| `captureMaxChars` | `500`   | 100-10000                   | Message length eligible for auto-capture.                  |
+| `customTriggers`  | `[]`    | 0-50 items, each ≤100 chars | Literal phrases that make auto-capture consider a message. |
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
-`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm
-search`. Auto-recall embeds the latest user message from the turn and falls
-back to the full prompt only when no user message is present, keeping channel
-metadata and large prompt blocks out of the embedding request.
+`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
+Auto-recall embeds the latest user message from the turn and falls back to the
+full prompt only when no user message is present, keeping channel metadata and
+large prompt blocks out of the embedding request.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture; it does not affect

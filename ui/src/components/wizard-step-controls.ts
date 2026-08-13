@@ -1,7 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { renderChannelPicker } from "./channel-picker.ts";
 import { handleCopyButton } from "./copy-button.ts";
+import { renderPicker } from "./select-picker.ts";
 import { renderSensitiveInput } from "./sensitive-input.ts";
 import "../styles/wizard-step-controls.css";
 
@@ -19,6 +21,7 @@ type WizardStepControlsProps = {
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown) => void;
   presentation?: "channels";
+  channelSelect?: boolean;
   answerLabel?: string;
   confirmAffirmativeLabel?: string;
   leadingAction?: TemplateResult;
@@ -112,29 +115,19 @@ function renderAnswerButton(
 function renderOption(
   props: WizardStepControlsProps,
   option: WizardStepOption,
-  index: number,
   selected: unknown[],
 ) {
   const checked = selected.some((value) => Object.is(value, option.value));
   if (props.presentation === "channels") {
-    return props.step.type === "select"
-      ? html`<wa-radio
-          class="channels-wizard__option"
-          appearance="button"
-          value=${String(index)}
-          .checked=${checked}
-        >
-          ${renderOptionBody(option, props.presentation)}
-        </wa-radio>`
-      : html`<button
-          type="button"
-          class="channels-wizard__option"
-          aria-pressed=${checked ? "true" : "false"}
-          ?disabled=${props.busy}
-          @click=${() => props.onValueChange(option.value)}
-        >
-          ${renderOptionBody(option, props.presentation, checked)}
-        </button>`;
+    return html`<button
+      type="button"
+      class="channels-wizard__option"
+      aria-pressed=${checked ? "true" : "false"}
+      ?disabled=${props.busy}
+      @click=${() => props.onValueChange(option.value)}
+    >
+      ${renderOptionBody(option, props.presentation, checked)}
+    </button>`;
   }
   return html`<label class="wizard-step__option">
     <input
@@ -247,24 +240,28 @@ function renderOptionsStep(props: WizardStepControlsProps) {
   const selected = multiple ? (Array.isArray(props.value) ? props.value : []) : [props.value];
   if (props.presentation === "channels" && !multiple) {
     const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
+    const channels =
+      props.channelSelect && options.every((option) => typeof option.value === "string");
+    const picker = channels ? renderChannelPicker : renderPicker;
     return html`
-      <wa-radio-group
-        class="channels-wizard__options"
-        label=${props.step.message ?? ""}
-        orientation="vertical"
-        .value=${selectedIndex >= 0 ? String(selectedIndex) : null}
-        ?disabled=${props.busy}
-        @change=${(event: Event) => {
-          const index = (event.currentTarget as HTMLElement & { value?: string | number | null })
-            .value;
-          const option = options[Number(index)];
-          if (option) {
-            props.onAnswer(option.value);
-          }
-        }}
-      >
-        ${options.map((option, index) => renderOption(props, option, index, selected))}
-      </wa-radio-group>
+      ${renderMessage(props)}
+      ${picker({
+        label: props.step.message ?? "",
+        value:
+          selectedIndex < 0
+            ? null
+            : channels
+              ? String(options[selectedIndex]?.value)
+              : String(selectedIndex),
+        options: options.map((option, index) => ({
+          value: channels ? String(option.value) : String(index),
+          label: option.label,
+          description: option.hint,
+          kind: channels ? "channel" : "neutral",
+        })),
+        disabled: props.busy,
+        onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
+      })}
     `;
   }
   const answer = multiple
@@ -275,7 +272,7 @@ function renderOptionsStep(props: WizardStepControlsProps) {
   return html`
     ${renderMessage(props)}
     <div class=${stepClass(props, "options")} role=${multiple ? nothing : "radiogroup"}>
-      ${options.map((option, index) => renderOption(props, option, index, selected))}
+      ${options.map((option) => renderOption(props, option, selected))}
     </div>
     ${renderAnswerButton(
       props,

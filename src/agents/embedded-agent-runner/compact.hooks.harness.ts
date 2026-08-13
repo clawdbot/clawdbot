@@ -445,6 +445,9 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
     release: vi.fn(),
   }),
 );
+export const getCurrentPluginMetadataSnapshotMock: Mock<
+  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+> = vi.fn(() => emptyPluginMetadataSnapshot);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -563,6 +566,8 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
+  getCurrentPluginMetadataSnapshotMock.mockReset();
+  getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -650,9 +655,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+    getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     setCurrentPluginMetadataSnapshot: vi.fn(),
+    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
   }));
 
   vi.doMock("../../plugins/command-registry-state.js", () => {
@@ -812,6 +818,7 @@ export async function loadCompactHooksHarness(): Promise<{
     clearCommandLane: vi.fn(() => 0),
     GatewayDrainingError: class GatewayDrainingError extends Error {},
     isGatewayDraining: vi.fn(() => false),
+    isCommandLaneTaskTimeoutError: vi.fn(() => false),
   }));
 
   vi.doMock("../../tasks/detached-task-runtime.js", async () => {

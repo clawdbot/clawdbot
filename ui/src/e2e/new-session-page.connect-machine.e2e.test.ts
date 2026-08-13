@@ -74,8 +74,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      await page.locator("#new-session-place-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await page.locator("#new-session-where-trigger").click();
       const connect = place.getByRole("button", { name: "Connect a machine…" });
       await connect.waitFor();
       await captureProof(page, "01-picker-foot.png");
@@ -118,9 +118,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      await page.locator("#new-session-place-trigger").click();
-      await place.getByText("Projects", { exact: true }).waitFor();
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await page.locator("#new-session-where-trigger").click();
+      await place.getByRole("button", { name: "Local" }).waitFor();
       expect(await place.getByRole("button", { name: "Connect a machine…" }).count()).toBe(0);
       expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
     } finally {
@@ -137,7 +137,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page.getByRole("button", { name: "Connect a machine…" }).click();
       await gateway.waitForRequest("device.pair.setupCode");
       const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');

@@ -1398,7 +1398,7 @@ not declared Codex-compatible.
     global default, per-model `params.fastMode`, then off. `/fast default`
     clears only the session layer. `/status` reports the resolved OpenClaw
     policy and runtime, not the upstream service tier actually honored or
-    returned. See [Thinking levels](/tools/thinking#fast-mode-fast) and
+    returned. See [Thinking levels](/tools/thinking#fast-mode-%2Ffast) and
     [Codex harness](/plugins/codex-harness#shared-fast-mode-and-codex-fast-mode).
     </Note>
 

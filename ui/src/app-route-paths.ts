@@ -27,6 +27,7 @@ const APP_ROUTE_DEFINITIONS = {
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
   apps: { path: "/apps" },
+  portals: { path: "/portals" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },

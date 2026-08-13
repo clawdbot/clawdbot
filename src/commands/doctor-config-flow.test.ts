@@ -1707,19 +1707,32 @@ describe("doctor config flow", () => {
   });
 
   it("removes a legacy list when Doctor persists keyed roster entries", async () => {
-    const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { ops: { workspace: "/srv/ops" } } } },
-      parsedConfig: {
-        agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] },
+    const rawConfig = {
+      agents: {
+        list: [
+          { id: "ops", default: true, workspace: "/srv/ops" },
+          { id: "research", model: "openai/research" },
+        ],
       },
+    };
+    const result = await runDoctorConfigWithInput({
+      config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
+      parsedConfig: rawConfig,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([
+      ["agents", "entries"],
+      ["agents", "ownership"],
+    ]);
     expect(result.cfg.agents?.entries).toEqual({
       ops: { workspace: "/srv/ops" },
+      research: { model: "openai/research" },
     });
+    expect(result.cfg.agents?.ownership).toBe("explicit");
+    expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 

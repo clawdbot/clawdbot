@@ -26,6 +26,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
   });
 
+  it("advertises portal replace-set updates", () => {
+    expect(GATEWAY_EVENTS).toContain("portal.changed");
+  });
+
   it("advertises session observer digests", () => {
     expect(GATEWAY_EVENTS).toContain("session.observer");
   });
@@ -66,7 +70,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-50)).toEqual([
+    expect(listGatewayMethods().slice(-53)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -117,6 +121,9 @@ describe("listGatewayMethods", () => {
       "desktop.launch",
       "device.scopes.requestUpgrade",
       "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -184,10 +191,24 @@ describe("listGatewayMethods", () => {
 
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
+    expect(methods).not.toContain("node.protocolFeatures.update");
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("registers the hidden node protocol feature publication method", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "node.protocolFeatures.update",
+    );
+
+    expect(coreGatewayHandlers["node.protocolFeatures.update"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "node.protocolFeatures.update",
+      scope: "node",
+      advertise: false,
+    });
   });
 
   it("preserves the legacy advertised method order", () => {
@@ -208,7 +229,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-57)).toEqual([
+    expect(coreMethods.slice(-60)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -266,6 +287,9 @@ describe("listGatewayMethods", () => {
       "desktop.launch",
       "device.scopes.requestUpgrade",
       "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -299,6 +323,9 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
       methods.indexOf("device.scopes.requestUpgrade") + 1,
     );
+    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
+    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
+    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

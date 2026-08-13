@@ -3,6 +3,7 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { createNodeRegistryRuntime } from "./node-registry-private.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
 import {
@@ -34,22 +35,25 @@ export function createGatewayNodeSessionRuntime(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
   const nodeSubscriptions = createNodeSubscriptionManager();
-  const nodeRegistry = new NodeRegistry({
-    listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
-    nodePluginToolsEnabled: params.nodePluginToolsEnabled,
-    nodeSkillsEnabled: params.nodeSkillsEnabled,
-    resolveCurrentPairingState:
-      params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
-    isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
-    onPairingInvalidated: params.onPairingInvalidated,
-    onPairingGenerationChanged: (change) => {
-      nodeSubscriptions.updatePairingGeneration({
-        ...change,
-        preserveSubscriptions: change.preserveSessionState,
-      });
-      params.onPairingGenerationChanged?.(change);
-    },
-  });
+  const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+    () =>
+      new NodeRegistry({
+        listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
+        nodePluginToolsEnabled: params.nodePluginToolsEnabled,
+        nodeSkillsEnabled: params.nodeSkillsEnabled,
+        resolveCurrentPairingState:
+          params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
+        isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
+        onPairingInvalidated: params.onPairingInvalidated,
+        onPairingGenerationChanged: (change) => {
+          nodeSubscriptions.updatePairingGeneration({
+            ...change,
+            preserveSubscriptions: change.preserveSessionState,
+          });
+          params.onPairingGenerationChanged?.(change);
+        },
+      }),
+  );
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;
   const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -129,6 +133,7 @@ export function createGatewayNodeSessionRuntime(params: {
 
   return {
     nodeRegistry,
+    nodeWorkerSupervisorTransport,
     nodePresenceTimers,
     sessionEventSubscribers,
     sessionMessageSubscribers,

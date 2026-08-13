@@ -121,7 +121,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await navigation;
     await page.getByRole("button", { name: "Request admin" }).waitFor();
 
-    await page.locator("#new-session-place-trigger").click();
+    await page.locator("#new-session-project-trigger").click();
     const browse = page.getByRole("button", { name: "Browse folders" });
     await expect.poll(() => browse.isDisabled()).toBe(true);
     await browse.focus();
@@ -193,6 +193,24 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
     },
   );
+
+  it("does not misreport limited Custodian access as an outdated Gateway", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", ...SCOPE_UPGRADE_METHODS],
+      operatorScopes: LIMITED_SCOPES,
+    });
+
+    await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+
+    expect(
+      await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+    await captureProof(page, "custodian-limited.png");
+  });
 
   it("keeps manual repair guidance when the banner module fails to load", async () => {
     const context = await createContext();

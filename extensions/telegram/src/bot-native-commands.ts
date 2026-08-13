@@ -64,7 +64,13 @@ type RegisterTelegramNativeCommandsParams = {
   telegramDeps?: TelegramNativeCommandDeps;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "botInfo" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "accountAbortSignal"
+    | "token"
+    | "ownerAgentId"
+    | "botInfo"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "accountAbortSignal"
   >;
 };
 

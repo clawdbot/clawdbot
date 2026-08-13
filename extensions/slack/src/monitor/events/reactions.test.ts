@@ -364,6 +364,33 @@ describe("registerSlackReactionEvents", () => {
     expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T111" }));
   });
 
+  it("allows an unscoped org user reaction policy across Enterprise workspaces", async () => {
+    const harness = createSlackSystemEventTestHarness({
+      dmPolicy: "open",
+      reactionMode: "allowlist",
+      reactionAllowlist: ["W01234567"],
+    });
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: buildReactionEvent({ user: "W01234567" }),
+        ...buildEnterpriseListenerArgs(teamId),
+      });
+    }
+
+    expect(reactionQueueMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects enterprise reaction events without validated listener scope", async () => {
     const trackEvent = vi.fn();
     const harness = createSlackSystemEventTestHarness();

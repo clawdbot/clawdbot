@@ -291,22 +291,17 @@ function composerControlsHtml(crowded = false) {
       }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
-          <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
-          </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
-            <div class="chat-controls__model-options">
-              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
+          <div class="chat-controls__model-control">
+            <div class="chat-controls__model-control-row">
+              <div class="model-picker">
+                <wa-select class="settings-select picker-select model-picker__select chat-controls__model-picker" style="display:block;width:100%;min-width:138px">
+                  <div class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+                    <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
+                  </div>
+                </wa-select>
+              </div>
             </div>
           </div>
-          </details>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
@@ -425,6 +420,18 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </openclaw-chat-session-rail>`
                   : ""
               }
+              ${
+                opts.crowdedComposerFooter
+                  ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
+                    <span class="agent-chat__typing-avatars" aria-hidden="true">
+                      <span class="chat-author-avatar">A</span>
+                      <span class="chat-author-avatar">B</span>
+                      <span class="chat-author-avatar">C</span>
+                    </span>
+                    <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
+                  </div>`
+                  : ""
+              }
               <div class="agent-chat__composer-shell">
                 <div class="agent-chat__input">
                   ${
@@ -483,18 +490,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </div>
                   <div class="agent-chat__composer-footer">
                     ${composerControlsHtml(opts.crowdedComposerFooter)}
-                    ${
-                      opts.crowdedComposerFooter
-                        ? `<div class="agent-chat__typing-indicator" role="status">
-                      <span class="agent-chat__typing-avatars" aria-hidden="true">
-                        <span class="chat-author-avatar">A</span>
-                        <span class="chat-author-avatar">B</span>
-                        <span class="chat-author-avatar">C</span>
-                      </span>
-                      <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
-                    </div>`
-                        : ""
-                    }
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
@@ -2428,10 +2423,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const composer = await getBoundingBox(page, ".agent-chat__input");
         for (const picker of [
           {
-            menu: ".chat-controls__model-menu",
-            trigger: '[data-chat-composer-model="true"]',
-          },
-          {
             menu: ".chat-controls__effort-menu",
             trigger: '[data-chat-composer-effort="true"]',
           },
@@ -2484,14 +2475,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
       });
       await syncFixtureComposerPopoverAnchor(page);
-      await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+      await page.locator('[data-chat-composer-effort="true"]').evaluate((node) => {
         node.parentElement?.setAttribute("open", "");
       });
       await waitForLayoutSettled(page);
       await syncFixtureComposerPopoverAnchor(page);
       await waitForLayoutSettled(page);
       const composer = await getBoundingBox(page, ".agent-chat__input");
-      const menu = await getBoundingBox(page, ".chat-controls__model-menu");
+      const menu = await getBoundingBox(page, ".chat-controls__effort-menu");
       const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({
         anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
         layoutHeight: document.documentElement.clientHeight,
@@ -2530,14 +2521,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           footer: rectFor(".agent-chat__composer-footer"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-controls__model-trigger"),
+          modelPicker: rectFor(".chat-controls__model-picker"),
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
           status: rectFor(".agent-chat__composer-run-status"),
-          typing: rectFor(".agent-chat__typing-indicator"),
+          typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
       });
 
-      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
+      expect(layout.controls.scrollWidth, JSON.stringify(layout)).toBeLessThanOrEqual(
+        layout.controls.clientWidth + 1,
+      );
       for (const control of [
         layout.status,
         layout.overrides,
@@ -2554,16 +2548,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
+      expect(layout.modelPicker.width).toBeGreaterThanOrEqual(138);
       expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
       for (const [left, right] of [
         [layout.status, layout.overrides],
         [layout.overrides, layout.model],
         [layout.model, layout.effort],
-        [layout.effort, layout.typing],
-        [layout.typing, layout.meta],
+        [layout.effort, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
       }
+      expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
     } finally {
       await closeBrowserPage(page);
     }

@@ -67,6 +67,11 @@ function mockContext(
           platform: "ios",
           caps: ["camera"],
           commands: ["system.run"],
+          workerRuns: {
+            bundleHash: "a".repeat(64),
+            openclawVersion: "2026.8.12",
+            protocolFeatures: ["worker-heartbeat-v1"],
+          },
           connectedAtMs: 123,
         },
       ],
@@ -199,7 +204,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
-  it("keeps the existing gateway and node projection unchanged without a worker service", async () => {
+  it("projects live node session-host capability without a worker service", async () => {
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -221,7 +226,7 @@ describe("environment gateway methods", () => {
           label: "Live Node",
           status: "available",
           platform: "ios",
-          sessionHost: false,
+          sessionHost: true,
           trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
@@ -394,7 +399,7 @@ describe("environment gateway methods", () => {
       label: "Live Node",
       status: "available",
       platform: "ios",
-      sessionHost: false,
+      sessionHost: true,
       trust: "persistent",
       capabilities: ["camera", "system.run"],
     });

@@ -2034,6 +2034,31 @@ openclaw-tooltip.chat-tasks-status__preview {
   font-size: var(--control-ui-text-xs);
 }
 
+.chat-subagent-activity__row--interactive {
+  width: 100%;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.chat-subagent-activity__row--interactive:hover,
+.chat-subagent-activity__row--interactive:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--text);
+}
+
+.chat-subagent-activity__row--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .chat-subagent-activity__indicator {
   display: inline-flex;
   align-items: center;

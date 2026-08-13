@@ -85,6 +85,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],
   "terminal.exit": [ADMIN_SCOPE],
+  "portal.changed": [READ_SCOPE],
 };
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an

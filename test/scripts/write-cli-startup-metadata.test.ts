@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -470,7 +471,7 @@ describe("write-cli-startup-metadata", () => {
             (reason: unknown) => reason,
           );
 
-        grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+        grandchildPid = await waitForPidFile(grandchildPidPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain("browser sentinel failure");
         expect(Date.now() - startedAt).toBeLessThan(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
@@ -578,7 +579,7 @@ describe("write-cli-startup-metadata", () => {
         }),
       ).rejects.toThrow("render failed: timed out after 500ms");
 
-      const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+      const grandchildPid = await waitForPidFile(markerPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
       await waitForProcessExit(grandchildPid);
     },
   );
@@ -706,10 +707,8 @@ describe("write-cli-startup-metadata", () => {
 
       try {
         const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
+        grandchildPid = await waitForPidFile(grandchildPidPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
         while (Date.now() < deadline) {
-          try {
-            grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
-          } catch {}
           let fastReady = false;
           try {
             fastReady = readFileSync(fastReadyPath, "utf8") === "ready";

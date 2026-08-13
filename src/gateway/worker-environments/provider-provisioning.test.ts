@@ -7,9 +7,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { VERSION } from "../../version.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
+import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -76,7 +78,12 @@ describe("worker environment service", () => {
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
   });
 
-  it("holds a node lease ready without entering SSH bootstrap", async () => {
+  it("commits a local-install receipt and credential for a node lease", async () => {
+    const workerBuild = {
+      bundleHash: "c".repeat(64),
+      openclawVersion: VERSION,
+      protocolFeatures: ["worker-heartbeat-v1"],
+    };
     support.testState.prepareInstallation = vi.fn(async () => {
       throw new Error("node leases must not prepare an SSH installation");
     });
@@ -89,6 +96,7 @@ describe("worker environment service", () => {
           sharedHost: true,
         }),
       }),
+      { resolveNodeWorkerBuild: async () => workerBuild },
     );
 
     const result = await workerService.create("development", "request-device");
@@ -97,13 +105,86 @@ describe("worker environment service", () => {
       state: "ready",
       leaseId: "device-lease-1",
       sshEndpoint: null,
-      bootstrapReceipt: null,
+      bootstrapReceipt: { ...workerBuild, installKind: "local" },
       sharedHost: true,
       ownerEpoch: 1,
     });
     expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-    expect(support.testState.store.getCredential(result.environmentId)).toBeUndefined();
+    const credential = workerService.takeMintedCredential({
+      environmentId: result.environmentId,
+      ownerEpoch: result.ownerEpoch,
+      sessionId: null,
+    });
+    expect(credential).toMatchObject({
+      credential: support.CREDENTIAL,
+      bundleHash: "c".repeat(64),
+    });
+    const attachedCredential = await workerService.attachSession({
+      environmentId: result.environmentId,
+      ownerEpoch: result.ownerEpoch,
+      sessionId: "session-device",
+    });
+    const attached = support.testState.store.get(result.environmentId)!;
+    const admission = {
+      environmentId: result.environmentId,
+      credential: attachedCredential.credential,
+      ownerEpoch: attached.ownerEpoch,
+      rpcSetVersion: 1,
+      sessionId: "session-device",
+      runId: "run-device",
+      handshake: workerBuild,
+    } as const;
+    expect(
+      admitWorkerConnection({
+        store: support.testState.store,
+        admission,
+        expectedBuild: workerBuild,
+        nowMs: support.testState.nowMs,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitWorkerConnection({
+        store: support.testState.store,
+        admission: {
+          ...admission,
+          handshake: { ...workerBuild, bundleHash: "d".repeat(64) },
+        },
+        expectedBuild: workerBuild,
+        nowMs: support.testState.nowMs,
+      }),
+    ).toEqual({ ok: false, reason: "bundle-mismatch" });
+  });
+
+  it("fails node provisioning visibly when the node version differs", async () => {
+    const nodeVersion = "0.0.0-node";
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        provision: async () => ({
+          leaseId: "device-lease-version-mismatch",
+          node: { deviceId: "device-1" },
+        }),
+      }),
+      {
+        resolveNodeWorkerBuild: async () => ({
+          bundleHash: "c".repeat(64),
+          openclawVersion: nodeVersion,
+          protocolFeatures: ["worker-heartbeat-v1"],
+        }),
+      },
+    );
+
+    await expect(
+      workerService.create("development", "request-device-mismatch"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+      message: expect.stringContaining(`OpenClaw ${nodeVersion}`),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "failed",
+      lastError: expect.stringContaining(`gateway runs ${VERSION}`),
+    });
   });
 
   it("creates a nested environment from its parent's snapshot after config drift", async () => {

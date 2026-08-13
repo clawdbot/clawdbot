@@ -178,6 +178,7 @@
   "error-runtime",
   "extension-shared",
   "channel-config-helpers",
+  "channel-config-ui-hints",
   "channel-config-writes",
   "channel-config-primitives",
   "channel-config-schema",
