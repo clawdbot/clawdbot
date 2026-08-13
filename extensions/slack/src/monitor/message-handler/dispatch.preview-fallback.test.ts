@@ -1871,6 +1871,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
   });
 
+  it("stops refreshing Slack thread status once the turn has visible output", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackThreadStatus }));
+
+    const typing = requireCapturedTyping();
+    setSlackThreadStatus.mockClear();
+    // Slack already dropped the status when the reply landed; a keepalive tick
+    // here would paint its own rotating "agent working" row under that reply.
+    await typing.start();
+
+    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+  });
+
   it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
     const setSlackThreadStatus = vi.fn(async () => undefined);
 
@@ -1889,18 +1903,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await typing.start();
     await typing.stop?.();
 
-    expect(setSlackThreadStatus).toHaveBeenCalledWith({
-      channelId: "C123",
-      threadTs: THREAD_TS,
-      status: "is typing...",
-      eventScope: undefined,
-    });
-    expect(setSlackThreadStatus).toHaveBeenCalledWith({
-      channelId: "C123",
-      threadTs: THREAD_TS,
-      status: "",
-      eventScope: undefined,
-    });
+    // The status write itself is gated on visible output (covered by "stops
+    // refreshing Slack thread status..."); this case owns the reaction wiring.
     const reactCall = requireMockCall(reactSlackMessageMock, 0, "react Slack message");
     expect(reactCall[0]).toBe("C123");
     expect(reactCall[1]).toBe("171234.111");

@@ -126,6 +126,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  let didAddTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
@@ -188,6 +189,12 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
+  // Slack clears the assistant thread status as soon as the app puts anything
+  // in the thread, then renders its own rotating "agent working" row for every
+  // later status write. Once this turn has visible output, the keepalive would
+  // paint that duplicate row under the streamed card, so it must go quiet.
+  // Installed by the dispatcher, which owns the delivered/preview facts.
+  const threadStatusGate = { hasVisibleOutput: () => false };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
@@ -201,14 +208,17 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
     typing: {
       start: async () => {
-        didSetStatus = true;
-        await ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "is typing...",
-          eventScope: prepared.eventScope,
-        });
+        if (!threadStatusGate.hasVisibleOutput()) {
+          didSetStatus = true;
+          await ctx.setSlackThreadStatus({
+            channelId: message.channel,
+            threadTs: statusThreadTs,
+            status: "is typing...",
+            eventScope: prepared.eventScope,
+          });
+        }
         if (typingReaction && message.ts) {
+          didAddTypingReaction = true;
           await reactSlackMessage(message.channel, message.ts, typingReaction, {
             token: ctx.botToken,
             client: slackClient,
@@ -218,17 +228,19 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         }
       },
       stop: async () => {
-        if (!didSetStatus) {
-          return;
+        if (didSetStatus) {
+          didSetStatus = false;
+          await ctx.setSlackThreadStatus({
+            channelId: message.channel,
+            threadTs: statusThreadTs,
+            status: "",
+            eventScope: prepared.eventScope,
+          });
         }
-        didSetStatus = false;
-        await ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "",
-          eventScope: prepared.eventScope,
-        });
-        if (typingReaction && message.ts) {
+        // Tracked apart from the status write: a suppressed status refresh
+        // still adds the reaction, and that reaction must still be removed.
+        if (didAddTypingReaction && typingReaction && message.ts) {
+          didAddTypingReaction = false;
           await removeSlackReaction(message.channel, message.ts, typingReaction, {
             token: ctx.botToken,
             client: slackClient,
@@ -343,6 +355,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     statusReactionsEnabled,
     statusReactions,
     hasRepliedRef,
+    threadStatusGate,
     replyPlan,
     onModelSelected,
     replyPipeline,
