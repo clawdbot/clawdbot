@@ -788,7 +788,7 @@ describe("cron service run admission", () => {
     expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
   });
 
-  it("releases a manual reservation when activation reload fails", async () => {
+  it("owns and clears a manual reservation when its post-commit reload fails", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.875Z");
     const job = createDueIsolatedJob({
@@ -820,7 +820,7 @@ describe("cron service run admission", () => {
       });
 
     try {
-      await expect(run(state, job.id, "force")).rejects.toThrow("activation reload failed");
+      await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     } finally {
       loadSpy.mockRestore();
     }
@@ -828,11 +828,15 @@ describe("cron service run admission", () => {
     expect(
       state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
     ).toBeUndefined();
-    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
     expect(
-      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
-        .runningAtMs,
+      state.store?.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs,
     ).toBeUndefined();
+    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+    const persisted = (await loadCronStore(store.storePath)).jobs.find(
+      (entry) => entry.id === job.id,
+    );
+    expect(persisted?.state.runningAtMs).toBeUndefined();
+    expect(persisted?.state.queuedAtMs).toBeUndefined();
   });
 
   it("releases a direct manual reservation when stop wins its admission wait", async () => {

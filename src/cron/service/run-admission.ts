@@ -293,7 +293,10 @@ export async function persistQueuedCronRunReservations(params: {
         }
         return committedJobs;
       }
-      await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
+      // A failed refresh cannot orphan committed markers before local ownership.
+      await ensureLoaded(params.state, { forceReload: true, skipRecompute: true }).catch(() =>
+        applyCronRuntimeRowsToState(params.state, committedJobs),
+      );
       const committed = new Set(committedJobs.map((job) => job.id));
       return (params.state.store?.jobs ?? []).filter((job) => committed.has(job.id));
     } catch (error) {

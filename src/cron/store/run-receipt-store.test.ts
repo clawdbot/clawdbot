@@ -12,6 +12,7 @@ import {
   claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
+  findActiveCronRunReceiptInDatabase,
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
@@ -69,6 +70,26 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("cron run receipt store", () => {
+  it("lazily creates receipt storage for direct transactional lookups", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("lazy-lookup");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
+
+    expect(
+      runOpenClawStateWriteTransaction(({ db }) =>
+        findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
+      ),
+    ).toBeUndefined();
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
+        )
+        .get(),
+    ).toEqual({ name: "cron_run_receipts" });
+  });
+
   it("records one durable active run and rejects an overlapping claimant", async () => {
     const { storePath } = await makeStorePath();
     const job = makeJob("overlap");

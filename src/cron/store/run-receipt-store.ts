@@ -186,15 +186,26 @@ function receiptFromRow(row: CronRunReceiptRow): CronRunReceipt {
 }
 
 function activeRow(database: DatabaseSync, storeKey: string, jobId: string) {
-  return executeSqliteQueryTakeFirstSync(
-    database,
-    query(database)
-      .selectFrom("cron_run_receipts")
-      .selectAll()
-      .where("store_key", "=", storeKey)
-      .where("job_id", "=", jobId)
-      .where("status", "=", "running"),
-  );
+  const find = () =>
+    executeSqliteQueryTakeFirstSync(
+      database,
+      query(database)
+        .selectFrom("cron_run_receipts")
+        .selectAll()
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", jobId)
+        .where("status", "=", "running"),
+    );
+  try {
+    return find();
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
+      throw error;
+    }
+    // A direct transaction can be the first receipt user after upgrade.
+    ensureCronRunReceiptSchema(database);
+    return find();
+  }
 }
 
 function currentJob(database: DatabaseSync, storeKey: string, jobId: string): CronJob | undefined {
@@ -350,9 +361,6 @@ export function claimCronRunReceiptInDatabase(params: {
   prepared: PreparedCronRunReceiptClaim;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
-  if (!initializedDatabases.has(params.database)) {
-    ensureCronRunReceiptSchema(params.database);
-  }
   const { handle, observed, observedStale } = params.prepared;
   if (handle.ownerStartTime === null) {
     throw new Error("cron run cannot acquire a durable fence without process start identity");
@@ -414,9 +422,6 @@ export function assertNoActiveCronRunReceiptInDatabase(params: {
   storePath: string;
   jobId: string;
 }): void {
-  if (!initializedDatabases.has(params.database)) {
-    ensureCronRunReceiptSchema(params.database);
-  }
   const current = activeRow(params.database, cronStoreKey(params.storePath), params.jobId);
   if (current) {
     throw new CronRunReceiptConflictError(receiptFromRow(current));

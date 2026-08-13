@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -786,6 +789,33 @@ describe("cron service ops seam coverage", () => {
     expect(loaded.jobs.map((job) => job.id)).toEqual([newJob.id]);
     expect(await fs.stat(storePath)).toBeTruthy();
     await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("starts and lists future jobs after upgrading from a database without receipts", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-05-20T08:30:00.000Z");
+    const job = createFutureEveryJob({ id: "pre-receipt-upgrade", now });
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    try {
+      await start(state);
+
+      await expect(list(state)).resolves.toEqual([
+        expect.objectContaining({ id: job.id, enabled: true }),
+      ]);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
+          )
+          .get(),
+      ).toEqual({ name: "cron_run_receipts" });
+    } finally {
+      stop(state);
+      runReceiptStore.inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+    }
   });
 
   it("leaves legacy notify fallback for doctor instead of migrating during startup", async () => {
