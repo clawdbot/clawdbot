@@ -347,8 +347,7 @@ async function expectSharedRailActions(page: Page, actions: Locator[]): Promise<
       const sentinel = document.createElement("button");
       sentinel.id = id;
       sentinel.type = "button";
-      sentinel.style.cssText =
-        "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none";
+      sentinel.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none";
       element.before(sentinel);
       sentinel.focus();
     }, sentinelId);
@@ -687,7 +686,9 @@ suite.define(() => {
         await expect
           .poll(async () =>
             (await gateway.getRequests("openclaw.chat")).some(
-              (request) => request.params.message === "Audit the shared rail header chrome.",
+              (request) =>
+                (request.params as { message?: unknown } | undefined)?.message ===
+                "Audit the shared rail header chrome.",
             ),
           )
           .toBe(true);
