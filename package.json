@@ -1637,7 +1637,7 @@
     "lint:apps": "pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node --import tsx scripts/check-no-pairing-store-group-auth.mts",
     "lint:auth:pairing-account-scope": "node --import tsx scripts/check-pairing-account-scope.mts",
-    "lint:core": "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
+    "lint:core": "node --import tsx scripts/run-oxlint-shards.mts --only=core",
     "lint:docker-e2e": "node --import tsx scripts/check-docker-e2e-boundaries.mts",
     "lint:kysely": "node --import tsx scripts/check-kysely-guardrails.mts",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
