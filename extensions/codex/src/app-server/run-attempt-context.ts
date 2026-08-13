@@ -167,6 +167,7 @@ export async function prepareCodexAttemptContext(
   const promptState = {
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
+    promptRequestRange: { start: 0, end: params.prompt.length } as CodexProjectedContextRange,
     developerInstructions: baseDeveloperInstructions,
     prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,

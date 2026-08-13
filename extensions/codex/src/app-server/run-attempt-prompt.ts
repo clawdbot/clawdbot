@@ -14,6 +14,7 @@ import {
 } from "./attempt-context.js";
 import {
   fitCodexProjectedContextForTurnStart,
+  neutralizeCodexToolMentionsOutsideRange,
   projectContextEngineAssemblyForCodex,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -82,6 +83,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
+    promptState.promptRequestRange = projection.promptRequestRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
   };
   const applyActiveContextEngineProjection = async (
@@ -163,6 +165,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     promptState.promptContextRange = projectionDecision.project
       ? projection.promptContextRange
       : undefined;
+    promptState.promptRequestRange = projectionDecision.project
+      ? projection.promptRequestRange
+      : { start: 0, end: params.prompt.length };
     promptState.developerInstructions = joinPresentSections(
       baseDeveloperInstructions,
       projection.developerInstructionAddition,
@@ -182,8 +187,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
   const buildPromptFromCurrentInputs = async () => {
+    const inputPrompt = prependCurrentInboundContext(
+      promptState.promptText,
+      params.currentInboundContext,
+    );
+    const promptStateOffset = inputPrompt.length - promptState.promptText.length;
     const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
+      prompt: inputPrompt,
       developerInstructions: promptState.developerInstructions,
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
@@ -194,7 +204,17 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
       );
     }
-    return result;
+    const currentRequestRange = result.promptInputRange
+      ? {
+          start:
+            result.promptInputRange.start +
+            promptStateOffset +
+            promptState.promptRequestRange.start,
+          end:
+            result.promptInputRange.start + promptStateOffset + promptState.promptRequestRange.end,
+        }
+      : undefined;
+    return { ...result, currentRequestRange };
   };
   const resolveShiftedPromptInputRange = (
     prompt: string,
@@ -259,6 +279,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const decorateCodexTurnPromptText = (promptBuildResult: {
     prompt: string;
     promptInputRange?: { start: number; end: number };
+    currentRequestRange?: { start: number; end: number };
   }) => {
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
@@ -274,22 +295,35 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptBuildResult.promptInputRange,
       turnPromptText,
     );
-    const preservedRange =
+    const currentRequestRange =
       resolveShiftedPromptInputRange(
         promptBuildResult.prompt,
-        promptBuildResult.promptInputRange,
+        promptBuildResult.currentRequestRange,
         turnPromptText,
       ) ??
       resolveCodexDeliveryHintPreservedInputRange({
         prompt: promptBuildResult.prompt,
-        promptInputRange: promptBuildResult.promptInputRange,
+        promptInputRange: promptBuildResult.currentRequestRange,
         decoratedPrompt: turnPromptText,
       });
+    const neutralized = currentRequestRange
+      ? neutralizeCodexToolMentionsOutsideRange({
+          promptText: turnPromptText,
+          preservedRange: currentRequestRange,
+          contextRange: projectedRanges?.contextRange,
+          requestRange: projectedRanges?.requestRange,
+        })
+      : {
+          promptText: turnPromptText,
+          contextRange: projectedRanges?.contextRange,
+          requestRange: currentRequestRange,
+          preservedRange: currentRequestRange,
+        };
     return fitCodexProjectedContextForTurnStart({
-      promptText: turnPromptText,
-      contextRange: projectedRanges?.contextRange,
-      requestRange: projectedRanges?.requestRange,
-      preservedRange,
+      promptText: neutralized.promptText,
+      contextRange: neutralized.contextRange,
+      requestRange: neutralized.requestRange,
+      preservedRange: neutralized.preservedRange,
     });
   };
   const firstPromptBuild = await buildPromptFromCurrentInputs();
@@ -370,6 +404,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
+    promptState.promptRequestRange = projection.promptRequestRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };

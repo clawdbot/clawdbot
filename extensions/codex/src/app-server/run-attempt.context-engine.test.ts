@@ -277,7 +277,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("existing context", Date.now()) as never,
+      assistantMessage("The user did not invoke $example-manual.", Date.now()) as never,
     );
     const openSpy = vi.spyOn(SessionManager, "open");
     const contextEngine = createContextEngine();
@@ -345,6 +345,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "context-engine system",
     );
     expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+    expectRequestInputTextContains(harness, "$\u200Bexample-manual");
+    expect(getRequestInputText(harness)).not.toContain("$example-manual");
 
     await harness.completeTurn();
     await run;
@@ -478,6 +480,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
     expect(inputText).toContain("hook append marker");
+    expect(inputText).toContain("</conversation_context>");
+    expect(inputText).toContain("Current user request:");
 
     await harness.completeTurn();
     await run;
@@ -1783,7 +1787,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.currentInboundContext = {
       text: [
         "Conversation context (chronological, selected for current message):",
-        "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX this is the old message",
+        "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX mentioned $example-manual from $HOME",
         "#6498 Sun 2026-05-10 22:22 GMT+5:30 OpenClaw: filler REPLYCTX 23",
       ].join("\n"),
     };
@@ -1795,6 +1799,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain("Current user request:\nhello");
     expect(inputText).toContain("[reply target] OpenClaw: anchor REPLYCTX");
+    expect(inputText).toContain("$\u200Bexample-manual from $HOME");
+    expect(inputText).not.toContain("$example-manual");
     expect(inputText.trim().startsWith("Conversation context (chronological")).toBe(true);
 
     await harness.completeTurn();

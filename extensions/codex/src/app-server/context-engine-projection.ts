@@ -10,6 +10,7 @@ type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
   promptContextRange?: CodexProjectedContextRange;
+  promptRequestRange: CodexProjectedContextRange;
   assembledMessages: AgentMessage[];
   prePromptMessageCount: number;
 };
@@ -37,6 +38,19 @@ const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const CODEX_IGNORED_TOOL_MENTION_NAMES = new Set([
+  "HOME",
+  "LANG",
+  "PATH",
+  "PWD",
+  "SHELL",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "XDG_CONFIG_HOME",
+]);
 
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export function projectContextEngineAssemblyForCodex(params: {
@@ -66,6 +80,10 @@ export function projectContextEngineAssemblyForCodex(params: {
     promptPrefix && boundedContext
       ? { start: promptPrefix.length, end: promptPrefix.length + boundedContext.length }
       : undefined;
+  const promptRequestRange = {
+    start: promptText.length - prompt.length,
+    end: promptText.length,
+  };
 
   return {
     ...(params.systemPromptAddition?.trim()
@@ -73,8 +91,59 @@ export function projectContextEngineAssemblyForCodex(params: {
       : {}),
     promptText,
     ...(promptContextRange ? { promptContextRange } : {}),
+    promptRequestRange,
     assembledMessages: params.assembledMessages,
     prePromptMessageCount: params.originalHistoryMessages.length,
+  };
+}
+
+/** Neutralizes Codex tool mentions outside the authenticated current-request span. */
+export function neutralizeCodexToolMentionsOutsideRange(params: {
+  promptText: string;
+  preservedRange: CodexProjectedContextRange;
+  contextRange?: CodexProjectedContextRange;
+  requestRange?: CodexProjectedContextRange;
+}): {
+  promptText: string;
+  preservedRange: CodexProjectedContextRange;
+  contextRange?: CodexProjectedContextRange;
+  requestRange?: CodexProjectedContextRange;
+} {
+  const preservedRange = normalizeProjectedContextRange(
+    params.preservedRange,
+    params.promptText.length,
+  );
+  if (!preservedRange) {
+    return params;
+  }
+  const prefix = params.promptText.slice(0, preservedRange.start);
+  const preserved = params.promptText.slice(preservedRange.start, preservedRange.end);
+  const suffix = params.promptText.slice(preservedRange.end);
+  const neutralizedPrefix = neutralizeCodexToolMentions(prefix);
+  const neutralizedSuffix = neutralizeCodexToolMentions(suffix);
+  const promptText = `${neutralizedPrefix}${preserved}${neutralizedSuffix}`;
+  const mapRange = (
+    range: CodexProjectedContextRange | undefined,
+  ): CodexProjectedContextRange | undefined => {
+    const normalized = normalizeProjectedContextRange(range, params.promptText.length);
+    if (!normalized) {
+      return undefined;
+    }
+    return {
+      start: mapNeutralizedOffset(params.promptText, preservedRange, normalized.start),
+      end: mapNeutralizedOffset(params.promptText, preservedRange, normalized.end),
+    };
+  };
+  const contextRange = mapRange(params.contextRange);
+  const requestRange = mapRange(params.requestRange);
+  return {
+    promptText,
+    preservedRange: {
+      start: neutralizedPrefix.length,
+      end: neutralizedPrefix.length + preserved.length,
+    },
+    ...(contextRange ? { contextRange } : {}),
+    ...(requestRange ? { requestRange } : {}),
   };
 }
 
@@ -240,6 +309,35 @@ function renderMessagesForCodexContext(
     })
     .filter((value): value is string => Boolean(value))
     .join("\n\n");
+}
+
+function neutralizeCodexToolMentions(text: string): string {
+  return text.replace(/\$([A-Za-z0-9_:-]+)/g, (match, name: string) => {
+    return CODEX_IGNORED_TOOL_MENTION_NAMES.has(name.toUpperCase()) ? match : `$\u200B${name}`;
+  });
+}
+
+function mapNeutralizedOffset(
+  promptText: string,
+  preservedRange: CodexProjectedContextRange,
+  offset: number,
+): number {
+  const prefixEnd = Math.min(offset, preservedRange.start);
+  const neutralizedPrefixLength = neutralizeCodexToolMentions(
+    promptText.slice(0, prefixEnd),
+  ).length;
+  if (offset <= preservedRange.start) {
+    return neutralizedPrefixLength;
+  }
+  const preservedLength = Math.min(offset, preservedRange.end) - preservedRange.start;
+  if (offset <= preservedRange.end) {
+    return neutralizedPrefixLength + preservedLength;
+  }
+  return (
+    neutralizedPrefixLength +
+    preservedLength +
+    neutralizeCodexToolMentions(promptText.slice(preservedRange.end, offset)).length
+  );
 }
 
 function renderMessageBody(

@@ -2578,8 +2578,8 @@ describe("runCodexAppServerAttempt", () => {
       systemPrompt: "custom codex system",
       prependSystemContext: "pre system",
       appendSystemContext: "post system",
-      prependContext: "queued context",
-      appendContext: "tail context",
+      prependContext: "queued $example-manual context from $HOME",
+      appendContext: "tail $hook-skill context",
       toolsAllow: ["*"],
     }));
     initializeGlobalHookRunner(
@@ -2592,7 +2592,9 @@ describe("runCodexAppServerAttempt", () => {
     const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "use $current-skill now";
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -2607,7 +2609,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       { runId?: string; sessionId?: string },
     ];
-    expect(hookInput.prompt).toBe("hello");
+    expect(hookInput.prompt).toBe("use $current-skill now");
     expect(hookInput.messages).toEqual([
       expect.objectContaining({
         role: "assistant",
@@ -2628,14 +2630,20 @@ describe("runCodexAppServerAttempt", () => {
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
       | undefined;
     expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
+      {
+        type: "text",
+        text: "queued $\u200Bexample-manual context from $HOME\n\nuse $current-skill now\n\ntail $\u200Bhook-skill context",
+        text_elements: [],
+      },
     ]);
     expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
       { historyMessages?: unknown[]; prompt?: string },
       unknown,
     ];
-    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
+    expect(llmInputPayload.prompt).toBe(
+      "queued $\u200Bexample-manual context from $HOME\n\nuse $current-skill now\n\ntail $\u200Bhook-skill context",
+    );
     expect(llmInputPayload.historyMessages).toEqual([]);
     expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });

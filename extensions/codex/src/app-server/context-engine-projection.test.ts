@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   fitCodexProjectedContextForTurnStart,
+  neutralizeCodexToolMentionsOutsideRange,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
 } from "./context-engine-projection.js";
@@ -208,6 +209,37 @@ describe("projectContextEngineAssemblyForCodex", () => {
 
     expect(result.promptText.length).toBeGreaterThan(60_000);
     expect(result.promptText).not.toContain("[truncated ");
+  });
+
+  it("neutralizes non-request tool mentions while preserving the current request", () => {
+    const currentRequest = "Use $current-skill for this request";
+    const promptText = [
+      "History: $example-manual and [$other-skill](skill://other/SKILL.md)",
+      "Shell context: cd $HOME/project && echo $custom_var",
+      `Current user request:\n${currentRequest}`,
+      "Hook context: $hook-skill",
+    ].join("\n");
+    const requestStart = promptText.indexOf(currentRequest);
+    const result = neutralizeCodexToolMentionsOutsideRange({
+      promptText,
+      preservedRange: { start: requestStart, end: requestStart + currentRequest.length },
+      contextRange: { start: 0, end: requestStart },
+      requestRange: { start: requestStart, end: requestStart + currentRequest.length },
+    });
+
+    expect(result.promptText).toContain("$\u200Bexample-manual");
+    expect(result.promptText).toContain("[$\u200Bother-skill](skill://other/SKILL.md)");
+    expect(result.promptText).toContain("cd $HOME/project && echo $\u200Bcustom_var");
+    expect(result.promptText).toContain("Hook context: $\u200Bhook-skill");
+    expect(result.promptText).not.toContain("$example-manual");
+    expect(result.promptText).not.toContain("$other-skill");
+    expect(result.promptText.slice(result.preservedRange.start, result.preservedRange.end)).toBe(
+      currentRequest,
+    );
+    expect(result.contextRange && result.promptText.slice(0, result.contextRange.end)).toContain(
+      "$\u200Bexample-manual",
+    );
+    expect(result.requestRange).toEqual(result.preservedRange);
   });
 
   it("fits projected context under the Codex turn input limit", () => {
