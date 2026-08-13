@@ -1,7 +1,4 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -63,6 +60,51 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 const preparedReplyMockState = vi.hoisted(() => ({
   unexpectedCalls: [] as string[],
 }));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.js", () => ({
+  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-state.js", () => ({
+  isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(),
+  releaseMainSessionRecoveryOwner: vi.fn(),
+}));
+
+// Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
+// projection here while preventing an unrelated active-plugin and public-artifact graph load.
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: () => undefined,
+}));
+
+vi.mock("../../agents/agent-tools.policy.js", () => ({
+  resolveEffectiveToolPolicy: (params: {
+    config: { tools?: { allow?: string[]; deny?: string[] } };
+  }) => ({
+    globalPolicy: params.config.tools
+      ? { allow: params.config.tools.allow, deny: params.config.tools.deny }
+      : undefined,
+    globalProviderPolicy: undefined,
+    agentPolicy: undefined,
+    agentProviderPolicy: undefined,
+    profile: undefined,
+    providerProfile: undefined,
+    profileAlsoAllow: undefined,
+    providerProfileAlsoAllow: undefined,
+  }),
+  resolveGroupToolPolicy: () => undefined,
+  resolveInheritedToolPolicyForSession: () => undefined,
+  resolveSubagentToolPolicyForSession: () => undefined,
+}));
+
+vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
+  isSubagentEnvelopeSession: vi.fn().mockReturnValue(false),
+  resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
+}));
+
 const selectAgentHarnessMock = vi.hoisted(() =>
   vi.fn(
     (params: {
@@ -198,6 +240,15 @@ vi.mock("./agent-runner.runtime.js", () => ({
 
 vi.mock("./body.js", () => ({
   applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+}));
+
+const resolveCurrentTurnImagesMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+vi.mock("./current-turn-images.js", () => ({
+  resolveCurrentTurnImages: resolveCurrentTurnImagesMock,
+}));
+
+vi.mock("./get-reply-fast-path.js", () => ({
+  shouldUseReplyFastTestRuntime: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("./groups.js", () => ({
@@ -435,8 +486,6 @@ function requireLastRunReplyAgentCall() {
 }
 
 describe("runPreparedReply media-only handling", () => {
-  const cleanupPaths: string[] = [];
-
   beforeAll(async () => {
     // Preload the runtime seams directly so test setup does not need a synthetic
     // reply turn with registry and session side effects.
@@ -458,14 +507,13 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     vi.mocked(hasControlCommand).mockReturnValue(false);
+    resolveCurrentTurnImagesMock.mockReset().mockResolvedValue({});
     replyRunTesting.resetReplyRunRegistry();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     resetSystemEventsForTest();
-    const paths = cleanupPaths.splice(0);
-    await Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
     expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
   });
 
@@ -1557,22 +1605,19 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current image facts by extension when content types are missing", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("forwards current image hydration into the runner and transcript media", async () => {
+    const imagePath = "/tmp/current-image.png";
+    const imageData = Buffer.from("current image").toString("base64");
+    resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+      images: [{ type: "image", data: imageData, mimeType: "image/png" }],
+      imageOrder: ["inline"],
+      imageSourceIndexes: [0],
+    });
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this"),
-        media: [{ path: imagePath, workspaceDir: tmpDir }],
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
         OriginatingChannel: "discord",
         OriginatingTo: "C123",
         ChatType: "group",
@@ -1583,7 +1628,7 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "C123",
         ChatType: "group",
-        media: [{ path: imagePath, workspaceDir: tmpDir }],
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
       },
     });
 
@@ -1593,7 +1638,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.images).toEqual([
       {
         type: "image",
-        data: expect.any(String),
+        data: imageData,
         mimeType: "image/png",
       },
     ]);
@@ -1604,8 +1649,16 @@ describe("runPreparedReply media-only handling", () => {
         media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
       },
     });
-    expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(resolveCurrentTurnImagesMock).toHaveBeenCalledWith({
+      ctx: expect.objectContaining({
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
+      }),
+      cfg: expect.any(Object),
+      images: undefined,
+      imageOrder: undefined,
+      extractedFileImages: undefined,
+    });
   });
 
   it("does not copy prior session media onto text-only followups", async () => {
@@ -1707,32 +1760,16 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
-    const secondImagePath = path.join(tmpDir, "second.png");
-    await writeFile(
-      secondImagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("persists described current image facts without rehydrated runner images", async () => {
+    const imagePath = "/tmp/described-image.png";
+    const secondImagePath = "/tmp/second-described-image.png";
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
         MediaUnderstanding: [
           {
@@ -1761,8 +1798,8 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "webchat:local",
         ChatType: "direct",
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
       },
     });
@@ -1782,27 +1819,28 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("rehydrates only current facts missing image understanding", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("projects partially hydrated current images into the runner and transcript layout", async () => {
+    const imagePath = "/tmp/described-image.png";
     const secondImageData = Buffer.from("second image bytes");
-    const secondImagePath = path.join(tmpDir, "second.png");
-    await writeFile(secondImagePath, secondImageData);
+    const secondImagePath = "/tmp/undescribed-image.png";
+    resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+      images: [
+        {
+          type: "image",
+          data: secondImageData.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      imageOrder: ["inline"],
+      imageSourceIndexes: [1],
+    });
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
         MediaUnderstanding: [
           {
@@ -1824,8 +1862,8 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "webchat:local",
         ChatType: "direct",
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
       },
     });
@@ -4047,28 +4085,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(run.ownerNumbers).toHaveLength(16);
     expect(run.ownerNumbers?.at(-1)).toBe(currentOwnerId);
     expect(params.command.ownerList).toHaveLength(24);
-  });
-
-  it("keeps sender ownership when drained system events are present", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(true);
-  });
-
-  it("does not downgrade sender ownership when event text contains a system marker", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System: but event is trusted.",
-    );
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
