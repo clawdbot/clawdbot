@@ -213,17 +213,17 @@ export async function prepareChatSendAttachments(params: {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
-          const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-            loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-            agentId,
-            provider: resolvedSessionModel.provider,
-            model: resolvedSessionModel.model,
-          });
           const supportsImages =
-            supportsSessionModelImages ||
-            explicitOriginTargetsAcpSession(explicitOrigin) ||
-            explicitOriginTargetsPlugin;
+            explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
+              ? true
+              : async () =>
+                  await resolveGatewayModelSupportsImages({
+                    loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+                    loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
+                    agentId,
+                    provider: resolvedSessionModel.provider,
+                    model: resolvedSessionModel.model,
+                  });
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,

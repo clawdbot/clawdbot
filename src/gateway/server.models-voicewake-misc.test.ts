@@ -326,6 +326,7 @@ describe("gateway server models + voicewake", () => {
   }): Promise<void> => {
     await withModelsConfig(
       {
+        ...fullCatalogProviderConfig(),
         agents: {
           defaults: {
             model: { primary: options.primary },
