@@ -6,9 +6,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
-const resolveSandboxContextWithPublishedSkills = vi.hoisted(() =>
-  vi.fn(async (): Promise<unknown> => null),
-);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
@@ -17,17 +14,14 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => (
 
 vi.mock("../../sandbox.js", () => ({
   resolveSandboxContext,
-  resolveSandboxContextWithPublishedSkills,
 }));
 
-import { attachPublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
 import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
     resolveSandboxContext.mockClear();
-    resolveSandboxContextWithPublishedSkills.mockClear();
   });
 
   it("prepares the default and session agent identities together", async () => {
@@ -72,10 +66,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-sandbox-skills"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(resolveSandboxContext).not.toHaveBeenCalled();
-    expect(resolveSandboxContextWithPublishedSkills).toHaveBeenCalledWith(
-      expect.objectContaining({ skillsSnapshot }),
-    );
+    expect(resolveSandboxContext).toHaveBeenCalledWith(expect.objectContaining({ skillsSnapshot }));
   });
 
   it.each(["ro", "rw"] as const)(
@@ -92,41 +83,17 @@ describe("prepareEmbeddedAttemptSetup", () => {
       });
 
       expect(resolveSandboxContext).not.toHaveBeenCalled();
-      expect(resolveSandboxContextWithPublishedSkills).not.toHaveBeenCalled();
       expect(setup.effectiveWorkspace).toBe(workspaceDir);
     },
   );
 
-  it("does not lease a published catalog for media-only workspace resolution", async () => {
-    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-media-only");
-    await resolveAttemptWorkspaceSandbox({
-      agentId: "main",
-      config: {},
-      sessionId: "session-media-only",
-      sessionKey: "agent:main:media-only",
-      workspaceDir,
-      retainPublishedSkills: false,
-    });
-
-    expect(resolveSandboxContext).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir, sessionKey: "agent:main:media-only" }),
-    );
-    expect(resolveSandboxContextWithPublishedSkills).not.toHaveBeenCalled();
-  });
-
-  it("releases the published catalog when sandboxed cwd is rejected", async () => {
+  it("rejects a cwd override for sandboxed runs", async () => {
     const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-cwd-reject");
-    const sandbox = {
+    resolveSandboxContext.mockResolvedValueOnce({
       enabled: true as const,
       workspaceDir: path.join(workspaceDir, "sandbox"),
       workspaceAccess: "ro" as const,
-    };
-    const releaseGeneration = vi.fn();
-    attachPublishedSandboxSkills(sandbox, {
-      releaseGeneration,
-      skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [] },
     });
-    resolveSandboxContextWithPublishedSkills.mockResolvedValueOnce(sandbox);
 
     await expect(
       resolveAttemptWorkspaceSandbox({
@@ -138,8 +105,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
         workspaceDir,
       }),
     ).rejects.toThrow(/cwd override is not supported/);
-
-    expect(releaseGeneration).toHaveBeenCalledOnce();
   });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {

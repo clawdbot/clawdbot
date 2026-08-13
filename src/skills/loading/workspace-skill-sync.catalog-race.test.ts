@@ -1,4 +1,4 @@
-// Workspace skill sync catalog-race tests cover published generation readability.
+// Workspace skill sync catalog-race tests cover incremental publish readability.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,10 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
-import {
-  attachPublishedSandboxSkills,
-  releasePublishedSandboxSkills,
-} from "../../agents/sandbox/published-skills-handoff.js";
+import { attachPublishedSandboxSkills } from "../../agents/sandbox/published-skills-handoff.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { recordRemoteSkillNodeInfo, replaceRemoteNodeSkills } from "../runtime/remote-skills.js";
@@ -18,7 +15,6 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
-import { leasePublishedSyncedSkillsGeneration } from "./workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
   createMaterializedSkillsBridge,
@@ -42,10 +38,7 @@ function resolveBoundSandboxCatalog(params: {
     skillsWorkspaceDir: params.targetWorkspace,
     workspaceAccess: "rw" as const,
   };
-  attachPublishedSandboxSkills(sandbox, {
-    skillsSnapshot: params.skillsSnapshot,
-    releaseGeneration: () => {},
-  });
+  attachPublishedSandboxSkills(sandbox, params.skillsSnapshot);
   return resolveSandboxSkillRuntimeInputs({
     sandbox,
     effectiveWorkspace: params.targetWorkspace,
@@ -55,8 +48,8 @@ function resolveBoundSandboxCatalog(params: {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-catalog-race", tempDirs);
 
-describe("syncWorkspaceSkills catalog generations", () => {
-  it("keeps concurrent prompt readers on a complete catalog during changed refresh", async () => {
+describe("syncWorkspaceSkills incremental catalog publish", () => {
+  it("keeps concurrent prompt readers on a complete readable catalog during changed refresh", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -113,13 +106,9 @@ describe("syncWorkspaceSkills catalog generations", () => {
       .spyOn(nodeFs.promises, "cp")
       .mockImplementation(async (source, destination, opts) => {
         const result = await originalCp(source, destination, opts);
-        const destinationPath = String(destination);
-        // Pause after the first new-generation copy so concurrent readers can
-        // observe the previous complete catalog while its files still exist.
-        if (
-          !pausedAfterCopy &&
-          destinationPath.includes(`${path.sep}.openclaw-generations${path.sep}`)
-        ) {
+        // Pause mid-refresh so a concurrent reader observes the tree while only
+        // part of the new catalog has landed.
+        if (!pausedAfterCopy) {
           pausedAfterCopy = true;
           await pause;
         }
@@ -138,13 +127,12 @@ describe("syncWorkspaceSkills catalog generations", () => {
         expect(pausedAfterCopy).toBe(true);
       });
 
-      // Live directory scan skips generation directories (dot-prefixed).
+      // A live directory scan mid-refresh is not yet the new catalog.
       const liveNameSet = new Set(
         loadWorkspaceSkills(targetWorkspace, { workspaceOnly: true }).map(
           (entry) => entry.skill.name,
         ),
       );
-      expect(oldCatalog.some((name) => !liveNameSet.has(name))).toBe(true);
       expect(newCatalog.every((name) => liveNameSet.has(name))).toBe(false);
 
       // Sandbox prompt readers use the catalog bound to this run, not a live scan.
@@ -176,9 +164,10 @@ describe("syncWorkspaceSkills catalog generations", () => {
       expect(
         sortedSkillNames(skillsSnapshotForRun?.skills.map((skill) => skill.name) ?? []),
       ).toEqual(oldCatalog);
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/.openclaw-generations/");
-      expect(prompt).toContain("/skill-01/SKILL.md");
+      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/skill-01/SKILL.md");
 
+      // Incremental publish never wipes a live child, so every advertised
+      // <location> stays readable through the sandbox bridge mid-refresh.
       const bridge = createMaterializedSkillsBridge(targetWorkspace);
       const oldCodeModeSkills = resolveCodeModeSkills({
         skillsPrompt: prompt,
@@ -196,17 +185,6 @@ describe("syncWorkspaceSkills catalog generations", () => {
       for (const skill of oldCodeModeSkills) {
         await expect(readCodeModeSkill(skill)).resolves.toContain(`# ${skill.name}`);
       }
-
-      // Runtime trace for the refresh window: advertised old locations stay
-      // readable through the sandbox bridge while the next generation copies.
-      console.info(
-        [
-          `liveScanIncomplete=${oldCatalog.some((name) => !liveNameSet.has(name))}`,
-          `readerASeesCompleteOld=${promptNames.join("\0") === oldCatalog.join("\0")}`,
-          `oldLocationsRead=${oldCodeModeSkills.length}/${oldCatalog.length}`,
-          "RESULT=PASS old catalog readable during generation copy",
-        ].join("\n"),
-      );
 
       releasePause();
       const second = await syncPromise;
@@ -238,21 +216,70 @@ describe("syncWorkspaceSkills catalog generations", () => {
       for (const skill of newCodeModeSkills) {
         await expect(readCodeModeSkill(skill)).resolves.toContain(`# ${skill.name}`);
       }
-      for (const skill of first.skillsSnapshot.resolvedSkills ?? []) {
-        expect(await pathExists(skill.filePath)).toBe(true);
-      }
-      console.info(
-        [
-          `readerBSeesCompleteNew=${sortedSkillNames(second.skillsSnapshot.skills.map((skill) => skill.name)).join("\0") === newCatalog.join("\0")}`,
-          `newLocationsRead=${newCodeModeSkills.length}/${newCatalog.length}`,
-          `oldGenerationStillOnDisk=true`,
-          "RESULT=PASS complete-old-or-complete-new with sandbox-readable advertised locations",
-        ].join("\n"),
+      // skill-08 left the catalog, so its child is pruned once the refresh lands.
+      expect(await pathExists(path.join(targetWorkspace, "skills", "skill-08", "SKILL.md"))).toBe(
+        false,
       );
     } finally {
       releasePause();
       cpSpy.mockRestore();
     }
+  });
+
+  it("leaves unchanged skill files untouched across a changed-catalog refresh", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "stable"),
+      name: "stable",
+      description: "Stable skill",
+    });
+    const publish = async () => {
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    const first = await publish();
+    const stablePath = first.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "stable",
+    )?.filePath;
+    if (!stablePath) {
+      throw new Error("expected the stable skill to be published");
+    }
+    const before = await fs.stat(stablePath);
+
+    // A new sibling changes the catalog identities and forces a full refresh.
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "added"),
+      name: "added",
+      description: "Added skill",
+    });
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const second = await publish();
+    expect(sortedSkillNames(second.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
+      "added",
+      "stable",
+    ]);
+
+    // The unchanged child keeps its inode: no wipe, so no window where a
+    // concurrent reader could miss the advertised location.
+    const after = await fs.stat(stablePath);
+    expect(after.ino).toBe(before.ino);
+    expect(
+      second.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "stable")?.filePath,
+    ).toBe(stablePath);
   });
 
   it("keeps node-hosted skills in the published sandbox catalog", async () => {
@@ -315,9 +342,8 @@ describe("syncWorkspaceSkills catalog generations", () => {
       });
       expect(resolved.skillsSnapshot?.prompt).toContain(nodeLocation);
       expect(resolved.skillsSnapshot?.prompt).toContain(
-        "/workspace/.openclaw/sandbox-skills/skills/.openclaw-generations/",
+        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
       );
-      expect(resolved.skillsSnapshot?.prompt).toContain("/demo/SKILL.md");
       expect(
         resolved.skillsSnapshot?.resolvedSkills?.some((skill) => skill.filePath === nodeLocation),
       ).toBe(true);
@@ -326,7 +352,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
     }
   });
 
-  it("recovers a mixed local/node catalog after cold-cache copy failure", async () => {
+  it("keeps a mixed local/node catalog whole when a cold-cache copy fails", async () => {
     resetRemoteNodeSkillsForTests();
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
@@ -407,104 +433,16 @@ describe("syncWorkspaceSkills catalog generations", () => {
       });
       copy.mockRestore();
 
-      expect(recovered.generation).toBe(first.generation);
+      // The already-published child survives an unreadable source, so a failed
+      // refresh never shrinks the advertised catalog.
       expect(sortedSkillNames(recovered.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
         "demo",
         "release-helper",
       ]);
+      expect(await pathExists(path.join(targetWorkspace, "skills", "demo", "SKILL.md"))).toBe(true);
     } finally {
       resetRemoteNodeSkillsForTests();
     }
-  });
-
-  it("keeps a leased generation readable after later catalogs replace it", async () => {
-    const sourceWorkspace = await fixtures.createCaseDir("source");
-    const targetWorkspace = await fixtures.createCaseDir("target");
-    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
-    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
-    const publish = async (description: string) => {
-      await writeSkill({
-        dir: path.join(sourceWorkspace, "skills", "alpha"),
-        name: "alpha",
-        description,
-        body: `# ${description}\n`,
-      });
-      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
-        bundledSkillsDir,
-        managedSkillsDir,
-        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
-      });
-      return await syncWorkspaceSkills({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        bundledSkillsDir,
-        managedSkillsDir,
-        skillsSnapshot,
-      });
-    };
-
-    const first = await publish("generation-one");
-    const firstFilePath = first.skillsSnapshot.resolvedSkills?.[0]?.filePath;
-    expect(firstFilePath).toBeTruthy();
-    expect(first.generation).toBeGreaterThan(0);
-
-    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-    const second = await publish("generation-two");
-    expect(second.generation).toBeGreaterThan(first.generation);
-
-    const owner = {};
-    attachPublishedSandboxSkills(owner, {
-      skillsSnapshot: first.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, first.generation),
-    });
-    const published = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: targetWorkspace,
-        workspaceAccess: "rw",
-      },
-      effectiveWorkspace: targetWorkspace,
-      publishedSkillsOwner: owner,
-    });
-    const bridge = createMaterializedSkillsBridge(targetWorkspace);
-    const codeModeSkills = resolveCodeModeSkills({
-      skillsPrompt: resolveSkillsPrompt({
-        skillsSnapshot: published.skillsSnapshot,
-        workspaceDir: published.skillsPromptWorkspaceDir,
-      }),
-      candidates: published.skillsSnapshot?.resolvedSkills ?? [],
-      reader: async ({ location, signal }) =>
-        (
-          await bridge.readFile({
-            filePath: location,
-            cwd: "/workspace",
-            signal,
-          })
-        ).toString("utf8"),
-    });
-    expect(codeModeSkills).toHaveLength(1);
-    const capturedSkill = codeModeSkills[0];
-    if (!capturedSkill) {
-      throw new Error("expected a captured sandbox skill from the first generation");
-    }
-    const releasePublishedGeneration = () => {
-      releasePublishedSandboxSkills(owner);
-    };
-
-    try {
-      bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-      await publish("generation-three");
-
-      expect(await pathExists(firstFilePath ?? "")).toBe(true);
-      await expect(readCodeModeSkill(capturedSkill)).resolves.toContain("# generation-one");
-    } finally {
-      releasePublishedGeneration();
-    }
-
-    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-    await publish("generation-four");
-    expect(await pathExists(firstFilePath ?? "")).toBe(false);
   });
 
   it("keeps concurrent sandbox owners on their own published catalogs", async () => {
@@ -535,50 +473,35 @@ describe("syncWorkspaceSkills catalog generations", () => {
 
     const first = await publish("alpha");
     const ownerA = {};
-    attachPublishedSandboxSkills(ownerA, {
-      skillsSnapshot: first.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, first.generation),
-    });
+    attachPublishedSandboxSkills(ownerA, first.skillsSnapshot);
 
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
     const second = await publish("beta");
     const ownerB = {};
-    attachPublishedSandboxSkills(ownerB, {
-      skillsSnapshot: second.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, second.generation),
-    });
+    attachPublishedSandboxSkills(ownerB, second.skillsSnapshot);
 
-    try {
-      const catalogA = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
-        effectiveWorkspace: targetWorkspace,
-        publishedSkillsOwner: ownerA,
-      });
-      const catalogB = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
-        effectiveWorkspace: targetWorkspace,
-        publishedSkillsOwner: ownerB,
-      });
-      expect(
-        sortedSkillNames(catalogA.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
-      ).toEqual(["alpha"]);
-      expect(
-        sortedSkillNames(catalogB.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
-      ).toEqual(["beta"]);
-    } finally {
-      releasePublishedSandboxSkills(ownerA);
-      releasePublishedSandboxSkills(ownerB);
-    }
+    const sandboxInputs = {
+      enabled: true as const,
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir: targetWorkspace,
+      workspaceAccess: "rw" as const,
+    };
+    const catalogA = resolveSandboxSkillRuntimeInputs({
+      sandbox: sandboxInputs,
+      effectiveWorkspace: targetWorkspace,
+      publishedSkillsOwner: ownerA,
+    });
+    const catalogB = resolveSandboxSkillRuntimeInputs({
+      sandbox: sandboxInputs,
+      effectiveWorkspace: targetWorkspace,
+      publishedSkillsOwner: ownerB,
+    });
+    expect(
+      sortedSkillNames(catalogA.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
+    ).toEqual(["alpha"]);
+    expect(
+      sortedSkillNames(catalogB.skillsSnapshot?.skills.map((skill) => skill.name) ?? []),
+    ).toEqual(["beta"]);
   });
 
   it("does not reuse a published catalog prompt across node-eligibility changes", async () => {
@@ -625,7 +548,6 @@ describe("syncWorkspaceSkills catalog generations", () => {
 
     expect(first.skillsSnapshot.prompt).toContain(remoteNote);
     expect(first.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: true });
-    expect(second.generation).toBe(first.generation);
     expect(second.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: false });
     expect(second.skillsSnapshot.prompt).not.toContain(remoteNote);
 
@@ -642,7 +564,6 @@ describe("syncWorkspaceSkills catalog generations", () => {
         },
       },
     });
-    expect(third.generation).toBe(first.generation);
     expect(third.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: true });
     expect(third.skillsSnapshot.prompt).toContain(otherNote);
     expect(third.skillsSnapshot.prompt).not.toContain(remoteNote);

@@ -552,26 +552,43 @@ export async function syncWorkspaceSkills(params: {
         publishedIdentities.push(plan.identity);
         continue;
       }
+      const readPath = path.join(
+        destinationPath,
+        path.relative(entry.skill.baseDir, entry.skill.filePath),
+      );
+      let refreshed = true;
       try {
         await syncSyncedSkillChild(entry.syncSourceDir ?? entry.skill.baseDir, destinationPath);
       } catch (error) {
-        // One unreadable source must not empty the catalog. Drop this skill from
-        // the published set; the next sync retries it because its identity is
-        // absent from the manifest.
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
-        continue;
+        // Keep the previously published copy when a source turns unreadable. One
+        // failed refresh must not shrink a catalog concurrent runs advertise;
+        // only a skill that was never published drops out here.
+        if (!(await lstatOrUndefined(readPath))) {
+          continue;
+        }
+        refreshed = false;
       }
-      publishedIdentities.push(plan.identity);
+      // A reused stale child stays out of the manifest identities so the next
+      // sync misses the unchanged-catalog fast path and retries the copy.
+      if (refreshed) {
+        publishedIdentities.push(plan.identity);
+      }
       skillUsagePaths.push({
-        readPath: path.join(
-          destinationPath,
-          path.relative(entry.skill.baseDir, entry.skill.filePath),
-        ),
+        readPath,
         skillFile: canonicalizePath(entry.skill.filePath),
         skillName: entry.skill.name,
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });
+    }
+    if (plans.length > 0 && skillUsagePaths.length === 0 && publishedIdentities.length === 0) {
+      // Every candidate failed to copy. Committing an empty manifest would tell
+      // later readers the catalog is genuinely empty instead of retrying.
+      return {
+        skillUsagePaths: [],
+        skillsSnapshot: createEmptySyncedSkillsSnapshot(skillsVersion),
+      };
     }
     const nextSkillsSnapshot = buildSyncedSkillsSnapshot({
       targetWorkspaceDir: targetDir,

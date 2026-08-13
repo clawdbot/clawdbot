@@ -60,7 +60,6 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     expect(await pathExists(syncedSkillMd ?? "")).toBe(true);
     expect(syncedStat.isSymbolicLink()).toBe(false);
     expect(prompt).toContain("Wiki maintenance skill for sandboxed agents");
-    expect(prompt).toContain(".openclaw-generations/");
     expect(prompt).toContain("wiki-maintainer/SKILL.md");
     expect(prompt).not.toContain(realPluginSkillDir.replaceAll("\\", "/"));
     expect(prompt).not.toContain(pluginSkillsDir.replaceAll("\\", "/"));

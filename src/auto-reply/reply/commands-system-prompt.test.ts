@@ -345,30 +345,25 @@ describe("resolveCommandsSystemPromptBundle", () => {
     }
   });
 
-  it("releases published sandbox skill generations after command prompt inspection", async () => {
+  it("uses the published sandbox catalog for command prompt inspection", async () => {
     const sandboxWorkspace = {
       workspaceDir: "/tmp/workspace",
       containerWorkdir: "/workspace",
       skillsWorkspaceDir: "/tmp/sandbox-skills",
       workspaceAccess: "rw" as const,
     };
-    const generationLocation =
-      "/workspace/.openclaw/sandbox-skills/skills/.openclaw-generations/1/gog/SKILL.md";
-    const releaseGeneration = vi.fn();
+    const publishedLocation = "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md";
     attachPublishedSandboxSkills(sandboxWorkspace, {
-      skillsSnapshot: {
-        prompt: [
-          "<available_skills>",
-          "  <skill>",
-          "    <name>gog</name>",
-          `    <location>${generationLocation}</location>`,
-          "  </skill>",
-          "</available_skills>",
-        ].join("\n"),
-        skills: [{ name: "gog" }],
-        resolvedSkills: [],
-      },
-      releaseGeneration,
+      prompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>gog</name>",
+        `    <location>${publishedLocation}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      skills: [{ name: "gog" }],
+      resolvedSkills: [],
     });
     vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
       sandboxed: true,
@@ -378,11 +373,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
 
     const result = await resolveCommandsSystemPromptBundle(makeParams());
 
-    expect(result.skillsPrompt).toContain(generationLocation);
-    expect(releaseGeneration).toHaveBeenCalledOnce();
-    expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith(
-      expect.objectContaining({ retainPublishedSkills: true }),
-    );
+    expect(result.skillsPrompt).toContain(publishedLocation);
   });
 
   it("preserves host skill snapshots for custom backends without a declared workdir", async () => {

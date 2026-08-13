@@ -26,10 +26,7 @@ vi.mock("../../skills/loading/plugin-skills.js", () => ({
 }));
 
 function bindPublishedSandboxSnapshot(owner: object, skillsSnapshot: SkillSnapshot): void {
-  attachPublishedSandboxSkills(owner, {
-    skillsSnapshot,
-    releaseGeneration: () => {},
-  });
+  attachPublishedSandboxSkills(owner, skillsSnapshot);
 }
 
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
@@ -138,9 +135,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       (skill) => skill.name === "demo",
     );
     expect(resolved.skillsSnapshot?.skills.map((skill) => skill.name)).toContain("demo");
-    expect(remappedDemo?.filePath).toContain("/workspace/.openclaw/sandbox-skills/skills/");
-    expect(remappedDemo?.filePath).toContain("/.openclaw-generations/");
-    expect(remappedDemo?.filePath).toContain("/demo/SKILL.md");
+    expect(remappedDemo?.filePath).toBe("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
     expect(resolved.skillsSnapshot?.prompt).toContain(remappedDemo?.filePath ?? "");
     expect(resolved.skillsSnapshot?.prompt).not.toContain(hostSkillPath);
     expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
@@ -192,8 +187,6 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     );
     const containerFilePath = remappedSkill?.filePath ?? "";
 
-    expect(hostFilePath).toContain(`${path.sep}.openclaw-generations${path.sep}`);
-    expect(containerFilePath).toContain("/.openclaw-generations/");
     expect(containerFilePath).toContain(`/${skillDirName}/SKILL.md`);
     expect(resolved.skillsSnapshot?.prompt).toContain(
       `<location>${escapeSkillXml(containerFilePath)}</location>`,

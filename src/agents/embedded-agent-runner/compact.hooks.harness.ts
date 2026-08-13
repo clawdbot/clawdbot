@@ -790,7 +790,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../sandbox.js", () => ({
-    resolveSandboxContextWithPublishedSkills: resolveSandboxContextMock,
+    resolveSandboxContext: resolveSandboxContextMock,
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({

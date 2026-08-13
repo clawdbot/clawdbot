@@ -8,10 +8,7 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
-import {
-  readPublishedSandboxSkills,
-  releasePublishedSandboxSkills,
-} from "./sandbox/published-skills-handoff.js";
+import { readPublishedSandboxSkills } from "./sandbox/published-skills-handoff.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -854,16 +851,14 @@ describe("resolveSandboxContext", () => {
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir,
-      retainPublishedSkills: true,
     });
 
     if (!result) {
       throw new Error("expected sandbox workspace resolution");
     }
-    expect(readPublishedSandboxSkills(result)?.skillsSnapshot).toEqual(skillsSnapshot);
+    expect(readPublishedSandboxSkills(result)).toEqual(skillsSnapshot);
+    // The catalog rides the opaque handoff, never the public workspace shape.
     expect(result).not.toHaveProperty("skillsSnapshot");
-    releasePublishedSandboxSkills(result);
-    expect(readPublishedSandboxSkills(result)).toBeUndefined();
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {

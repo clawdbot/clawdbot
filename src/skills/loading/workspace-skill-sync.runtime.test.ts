@@ -121,7 +121,6 @@ describe("syncWorkspaceSkills", () => {
     });
 
     const publishedFilePath = skillsSnapshot.resolvedSkills?.[0]?.filePath;
-    expect(publishedFilePath).toContain(`${path.sep}.openclaw-generations${path.sep}`);
     expect(publishedFilePath).toContain(`${path.sep}demo-skill${path.sep}SKILL.md`);
     expect(skillUsagePaths).toEqual([
       {
@@ -185,7 +184,6 @@ describe("syncWorkspaceSkills", () => {
     copy.mockRestore();
 
     expect(second.skillUsagePaths).toEqual(first.skillUsagePaths);
-    expect(second.generation).toBe(first.generation);
     expect(second.skillsSnapshot.prompt).toBe(first.skillsSnapshot.prompt);
     expect(second.skillsSnapshot.skills).toEqual(first.skillsSnapshot.skills);
     expect(copyCount).toBe(0);
@@ -256,7 +254,7 @@ describe("syncWorkspaceSkills", () => {
     expect(await pathExists(path.resolve(targetSkillsDir, "../escape"))).toBe(false);
   });
 
-  it("keeps the previous generation readable after publishing a changed catalog", async () => {
+  it("keeps retained children in place and prunes removed ones on a changed catalog", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -317,16 +315,17 @@ describe("syncWorkspaceSkills", () => {
       "alpha",
       "gamma",
     ]);
-    expect(secondAlphaPath).not.toBe(firstAlphaPath);
+    // A retained skill keeps its published path so readers holding the previous
+    // catalog never lose the location they advertised.
+    expect(secondAlphaPath).toBe(firstAlphaPath);
     expect(await pathExists(firstAlphaPath ?? "")).toBe(true);
-    expect(await pathExists(firstBetaPath ?? "")).toBe(true);
-    expect(
-      await fs.readFile(path.join(path.dirname(firstAlphaPath ?? ""), "preserved.txt"), "utf8"),
-    ).toBe("preserved");
-    expect(await pathExists(path.join(path.dirname(secondAlphaPath ?? ""), "preserved.txt"))).toBe(
+    expect(await pathExists(secondGammaPath ?? "")).toBe(true);
+    // A skill that left the catalog, and a file the source no longer has, are
+    // the only things the refresh deletes.
+    expect(await pathExists(firstBetaPath ?? "")).toBe(false);
+    expect(await pathExists(path.join(path.dirname(firstAlphaPath ?? ""), "preserved.txt"))).toBe(
       false,
     );
-    expect(await pathExists(secondGammaPath ?? "")).toBe(true);
   });
 
   it("refreshes same-key skill trees after the watcher version changes", async () => {
@@ -508,7 +507,7 @@ describe("syncWorkspaceSkills", () => {
     expect(await pathExists(firstFilePath ?? "")).toBe(true);
   });
 
-  it("keeps canonical skill identity after restarting from the published generation", async () => {
+  it("keeps canonical skill identity after restarting from the published catalog", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -534,17 +533,16 @@ describe("syncWorkspaceSkills", () => {
     const first = await syncWorkspaceSkills(syncParams);
     const firstUsage = first.skillUsagePaths[0];
     expect(firstUsage?.skillFile).toBe(sourceSkillFile);
-    expect(firstUsage?.readPath).toContain(`${path.sep}.openclaw-generations${path.sep}`);
 
     dropSyncedSkillsUsageCacheForTests(targetWorkspace);
     const recovered = await syncWorkspaceSkills(syncParams);
     const recoveredUsage = recovered.skillUsagePaths[0];
     expect(recoveredUsage?.readPath).toBe(firstUsage?.readPath);
+    // Hydration must not confuse the sandbox destination with the host source.
     expect(recoveredUsage?.skillFile).toBe(sourceSkillFile);
-    expect(recoveredUsage?.skillFile).not.toContain(".openclaw-generations");
   });
 
-  it("keeps canonical skill metadata when projecting a reused generation", async () => {
+  it("keeps canonical skill metadata when projecting a reused catalog", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -577,11 +575,10 @@ describe("syncWorkspaceSkills", () => {
     ]);
 
     const second = await syncWorkspaceSkills(syncParams);
-    expect(second.generation).toBe(first.generation);
     expect(second.skillsSnapshot.skills).toEqual(first.skillsSnapshot.skills);
   });
 
-  it("keeps source-origin skill keys when projecting a reused generation", async () => {
+  it("keeps source-origin skill keys when projecting a reused catalog", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -613,7 +610,6 @@ describe("syncWorkspaceSkills", () => {
     const first = await syncWorkspaceSkills(syncParams);
     expect(first.skillsSnapshot.skills[0]?.skillKey).toBe("custom-key");
     const second = await syncWorkspaceSkills(syncParams);
-    expect(second.generation).toBe(first.generation);
     expect(second.skillsSnapshot.skills[0]?.skillKey).toBe("custom-key");
   });
 
@@ -673,23 +669,22 @@ describe("syncWorkspaceSkills", () => {
     });
     copy.mockRestore();
 
-    expect(recovered.generation).toBe(first.generation);
     expect(recovered.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: false });
     expect(recovered.skillsSnapshot.prompt).not.toContain(remoteNote);
     expect(recovered.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha"]);
   });
 
-  it("keeps a committed catalog when generation pruning fails", async () => {
+  it("keeps a committed catalog when pruning a removed child fails", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
     const managedSkillsDir = path.join(sourceWorkspace, ".managed");
-    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
-    const publish = async (description: string) => {
+    const publish = async (name: string) => {
+      await fs.rm(path.join(sourceWorkspace, "skills"), { recursive: true, force: true });
       await writeSkill({
-        dir: sourceSkillDir,
-        name: "alpha",
-        description,
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
       });
       const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
         bundledSkillsDir,
@@ -705,33 +700,27 @@ describe("syncWorkspaceSkills", () => {
       });
     };
 
-    const first = await publish("generation-one");
+    await publish("alpha");
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-    const second = await publish("generation-two");
-    expect(second.generation).toBeGreaterThan(first.generation);
 
-    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
     const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
     const rm = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, opts) => {
-      if (
-        String(target).includes(
-          `${path.sep}.openclaw-generations${path.sep}${String(first.generation)}`,
-        )
-      ) {
+      if (String(target).endsWith(`${path.sep}skills${path.sep}alpha`)) {
         throw new Error("injected prune failure");
       }
       return await originalRm(target, opts);
     });
-    const third = await publish("generation-three");
+    const second = await publish("beta");
     rm.mockRestore();
 
-    expect(third.generation).toBeGreaterThan(second.generation);
-    expect(third.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha"]);
-    expect(third.skillUsagePaths).toHaveLength(1);
-    expect(await pathExists(third.skillUsagePaths[0]?.readPath ?? "")).toBe(true);
+    // Prune is cleanup after the manifest commit; failing it must not hide the
+    // catalog this run published.
+    expect(second.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["beta"]);
+    expect(second.skillUsagePaths).toHaveLength(1);
+    expect(await pathExists(second.skillUsagePaths[0]?.readPath ?? "")).toBe(true);
   });
 
-  it("returns no snapshot paths when the first generation copy fails", async () => {
+  it("returns no snapshot paths when the first copy fails", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -755,15 +744,13 @@ describe("syncWorkspaceSkills", () => {
     });
     copy.mockRestore();
 
-    expect(synced.generation).toBe(0);
     expect(synced.skillUsagePaths).toEqual([]);
     expect(synced.skillsSnapshot.skills).toEqual([]);
     expect(synced.skillsSnapshot.resolvedSkills ?? []).toEqual([]);
     expect(synced.skillsSnapshot.prompt).toBe("");
     expect(peekPublishedSyncedSkillsSnapshot(targetWorkspace)).toBeUndefined();
-    expect(
-      await pathExists(path.join(targetWorkspace, "skills", ".openclaw-generations", "1")),
-    ).toBe(false);
+    // Nothing was ever published, so no child is advertised.
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(

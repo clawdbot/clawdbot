@@ -420,8 +420,6 @@ vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
 
 vi.mock("../../sandbox.js", () => ({
   resolveSandboxContext: (...args: unknown[]) => hoisted.resolveSandboxContextMock(...args),
-  resolveSandboxContextWithPublishedSkills: (...args: unknown[]) =>
-    hoisted.resolveSandboxContextMock(...args),
 }));
 
 vi.mock("../../session-tool-result-guard-wrapper.js", () => ({

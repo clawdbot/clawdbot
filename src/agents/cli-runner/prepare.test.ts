@@ -59,7 +59,6 @@ import {
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
-import { attachPublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -4497,7 +4496,6 @@ describe("prepareCliRunContext", () => {
       config: createCliBackendConfig(),
       sessionKey: "agent:main:sandboxed-user",
       workspaceDir: dir,
-      retainPublishedSkills: true,
     });
     expect(context.systemPrompt).toContain(
       "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
@@ -4507,95 +4505,6 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPromptReport.skills.entries).toEqual([
       { name: "gog", blockChars: expect.any(Number) },
     ]);
-  });
-
-  it("keeps advertised CLI sandbox skill locations until prepare cleanup releases them", async () => {
-    const { dir } = fixture.session;
-    const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
-    const hostSkillPath = `${hostSkillDir}/SKILL.md`;
-    const generationSkillPath =
-      "/workspace/.openclaw/sandbox-skills/skills/.openclaw-generations/1/gog/SKILL.md";
-    const sandboxWorkspace: SandboxWorkspaceInfo = {
-      workspaceDir: dir,
-      containerWorkdir: "/workspace",
-      skillsWorkspaceDir: path.join(dir, "state", "sandbox-skills"),
-      workspaceAccess: "rw",
-    };
-    const releaseGeneration = vi.fn();
-    attachPublishedSandboxSkills(sandboxWorkspace, {
-      skillsSnapshot: {
-        prompt: [
-          "<available_skills>",
-          "  <skill>",
-          "    <name>gog</name>",
-          "    <description>Read Gmail safely.</description>",
-          `    <location>${generationSkillPath}</location>`,
-          "  </skill>",
-          "</available_skills>",
-        ].join("\n"),
-        skills: [{ name: "gog" }],
-        resolvedSkills: [
-          {
-            name: "gog",
-            description: "Read Gmail safely.",
-            filePath: `${path.join(dir, "state", "sandbox-skills")}/skills/.openclaw-generations/1/gog/SKILL.md`,
-            baseDir: `${path.join(dir, "state", "sandbox-skills")}/skills/.openclaw-generations/1/gog`,
-            source: "openclaw-workspace",
-            sourceInfo: {
-              path: `${path.join(dir, "state", "sandbox-skills")}/skills/.openclaw-generations/1/gog/SKILL.md`,
-              source: "openclaw-workspace",
-              scope: "project",
-              origin: "top-level",
-              baseDir: `${path.join(dir, "state", "sandbox-skills")}/skills/.openclaw-generations/1/gog`,
-            },
-            disableModelInvocation: false,
-          },
-        ],
-      },
-      releaseGeneration,
-    });
-    ensureSandboxWorkspaceForSessionMock.mockResolvedValue(sandboxWorkspace);
-
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:sandboxed-user",
-      agentId: "main",
-      prompt: "are there any unread emails",
-      skillsSnapshot: {
-        prompt: [
-          "<available_skills>",
-          "  <skill>",
-          "    <name>gog</name>",
-          `    <location>${hostSkillPath}</location>`,
-          "  </skill>",
-          "</available_skills>",
-        ].join("\n"),
-        skills: [{ name: "gog" }],
-        resolvedSkills: [
-          {
-            name: "gog",
-            description: "Read Gmail safely.",
-            filePath: hostSkillPath,
-            baseDir: hostSkillDir,
-            source: "openclaw-bundled",
-            sourceInfo: {
-              path: hostSkillPath,
-              source: "openclaw-bundled",
-              scope: "project",
-              origin: "top-level",
-              baseDir: hostSkillDir,
-            },
-            disableModelInvocation: false,
-          },
-        ],
-      },
-    });
-
-    expect(context.systemPrompt).toContain(generationSkillPath);
-    expect(context.systemPrompt).not.toContain(hostSkillPath);
-    expect(releaseGeneration).not.toHaveBeenCalled();
-
-    await context.preparedBackend.cleanup?.();
-    expect(releaseGeneration).toHaveBeenCalledOnce();
   });
 
   it.each([
