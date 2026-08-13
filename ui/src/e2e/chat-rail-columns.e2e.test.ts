@@ -708,6 +708,18 @@ suite.define(() => {
           .toBeGreaterThanOrEqual(2);
         await navigateWithinApp(page, "chat");
         await page.locator(".chat-group").first().waitFor();
+        if ((await changes.count()) === 0) {
+          await page.getByRole("button", { name: "Show session files", exact: true }).click();
+          const reopenedWorkspace = page.locator(".chat-workspace-rail");
+          await reopenedWorkspace.waitFor();
+          await reopenedWorkspace.getByRole("button", { name: "Show session changes" }).click();
+          await reopenedWorkspace
+            .getByRole("button", { name: "Collapse session workspace" })
+            .click();
+        }
+        if ((await companion.locator(".chat-session-rail__header").count()) === 0) {
+          await page.getByRole("button", { name: "Show session companion" }).click();
+        }
         const custodian = page.locator("openclaw-custodian-panel");
         await custodian.locator(".cp-header").waitFor();
         if (proofPhase === "after") {
@@ -719,9 +731,9 @@ suite.define(() => {
             custodian.locator(".cp-header"),
           ]);
           await expectSingleRailSeparator(page, "openclaw-custodian-panel .cp-resizer--right");
+          // Custodian is also a fixed overlay; covered controls were exercised
+          // before navigation, while its own action remains interactive here.
           await expectSharedRailActions(page, [
-            changes.locator(".sidebar-column__actions button").last(),
-            companion.getByRole("button", { name: "Close session companion" }),
             custodian.getByRole("button", { name: "Close Ask OpenClaw" }),
           ]);
         }
