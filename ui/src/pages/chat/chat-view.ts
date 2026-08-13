@@ -636,7 +636,7 @@ export function renderChat(props: ChatProps) {
         ${workspaceSideOpen ? (props.workspaceRail?.[1] ?? nothing) : nothing}
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         ${tasksSideOpen ? (props.tasksRail?.[1] ?? nothing) : nothing}
-        ${renderBackgroundTasksRail(props.backgroundTasks, backgroundTaskThread)}
+        ${renderBackgroundTasksRail(props.backgroundTasks)}
       </div>
     </section>
   `;
