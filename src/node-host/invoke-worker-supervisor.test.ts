@@ -137,9 +137,10 @@ describe("node-host worker supervisor commands", () => {
       supervisor,
     });
 
-    expect(supervisor[method]).toHaveBeenCalledOnce();
+    const mocks = supervisorMocks(supervisor);
+    expect(mocks[method].mock.calls).toHaveLength(1);
     if (method === "cancel") {
-      expect(supervisor.cancel).toHaveBeenCalledWith(cancelInput(receipt));
+      expect(mocks.cancel.mock.calls[0]?.[0]).toEqual(cancelInput(receipt));
     }
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(result?.ok).toBe(true);

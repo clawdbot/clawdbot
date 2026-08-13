@@ -5,6 +5,11 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  nodeWorkerPlanHash,
+  type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorIdentity,
+} from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
@@ -159,6 +164,20 @@ export function testWorkerDescriptor(
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: { allowedToolNames: [] },
     },
+  };
+}
+
+export function testNodeWorkerLaunchIdentity(
+  input: NodeWorkerLaunchInput,
+): NodeWorkerSupervisorIdentity {
+  return {
+    launchId: input.launchId,
+    planHash: nodeWorkerPlanHash(input),
+    environmentId: input.descriptor.admission.environmentId,
+    sessionId: input.descriptor.admission.sessionId,
+    ownerEpoch: input.descriptor.admission.ownerEpoch,
+    placementGeneration: input.placementGeneration,
+    runId: input.descriptor.assignment.runId,
   };
 }
 

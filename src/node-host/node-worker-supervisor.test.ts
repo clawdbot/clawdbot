@@ -15,11 +15,11 @@ import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
-import { nodeWorkerLaunchIdentity } from "./node-worker-supervisor-contract.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_CREDENTIAL,
   TEST_WORKER_SOURCE,
+  testNodeWorkerLaunchIdentity,
   testWorkerDescriptor,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
@@ -215,7 +215,7 @@ describe("node worker supervisor", () => {
           case "launch":
             return await supervisor.launch(input);
           case "cancel":
-            return await supervisor.cancel(nodeWorkerLaunchIdentity(input));
+            return await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
           case "close":
             await supervisor.close();
             return new NodeWorkerLaunchStore({ env }).get(input.launchId);
@@ -421,7 +421,7 @@ describe("node worker supervisor", () => {
     expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
 
     if (operation === "cancel") {
-      await supervisor.cancel(nodeWorkerLaunchIdentity(input));
+      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
     } else {
       await supervisor.close();
     }
@@ -451,7 +451,7 @@ describe("node worker supervisor", () => {
           const receipt = Reflect.apply(originalMarkRunning, this, [params]);
           stopping =
             operation === "cancel"
-              ? supervisor.cancel(nodeWorkerLaunchIdentity(input))
+              ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
               : supervisor.close();
           return receipt;
         },
@@ -470,7 +470,7 @@ describe("node worker supervisor", () => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "identity-cancel-launch", "wait");
     const running = await supervisor.launch(input);
-    const expected = nodeWorkerLaunchIdentity(input);
+    const expected = testNodeWorkerLaunchIdentity(input);
     const mismatches = [
       { ...expected, launchId: "launch-other" },
       { ...expected, planHash: "b".repeat(64) },
@@ -506,7 +506,7 @@ describe("node worker supervisor", () => {
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
 
     if (operation === "cancel") {
-      await supervisor.cancel(nodeWorkerLaunchIdentity(input));
+      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
     } else {
       await supervisor.close();
     }

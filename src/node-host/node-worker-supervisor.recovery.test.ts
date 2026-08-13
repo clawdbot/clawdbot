@@ -16,9 +16,9 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
-import { nodeWorkerLaunchIdentity } from "./node-worker-supervisor-contract.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
+  testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -252,13 +252,13 @@ describe("node worker supervisor recovery", () => {
 
       if (operation === "cancel") {
         await expect(
-          supervisor.cancel({ ...nodeWorkerLaunchIdentity(input), runId: "run-mismatch" }),
+          supervisor.cancel({ ...testNodeWorkerLaunchIdentity(input), runId: "run-mismatch" }),
         ).resolves.toBeUndefined();
         expect(inspectNodeWorkerProcessIdentity(worker)).toBe("live");
       }
       const recovered =
         operation === "cancel"
-          ? await supervisor.cancel(nodeWorkerLaunchIdentity(input))
+          ? await supervisor.cancel(testNodeWorkerLaunchIdentity(input))
           : await supervisor.launch(input);
 
       expect(recovered).toMatchObject({ state, worker });
@@ -279,7 +279,7 @@ describe("node worker supervisor recovery", () => {
     }
     const second = createNodeWorkerSupervisor({ bundleRoot, env });
 
-    const unchanged = await second.cancel(nodeWorkerLaunchIdentity(input));
+    const unchanged = await second.cancel(testNodeWorkerLaunchIdentity(input));
     if (process.platform === "linux") {
       const originalReadFileSync = fs.readFileSync;
       const supervisorStatPath = `/proc/${owned.supervisor.pid}/stat`;
@@ -293,7 +293,7 @@ describe("node worker supervisor recovery", () => {
         return Reflect.apply(originalReadFileSync, fs, [file, ...args]);
       }) as typeof fs.readFileSync);
       try {
-        await expect(second.cancel(nodeWorkerLaunchIdentity(input))).resolves.toEqual(owned);
+        await expect(second.cancel(testNodeWorkerLaunchIdentity(input))).resolves.toEqual(owned);
         expect(inspectNodeWorkerProcessIdentity(owned.worker!)).toBe("live");
       } finally {
         readFileSync.mockRestore();

@@ -9,9 +9,6 @@ import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-// Four 256-character identifiers can each expand to six-byte JSON escapes;
-// 8 KiB leaves headroom for the fixed keys, hash, state, and safe integers.
-const NODE_WORKER_SUPERVISOR_REPLY_MAX_BYTES = 8 * 1024;
 const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
 
 export type NodeWorkerLaunchInput = {
@@ -166,21 +163,6 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
   };
 }
 
-export function nodeWorkerLaunchIdentity(
-  input: NodeWorkerLaunchInput,
-): NodeWorkerSupervisorIdentity {
-  const descriptor = parseWorkerLaunchDescriptor(structuredClone(input.descriptor));
-  return {
-    launchId: input.launchId,
-    planHash: nodeWorkerPlanHash({ ...input, descriptor }),
-    environmentId: descriptor.admission.environmentId,
-    sessionId: descriptor.admission.sessionId,
-    ownerEpoch: descriptor.admission.ownerEpoch,
-    placementGeneration: input.placementGeneration,
-    runId: descriptor.assignment.runId,
-  };
-}
-
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
@@ -211,67 +193,5 @@ export function projectNodeWorkerSupervisorReceipt(
     placementGeneration: receipt.placementGeneration,
     runId: receipt.runId,
     state: receipt.state,
-  };
-}
-
-const RECEIPT_KEYS = [
-  "launchId",
-  "planHash",
-  "environmentId",
-  "sessionId",
-  "ownerEpoch",
-  "placementGeneration",
-  "runId",
-  "state",
-] as const;
-const RECEIPT_STATES = new Set([
-  "pending",
-  "running",
-  "completed",
-  "failed",
-  "interrupted",
-  "cancelled",
-]);
-
-export function parseNodeWorkerSupervisorReceipt(raw: string): NodeWorkerSupervisorReceipt | null {
-  if (Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_REPLY_MAX_BYTES) {
-    throw new Error("worker supervisor reply exceeded its byte limit");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("worker supervisor reply was malformed JSON");
-  }
-  if (value === null) {
-    return null;
-  }
-  if (!isRecord(value) || !hasExactKeys(value, RECEIPT_KEYS)) {
-    throw new Error("worker supervisor reply had an invalid shape");
-  }
-  const identity = {
-    launchId: requireIdentifier(value.launchId, "launchId"),
-    planHash:
-      typeof value.planHash === "string" && /^[a-f0-9]{64}$/u.test(value.planHash)
-        ? value.planHash
-        : "",
-    environmentId: requireIdentifier(value.environmentId, "environmentId"),
-    sessionId: requireIdentifier(value.sessionId, "sessionId"),
-    ownerEpoch: requireNonNegativeInteger(value.ownerEpoch, "ownerEpoch"),
-    placementGeneration: requireNonNegativeInteger(
-      value.placementGeneration,
-      "placementGeneration",
-    ),
-    runId: requireIdentifier(value.runId, "runId"),
-  };
-  if (!identity.planHash) {
-    throw new Error("worker supervisor reply had an invalid plan hash");
-  }
-  if (typeof value.state !== "string" || !RECEIPT_STATES.has(value.state)) {
-    throw new Error("worker supervisor reply had an invalid state");
-  }
-  return {
-    ...identity,
-    state: value.state as NodeWorkerSupervisorReceipt["state"],
   };
 }

@@ -228,12 +228,7 @@ describe("node-host invocation cancellation", () => {
 
   it("aborts MCP startup before waiting while supervisor retirement runs independently", async () => {
     let startupSignal: AbortSignal | undefined;
-    let resolveStartup!: (manager: {
-      configuredServerCount: number;
-      descriptors: never[];
-      callMcpTool: ReturnType<typeof vi.fn>;
-      close: ReturnType<typeof vi.fn>;
-    }) => void;
+    let resolveStartup!: (manager: Awaited<ReturnType<typeof mocks.startMcp>>) => void;
     mocks.startMcp.mockImplementationOnce(async (_servers, deps) => {
       startupSignal = deps?.signal;
       return await new Promise((resolve) => {

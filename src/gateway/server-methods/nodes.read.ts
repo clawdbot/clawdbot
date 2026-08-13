@@ -370,7 +370,8 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     const nodeSession = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
     if (
       protocolFeatures.length > 0 &&
-      nodeSession?.connId === client?.connId &&
+      nodeSession &&
+      nodeSession.connId === client?.connId &&
       !nodeSession.pairingGeneration
     ) {
       respond(
