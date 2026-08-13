@@ -4,6 +4,7 @@ import {
   combineChannelAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
+  copyChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   type ChannelAdmissionEvidence,
@@ -58,6 +59,25 @@ describe("channel admission evidence", () => {
         ingressState: "unknown",
         invoker: { state: "unknown" },
         decisionCoverage: "unknown",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects copying one participant carrier onto another participant context", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const source = await buildAdmittedContext("person-a");
+      const target = { ...source, SenderId: "person-b" };
+
+      copyChannelParticipantAdmissionEvidence(source, target);
+
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(target)),
+      ).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
       });
     } finally {
       cleanup();

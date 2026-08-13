@@ -233,11 +233,35 @@ export function readChannelContextAdmissionEvidence(
   return state.evidenceByContext.get(context);
 }
 
+function contextIdentityMatches(source: object, target: object): boolean {
+  return ["OriginatingChannel", "AccountId", "SenderId"].every((key) => {
+    const sourceDescriptor = Object.getOwnPropertyDescriptor(source, key);
+    const targetDescriptor = Object.getOwnPropertyDescriptor(target, key);
+    if (!sourceDescriptor || !targetDescriptor) {
+      return sourceDescriptor === targetDescriptor;
+    }
+    return (
+      "value" in sourceDescriptor &&
+      "value" in targetDescriptor &&
+      Object.is(sourceDescriptor.value, targetDescriptor.value)
+    );
+  });
+}
+
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
-  if (evidence) {
-    state.evidenceByContext.set(target, evidence);
+  if (!evidence) {
+    return;
+  }
+  const safeEvidence = contextIdentityMatches(source, target)
+    ? evidence
+    : mintChannelAdmissionEvidence({
+        kind: "leaf",
+        contribution: Object.freeze({ participant: { state: "unknown" as const } }),
+      });
+  if (safeEvidence) {
+    state.evidenceByContext.set(target, safeEvidence);
   }
 }
 
