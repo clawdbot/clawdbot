@@ -2804,12 +2804,12 @@ NODE
     expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
   });
 
-  it("runs canonical main CI single-flight while coalescing the pending tip", () => {
+  it("pipelines canonical main CI across two non-canceling slots", () => {
     const workflow = readCiWorkflow();
 
-    // GitHub concurrency keeps one running and one pending run by default.
-    // Replacing only the pending run preserves a complete integration cycle
-    // while coalescing merge bursts to the newest main tip.
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}",
+    );
     expect(workflow.concurrency["cancel-in-progress"]).toBe(
       "${{ github.event_name == 'pull_request' }}",
     );
