@@ -2390,7 +2390,8 @@ describe("createOpenClawCodingTools", () => {
           ].join("\n"),
         }),
       ).rejects.toThrow(/file already exists/i);
-      expect(rollback).toHaveBeenCalledOnce();
+      expect(rollback).not.toHaveBeenCalled();
+      expect(recordWriteProvenance).toHaveBeenCalledTimes(3);
       await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
         "network project note\n",
       );

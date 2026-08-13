@@ -13,18 +13,10 @@ import {
 } from "../test-utils/symlink-rebind-race.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyPatch } from "./apply-patch.test-support.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-
-async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  // realpath: production sandbox checks compare against canonical paths; on macOS
-  // os.tmpdir() is a /var -> /private/var symlink, which otherwise trips the guard.
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-")));
-  try {
-    return await fn(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
+import {
+  createMemoryPatchSandbox,
+  withCanonicalTempDir,
+} from "./test-helpers/apply-patch-fixtures.js";
 
 async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(process.cwd(), "openclaw-patch-workspace-"));
@@ -40,71 +32,6 @@ function buildAddFilePatch(targetPath: string): string {
 *** Add File: ${targetPath}
 +escaped
 *** End Patch`;
-}
-
-function createMemoryPatchSandbox(
-  initialFiles: Record<string, string | Buffer> = {},
-  options: { supportsExclusiveCreate?: boolean } = {},
-) {
-  const files = new Map<string, string | Buffer>(
-    Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
-  );
-  const writeFile = vi.fn(async ({ filePath, data }) => {
-    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
-  });
-  const createFileExclusive = vi.fn(async ({ filePath, data }) => {
-    if (files.has(filePath)) {
-      return "exists" as const;
-    }
-    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
-    return "created" as const;
-  });
-  const mkdirp = vi.fn(async () => {});
-  const bridge: SandboxFsBridge = {
-    resolvePath: ({ filePath }) => ({
-      relativePath: filePath,
-      containerPath: `/sandbox/${filePath}`,
-    }),
-    readFile: async ({ filePath }) => {
-      const contents = files.get(filePath);
-      return typeof contents === "string"
-        ? Buffer.from(contents, "utf8")
-        : Buffer.from(contents ?? "");
-    },
-    writeFile,
-    ...(options.supportsExclusiveCreate === false ? {} : { createFileExclusive }),
-    remove: async ({ filePath }) => {
-      files.delete(filePath);
-    },
-    rename: async ({ from, to }) => {
-      const contents = files.get(from);
-      if (contents !== undefined) {
-        files.set(to, contents);
-        files.delete(from);
-      }
-    },
-    stat: async ({ filePath }) => {
-      const contents = files.get(filePath);
-      return contents === undefined
-        ? null
-        : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
-    },
-    mkdirp,
-  };
-  return {
-    files,
-    bridge,
-    writeFile,
-    createFileExclusive,
-    mkdirp,
-    options: {
-      cwd: "/local/workspace",
-      sandbox: {
-        root: "/local/workspace",
-        bridge,
-      },
-    },
-  };
 }
 
 async function expectOutsideWriteRejected(params: {
@@ -139,7 +66,7 @@ describe("applyPatch", () => {
     { name: "workspace-confined host", workspaceOnly: true },
     { name: "unconfined host", workspaceOnly: false },
   ])("preserves a valid UTF-8 BOM in $name updates", async ({ workspaceOnly }) => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const filePath = path.join(dir, "source.txt");
       await fs.writeFile(filePath, Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"));
 
@@ -155,7 +82,7 @@ describe("applyPatch", () => {
     { name: "workspace-confined host", workspaceOnly: true },
     { name: "unconfined host", workspaceOnly: false },
   ])("rejects invalid UTF-8 in $name updates without changing bytes", async ({ workspaceOnly }) => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const filePath = path.join(dir, "source.txt");
       const original = Buffer.concat([
         Buffer.from("heading\nprice: 5\n"),
@@ -727,7 +654,7 @@ describe("applyPatch", () => {
   });
 
   it("rejects path traversal outside cwd by default", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const escapedPath = path.join(
         path.dirname(dir),
         `escaped-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
@@ -747,7 +674,7 @@ describe("applyPatch", () => {
   });
 
   it("rejects absolute paths outside cwd by default", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const escapedPath = path.join(os.tmpdir(), `openclaw-apply-patch-${Date.now()}.txt`);
 
       try {
@@ -781,7 +708,7 @@ describe("applyPatch", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const outside = path.join(path.dirname(dir), "outside-target.txt");
       const linkPath = path.join(dir, "link.txt");
       await fs.writeFile(outside, "initial\n", "utf8");
@@ -832,7 +759,7 @@ describe("applyPatch", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const outside = path.join(
         path.dirname(dir),
         `outside-hardlink-${process.pid}-${Date.now()}.txt`,
@@ -869,7 +796,7 @@ describe("applyPatch", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const target = path.join(dir, "target.txt");
       const linkPath = path.join(dir, "link.txt");
       await fs.writeFile(target, "initial\n", "utf8");
@@ -893,7 +820,7 @@ describe("applyPatch", () => {
   });
 
   it("rejects delete path traversal via symlink directories by default", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const outsideDir = path.join(path.dirname(dir), `outside-dir-${process.pid}-${Date.now()}`);
       const outsideFile = path.join(outsideDir, "victim.txt");
       await fs.mkdir(outsideDir, { recursive: true });
@@ -922,7 +849,7 @@ describe("applyPatch", () => {
   });
 
   it("allows path traversal when workspaceOnly is explicitly disabled", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const escapedPath = path.join(
         path.dirname(dir),
         `escaped-allow-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
@@ -946,7 +873,7 @@ describe("applyPatch", () => {
   });
 
   it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const patch = `*** Begin Patch
 *** Add File: ..note.txt
 +inside
@@ -960,7 +887,7 @@ describe("applyPatch", () => {
   });
 
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
       try {
         const outsideTarget = path.join(outsideDir, "target.txt");
@@ -994,7 +921,7 @@ describe("applyPatch", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir(async (dir) => {
+    await withCanonicalTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
       try {
         const sourcePath = path.join(dir, "source.txt");
@@ -1025,7 +952,7 @@ describe("applyPatch", () => {
   it.runIf(process.platform !== "win32")(
     "does not delete out-of-root files when a checked directory is rebound before remove",
     async () => {
-      await withTempDir(async (dir) => {
+      await withCanonicalTempDir(async (dir) => {
         const inside = path.join(dir, "inside");
         const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-outside-"));
         const slot = path.join(dir, "slot");
@@ -1065,7 +992,7 @@ describe("applyPatch", () => {
   it.runIf(process.platform !== "win32")(
     "does not create out-of-root directories when a checked directory is rebound before mkdir",
     async () => {
-      await withTempDir(async (dir) => {
+      await withCanonicalTempDir(async (dir) => {
         const inside = path.join(dir, "inside");
         const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-outside-"));
         const slot = path.join(dir, "slot");

@@ -39,7 +39,26 @@ export type PatchFileOps = {
   createFileExclusive: (filePath: string, content: string) => Promise<PatchCreateOutcome>;
   remove: (filePath: string) => Promise<void>;
   mkdirp: (dir: string) => Promise<void>;
+  entryKind: (filePath: string) => Promise<PatchEntryKind>;
 };
+
+export type PatchEntryKind = "file" | "directory" | "other" | null;
+
+async function lstatEntryKind(filePath: string): Promise<PatchEntryKind> {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (stats.isDirectory()) {
+      return "directory";
+    }
+    return stats.isFile() ? "file" : "other";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return null;
+    }
+    throw error;
+  }
+}
 
 export async function createPatchTarget(params: {
   target: { resolved: string; display: string };
@@ -76,6 +95,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
         },
         remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
         mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+        entryKind: async (filePath) => (await bridge.stat({ filePath, cwd: root }))?.type ?? null,
       },
     });
   }
@@ -103,6 +123,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
         mkdirp: async (dir) => {
           await fs.mkdir(dir, { recursive: true });
         },
+        entryKind: lstatEntryKind,
       },
     });
   }
@@ -177,6 +198,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
         }
         await root.mkdir(relative);
       },
+      entryKind: lstatEntryKind,
     },
   });
 }

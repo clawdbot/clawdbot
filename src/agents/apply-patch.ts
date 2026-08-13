@@ -1,67 +1,29 @@
 /**
- * Runtime apply_patch tool and parser.
- * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
- * through guarded host or sandbox filesystem operations.
+ * Runtime apply_patch tool.
+ * Stages parsed add/update/delete/move hunks against a virtual overlay, then
+ * commits them through guarded host or sandbox filesystem operations.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
   type ApplyPatchFileOptions,
   createPatchTarget,
+  type PatchEntryKind,
   type PatchFileOps,
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
+import { type Hunk, parsePatchText } from "./apply-patch-parse.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import {
-  withFileMutationQueue,
-  withFileMutationQueues,
-} from "./sessions/tools/file-mutation-queue.js";
-
-const BEGIN_PATCH_MARKER = "*** Begin Patch";
-const END_PATCH_MARKER = "*** End Patch";
-const ADD_FILE_MARKER = "*** Add File: ";
-const DELETE_FILE_MARKER = "*** Delete File: ";
-const UPDATE_FILE_MARKER = "*** Update File: ";
-const MOVE_TO_MARKER = "*** Move to: ";
-const EOF_MARKER = "*** End of File";
-const CHANGE_CONTEXT_MARKER = "@@ ";
-const EMPTY_CHANGE_CONTEXT_MARKER = "@@";
-
-type AddFileHunk = {
-  kind: "add";
-  path: string;
-  contents: string;
-};
-
-type DeleteFileHunk = {
-  kind: "delete";
-  path: string;
-};
-
-type UpdateFileChunk = {
-  changeContext?: string;
-  oldLines: string[];
-  newLines: string[];
-  contextOldIndexes: Array<number | undefined>;
-  isEndOfFile: boolean;
-};
-
-type UpdateFileHunk = {
-  kind: "update";
-  path: string;
-  movePath?: string;
-  chunks: UpdateFileChunk[];
-};
-
-type Hunk = AddFileHunk | DeleteFileHunk | UpdateFileHunk;
+import { withFileMutationQueues } from "./sessions/tools/file-mutation-queue.js";
 
 export type ApplyPatchSummary = {
   added: string[];
@@ -164,6 +126,66 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     throw new Error("No files were modified.");
   }
 
+  const fileOps = resolvePatchFileOps(options);
+  const resolvedHunks: ResolvedPatchHunk[] = [];
+  for (const hunk of parsed.hunks) {
+    if (options.signal?.aborted) {
+      throw createAbortError("Aborted");
+    }
+    if (hunk.kind === "delete") {
+      resolvedHunks.push({
+        hunk,
+        target: await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget),
+      });
+      continue;
+    }
+    resolvedHunks.push({
+      hunk,
+      target: await resolvePatchPath(hunk.path, options),
+      moveTarget:
+        hunk.kind === "update" && hunk.movePath
+          ? await resolvePatchPath(hunk.movePath, options)
+          : undefined,
+    });
+  }
+
+  const queuedPaths = resolvedHunks.flatMap((entry) => [
+    entry.target.resolved,
+    ...(entry.moveTarget ? [entry.moveTarget.resolved] : []),
+  ]);
+  return await withFileMutationQueues(queuedPaths, async () => {
+    const staged = await stagePatchHunks(resolvedHunks, fileOps, options);
+    if (options.signal?.aborted) {
+      throw createAbortError("Aborted");
+    }
+    await commitStagedPatchOps(staged.ops, fileOps);
+
+    const { summary, noOpPaths } = staged;
+    const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
+    return {
+      summary,
+      text: noOp
+        ? `No changes made to ${Array.from(noOpPaths).join(", ")}.`
+        : formatSummary(summary),
+      ...(noOp ? { noOp: true } : {}),
+    };
+  });
+}
+
+type PatchTarget = { resolved: string; display: string };
+
+type ResolvedPatchHunk = { hunk: Hunk; target: PatchTarget; moveTarget?: PatchTarget };
+
+type StagedPatchOp =
+  | { kind: "create"; target: PatchTarget; contents: string; hint: string }
+  | { kind: "write"; target: PatchTarget; contents: string }
+  | { kind: "remove"; target: PatchTarget };
+
+async function stagePatchHunks(
+  resolvedHunks: ResolvedPatchHunk[],
+  fileOps: PatchFileOps,
+  options: ApplyPatchOptions,
+): Promise<{ ops: StagedPatchOp[]; summary: ApplyPatchSummary; noOpPaths: Set<string> }> {
   const summary: ApplyPatchSummary = {
     added: [],
     modified: [],
@@ -175,96 +197,177 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     deleted: new Set<string>(),
   };
   const noOpPaths = new Set<string>();
-  const fileOps = resolvePatchFileOps(options);
+  const stagedContents = new Map<string, string | null>();
+  const stagedDirs = new Set<string>();
+  const ops: StagedPatchOp[] = [];
 
-  for (const hunk of parsed.hunks) {
+  const readStaged = async (filePath: string): Promise<string> => {
+    const stagedFile = stagedContents.get(filePath);
+    if (stagedFile === null) {
+      throw new Error("File was deleted earlier in this patch.");
+    }
+    return stagedFile ?? (await fileOps.readFile(filePath));
+  };
+  const stagedEntryKind = async (filePath: string): Promise<PatchEntryKind> => {
+    if (stagedDirs.has(filePath)) {
+      return "directory";
+    }
+    const stagedFile = stagedContents.get(filePath);
+    if (stagedFile === undefined) {
+      return await fileOps.entryKind(filePath);
+    }
+    return stagedFile === null ? null : "file";
+  };
+  const stageParentDirs = async (target: PatchTarget) => {
+    let current = path.dirname(target.resolved);
+    let currentDisplay = path.dirname(target.display);
+    while (current !== path.dirname(current) && !stagedDirs.has(current)) {
+      const stagedFile = stagedContents.get(current);
+      if (stagedFile === undefined) {
+        const kind = await fileOps.entryKind(current);
+        if (kind === "file") {
+          throw new Error(
+            `Cannot create ${target.display}: ${currentDisplay} is an existing file, not a directory. Delete it earlier in the same patch or choose another destination.`,
+          );
+        }
+        if (kind !== null) {
+          return;
+        }
+      } else if (stagedFile !== null) {
+        throw new Error(
+          `Cannot create ${target.display}: ${currentDisplay} is created as a file earlier in this patch. Reorder the hunks or choose another destination.`,
+        );
+      }
+      stagedDirs.add(current);
+      current = path.dirname(current);
+      currentDisplay = path.dirname(currentDisplay);
+    }
+  };
+  const stageCreate = async (params: {
+    target: PatchTarget;
+    parentPath: string;
+    contents: string;
+    hint: string;
+  }) => {
+    await assertPatchParentPath(params.parentPath, options);
+    if (stagedDirs.has(params.target.resolved)) {
+      throw new Error(
+        `Cannot create ${params.target.display}: an earlier hunk in this patch creates it as a directory. Reorder the hunks or choose another destination.`,
+      );
+    }
+    if ((await stagedEntryKind(params.target.resolved)) !== null) {
+      throw new Error(
+        `Cannot create ${params.target.display}: the file already exists. ${params.hint}`,
+      );
+    }
+    await stageParentDirs(params.target);
+    ops.push({
+      kind: "create",
+      target: params.target,
+      contents: params.contents,
+      hint: params.hint,
+    });
+    stagedContents.set(params.target.resolved, params.contents);
+  };
+
+  for (const { hunk, target, moveTarget } of resolvedHunks) {
     if (options.signal?.aborted) {
       throw createAbortError("Aborted");
     }
 
     if (hunk.kind === "add") {
-      const target = await resolvePatchPath(hunk.path, options);
-      await withFileMutationQueue(target.resolved, async () => {
-        await assertPatchParentPath(hunk.path, options);
-        await ensureDir(target.resolved, fileOps);
-        await createPatchTarget({
-          target,
-          contents: hunk.contents,
-          ops: fileOps,
-          hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
-        });
+      await stageCreate({
+        target,
+        parentPath: hunk.path,
+        contents: hunk.contents,
+        hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
       });
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
-      await withFileMutationQueue(target.resolved, () => fileOps.remove(target.resolved));
+      const entryKind = await stagedEntryKind(target.resolved);
+      if (entryKind === null) {
+        throw new Error(`Cannot delete ${target.display}: the file was not found.`);
+      }
+      if (entryKind === "directory") {
+        throw new Error(
+          `Cannot delete ${target.display}: it is a directory, not a file. Delete each file inside it with its own hunk.`,
+        );
+      }
+      ops.push({ kind: "remove", target });
+      stagedContents.set(target.resolved, null);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
-    const target = await resolvePatchPath(hunk.path, options);
-    const moveTarget = hunk.movePath ? await resolvePatchPath(hunk.movePath, options) : undefined;
-    await withFileMutationQueues(
-      [target.resolved, ...(moveTarget ? [moveTarget.resolved] : [])],
-      async () => {
-        const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-          readFile: (pathLocal) => fileOps.readFile(pathLocal),
-        });
+    const applied = await applyUpdateHunk(target.resolved, hunk.chunks, { readFile: readStaged });
+    const moveResolvesToSource =
+      moveTarget !== undefined &&
+      path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+    if (hunk.movePath && moveTarget && !moveResolvesToSource) {
+      noOpPaths.delete(target.display);
+      await stageCreate({
+        target: moveTarget,
+        parentPath: hunk.movePath,
+        contents: applied,
+        hint: "Delete it earlier in the same patch to replace it.",
+      });
+      ops.push({ kind: "remove", target });
+      stagedContents.set(target.resolved, null);
+      recordSummary(summary, seen, "modified", moveTarget.display);
+      continue;
+    }
 
-        if (hunk.movePath && moveTarget) {
-          await assertPatchParentPath(hunk.movePath, options);
-          await ensureDir(moveTarget.resolved, fileOps);
-          const moveResolvesToSource =
-            path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
-          if (moveResolvesToSource) {
-            const existing = await fileOps.readFile(target.resolved);
-            if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
-              noOpPaths.add(target.display);
-            } else {
-              noOpPaths.delete(target.display);
-              await fileOps.writeFile(target.resolved, applied);
-            }
-          } else {
-            noOpPaths.delete(target.display);
-            await createPatchTarget({
-              target: moveTarget,
-              contents: applied,
-              ops: fileOps,
-              hint: "Delete it earlier in the same patch to replace it.",
-            });
-            await fileOps.remove(target.resolved);
-          }
-          if (!noOpPaths.has(target.display)) {
-            recordSummary(
-              summary,
-              seen,
-              "modified",
-              moveResolvesToSource ? target.display : moveTarget.display,
-            );
-          }
-          return;
-        }
-        const existing = await fileOps.readFile(target.resolved);
-        if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
-          noOpPaths.add(target.display);
-        } else {
-          noOpPaths.delete(target.display);
-          await fileOps.writeFile(target.resolved, applied);
-          recordSummary(summary, seen, "modified", target.display);
-        }
-      },
-    );
+    const existing = await readStaged(target.resolved);
+    if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
+      noOpPaths.add(target.display);
+      continue;
+    }
+    noOpPaths.delete(target.display);
+    ops.push({ kind: "write", target, contents: applied });
+    stagedContents.set(target.resolved, applied);
+    recordSummary(summary, seen, "modified", target.display);
   }
 
-  const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
-  return {
-    summary,
-    text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
-    ...(noOp ? { noOp: true } : {}),
-  };
+  return { ops, summary, noOpPaths };
+}
+
+const STAGED_OP_APPLIED_LABEL = {
+  create: "added",
+  write: "modified",
+  remove: "deleted",
+} as const;
+
+async function commitStagedPatchOps(ops: StagedPatchOp[], fileOps: PatchFileOps) {
+  const applied: string[] = [];
+  for (const op of ops) {
+    try {
+      if (op.kind === "create") {
+        await ensureDir(op.target.resolved, fileOps);
+        await createPatchTarget({
+          target: op.target,
+          contents: op.contents,
+          ops: fileOps,
+          hint: op.hint,
+        });
+      } else if (op.kind === "write") {
+        await fileOps.writeFile(op.target.resolved, op.contents);
+      } else {
+        await fileOps.remove(op.target.resolved);
+      }
+    } catch (error) {
+      if (applied.length === 0) {
+        throw error;
+      }
+      throw new Error(
+        `${formatErrorMessage(error)} The patch was partially applied before this failure: ${applied.join(", ")}. The workspace no longer matches the patch input.`,
+        { cause: error },
+      );
+    }
+    applied.push(`${STAGED_OP_APPLIED_LABEL[op.kind]} ${op.target.display}`);
+  }
 }
 
 function recordSummary(
@@ -415,255 +518,6 @@ function relativePathEscapesRoot(relativePath: string): boolean {
     relativePath.startsWith("..\\") ||
     path.isAbsolute(relativePath)
   );
-}
-
-function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error("Invalid patch: input is empty.");
-  }
-
-  const lines = trimmed.split(/\r?\n/);
-  const validated = checkPatchBoundariesLenient(lines);
-  const hunks: Hunk[] = [];
-
-  const lastLineIndex = validated.length - 1;
-  let remaining = validated.slice(1, lastLineIndex);
-  let lineNumber = 2;
-
-  while (remaining.length > 0) {
-    const { hunk, consumed } = parseOneHunk(remaining, lineNumber);
-    hunks.push(hunk);
-    lineNumber += consumed;
-    remaining = remaining.slice(consumed);
-  }
-
-  return { hunks, patch: validated.join("\n") };
-}
-
-function checkPatchBoundariesLenient(lines: string[]): string[] {
-  const strictError = checkPatchBoundariesStrict(lines);
-  if (!strictError) {
-    return lines;
-  }
-
-  if (lines.length < 4) {
-    throw new Error(strictError);
-  }
-  const first = lines[0];
-  const last = lines.at(-1);
-  if (
-    last &&
-    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
-    last.endsWith("EOF")
-  ) {
-    const inner = lines.slice(1, -1);
-    const innerError = checkPatchBoundariesStrict(inner);
-    if (!innerError) {
-      return inner;
-    }
-    throw new Error(innerError);
-  }
-
-  throw new Error(strictError);
-}
-
-function checkPatchBoundariesStrict(lines: string[]): string | null {
-  const firstLine = lines[0]?.trim();
-  const lastLine = lines[lines.length - 1]?.trim();
-
-  if (firstLine === BEGIN_PATCH_MARKER && lastLine === END_PATCH_MARKER) {
-    return null;
-  }
-  if (firstLine !== BEGIN_PATCH_MARKER) {
-    return "The first line of the patch must be '*** Begin Patch'";
-  }
-  return "The last line of the patch must be '*** End Patch'";
-}
-
-function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
-  const firstLine = lines.at(0)?.trim();
-  if (firstLine === undefined) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
-  if (firstLine.startsWith(ADD_FILE_MARKER)) {
-    const targetPath = firstLine.slice(ADD_FILE_MARKER.length);
-    let contents = "";
-    let consumed = 1;
-    for (const addLine of lines.slice(1)) {
-      if (addLine.startsWith("+")) {
-        contents += `${addLine.slice(1)}\n`;
-        consumed += 1;
-      } else {
-        break;
-      }
-    }
-    return {
-      hunk: { kind: "add", path: targetPath, contents },
-      consumed,
-    };
-  }
-
-  if (firstLine.startsWith(DELETE_FILE_MARKER)) {
-    const targetPath = firstLine.slice(DELETE_FILE_MARKER.length);
-    return {
-      hunk: { kind: "delete", path: targetPath },
-      consumed: 1,
-    };
-  }
-
-  if (firstLine.startsWith(UPDATE_FILE_MARKER)) {
-    const targetPath = firstLine.slice(UPDATE_FILE_MARKER.length);
-    let remaining = lines.slice(1);
-    let consumed = 1;
-    let movePath: string | undefined;
-
-    const moveCandidate = remaining[0]?.trim();
-    if (moveCandidate?.startsWith(MOVE_TO_MARKER)) {
-      movePath = moveCandidate.slice(MOVE_TO_MARKER.length);
-      remaining = remaining.slice(1);
-      consumed += 1;
-    }
-
-    const chunks: UpdateFileChunk[] = [];
-    while (remaining.length > 0) {
-      const firstRemaining = remaining.at(0);
-      if (firstRemaining === undefined) {
-        break;
-      }
-      if (firstRemaining.trim() === "") {
-        remaining = remaining.slice(1);
-        consumed += 1;
-        continue;
-      }
-      if (firstRemaining.startsWith("***")) {
-        break;
-      }
-      const { chunk, consumed: chunkLines } = parseUpdateFileChunk(
-        remaining,
-        lineNumber + consumed,
-        chunks.length === 0,
-      );
-      chunks.push(chunk);
-      remaining = remaining.slice(chunkLines);
-      consumed += chunkLines;
-    }
-
-    if (chunks.length === 0) {
-      throw new Error(
-        `Invalid patch hunk at line ${lineNumber}: Update file hunk for path '${targetPath}' is empty`,
-      );
-    }
-
-    return {
-      hunk: {
-        kind: "update",
-        path: targetPath,
-        movePath,
-        chunks,
-      },
-      consumed,
-    };
-  }
-
-  throw new Error(
-    `Invalid patch hunk at line ${lineNumber}: '${lines[0]}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
-  );
-}
-
-function parseUpdateFileChunk(
-  lines: string[],
-  lineNumber: number,
-  allowMissingContext: boolean,
-): { chunk: UpdateFileChunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Update hunk does not contain any lines`,
-    );
-  }
-
-  let changeContext: string | undefined;
-  let startIndex = 0;
-  const firstLine = lines.at(0);
-  if (firstLine === EMPTY_CHANGE_CONTEXT_MARKER) {
-    startIndex = 1;
-  } else if (firstLine?.startsWith(CHANGE_CONTEXT_MARKER)) {
-    changeContext = firstLine.slice(CHANGE_CONTEXT_MARKER.length);
-    startIndex = 1;
-  } else if (!allowMissingContext) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Expected update hunk to start with a @@ context marker, got: '${firstLine}'`,
-    );
-  }
-
-  if (startIndex >= lines.length) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-    );
-  }
-
-  const chunk: UpdateFileChunk = {
-    changeContext,
-    oldLines: [],
-    newLines: [],
-    contextOldIndexes: [],
-    isEndOfFile: false,
-  };
-
-  let parsedLines = 0;
-  for (const line of lines.slice(startIndex)) {
-    if (line === EOF_MARKER) {
-      if (parsedLines === 0) {
-        throw new Error(
-          `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-        );
-      }
-      chunk.isEndOfFile = true;
-      parsedLines += 1;
-      break;
-    }
-
-    const marker = line[0];
-    if (!marker) {
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push("");
-      chunk.newLines.push("");
-      parsedLines += 1;
-      continue;
-    }
-
-    if (marker === " ") {
-      const content = line.slice(1);
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push(content);
-      chunk.newLines.push(content);
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "+") {
-      chunk.contextOldIndexes.push(undefined);
-      chunk.newLines.push(line.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "-") {
-      chunk.oldLines.push(line.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-
-    if (parsedLines === 0) {
-      throw new Error(
-        `Invalid patch hunk at line ${lineNumber + 1}: Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
-      );
-    }
-    break;
-  }
-
-  return { chunk, consumed: parsedLines + startIndex };
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
