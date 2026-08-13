@@ -13,7 +13,10 @@ import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
+import {
+  inspectActiveCronRunReceipt,
+  isCronRunReceiptOwnerDefinitelyStale,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -75,7 +78,13 @@ beforeEach(async () => {
         \`);
         await cron.run(jobId, "force");
       }
-      if (mode === "block" || mode === "hold") await cron.run(jobId, "force");
+      if (mode === "block" || mode === "hold" || mode === "hold-alive") {
+        await cron.run(jobId, "force");
+      }
+      if (mode === "hold-alive") {
+        process.stdout.write("completed\\n");
+        while (!fs.existsSync(releasePath + ".exit")) await sleep(10);
+      }
       if (mode === "due") await sleep(350);
       cron.stop();
     `,
@@ -111,7 +120,7 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode: "block" | "hold" | "trigger" | "due" | "crash-activation";
+  mode: "block" | "hold" | "hold-alive" | "trigger" | "due" | "crash-activation";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -213,12 +222,7 @@ describe("cron durable run ownership", () => {
     const now = Date.now();
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    reconcileCronRunReceiptForStartup({
-      storePath,
-      jobId: job.id,
-      startedAtMs: 0,
-      nowMs: now,
-    });
+    inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
       CREATE TRIGGER reject_cron_run_receipt
@@ -275,12 +279,7 @@ describe("cron durable run ownership", () => {
     const now = Date.now();
     const job = makeCommandJob("receipt-finalization-failure", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    reconcileCronRunReceiptForStartup({
-      storePath,
-      jobId: job.id,
-      startedAtMs: 0,
-      nowMs: now,
-    });
+    inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
       CREATE TRIGGER reject_cron_run_receipt_finish
@@ -339,35 +338,33 @@ describe("cron durable run ownership", () => {
       expect(receipt).toMatchObject({ status: "ok" });
       databaseUpdateReceiptToRunning(receipt!.receiptId);
 
-      expect(
-        reconcileCronRunReceiptForStartup({
-          storePath,
-          jobId: job.id,
-          startedAtMs: receipt!.startedAtMs,
-          nowMs: now + 1,
-        }),
-      ).toBeUndefined();
-      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+      const active = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      expect(active?.receiptId).toBe(receipt!.receiptId);
+      expect(isCronRunReceiptOwnerDefinitelyStale(active!)).toBe(true);
     } finally {
       cron.stop();
     }
   });
 
-  it("recovers a foreign run whose owner dies after overlapping startup", async () => {
+  it("recovers owner death after a post-startup admission conflict", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("restart-mid-run", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const releasePath = path.join(scriptRoot, `release-${now}`);
-    const outputPath = path.join(scriptRoot, `output-${now}`);
-    const owner = spawnRunner({ storePath, jobId: job.id, mode: "block", releasePath, outputPath });
-    await waitForLine(owner, "started");
-
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
     const replacement = makeParentService(storePath, replacementRunner);
+    let owner: ChildProcess | undefined;
     try {
       await replacement.start();
+      owner = spawnRunner({
+        storePath,
+        jobId: job.id,
+        mode: "block",
+        releasePath: path.join(scriptRoot, `release-${now}`),
+        outputPath: path.join(scriptRoot, `output-${now}`),
+      });
+      await waitForLine(owner, "started");
       await expect(replacement.run(job.id, "force")).resolves.toEqual({
         ok: true,
         ran: false,
@@ -381,9 +378,9 @@ describe("cron durable run ownership", () => {
       await vi.waitFor(
         async () => {
           expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-          expect((await loadCronStore(storePath)).jobs[0]?.state.lastError).toContain(
-            "interrupted by gateway restart",
-          );
+          const recoveredState = (await loadCronStore(storePath)).jobs[0]?.state;
+          expect(recoveredState?.lastError).toContain("interrupted by gateway restart");
+          expect(recoveredState?.nextRunAtMs).toEqual(expect.any(Number));
         },
         { timeout: 6_000, interval: 50 },
       );
@@ -392,7 +389,7 @@ describe("cron durable run ownership", () => {
       expect(replacementRunner).toHaveBeenCalledOnce();
     } finally {
       replacement.stop();
-      if (owner.exitCode === null && owner.signalCode === null) {
+      if (owner && owner.exitCode === null && owner.signalCode === null) {
         owner.kill("SIGKILL");
       }
     }
@@ -407,7 +404,13 @@ describe("cron durable run ownership", () => {
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const releasePath = path.join(scriptRoot, `normal-release-${now}`);
     const outputPath = path.join(scriptRoot, `normal-output-${now}`);
-    const owner = spawnRunner({ storePath, jobId: job.id, mode: "hold", releasePath, outputPath });
+    const owner = spawnRunner({
+      storePath,
+      jobId: job.id,
+      mode: "hold-alive",
+      releasePath,
+      outputPath,
+    });
     await waitForLine(owner, "started");
     openOpenClawStateDatabase()
       .db.prepare("UPDATE cron_jobs SET next_run_at_ms = NULL WHERE job_id = ?")
@@ -418,8 +421,9 @@ describe("cron durable run ownership", () => {
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
       const staleTimer = replacementState.timer;
+      const completed = waitForLine(owner, "completed");
       await fsPromises.writeFile(releasePath, "release");
-      await waitForExit(owner);
+      await completed;
       await vi.waitFor(
         async () => {
           expect(replacementState.timer).not.toBe(staleTimer);
@@ -431,6 +435,7 @@ describe("cron durable run ownership", () => {
       );
     } finally {
       replacement.stop();
+      await fsPromises.writeFile(`${releasePath}.exit`, "exit");
       if (owner.exitCode === null && owner.signalCode === null) {
         owner.kill("SIGKILL");
       }

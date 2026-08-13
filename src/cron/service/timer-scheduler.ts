@@ -16,6 +16,7 @@ import { locked } from "./locked.js";
 import {
   cleanupQueuedCronRunReservations,
   executeQueuedCronRun,
+  persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
   resolveRunConcurrency,
@@ -211,12 +212,12 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
 
       const now = state.deps.nowMs();
-      const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-      for (const job of due) {
-        job.state.queuedAtMs = now;
-      }
-      await persistOrRestore(state, reservationRollbackSnapshot);
-      const reservedDue = due.map((job) => ({
+      const reservedJobs = await persistQueuedCronRunReservations({
+        state,
+        jobIds: due.map((job) => job.id),
+        reservedAtMs: now,
+      });
+      const reservedDue = reservedJobs.map((job) => ({
         id: job.id,
         job,
         reservedAtMs: now,

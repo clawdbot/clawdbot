@@ -52,7 +52,7 @@ export function getCronJobsStoreRevision(storePath: string): number {
   return cronStoreRevisions.get(cronStoreKey(storePath)) ?? 0;
 }
 
-function noteCronJobsStoreCommit(storeKey: string): void {
+export function noteCronJobsStoreCommit(storeKey: string): void {
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
   cronStoreRevisions.delete(storeKey);

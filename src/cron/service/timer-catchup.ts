@@ -9,6 +9,7 @@ import {
   clearOwnedQueuedCronRunMarkers,
   cleanupQueuedCronRunReservations,
   executeQueuedCronRun,
+  persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
@@ -221,14 +222,14 @@ async function planStartupCatchup(
         "cron: running missed jobs after restart",
       );
     }
-    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-    for (const job of startupCandidates) {
-      job.state.queuedAtMs = now;
-    }
-    await persistOrRestore(state, reservationRollbackSnapshot);
+    const reservedStartupCandidates = await persistQueuedCronRunReservations({
+      state,
+      jobIds: startupCandidates.map((job) => job.id),
+      reservedAtMs: now,
+    });
 
     return {
-      candidates: startupCandidates.map((job) => ({
+      candidates: reservedStartupCandidates.map((job) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,

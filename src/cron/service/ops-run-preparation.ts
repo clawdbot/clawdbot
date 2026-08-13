@@ -21,6 +21,7 @@ import {
   clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
+  persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
@@ -345,12 +346,17 @@ export async function prepareManualRun(
     if (!isJobDue(job, reservationAt, { forced: mode === "force" })) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-    job.state.queuedAtMs = reservationAt;
     // Persist the queued marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
-    await persistOrRestore(state, reservationRollbackSnapshot);
-    const reservationIdentity = reserveQueuedCronRun(state, job.id, reservationAt, {
+    const [reservedJob] = await persistQueuedCronRunReservations({
+      state,
+      jobIds: [job.id],
+      reservedAtMs: reservationAt,
+    });
+    if (!reservedJob) {
+      return { ok: true, ran: false, reason: "already-running" as const };
+    }
+    const reservationIdentity = reserveQueuedCronRun(state, reservedJob.id, reservationAt, {
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
     });
     if (state.stopped) {
@@ -361,18 +367,18 @@ export async function prepareManualRun(
           typeof persistedJob?.state.queuedAtMs !== "number" ||
           !isQueuedCronRunReservationMarkerCurrent(
             state,
-            job.id,
+            reservedJob.id,
             reservationIdentity,
             persistedJob.state.queuedAtMs,
           )
         ) {
-          releaseQueuedCronRun(state, job.id, reservationIdentity);
+          releaseQueuedCronRun(state, reservedJob.id, reservationIdentity);
           return;
         }
         const rollbackSnapshot = snapshotStoreForRollback(state);
         delete persistedJob.state.queuedAtMs;
         await persistOrRestore(state, rollbackSnapshot);
-        releaseQueuedCronRun(state, job.id, reservationIdentity);
+        releaseQueuedCronRun(state, reservedJob.id, reservationIdentity);
       };
       try {
         await cleanup();
@@ -391,7 +397,7 @@ export async function prepareManualRun(
     return {
       ok: true,
       ran: true,
-      jobId: job.id,
+      jobId: reservedJob.id,
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,

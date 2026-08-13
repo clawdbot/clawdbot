@@ -602,6 +602,16 @@ function recomputeJobNextRunAtMs(params: {
   return changed;
 }
 
+/** Re-arms one atomically recovered job without taking a second store snapshot. */
+export function recomputeRecoveredJobNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  deferredNotifications?: DeferredCronNotifications;
+}): boolean {
+  return recomputeJobNextRunAtMs(params);
+}
+
 /** Recomputes missing, due, or repairable next-run timestamps for all schedulable jobs. */
 export function recomputeNextRuns(state: CronServiceState): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {

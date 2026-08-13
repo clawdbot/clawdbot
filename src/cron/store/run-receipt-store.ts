@@ -55,6 +55,7 @@ export type CronRunReceiptHandle = Pick<
   | "startedAtMs"
   | "storeKey"
 >;
+export type CronRunReceiptRecoveryCandidate = CronRunReceiptHandle;
 
 type ResolveReceiptAgentId = (job: CronJob) => string;
 
@@ -96,9 +97,12 @@ type CronRunReceiptFinishRetry = { finish: CronRunReceiptFinish; timer: NodeJS.T
 const pendingReceiptFinishRetries = new Map<string, CronRunReceiptFinishRetry>();
 
 export class CronRunReceiptConflictError extends Error {
+  readonly candidate: CronRunReceiptRecoveryCandidate;
+
   constructor(readonly receipt: CronRunReceipt) {
     super(`cron job ${receipt.jobId} is already running in process ${receipt.ownerPid}`);
     this.name = "CronRunReceiptConflictError";
+    this.candidate = receiptHandle(receipt);
   }
 }
 
@@ -217,19 +221,31 @@ function observeOwner(row: CronRunReceiptRow): CronRunReceiptOwnerObservation {
   };
 }
 
-function ownerDefinitelyStale(row: CronRunReceiptRow): boolean {
-  if (row.owner_pid === process.pid) {
-    return !locallyOwnedReceipts.has(row.receipt_id);
+function ownerDefinitelyStale(owner: {
+  receiptId: string;
+  ownerPid: number;
+  ownerStartTime: number | null;
+}): boolean {
+  if (owner.ownerPid === process.pid) {
+    return !locallyOwnedReceipts.has(owner.receiptId);
   }
-  if (isPidDefinitelyDead(row.owner_pid)) {
+  if (isPidDefinitelyDead(owner.ownerPid)) {
     return true;
   }
-  const observedStartTime = getFileLockProcessStartTime(row.owner_pid);
+  const observedStartTime = getFileLockProcessStartTime(owner.ownerPid);
   return (
-    row.owner_start_time !== null &&
+    owner.ownerStartTime !== null &&
     observedStartTime !== null &&
-    row.owner_start_time !== observedStartTime
+    owner.ownerStartTime !== observedStartTime
   );
+}
+
+function ownerFromRow(row: CronRunReceiptRow) {
+  return {
+    receiptId: row.receipt_id,
+    ownerPid: row.owner_pid,
+    ownerStartTime: row.owner_start_time,
+  };
 }
 
 function validateCurrentJob(params: {
@@ -323,7 +339,7 @@ export function prepareCronRunReceiptClaim(params: {
   return {
     handle,
     ...(observed ? { observed: observeOwner(observed) } : {}),
-    observedStale: observed ? ownerDefinitelyStale(observed) : false,
+    observedStale: observed ? ownerDefinitelyStale(ownerFromRow(observed)) : false,
     ...(params.requestRunId ? { requestRunId: params.requestRunId } : {}),
   };
 }
@@ -405,6 +421,38 @@ export function assertNoActiveCronRunReceiptInDatabase(params: {
   if (current) {
     throw new CronRunReceiptConflictError(receiptFromRow(current));
   }
+}
+
+export function findActiveCronRunReceiptInDatabase(params: {
+  database: DatabaseSync;
+  storePath: string;
+  jobId: string;
+}): CronRunReceiptRecoveryCandidate | undefined {
+  const row = activeRow(params.database, cronStoreKey(params.storePath), params.jobId);
+  return row ? receiptHandle(receiptFromRow(row)) : undefined;
+}
+
+export function inspectActiveCronRunReceipt(params: {
+  storePath: string;
+  jobId: string;
+  env?: NodeJS.ProcessEnv;
+}): CronRunReceiptRecoveryCandidate | undefined {
+  return withReceiptWrite(
+    "cron.run-receipt.recovery-inspect",
+    params.env ? { env: params.env } : {},
+    (database) =>
+      findActiveCronRunReceiptInDatabase({
+        database,
+        storePath: params.storePath,
+        jobId: params.jobId,
+      }),
+  );
+}
+
+export function isCronRunReceiptOwnerDefinitelyStale(
+  candidate: CronRunReceiptRecoveryCandidate,
+): boolean {
+  return ownerDefinitelyStale(candidate);
 }
 
 /** Synchronous transaction guard used immediately before a run side effect or state write. */
@@ -585,90 +633,4 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("receipt_id", "=", params.handle.receiptId),
   );
   return row ? receiptFromRow(row) : undefined;
-}
-
-/** Corrects the exact interrupted receipt only after task-ledger restoration commits. */
-export function correctInterruptedCronRunReceiptInDatabase(params: {
-  database: DatabaseSync;
-  storePath: string;
-  jobId: string;
-  startedAtMs: number;
-  status: "ok" | "error" | "skipped";
-  finishedAtMs: number;
-  error?: string;
-}): void {
-  const storeKey = cronStoreKey(params.storePath);
-  const receipt = executeSqliteQueryTakeFirstSync(
-    params.database,
-    query(params.database)
-      .selectFrom("cron_run_receipts")
-      .select("receipt_id")
-      .where("store_key", "=", storeKey)
-      .where("job_id", "=", params.jobId)
-      .where("started_at_ms", "=", params.startedAtMs)
-      .where("status", "=", "interrupted")
-      .orderBy("receipt_id", "desc"),
-  );
-  if (!receipt) {
-    return;
-  }
-  executeSqliteQuerySync(
-    params.database,
-    query(params.database)
-      .updateTable("cron_run_receipts")
-      .set({
-        status: params.status,
-        finished_at_ms: params.finishedAtMs,
-        error_text: params.error ?? null,
-      })
-      .where("receipt_id", "=", receipt.receipt_id)
-      .where("status", "=", "interrupted"),
-  );
-  pruneTerminalReceipts(params.database, storeKey, params.jobId);
-}
-
-/** Returns a still-live foreign claim, or retires a provably stale owner. */
-export function reconcileCronRunReceiptForStartup(params: {
-  storePath: string;
-  jobId: string;
-  startedAtMs: number;
-  nowMs: number;
-  env?: NodeJS.ProcessEnv;
-}): CronRunReceipt | undefined {
-  const storeKey = cronStoreKey(params.storePath);
-  const options = params.env ? { env: params.env } : {};
-  const observed = withReceiptWrite("cron.run-receipt.startup-inspect", options, (database) =>
-    activeRow(database, storeKey, params.jobId),
-  );
-  if (!observed || observed.started_at_ms !== params.startedAtMs) {
-    return undefined;
-  }
-  const stale = ownerDefinitelyStale(observed);
-  return withReceiptWrite("cron.run-receipt.startup-reconcile", options, (database) => {
-    const current = activeRow(database, storeKey, params.jobId);
-    if (
-      !current ||
-      !sameOwner(current, observeOwner(observed)) ||
-      current.started_at_ms !== params.startedAtMs
-    ) {
-      return current ? receiptFromRow(current) : undefined;
-    }
-    if (!stale) {
-      return receiptFromRow(current);
-    }
-    executeSqliteQuerySync(
-      database,
-      query(database)
-        .updateTable("cron_run_receipts")
-        .set({
-          status: "interrupted",
-          finished_at_ms: params.nowMs,
-          error_text: "cron: job interrupted by owner process exit",
-        })
-        .where("receipt_id", "=", current.receipt_id)
-        .where("status", "=", "running"),
-    );
-    pruneTerminalReceipts(database, storeKey, params.jobId);
-    return undefined;
-  });
 }

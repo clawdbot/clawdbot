@@ -17,6 +17,7 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -30,6 +31,7 @@ import {
 import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
+import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
 import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
 import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
@@ -900,7 +902,7 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
-  it("start persists an interrupted-run auto-disable before notifying", async () => {
+  it("commits an interrupted-run auto-disable before notifying", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const job = createInterruptedMainJob(now);
@@ -909,17 +911,15 @@ describe("cron service ops seam coverage", () => {
 
     const order: string[] = [];
     const enqueueSystemEvent = vi.fn(() => {
-      expect(order.at(-1)).toBe("persist");
+      const row = runOpenClawStateWriteTransaction(({ db }) =>
+        db.prepare("SELECT enabled FROM cron_jobs WHERE job_id = ?").get(job.id),
+      ) as { enabled: number };
+      expect(row.enabled).toBe(0);
       order.push("notify");
     });
     const requestHeartbeat = vi.fn(() => {
       expect(order.at(-1)).toBe("notify");
       order.push("heartbeat");
-    });
-    const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockImplementation(async (...args) => {
-      await saveCronJobsStore(...args);
-      order.push("persist");
     });
     const state = createCronServiceState({
       storePath,
@@ -933,7 +933,7 @@ describe("cron service ops seam coverage", () => {
 
     await start(state);
 
-    expect(order.slice(0, 3)).toEqual(["persist", "notify", "heartbeat"]);
+    expect(order).toEqual(["notify", "heartbeat"]);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
       enabled: false,
       state: {
@@ -943,7 +943,7 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
-  it("preserves a foreign completion committed during startup receipt inspection", async () => {
+  it("preserves a foreign completion committed after recovery is proposed", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const startedAt = now - 30_000;
@@ -978,15 +978,25 @@ describe("cron service ops seam coverage", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    vi.spyOn(runReceiptStore, "reconcileCronRunReceiptForStartup").mockImplementationOnce(() => {
-      runReceiptStore.finishCronRunReceipt({
-        handle: receipt,
-        status: "ok",
-        finishedAtMs: now,
-      });
-      void cronStoreModule.saveCronStore(storePath, { version: 1, jobs: [completedJob] });
-      return undefined;
-    });
+    const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      { version: 1, jobs: [completedJob] },
+      undefined,
+      {
+        afterWrite: (db) => {
+          runReceiptStore.finishCronRunReceiptInDatabase({
+            database: db,
+            handle: receipt,
+            status: "ok",
+            finishedAtMs: now,
+          });
+        },
+      },
+    );
+    runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, proposal)).toEqual({ kind: "superseded" });
 
     await start(state);
 
@@ -1181,20 +1191,11 @@ describe("cron service ops seam coverage", () => {
           durationMs: 1_000,
         },
       });
-      const finalized = taskRuns.tryFindFinalizedCronTaskRun(state, job.id, startedAt);
-      if (!finalized) {
-        throw new Error("expected finalized cron task record");
-      }
-      const finalizedSpy = vi.spyOn(taskRuns, "tryFindFinalizedCronTaskRun").mockReturnValue({
-        ...finalized,
-        entry: { ...finalized.entry, ts: Number.NaN },
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare("UPDATE task_runs SET ended_at = -1 WHERE run_id = ?").run(taskRunId);
       });
 
-      try {
-        await start(state);
-      } finally {
-        finalizedSpy.mockRestore();
-      }
+      await start(state);
 
       const persisted = (await loadCronStore(storePath)).jobs[0];
       expect(persisted?.state.lastRunStatus).toBe("error");

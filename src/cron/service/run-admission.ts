@@ -2,6 +2,7 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
+  assertNoActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
@@ -9,6 +10,7 @@ import {
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
+import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
@@ -279,6 +281,51 @@ export function isQueuedCronRunReservationMarkerCurrent(
   return reservation?.identity === identity && reservation.markerAtMs === runningAtMs;
 }
 
+/** Persists queued markers only while no gateway owns an active run receipt.
+ * Conflicting jobs are enrolled for lifecycle recovery; unrelated jobs retry
+ * from the transaction rollback snapshot and reserve independently.
+ */
+export async function persistQueuedCronRunReservations(params: {
+  state: CronServiceState;
+  jobIds: readonly string[];
+  reservedAtMs: number;
+}): Promise<CronJob[]> {
+  const pendingJobIds = new Set(params.jobIds);
+  while (pendingJobIds.size > 0) {
+    const jobs = (params.state.store?.jobs ?? []).filter((job) => pendingJobIds.has(job.id));
+    if (jobs.length === 0) {
+      return [];
+    }
+    const rollbackSnapshot = snapshotStoreForRollback(params.state);
+    for (const job of jobs) {
+      job.state.queuedAtMs = params.reservedAtMs;
+    }
+    try {
+      await persistOrRestore(params.state, rollbackSnapshot, {
+        transactionHooks: {
+          beforeWrite: (database) => {
+            for (const jobId of [...pendingJobIds].toSorted()) {
+              assertNoActiveCronRunReceiptInDatabase({
+                database,
+                storePath: params.state.deps.storePath,
+                jobId,
+              });
+            }
+          },
+        },
+      });
+      return jobs;
+    } catch (error) {
+      if (!(error instanceof CronRunReceiptConflictError)) {
+        throw error;
+      }
+      enrollForeignReceipt(params.state, error.candidate);
+      pendingJobIds.delete(error.candidate.jobId);
+    }
+  }
+  return [];
+}
+
 export async function activateQueuedCronRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -317,10 +364,11 @@ export async function activateQueuedCronRun(params: {
     });
   } catch (error) {
     releaseLocalCronRunReceiptOwnership(runReceipt);
-    if (
-      error instanceof CronRunReceiptConflictError ||
-      error instanceof CronRunReceiptRevisionError
-    ) {
+    if (error instanceof CronRunReceiptConflictError) {
+      enrollForeignReceipt(state, error.candidate);
+      return { kind: "fenced" };
+    }
+    if (error instanceof CronRunReceiptRevisionError) {
       return { kind: "fenced" };
     }
     throw error;
