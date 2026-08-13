@@ -1,4 +1,4 @@
-// Minimax plugin module implements tts behavior.
+﻿// Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -9,7 +9,11 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { assertMinimaxBaseResp, normalizeMinimaxHexAudio } from "./media-provider-runtime.js";
+import {
+  assertMinimaxBaseResp,
+  normalizeMinimaxHexAudio,
+  type MinimaxBaseResp,
+} from "./media-provider-runtime.js";
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
@@ -115,7 +119,10 @@ export async function minimaxTTS(params: {
         throw new Error("MiniMax TTS API returned a malformed response");
       }
 
-      assertMinimaxBaseResp(body.base_resp, "MiniMax TTS API error");
+      assertMinimaxBaseResp(
+        isRecord(body.base_resp) ? (body.base_resp as MinimaxBaseResp) : undefined,
+        "MiniMax TTS API error",
+      );
       const dataField = isRecord(body.data) ? body.data : undefined;
       const hexAudio =
         dataField && typeof dataField.audio === "string" ? dataField.audio : undefined;
