@@ -153,12 +153,9 @@ export async function cleanupQueuedCronRunReservations(params: {
           const committed: CronJob[] = [];
           for (const reservation of reservations) {
             const ownership = state.queuedRunReservationsByJobId.get(reservation.jobId);
-            const job = jobs.get(reservation.jobId);
-            if (!job || ownership?.identity !== reservation.reservationIdentity) {
+            if (ownership?.identity !== reservation.reservationIdentity) {
               continue;
             }
-            const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
-            const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
             if (!params.transactionHooks) {
               finishCronRunReceiptInDatabase({
                 database,
@@ -168,6 +165,12 @@ export async function cleanupQueuedCronRunReservations(params: {
                 error: "cron reservation released before completion",
               });
             }
+            const job = jobs.get(reservation.jobId);
+            if (!job) {
+              continue;
+            }
+            const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
+            const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
             if (!queuedMatches && !runningMatches) {
               continue;
             }

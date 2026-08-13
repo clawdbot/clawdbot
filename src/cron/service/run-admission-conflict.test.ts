@@ -16,7 +16,11 @@ import {
 import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
-import { persistQueuedCronRunReservations } from "./run-admission.js";
+import {
+  cleanupQueuedCronRunReservations,
+  persistQueuedCronRunReservations,
+  reserveQueuedCronRun,
+} from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -249,5 +253,51 @@ it("rejects a stale reservation plan after the job already finalized", async () 
   const persisted = (await loadCronStore(store.storePath)).jobs[0];
   expect(persisted).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
   expect(persisted?.state.queuedAtMs).toBeUndefined();
+  stop(state);
+});
+
+it("terminalizes an owned reservation after another gateway deletes the job", async () => {
+  const store = fixtures.makeStorePath();
+  const now = Date.parse("2026-08-13T17:15:00.000Z");
+  const job = createDueIsolatedJob({
+    id: "deleted-after-reservation",
+    nowMs: now,
+    nextRunAtMs: now,
+  });
+  await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(),
+  });
+  await list(state);
+  const [reservation] = await persistQueuedCronRunReservations({
+    state,
+    candidates: [job],
+    reservedAtMs: now,
+  });
+  if (!reservation) {
+    throw new Error("expected reservation");
+  }
+  const reservationIdentity = reserveQueuedCronRun(state, job.id, now, {
+    runReceipt: reservation.runReceipt,
+  });
+  await saveCronStore(store.storePath, { version: 1, jobs: [] });
+
+  await cleanupQueuedCronRunReservations({
+    state,
+    reservations: [{ jobId: job.id, reservationIdentity }],
+  });
+
+  const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+    db
+      .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+      .get(reservation.runReceipt.receiptId),
+  ) as { status: string } | undefined;
+  expect(receipt?.status).toBe("skipped");
   stop(state);
 });

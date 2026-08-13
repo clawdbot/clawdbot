@@ -10,6 +10,7 @@ import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
@@ -233,6 +234,14 @@ export async function finalizeCompletedCronRunOutcomes(
         committed.upsertedJobs,
         committed.removedJobs.map((job) => job.id),
       );
+      const maintenance = recomputeUnownedCronSchedules(
+        state,
+        opts?.repairFutureCronNextRunAtMs === false
+          ? { repairFutureCronNextRunAtMs: false }
+          : undefined,
+      );
+      runPostPersistCronNotifications(state, maintenance.notifications);
+      applyCronRuntimeRowsToState(state, maintenance.jobs);
       for (const plan of committed.eventPlans) {
         if (plan.job) {
           emitCronOutcomeEventForJob(state, plan.job, plan.outcome);

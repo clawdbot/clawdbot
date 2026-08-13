@@ -26,6 +26,7 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
@@ -51,7 +52,9 @@ beforeEach(async () => {
         storePath,
         cronEnabled: true,
         log: logger,
-        enqueueSystemEvent() {},
+        enqueueSystemEvent() {
+          if (mode === "manual-postcommit-crash") process.kill(process.pid, "SIGKILL");
+        },
         requestHeartbeat() {},
         evaluateCronTrigger: async () => {
           process.stdout.write("trigger\\n");
@@ -60,6 +63,9 @@ beforeEach(async () => {
         },
         runIsolatedAgentJob: async () => ({ status: "ok" }),
         runCommandJob: async ({ job }) => {
+          if (mode === "manual-postcommit-crash") {
+            return { status: "error", error: "expected manual failure" };
+          }
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
@@ -68,7 +74,7 @@ beforeEach(async () => {
           return { status: "ok", summary: "done" };
         },
       });
-      await cron.start();
+      if (mode !== "manual-postcommit-crash") await cron.start();
       if (mode === "barrier-block") {
         process.stdout.write("ready\\n");
         while (!fs.existsSync(releasePath)) await sleep(10);
@@ -90,6 +96,7 @@ beforeEach(async () => {
         \`);
         await cron.run(jobId, "force");
       }
+      if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
       if (mode === "block" || mode === "hold" || mode === "hold-alive") {
         await cron.run(jobId, "force");
       }
@@ -132,7 +139,15 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode: "barrier-block" | "block" | "hold" | "hold-alive" | "trigger" | "due" | "crash-activation";
+  mode:
+    | "barrier-block"
+    | "block"
+    | "hold"
+    | "hold-alive"
+    | "trigger"
+    | "due"
+    | "crash-activation"
+    | "manual-postcommit-crash";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -679,5 +694,41 @@ describe("cron durable run ownership", () => {
     } finally {
       cron.stop();
     }
+  });
+
+  it("records manual task recovery before postcommit notification can crash", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("manual-task-precommit", now - 1);
+    job.state.consecutiveErrors = 9;
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const child = spawnRunner({
+      storePath,
+      jobId: job.id,
+      mode: "manual-postcommit-crash",
+      releasePath: path.join(scriptRoot, `unused-release-${now}`),
+      outputPath: path.join(scriptRoot, `unused-output-${now}`),
+    });
+
+    await waitForExit(child);
+
+    expect(child.signalCode).toBe("SIGKILL");
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    expect(persisted?.state).toMatchObject({
+      lastRunStatus: "error",
+      consecutiveErrors: 10,
+    });
+    expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "error" });
+    const recovered = findCronTaskRunRecoveryInDatabase({
+      database: openOpenClawStateDatabase().db,
+      jobId: job.id,
+      startedAt: persisted!.state.lastRunAtMs!,
+      storeKey: cronStoreKey(storePath),
+    });
+    expect(recovered.finalized?.entry).toMatchObject({
+      jobId: job.id,
+      status: "error",
+    });
   });
 });

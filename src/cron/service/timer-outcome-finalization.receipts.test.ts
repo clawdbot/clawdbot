@@ -141,4 +141,49 @@ describe("cron outcome receipt finalization", () => {
       .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
     expect(receipt?.status).toBe("skipped");
   });
+
+  it("schedules an unrelated job missing nextRunAtMs after batch finalization", async () => {
+    const store = fixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:00.000Z");
+    const completed = createDueIsolatedJob({
+      id: "completed-batch-job",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    completed.state.runningAtMs = startedAt;
+    const imported = createDueIsolatedJob({
+      id: "imported-without-next-run",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt + 60_000,
+    });
+    imported.state.nextRunAtMs = undefined;
+    await saveCronStore(store.storePath, { version: 1, jobs: [completed, imported] });
+    const receipt = claimReceipt(store.storePath, completed, startedAt);
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startedAt + 1,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    await finalizeCompletedCronRunOutcomes(state, [
+      {
+        jobId: completed.id,
+        job: completed,
+        activeJobMarker: markCronJobActive(completed.id),
+        runReceipt: receipt,
+        status: "ok",
+        startedAt,
+        endedAt: startedAt + 1,
+      },
+    ]);
+
+    const persisted = await loadCronStore(store.storePath);
+    expect(persisted.jobs.find((job) => job.id === imported.id)?.state.nextRunAtMs).toEqual(
+      expect.any(Number),
+    );
+  });
 });

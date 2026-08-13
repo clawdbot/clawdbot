@@ -36,6 +36,7 @@ import { emit } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
+  recordCronOutcomeForJob,
   resolveCronRunScheduleOwnership,
   resolveCronRunTriggerOwnership,
 } from "./timer-outcomes.js";
@@ -50,6 +51,79 @@ import {
 import { wake } from "./wake.js";
 
 let nextManualRunId = 1;
+
+type ManualRunCoreResult = Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+
+function applyManualRunOutcome(params: {
+  state: CronServiceState;
+  job: CronJob;
+  prepared: ActivatedManualRun;
+  coreResult: ManualRunCoreResult;
+  startedAt: number;
+  endedAt: number;
+  triggerSkipped: boolean;
+  mode?: "due" | "force";
+  deferredNotifications: DeferredCronNotifications;
+}): boolean {
+  const scheduleOwnership = resolveCronRunScheduleOwnership({
+    admittedJob: params.prepared.admittedJob,
+    currentJob: params.job,
+    activeJobMarker: params.prepared.activeJobMarker,
+  });
+  const triggerOwnership = resolveCronRunTriggerOwnership({
+    admittedJob: params.prepared.admittedJob,
+    currentJob: params.job,
+    activeJobMarker: params.prepared.activeJobMarker,
+  });
+  const scheduleMode =
+    scheduleOwnership === "stale"
+      ? "stale-preserve"
+      : params.mode === "force"
+        ? "force-preserve"
+        : "advance";
+  if (params.triggerSkipped) {
+    applyTriggerNoFireResult(
+      params.state,
+      params.job,
+      {
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
+        triggerEval: params.coreResult.triggerEval!,
+      },
+      {
+        scheduleMode,
+        triggerOwnership,
+        deferredNotifications: params.deferredNotifications,
+      },
+    );
+    return false;
+  }
+  const removed = applyJobResult(
+    params.state,
+    params.job,
+    { ...params.coreResult, startedAt: params.startedAt, endedAt: params.endedAt },
+    {
+      scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
+      scheduleOwnership,
+      scheduleOwnershipAtMs: params.prepared.scheduleOwnershipAtMs,
+      deferredNotifications: params.deferredNotifications,
+    },
+  );
+  applyTriggerRunResult(
+    params.job,
+    {
+      status: params.coreResult.status,
+      endedAt: params.endedAt,
+      triggerEval: params.coreResult.triggerEval,
+    },
+    { scheduleOwnership, triggerOwnership },
+  );
+  applyScriptRunResult(params.job, params.coreResult, { triggerOwnership });
+  if (params.job.schedule.kind === "stream") {
+    params.job.state.nextRunAtMs = undefined;
+  }
+  return removed;
+}
 
 async function finishPreparedManualRun(
   state: CronServiceState,
@@ -139,19 +213,6 @@ async function finishPreparedManualRun(
         },
       );
     };
-    if (!triggerSkipped) {
-      // Terminal state must land even if the store merge below throws; the later
-      // emitCronRunFinished re-finalizes the same row to attach history detail
-      // (same-status terminal updates apply, so this does not race precedence).
-      tryFinishCronTaskRunWithoutHistory(state, {
-        taskRunId,
-        status: coreResult.status,
-        error: coreResult.error,
-        endedAt,
-        summary: coreResult.summary,
-        childSessionKey: coreResult.sessionKey,
-      });
-    }
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       emitMissingQueuedTerminal();
       return;
@@ -176,6 +237,40 @@ async function finishPreparedManualRun(
         notifySetupTimeout = false;
         return;
       }
+      if (triggerSkipped) {
+        tryFinishCronTaskRunWithoutHistory(state, {
+          taskRunId,
+          status: coreResult.status,
+          error: coreResult.error,
+          endedAt,
+          summary: coreResult.summary,
+          childSessionKey: coreResult.sessionKey,
+          triggerEval: coreResult.triggerEval,
+        });
+      } else {
+        const taskJob = structuredClone(job);
+        applyManualRunOutcome({
+          state,
+          job: taskJob,
+          prepared,
+          coreResult,
+          startedAt,
+          endedAt,
+          triggerSkipped,
+          mode,
+          deferredNotifications: [],
+        });
+        recordCronOutcomeForJob(state, taskJob, {
+          ...coreResult,
+          jobId,
+          job: executionJob,
+          taskRunId,
+          activeJobMarker: prepared.activeJobMarker,
+          runReceipt: prepared.runReceipt,
+          startedAt,
+          endedAt,
+        });
+      }
       let removedJob: CronJob | undefined;
       try {
         const committed = commitCronRuntimeRows({
@@ -196,52 +291,17 @@ async function finishPreparedManualRun(
             if (!current) {
               return { value: undefined };
             }
-            const scheduleOwnership = resolveCronRunScheduleOwnership({
-              admittedJob: prepared.admittedJob,
-              currentJob: current,
-              activeJobMarker: prepared.activeJobMarker,
+            const removed = applyManualRunOutcome({
+              state,
+              job: current,
+              prepared,
+              coreResult,
+              startedAt,
+              endedAt,
+              triggerSkipped,
+              mode,
+              deferredNotifications: postPersistNotifications,
             });
-            const triggerOwnership = resolveCronRunTriggerOwnership({
-              admittedJob: prepared.admittedJob,
-              currentJob: current,
-              activeJobMarker: prepared.activeJobMarker,
-            });
-            const scheduleMode =
-              scheduleOwnership === "stale"
-                ? "stale-preserve"
-                : mode === "force"
-                  ? "force-preserve"
-                  : "advance";
-            let removed = false;
-            if (triggerSkipped) {
-              applyTriggerNoFireResult(
-                state,
-                current,
-                { startedAt, endedAt, triggerEval: coreResult.triggerEval! },
-                { scheduleMode, triggerOwnership, deferredNotifications: postPersistNotifications },
-              );
-            } else {
-              removed = applyJobResult(
-                state,
-                current,
-                { ...coreResult, startedAt, endedAt },
-                {
-                  scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
-                  scheduleOwnership,
-                  scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
-                  deferredNotifications: postPersistNotifications,
-                },
-              );
-              applyTriggerRunResult(
-                current,
-                { status: coreResult.status, endedAt, triggerEval: coreResult.triggerEval },
-                { scheduleOwnership, triggerOwnership },
-              );
-              applyScriptRunResult(current, coreResult, { triggerOwnership });
-              if (current.schedule.kind === "stream") {
-                current.state.nextRunAtMs = undefined;
-              }
-            }
             return {
               ...(removed ? { deleteJobIds: [jobId] } : { upsertJobIds: [jobId] }),
               value: { job: structuredClone(current), removed },
@@ -331,17 +391,6 @@ async function finishPreparedManualRun(
       });
     }
     if (finalized) {
-      if (triggerSkipped) {
-        tryFinishCronTaskRunWithoutHistory(state, {
-          taskRunId,
-          status: coreResult.status,
-          error: coreResult.error,
-          endedAt,
-          summary: coreResult.summary,
-          childSessionKey: coreResult.sessionKey,
-          triggerEval: coreResult.triggerEval,
-        });
-      }
       armTimer(state);
     }
     emitMissingQueuedTerminal();
