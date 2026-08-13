@@ -201,6 +201,83 @@ private func onboardingProbeAuthFailureTaskFactory() -> GatewayTestWebSocketSess
     }
 }
 
+private func onboardingProbeRequest(
+    from message: URLSessionWebSocketTask.Message) -> (id: String, method: String)?
+{
+    let data: Data? = switch message {
+    case let .data(data): data
+    case let .string(string): string.data(using: .utf8)
+    @unknown default: nil
+    }
+    guard let data,
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let id = object["id"] as? String,
+          let method = object["method"] as? String
+    else { return nil }
+    return (id: id, method: method)
+}
+
+private func onboardingVerifyResponse(
+    id: String,
+    ok: Bool,
+    status: String? = nil,
+    error: String? = nil) -> Data
+{
+    let statusJSON = status.map { #", "status":"\#($0)""# } ?? ""
+    let errorJSON = error.map { #", "error":"\#($0)""# } ?? ""
+    return Data("""
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "ok":\(ok),"modelRef":"openai/gpt-5.5"\(statusJSON)\(errorJSON)}}
+        """
+        .utf8)
+}
+
+private enum OnboardingVerifyReply: Sendable {
+    case verified
+    case rejected
+    case transportFailure
+}
+
+private func onboardingVerifyTaskFactory(
+    reply: OnboardingVerifyReply,
+    advertiseVerifyMethod: Bool = true,
+    beforeVerifyReply: (@Sendable () async -> Void)? = nil) -> GatewayTestWebSocketSession.TaskFactory
+{
+    {
+        GatewayTestWebSocketTask(
+            sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let request = onboardingProbeRequest(from: message)
+                else { return }
+                guard request.method == "openclaw.setup.verify" else {
+                    task.emitReceiveSuccess(.data(onboardingAgentsResponse(id: request.id)))
+                    return
+                }
+                await beforeVerifyReply?()
+                switch reply {
+                case .verified:
+                    task.emitReceiveSuccess(.data(onboardingVerifyResponse(id: request.id, ok: true)))
+                case .rejected:
+                    task.emitReceiveSuccess(.data(onboardingVerifyResponse(
+                        id: request.id,
+                        ok: false,
+                        status: "auth",
+                        error: "expired login")))
+                case .transportFailure:
+                    task.emitReceiveFailure()
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: advertiseVerifyMethod ? ["openclaw.setup.verify"] : []))
+            })
+    }
+}
+
 @MainActor
 private struct OnboardingProbeFixture {
     let session: GatewayTestWebSocketSession
@@ -270,6 +347,102 @@ private func isMissing(_ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> B
 @Suite(.serialized)
 @MainActor
 struct OnboardingConfiguredGatewayProbeTests {
+    @Test func `configured route must pass live verification`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(reply: .verified))
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        #expect(configuredModel(outcome) == "openai/gpt-5.5")
+        #expect(fixture.session.latestTask()?.snapshotSendCount() == 3)
+    }
+
+    @Test func `failed live verification stays in onboarding`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(reply: .rejected))
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        guard case let .verificationFailed(status, error, _) = outcome else {
+            Issue.record("expected configured inference verification failure")
+            return
+        }
+        #expect(status == "auth")
+        #expect(error == "expired login")
+    }
+
+    @Test func `gateway without live verification keeps config-only handoff`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(
+                reply: .verified,
+                advertiseVerifyMethod: false))
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        #expect(configuredModel(outcome) == "openai/gpt-5.5")
+        #expect(fixture.session.latestTask()?.snapshotSendCount() == 2)
+    }
+
+    @Test func `live verification transport failure is unavailable`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(reply: .transportFailure))
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        #expect({
+            if case .unavailable = outcome {
+                return true
+            }
+            return false
+        }())
+    }
+
+    @Test func `route replacement supersedes live verification`() async throws {
+        let config = OnboardingProbeGatewayConfig()
+        let gate = OnboardingProbeGate()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let probe = onboardingProbeFixture(
+            url: url,
+            tokenProvider: { await config.snapshotToken() },
+            taskFactory: onboardingVerifyTaskFactory(
+                reply: .verified,
+                beforeVerifyReply: { await gate.wait() })).probe
+
+        let attempt = probe.beginProbe()
+        let result = Task { await probe.probe(connectionMode: .remote, attempt: attempt) }
+        await gate.waitUntilStarted()
+        await config.setToken("route-b")
+        await gate.release()
+
+        #expect(await result.value == .superseded)
+    }
+
+    @Test func `invalidation supersedes live verification`() async throws {
+        let gate = OnboardingProbeGate()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let probe = onboardingProbeFixture(
+            url: url,
+            taskFactory: onboardingVerifyTaskFactory(
+                reply: .verified,
+                beforeVerifyReply: { await gate.wait() })).probe
+
+        let attempt = probe.beginProbe()
+        let result = Task { await probe.probe(connectionMode: .remote, attempt: attempt) }
+        await gate.waitUntilStarted()
+        probe.invalidate()
+        await gate.release()
+
+        #expect(await result.value == .superseded)
+    }
+
     @Test func `reachable gateway uses its configured default agent model`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
         let fixture = onboardingProbeFixture(

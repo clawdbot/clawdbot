@@ -268,6 +268,18 @@ private func detectedSetupResponse(
         """.utf8)
 }
 
+private func reauthenticationDetectedSetupResponse(id: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "candidates":[],"manualProviders":[],
+          "authOptions":[{"id":"openai:oauth","brandId":"openai","label":"OpenAI",
+            "hint":"Sign in with OpenAI","kind":"oauth","featured":true}],
+          "prepareOptions":[],"workspace":"/tmp/openclaw-workspace",
+          "configuredModel":"openai/gpt-5.5","setupComplete":true}}
+        """.utf8)
+}
+
 private func successfulEmptyResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{}}"#.utf8)
 }
@@ -751,6 +763,50 @@ private func setupAdmissionBusyResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test func `failed configured route verification exposes provider reauthentication`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyRecovery"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        let view = harness.view(
+            state: appState,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+
+        #expect(Array(requests.methods.prefix(3)) == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
+        ])
+        #expect(view.aiSetup.phase == .ready)
+        #expect(view.aiSetup.authOptions.map(\.id) == ["openai:oauth"])
+        #expect(!view.aiSetup.connected)
+    }
+
     @Test func `candidate failure keeps friendly summary and exact detail`() {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",

@@ -15,6 +15,7 @@ final class OnboardingConfiguredGatewayProbe {
 
     enum Outcome: Equatable {
         case configured(modelRef: String, route: BoundRoute)
+        case verificationFailed(status: String?, error: String?, route: BoundRoute)
         case missing(route: BoundRoute)
         case authIssue(RemoteGatewayAuthIssue)
         case unavailable
@@ -22,7 +23,7 @@ final class OnboardingConfiguredGatewayProbe {
 
         var boundRoute: BoundRoute? {
             switch self {
-            case let .configured(_, route), let .missing(route):
+            case let .configured(_, route), let .verificationFailed(_, _, route), let .missing(route):
                 route
             case .authIssue, .unavailable, .superseded:
                 nil
@@ -32,6 +33,7 @@ final class OnboardingConfiguredGatewayProbe {
 
     private let gateway: GatewayConnection
     private let timeoutMs: Double
+    private let verificationTimeoutMs: Double
     private var generation: UInt64 = 0
     private var activeProbeCount = 0
     private var reconnectPending = false
@@ -41,10 +43,12 @@ final class OnboardingConfiguredGatewayProbe {
 
     init(
         gateway: GatewayConnection = .shared,
-        timeoutMs: Double = 15000)
+        timeoutMs: Double = 15000,
+        verificationTimeoutMs: Double = 150_000)
     {
         self.gateway = gateway
         self.timeoutMs = timeoutMs
+        self.verificationTimeoutMs = verificationTimeoutMs
     }
 
     /// Allocate before queuing async work so user-event order, not Task start
@@ -125,8 +129,6 @@ final class OnboardingConfiguredGatewayProbe {
             return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
-        let boundRoute = BoundRoute(route: route, identity: routeIdentity)
-
         do {
             let model = try await gateway.configuredInferenceModel(
                 ifCurrentRoute: route,
@@ -134,9 +136,43 @@ final class OnboardingConfiguredGatewayProbe {
             guard await self.gateway.isCurrentRoute(route),
                   self.isCurrent(attempt)
             else { return .superseded }
-            guard let model = model?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !model.isEmpty
-            else { return .missing(route: boundRoute) }
+            let boundRoute = BoundRoute(route: route, identity: routeIdentity)
+            guard let model else { return .missing(route: boundRoute) }
+
+            // Bind method negotiation and inference to the socket that owned
+            // agents.list. A reconnect or credential replacement supersedes it.
+            guard let lease = await self.gateway.captureServerLease(ifCurrentRoute: route) else {
+                guard self.isCurrent(attempt) else { return .superseded }
+                return .unavailable
+            }
+            guard self.isCurrent(attempt) else { return .superseded }
+            guard let supportsVerification = await self.gateway.supportsServerMethod(
+                "openclaw.setup.verify",
+                ifCurrentServerLease: lease),
+                self.isCurrent(attempt)
+            else { return .superseded }
+            // Released Gateways predate the live verifier. Preserve their
+            // config-only handoff until they are upgraded.
+            guard supportsVerification else {
+                return .configured(modelRef: model, route: boundRoute)
+            }
+            let verificationData = try await gateway.request(
+                method: "openclaw.setup.verify",
+                params: [:],
+                timeoutMs: self.verificationTimeoutMs,
+                ifCurrentServerLease: lease)
+            guard await self.gateway.isCurrentServerLease(lease),
+                  self.isCurrent(attempt)
+            else { return .superseded }
+            let verification = try JSONDecoder().decode(
+                OnboardingAISetupModel.ActivateResult.self,
+                from: verificationData)
+            guard verification.ok else {
+                return .verificationFailed(
+                    status: verification.status,
+                    error: verification.error,
+                    route: boundRoute)
+            }
             return .configured(modelRef: model, route: boundRoute)
         } catch is CancellationError {
             return .superseded

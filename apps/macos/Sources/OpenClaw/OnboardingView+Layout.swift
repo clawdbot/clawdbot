@@ -219,6 +219,11 @@ extension OnboardingView {
                 OnboardingController.markComplete()
                 OnboardingController.shared.close()
                 AppNavigationActions.openDashboard()
+            case .verificationFailed:
+                // A configured model is not usable when its live turn fails.
+                // Keep onboarding open and expose the existing provider sign-in
+                // and credential recovery choices.
+                self.resumePendingInferenceSetup()
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -270,7 +275,7 @@ extension OnboardingView {
             // Authentication is actionable at the Gateway page and never
             // evidence that Gateway-owned inference setup is missing.
             self.aiSetup.showConfiguredGatewayAuthIssue(issue)
-        case .configured, .missing, .superseded:
+        case .configured, .verificationFailed, .missing, .superseded:
             assertionFailure("Expected a configured Gateway probe blocker")
         }
     }
