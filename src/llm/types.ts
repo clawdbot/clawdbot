@@ -48,6 +48,34 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/**
+ * Content-free prompt-shape record for one provider request. The original prompt
+ * is intentionally never retained in this type or terminal telemetry.
+ */
+export type PromptCompositionBlock = {
+  name: string;
+  byteSize: number;
+  tokenEstimate: number;
+  contentHash: string;
+};
+
+export type PromptCompositionRequest = {
+  blocks: PromptCompositionBlock[];
+};
+
+export type PromptCompositionTelemetry = {
+  version: 1;
+  requests: PromptCompositionRequest[];
+};
+
+/**
+ * Ephemeral source hints used only to partition rendered system prompt blocks
+ * before hashing. Providers must never send or log this metadata.
+ */
+export type PromptCompositionSource = {
+  injectedFiles?: Array<{ path: string; content: string }>;
+};
+
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -79,6 +107,16 @@ export interface StreamOptions {
    * Return undefined to keep the payload unchanged.
    */
   onPayload?: (payload: unknown, model: Model) => MaybePromise<unknown>;
+  /**
+   * Ephemeral source hints used to derive content-free prompt-shape telemetry.
+   * This data is not part of the provider payload.
+   */
+  promptComposition?: PromptCompositionSource;
+  /**
+   * Receives only byte counts, token estimates, and hashes for a final provider
+   * request. Prompt content is deliberately not exposed by this callback.
+   */
+  onPromptComposition?: (request: PromptCompositionRequest, model: Model) => MaybePromise<void>;
   /**
    * Optional callback invoked after an HTTP response is received and before
    * its body stream is consumed.

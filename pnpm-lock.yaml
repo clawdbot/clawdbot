@@ -2084,6 +2084,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/vctraderai-get-data-vault-dataset:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/vctraderai-get-experiment-run:
     dependencies:
       typebox:
@@ -2436,6 +2449,19 @@ importers:
         version: link:../..
 
   extensions/vctraderai-list-current-deployments:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/vctraderai-list-data-vault-datasets:
     dependencies:
       typebox:
         specifier: 1.1.38
@@ -3008,6 +3034,19 @@ importers:
         version: link:../..
 
   extensions/vctraderai-stop-heartbeat:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/vctraderai-store-dataset:
     dependencies:
       typebox:
         specifier: 1.1.38

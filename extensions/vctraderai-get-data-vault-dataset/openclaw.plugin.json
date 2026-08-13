@@ -1,0 +1,8 @@
+{
+  "id": "vctraderai-get-data-vault-dataset",
+  "name": "VC Trader AI Get Data Vault Dataset",
+  "description": "Workspace-scoped bounded Data Vault preview tool using PFM_AGENT_TOKEN.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["get_data_vault_dataset"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "vctraderai-store-dataset",
+  "name": "VC Trader AI Store Dataset",
+  "description": "Workspace-scoped immutable Data Vault write tool. Uses the PFM_AGENT_TOKEN owner credential at the BFF boundary.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["store_dataset"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

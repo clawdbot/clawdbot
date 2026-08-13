@@ -15,6 +15,12 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: vctraderai-data-vault":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-store-dataset/**"
+          - "extensions/vctraderai-list-data-vault-datasets/**"
+          - "extensions/vctraderai-get-data-vault-dataset/**"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:

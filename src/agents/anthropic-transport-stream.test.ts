@@ -1,6 +1,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -206,6 +207,114 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("marks only the stable system prefix with the explicit one-hour cache TTL", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        systemPrompt: `Stable trading policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic market snapshot`,
+        messages: [{ role: "user", content: "Summarize the position." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        cacheRetention: "long",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Stable trading policy",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+      { type: "text", text: "Dynamic market snapshot" },
+    ]);
+    expect(payload.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Summarize the position.",
+            cache_control: { type: "ephemeral", ttl: "1h" },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("emits hash-only prompt composition for the actual Anthropic request", async () => {
+    const telemetry: Array<{ blocks: Array<Record<string, unknown>> }> = [];
+    const agentsContent = "Follow the workspace trading controls.";
+    const memoryContent = "MEMORY-SECRET: retain a private preference.";
+    const userContent = "What is the current portfolio exposure?";
+
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        systemPrompt: [
+          "You are the VC Trader AI.",
+          "# Project Context",
+          "",
+          "The following project context files have been loaded:",
+          "",
+          "## /workspace/AGENTS.md",
+          "",
+          agentsContent,
+          "",
+          "## /workspace/MEMORY.md",
+          "",
+          memoryContent,
+        ].join("\n"),
+        messages: [{ role: "user", content: userContent }],
+        tools: [
+          {
+            name: "tool_search",
+            description: "Search the allowed tool surface.",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        promptComposition: {
+          injectedFiles: [
+            { path: "/workspace/AGENTS.md", content: agentsContent },
+            { path: "/workspace/MEMORY.md", content: memoryContent },
+          ],
+        },
+        onPromptComposition: (request) => telemetry.push(request),
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    expect(telemetry).toHaveLength(1);
+    const blocks = telemetry[0]?.blocks ?? [];
+    expect(blocks.map((block) => block.name)).toEqual([
+      "system-preamble",
+      "bootstrap:/workspace/AGENTS.md",
+      "memory",
+      "tool-search-surface",
+      "conversation-history",
+    ]);
+    for (const block of blocks) {
+      expect(Object.keys(block).sort()).toEqual([
+        "byteSize",
+        "contentHash",
+        "name",
+        "tokenEstimate",
+      ]);
+      expect(block.contentHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(block.byteSize).toEqual(expect.any(Number));
+      expect(block.tokenEstimate).toEqual(expect.any(Number));
+    }
+    expect(blocks.find((block) => block.name === "memory")?.byteSize).toBe(
+      Buffer.byteLength(memoryContent, "utf8"),
+    );
+    expect(JSON.stringify(telemetry)).not.toContain(agentsContent);
+    expect(JSON.stringify(telemetry)).not.toContain(memoryContent);
+    expect(JSON.stringify(telemetry)).not.toContain(userContent);
   });
 
   it("strips the provider prefix from direct Anthropic request model ids", async () => {

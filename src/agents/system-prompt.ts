@@ -153,7 +153,7 @@ function isBootstrapContextFile(pathValue: string): boolean {
   return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
 }
 
-function sanitizeContextFileContentForPrompt(content: string): string {
+export function sanitizeContextFileContentForPrompt(content: string): string {
   // Claude Code subscription mode rejects this exact prompt-policy quote when it
   // appears in system context. The live heartbeat user turn still carries the
   // actual instruction, and the generated heartbeat section below covers behavior.

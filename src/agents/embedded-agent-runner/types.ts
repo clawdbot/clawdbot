@@ -5,6 +5,7 @@ import type {
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { PromptCompositionTelemetry } from "../../llm/types.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type {
   MessagingToolSend,
@@ -18,6 +19,15 @@ export type EmbeddedAgentMeta = {
   sessionFile?: string;
   provider: string;
   model: string;
+  /**
+   * Prompt-cache retention selected for this run. Kept with the aggregate
+   * usage so downstream metering can price cache writes at their actual TTL.
+   */
+  cacheRetention?: "none" | "short" | "long" | "in_memory" | "24h";
+  /** Provider-specific response/request identifier, when the transport exposes one. */
+  providerRequestId?: string;
+  /** Content-free composition records for each provider request in this turn. */
+  promptComposition?: PromptCompositionTelemetry;
   contextTokens?: number;
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];

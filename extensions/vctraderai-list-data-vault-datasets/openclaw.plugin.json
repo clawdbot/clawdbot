@@ -1,0 +1,8 @@
+{
+  "id": "vctraderai-list-data-vault-datasets",
+  "name": "VC Trader AI List Data Vault Datasets",
+  "description": "Workspace-scoped immutable Data Vault catalogue reader using PFM_AGENT_TOKEN.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["list_data_vault_datasets"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

@@ -126,6 +126,60 @@ function shouldSuppressHeartbeatToolEvents(runId: string, sourceRunId?: string):
   return Boolean(resolveHeartbeatContext(runId, sourceRunId)?.isHeartbeat);
 }
 
+/**
+ * Gateway-side defense in depth for prompt-shape telemetry. Lifecycle events
+ * may originate outside the embedded runner, so only the content-free schema
+ * is permitted into chat.final.
+ */
+function sanitizePromptCompositionTelemetry(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const composition = value as Record<string, unknown>;
+  if (composition.version !== 1 || !Array.isArray(composition.requests)) {
+    return undefined;
+  }
+  const requests = composition.requests
+    .slice(0, 100)
+    .map((request) => {
+      if (!request || typeof request !== "object" || Array.isArray(request)) {
+        return undefined;
+      }
+      const blocks = (request as Record<string, unknown>).blocks;
+      if (!Array.isArray(blocks)) {
+        return undefined;
+      }
+      const sanitizedBlocks = blocks.slice(0, 100).flatMap((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return [];
+        }
+        const record = block as Record<string, unknown>;
+        const name = typeof record.name === "string" ? record.name.trim() : "";
+        const byteSize = record.byteSize;
+        const tokenEstimate = record.tokenEstimate;
+        const contentHash = record.contentHash;
+        if (
+          !name ||
+          name.length > 512 ||
+          typeof byteSize !== "number" ||
+          !Number.isSafeInteger(byteSize) ||
+          byteSize < 0 ||
+          typeof tokenEstimate !== "number" ||
+          !Number.isSafeInteger(tokenEstimate) ||
+          tokenEstimate < 0 ||
+          typeof contentHash !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(contentHash)
+        ) {
+          return [];
+        }
+        return [{ name, byteSize, tokenEstimate, contentHash }];
+      });
+      return sanitizedBlocks.length > 0 ? { blocks: sanitizedBlocks } : undefined;
+    })
+    .filter((request): request is { blocks: Record<string, unknown>[] } => Boolean(request));
+  return requests.length > 0 ? { version: 1, requests } : undefined;
+}
+
 function normalizeHeartbeatChatFinalText(params: {
   runId: string;
   sourceRunId?: string;
@@ -421,10 +475,21 @@ export function createAgentEventHandler({
         // failover fallback) carried on the terminal lifecycle event.
         const evtModel = typeof evt.data?.model === "string" ? evt.data.model : undefined;
         const evtProvider = typeof evt.data?.provider === "string" ? evt.data.provider : undefined;
+        const evtProviderUsage =
+          evt.data?.providerUsage &&
+          typeof evt.data.providerUsage === "object" &&
+          !Array.isArray(evt.data.providerUsage)
+            ? (evt.data.providerUsage as Record<string, unknown>)
+            : undefined;
+        const evtPromptComposition = sanitizePromptCompositionTelemetry(
+          evt.data?.promptComposition,
+        );
         const terminalOpts = {
           controlUiVisible: isControlUiVisible,
           ...(evtModel ? { model: evtModel } : {}),
           ...(evtProvider ? { provider: evtProvider } : {}),
+          ...(evtProviderUsage ? { providerUsage: evtProviderUsage } : {}),
+          ...(evtPromptComposition ? { promptComposition: evtPromptComposition } : {}),
         };
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
@@ -674,7 +739,13 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
     errorKind?: ErrorKind,
-    opts?: { controlUiVisible?: boolean; model?: string; provider?: string },
+    opts?: {
+      controlUiVisible?: boolean;
+      model?: string;
+      provider?: string;
+      providerUsage?: Record<string, unknown>;
+      promptComposition?: Record<string, unknown>;
+    },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: false,
@@ -685,6 +756,10 @@ export function createAgentEventHandler({
       ...(opts?.model ? { model: opts.model } : {}),
       ...(opts?.provider ? { provider: opts.provider } : {}),
     };
+    const providerUsageFields = opts?.providerUsage ? { providerUsage: opts.providerUsage } : {};
+    const promptCompositionFields = opts?.promptComposition
+      ? { promptComposition: opts.promptComposition }
+      : {};
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
@@ -701,6 +776,8 @@ export function createAgentEventHandler({
         state: "final" as const,
         ...(stopReason && { stopReason }),
         ...servedFields,
+        ...providerUsageFields,
+        ...promptCompositionFields,
         message:
           text && !shouldSuppressSilent
             ? {

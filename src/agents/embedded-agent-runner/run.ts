@@ -1157,6 +1157,7 @@ export async function runEmbeddedAgent(
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+      let promptComposition: EmbeddedAgentMeta["promptComposition"] | undefined;
       let autoCompactionCount = 0;
       let lastCompactionTokensAfter: number | undefined;
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
@@ -1717,6 +1718,15 @@ export async function runEmbeddedAgent(
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          if (attempt.promptComposition?.requests.length) {
+            promptComposition = {
+              version: 1,
+              requests: [
+                ...(promptComposition?.requests ?? []),
+                ...attempt.promptComposition.requests,
+              ],
+            };
+          }
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
@@ -2858,6 +2868,13 @@ export async function runEmbeddedAgent(
             sessionFile: sessionFileUsed,
             provider: reportedModelRef.provider,
             model: reportedModelRef.model,
+            ...(attempt.promptCache?.retention
+              ? { cacheRetention: attempt.promptCache.retention }
+              : {}),
+            ...(sessionLastAssistant?.responseId
+              ? { providerRequestId: sessionLastAssistant.responseId }
+              : {}),
+            ...(promptComposition ? { promptComposition } : {}),
             contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,

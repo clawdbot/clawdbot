@@ -1217,6 +1217,104 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
+function buildProviderUsageForTerminal(agentMeta: unknown): Record<string, unknown> | undefined {
+  if (!agentMeta || typeof agentMeta !== "object" || Array.isArray(agentMeta)) {
+    return undefined;
+  }
+  const meta = agentMeta as Record<string, unknown>;
+  const provider = readStringValue(meta.provider);
+  const model = readStringValue(meta.model);
+  const usage = meta.usage;
+  if (!provider || !model || !usage || typeof usage !== "object" || Array.isArray(usage)) {
+    return undefined;
+  }
+
+  const usageRecord = usage as Record<string, unknown>;
+  const tokenCount = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  const cacheWriteTokens = tokenCount(usageRecord.cacheWrite);
+  const retention = readStringValue(meta.cacheRetention);
+  const cacheWriteFields =
+    retention === "long"
+      ? { cacheWrite1hTokens: cacheWriteTokens }
+      : retention === "short"
+        ? { cacheWrite5mTokens: cacheWriteTokens }
+        : { cacheWriteTokens };
+  const providerRequestId = readStringValue(meta.providerRequestId);
+
+  return {
+    version: 2,
+    provider,
+    model,
+    uncachedInputTokens: tokenCount(usageRecord.input),
+    cacheReadTokens: tokenCount(usageRecord.cacheRead),
+    ...cacheWriteFields,
+    outputTokens: tokenCount(usageRecord.output),
+    reasoningTokens: tokenCount(usageRecord.reasoningTokens),
+    ...(providerRequestId ? { providerRequestId } : {}),
+  };
+}
+
+/**
+ * Explicit allowlist at the lifecycle boundary. This guarantees that prompt
+ * content cannot become terminal telemetry even if an upstream caller supplies
+ * a malformed object.
+ */
+function buildPromptCompositionForTerminal(
+  agentMeta: unknown,
+): Record<string, unknown> | undefined {
+  if (!agentMeta || typeof agentMeta !== "object" || Array.isArray(agentMeta)) {
+    return undefined;
+  }
+  const raw = (agentMeta as Record<string, unknown>).promptComposition;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const composition = raw as Record<string, unknown>;
+  if (composition.version !== 1 || !Array.isArray(composition.requests)) {
+    return undefined;
+  }
+  const requests = composition.requests
+    .slice(0, 100)
+    .map((request) => {
+      if (!request || typeof request !== "object" || Array.isArray(request)) {
+        return undefined;
+      }
+      const blocks = (request as Record<string, unknown>).blocks;
+      if (!Array.isArray(blocks)) {
+        return undefined;
+      }
+      const sanitizedBlocks = blocks.slice(0, 100).flatMap((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return [];
+        }
+        const value = block as Record<string, unknown>;
+        const name = readStringValue(value.name);
+        const byteSize = value.byteSize;
+        const tokenEstimate = value.tokenEstimate;
+        const contentHash = readStringValue(value.contentHash);
+        if (
+          !name ||
+          name.length > 512 ||
+          typeof byteSize !== "number" ||
+          !Number.isSafeInteger(byteSize) ||
+          byteSize < 0 ||
+          typeof tokenEstimate !== "number" ||
+          !Number.isSafeInteger(tokenEstimate) ||
+          tokenEstimate < 0 ||
+          !/^[a-f0-9]{64}$/u.test(contentHash)
+        ) {
+          return [];
+        }
+        return [{ name, byteSize, tokenEstimate, contentHash }];
+      });
+      return sanitizedBlocks.length > 0 ? { blocks: sanitizedBlocks } : undefined;
+    })
+    .filter((request): request is { blocks: Record<string, unknown>[] } => Boolean(request));
+
+  return requests.length > 0 ? { version: 1, requests } : undefined;
+}
+
 function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessionKey?: string }) {
   let terminalEmitted = false;
   let startedAt: number | undefined;
@@ -1251,6 +1349,14 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
         resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
           ? (resultOrError as { meta?: Record<string, unknown> }).meta
           : undefined;
+      const providerUsage = buildProviderUsageForTerminal(meta?.agentMeta);
+      if (providerUsage) {
+        data.providerUsage = providerUsage;
+      }
+      const promptComposition = buildPromptCompositionForTerminal(meta?.agentMeta);
+      if (promptComposition) {
+        data.promptComposition = promptComposition;
+      }
       if (meta?.aborted === true) {
         data.aborted = true;
       }
@@ -2172,6 +2278,9 @@ export async function runAgentTurnWithFallback(params: {
                   runEmbeddedAgent({
                     ...embeddedContext,
                     allowGatewaySubagentBinding: true,
+                    // The final terminal belongs here, after the embedded run
+                    // has produced provider usage and prompt-cache retention.
+                    deferTerminalLifecycleEnd: true,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                     groupChannel:

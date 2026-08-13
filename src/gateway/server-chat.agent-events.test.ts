@@ -2681,6 +2681,98 @@ describe("agent event handler", () => {
     expect(nodePayload.provider).toBe("deepinfra");
   });
 
+  it("forwards lifecycle cache-read provider usage to chat.final for BFF metering", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-provider-usage",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    chatRunState.registry.add("run-provider-usage", {
+      sessionKey: "session-provider-usage",
+      clientRunId: "run-provider-usage",
+    });
+    registerAgentRunContext("run-provider-usage", { sessionKey: "session-provider-usage" });
+
+    handler({
+      runId: "run-provider-usage",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "final answer" },
+    });
+    handler({
+      runId: "run-provider-usage",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "end",
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        providerUsage: {
+          version: 2,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          uncachedInputTokens: 1_250,
+          cacheReadTokens: 24_099,
+          cacheWrite1hTokens: 1_250,
+          outputTokens: 188,
+          reasoningTokens: 34,
+          providerRequestId: "msg_01ProviderUsage",
+        },
+        promptComposition: {
+          version: 1,
+          requests: [
+            {
+              blocks: [
+                {
+                  name: "memory",
+                  byteSize: 42,
+                  tokenEstimate: 11,
+                  contentHash: "a".repeat(64),
+                  content: "never forward this workspace data",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      providerUsage?: Record<string, unknown>;
+      promptComposition?: Record<string, unknown>;
+    };
+    expect(payload.state).toBe("final");
+    expect(payload.providerUsage).toEqual({
+      version: 2,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      uncachedInputTokens: 1_250,
+      cacheReadTokens: 24_099,
+      cacheWrite1hTokens: 1_250,
+      outputTokens: 188,
+      reasoningTokens: 34,
+      providerRequestId: "msg_01ProviderUsage",
+    });
+    expect(payload.promptComposition).toEqual({
+      version: 1,
+      requests: [
+        {
+          blocks: [
+            {
+              name: "memory",
+              byteSize: 42,
+              tokenEstimate: 11,
+              contentHash: "a".repeat(64),
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain("never forward this workspace data");
+  });
+
   it("carries the fallback serving model and provider on an error terminal", () => {
     const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-served-error",

@@ -1,7 +1,16 @@
+import { createHash } from "node:crypto";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
-import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import type {
+  Context,
+  Model,
+  PromptCompositionBlock,
+  PromptCompositionRequest,
+  PromptCompositionSource,
+  SimpleStreamOptions,
+  ThinkingLevel,
+} from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -55,7 +64,10 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+  Pick<
+    SimpleStreamOptions,
+    "reasoning" | "thinkingBudgets" | "promptComposition" | "onPromptComposition"
+  >;
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
@@ -65,6 +77,105 @@ type AnthropicMessagesClient = {
     ): AsyncIterable<Record<string, unknown>>;
   };
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toPromptCompositionJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    // Telemetry must be observational only. A malformed payload must never
+    // prevent the provider request, and its content must never be logged.
+    return "";
+  }
+}
+
+function buildPromptCompositionBlock(name: string, content: string): PromptCompositionBlock {
+  const byteSize = Buffer.byteLength(content, "utf8");
+  return {
+    name,
+    byteSize,
+    // Provider tokenizers vary; this intentionally remains a conservative,
+    // transparent UTF-8 byte estimate rather than claiming exact billing tokens.
+    tokenEstimate: Math.ceil(byteSize / 4),
+    contentHash: createHash("sha256").update(content, "utf8").digest("hex"),
+  };
+}
+
+function collectAnthropicSystemText(system: unknown): string {
+  const entries = Array.isArray(system) ? system : [system];
+  return entries
+    .map((entry) => (isRecord(entry) && typeof entry.text === "string" ? entry.text : ""))
+    .join("\n");
+}
+
+function resolvePromptCompositionFileBlocks(params: {
+  systemText: string;
+  source?: PromptCompositionSource;
+}): { blocks: PromptCompositionBlock[]; contentRanges: Array<{ start: number; end: number }> } {
+  const injectedFiles = params.source?.injectedFiles ?? [];
+  const blocks: PromptCompositionBlock[] = [];
+  const contentRanges: Array<{ start: number; end: number }> = [];
+
+  for (const file of injectedFiles) {
+    if (!file.path || typeof file.content !== "string") {
+      continue;
+    }
+    const header = `## ${file.path}\n\n`;
+    const headerIndex = params.systemText.indexOf(header);
+    if (headerIndex < 0) {
+      continue;
+    }
+    const start = headerIndex + header.length;
+    const end = start + file.content.length;
+    if (params.systemText.slice(start, end) !== file.content) {
+      continue;
+    }
+    const isMemory = /(^|[\\/])memory\.md$/iu.test(file.path.trim());
+    blocks.push(
+      buildPromptCompositionBlock(isMemory ? "memory" : `bootstrap:${file.path}`, file.content),
+    );
+    contentRanges.push({ start, end });
+  }
+
+  return { blocks, contentRanges };
+}
+
+/**
+ * Derive a request's prompt composition after all Anthropic payload policy and
+ * onPayload mutations. This function never returns prompt content.
+ */
+export function buildAnthropicPromptCompositionRequest(params: {
+  payload: Record<string, unknown>;
+  source?: PromptCompositionSource;
+}): PromptCompositionRequest {
+  const systemText = collectAnthropicSystemText(params.payload.system);
+  const { blocks: injectedFileBlocks, contentRanges } = resolvePromptCompositionFileBlocks({
+    systemText,
+    source: params.source,
+  });
+  let systemPreamble = systemText;
+  for (const range of [...contentRanges].sort((a, b) => b.start - a.start)) {
+    systemPreamble = `${systemPreamble.slice(0, range.start)}${systemPreamble.slice(range.end)}`;
+  }
+
+  return {
+    blocks: [
+      buildPromptCompositionBlock("system-preamble", systemPreamble),
+      ...injectedFileBlocks,
+      buildPromptCompositionBlock(
+        "tool-search-surface",
+        params.payload.tools === undefined ? "" : toPromptCompositionJson(params.payload.tools),
+      ),
+      buildPromptCompositionBlock(
+        "conversation-history",
+        toPromptCompositionJson(params.payload.messages),
+      ),
+    ],
+  };
+}
 
 function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
   if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
@@ -897,6 +1008,8 @@ function resolveAnthropicTransportOptions(
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,
+    promptComposition: options?.promptComposition,
+    onPromptComposition: options?.onPromptComposition,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
@@ -959,6 +1072,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
+        }
+        try {
+          await transportOptions.onPromptComposition?.(
+            buildAnthropicPromptCompositionRequest({
+              payload: params,
+              source: transportOptions.promptComposition,
+            }),
+            model,
+          );
+        } catch {
+          // Prompt-shape telemetry is strictly best-effort and must never alter
+          // request execution or emit prompt content through an error path.
         }
         const anthropicStream = client.messages.stream(
           { ...params, stream: true },

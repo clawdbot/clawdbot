@@ -32,7 +32,11 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type {
+  AssistantMessage,
+  PromptCompositionRequest,
+  PromptCompositionTelemetry,
+} from "../../../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
@@ -172,7 +176,10 @@ import {
 } from "../../subagent-capabilities.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  sanitizeContextFileContentForPrompt,
+} from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -3060,6 +3067,7 @@ export async function runEmbeddedAttempt(
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
+      let promptComposition: PromptCompositionTelemetry | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
       let lastCallUsage: NormalizedUsage | undefined;
@@ -3941,6 +3949,34 @@ export async function runEmbeddedAttempt(
                 }
               };
             };
+            const promptCompositionSource = {
+              injectedFiles: contextFiles.map((file) => ({
+                path: file.path,
+                content: sanitizeContextFileContentForPrompt(file.content),
+              })),
+            };
+            const installPromptCompositionTelemetryCapture = (): (() => void) => {
+              const baseStreamFn = activeSession.agent.streamFn;
+              const requests: PromptCompositionRequest[] = [];
+              const promptCompositionStreamFn: typeof baseStreamFn = (model, context, options) =>
+                baseStreamFn(model, context, {
+                  ...options,
+                  promptComposition: promptCompositionSource,
+                  onPromptComposition: async (request, requestModel) => {
+                    requests.push(request);
+                    await options?.onPromptComposition?.(request, requestModel);
+                  },
+                });
+              activeSession.agent.streamFn = promptCompositionStreamFn;
+              return () => {
+                if (activeSession.agent.streamFn === promptCompositionStreamFn) {
+                  activeSession.agent.streamFn = baseStreamFn;
+                }
+                if (requests.length > 0) {
+                  promptComposition = { version: 1, requests };
+                }
+              };
+            };
             finalPromptText = promptForSession;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
@@ -3969,6 +4005,8 @@ export async function runEmbeddedAttempt(
               }
             };
             const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+            const cleanupPromptCompositionTelemetryCapture =
+              installPromptCompositionTelemetryCapture();
             try {
               if (promptSubmission.runtimeOnly) {
                 await promptActiveSession(promptForSession, {
@@ -3997,6 +4035,7 @@ export async function runEmbeddedAttempt(
                 }
               }
             } finally {
+              cleanupPromptCompositionTelemetryCapture();
               cleanupProviderPromptHistoryTransform();
               cleanupModelPromptTransform();
             }
@@ -4703,6 +4742,7 @@ export async function runEmbeddedAttempt(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
         attemptUsage,
+        promptComposition,
         promptCache,
         contextBudgetStatus,
         compactionCount: getCompactionCount(),
