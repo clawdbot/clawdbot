@@ -132,7 +132,7 @@ export async function prepareGatewayServerBootstrap(input: {
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
-  const ambientEnvTriggers = opts.ambientEnvTriggers ?? "allow";
+  const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
