@@ -654,11 +654,10 @@ export async function spawnAcpDirect(
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
     progressSessionKey: ownership.completionRequesterSessionKey,
-    buildRegistration: (state, runId) => {
-      const inlineDelivery = state.deliveryPlan?.useInlineDelivery === true;
+    buildRegistration: (_state, runId) => {
       return {
         runId,
-        requesterTurnRunId: ctx.requesterTurnRunId,
+        lifecycleOwner: "acp",
         childSessionKey: sessionKey,
         controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
@@ -672,9 +671,8 @@ export async function spawnAcpDirect(
         cleanup: spawnMode === "session" ? "keep" : params.cleanup === "delete" ? "delete" : "keep",
         label: params.label,
         runTimeoutSeconds,
-        expectsCompletionMessage: inlineDelivery
-          ? false
-          : params.expectsCompletionMessage !== false,
+        // The canonical ACP task owns delivery. This row is topology/control only.
+        expectsCompletionMessage: false,
         spawnMode,
       };
     },

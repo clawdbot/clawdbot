@@ -1,6 +1,5 @@
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
@@ -33,7 +32,7 @@ import type {
   SubagentCompletionRequest,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { hasLiveRunOwner, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
@@ -256,7 +255,7 @@ export function createSubagentRegistrySweeper(params: {
             ? 1
             : entry.terminalOwner === "interrupted-recovery"
               ? 2
-              : !getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number"
+              : !hasLiveRunOwner(runId, entry) && typeof entry.execution.endedAt !== "number"
                 ? 3
                 : entry.killReconciliation
                   ? 4
@@ -356,15 +355,16 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
+          entry.lifecycleOwner !== "acp" &&
           (entry.execution.restartRecovery?.phase === "accepted" ||
             entry.terminalOwner === "interrupted-recovery" ||
-            (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
+            (!hasLiveRunOwner(runId, entry) && typeof entry.execution.endedAt !== "number")) &&
           (await recovery.recover(runId, entry, now))
         ) {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
-          const hasLiveRunContext = Boolean(getAgentRunContext(runId));
+          const hasLiveRunContext = hasLiveRunOwner(runId, entry);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });

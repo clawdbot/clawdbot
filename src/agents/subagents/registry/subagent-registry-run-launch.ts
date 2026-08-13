@@ -52,6 +52,8 @@ function resolveSwarmWaitOwnerSessionKeys(
 
 export type RegisterSubagentRunParams = {
   runId: string;
+  /** External runtime that owns terminal delivery and child-session cleanup. */
+  lifecycleOwner?: "acp";
   requesterTurnRunId?: string;
   childSessionKey: string;
   controllerSessionKey?: string;
@@ -115,6 +117,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const queued = registerParams.queued === true;
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
+      lifecycleOwner: registerParams.lifecycleOwner,
       taskRunId: runId,
       ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
         ? { requesterTurnRunId }
@@ -160,6 +163,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         status: queued ? "queued" : "running",
         startedAt: queued ? undefined : now,
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        // ACP has its own canonical task, liveness, delivery, and cleanup owner.
+        suppressSessionEffects: registerParams.lifecycleOwner === "acp" ? true : undefined,
       },
       completion: {
         required: registerParams.expectsCompletionMessage === true,
@@ -189,6 +194,16 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       throw error;
     }
     try {
+      if (registerParams.lifecycleOwner === "acp") {
+        // Keep the registry row for child topology and controls only. Creating a
+        // second subagent task gives the observer authority over ACP lifecycle.
+        this.options.ensureListener();
+        this.options.startSweeper();
+        if (!queued) {
+          void this.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+        }
+        return;
+      }
       const taskParams = {
         runtime: "subagent",
         sourceId: runId,
