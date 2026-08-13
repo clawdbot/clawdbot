@@ -220,9 +220,10 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
 }
 
 /**
- * Register a serialized call record event: prune, then metadata, then chunks.
+ * Register a serialized call record event: metadata, then chunks, then prune.
  * Each row commits independently; chunks must never exist without their
- * metadata row, or an interrupted write strands them until they evict live rows.
+ * metadata row, a failed write rolls its own rows back, and retention prunes
+ * only after the new snapshot has fully committed.
  */
 function registerCallRecordEvent(
   stores: CallRecordStateStores,
@@ -238,23 +239,32 @@ function registerCallRecordEvent(
       `voice-call record exceeds SQLite chunk limit (${chunkCount}/${MAX_CHUNKS_PER_CALL_RECORD_EVENT})`,
     );
   }
-  pruneCallRecordEvents(stores);
   stores.events.register(eventKey, {
     chunkCount,
     byteLength: buffer.byteLength,
     persistedAt: order?.persistedAt,
     sequence: order?.sequence,
   });
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunk = buffer.subarray(
-      index * RAW_CALL_RECORD_CHUNK_BYTES,
-      (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
-    );
-    stores.chunks.register(buildChunkKey(eventKey, index), {
-      index,
-      dataBase64: chunk.toString("base64"),
-    });
+  try {
+    for (let index = 0; index < chunkCount; index += 1) {
+      const chunk = buffer.subarray(
+        index * RAW_CALL_RECORD_CHUNK_BYTES,
+        (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
+      );
+      stores.chunks.register(buildChunkKey(eventKey, index), {
+        index,
+        dataBase64: chunk.toString("base64"),
+      });
+    }
+  } catch (err) {
+    try {
+      deleteCallRecordEventRows(stores, eventKey);
+    } catch {
+      // Preserve the original write failure; startup reconciliation cleans up.
+    }
+    throw err;
   }
+  pruneCallRecordEvents(stores);
 }
 
 /** Delete chunk rows, then metadata last so interrupted deletes stay visible. */
@@ -327,7 +337,8 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
 
 /**
  * Delete partial persistence debris: chunks with no metadata row (stranded by
- * the old chunk-first write order) and metadata rows missing chunks. Runs only
+ * the old chunk-first write order) and metadata rows missing chunks, then
+ * prune overage a crash left unpruned so bounded caps hold again. Runs only
  * from manager startup, before any new writes, so it cannot race a live write.
  */
 function reconcileCallRecordEventRows(stores: CallRecordStateStores): void {
@@ -351,6 +362,7 @@ function reconcileCallRecordEventRows(stores: CallRecordStateStores): void {
       stores.chunks.delete(key);
     }
   }
+  pruneCallRecordEvents(stores);
 }
 
 /** Persist one call record event to plugin state. */

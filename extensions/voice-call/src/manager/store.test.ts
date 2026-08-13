@@ -23,6 +23,7 @@ import {
   findCallMatchesInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
+  MAX_CALL_RECORD_EVENTS,
   persistCallRecord,
 } from "./store.js";
 
@@ -206,6 +207,75 @@ describe("voice-call call record store", () => {
 
     const restored = loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-interrupted")?.state).toBe("ringing");
+  });
+
+  it("keeps retained snapshots and rolls back rows when a persist fails", async () => {
+    const storePath = createTestStorePath();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
+    const events = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>("voice-call", {
+      namespace: CALL_RECORD_EVENTS_NAMESPACE,
+      maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+      env,
+    });
+    const chunks = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>("voice-call", {
+      namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+      maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+      env,
+    });
+    for (let index = 0; index <= MAX_CALL_RECORD_EVENTS; index += 1) {
+      const key = `event:seed:${String(index).padStart(6, "0")}:seeded`;
+      const serialized = JSON.stringify(
+        CallRecordSchema.parse(makePersistedCall({ callId: `call-seed-${index}` })),
+      );
+      events.register(key, {
+        chunkCount: 1,
+        byteLength: Buffer.byteLength(serialized, "utf8"),
+        persistedAt: index,
+        sequence: index % 1_000_000,
+      });
+      chunks.register(`${key}:chunk:0000`, {
+        index: 0,
+        dataBase64: Buffer.from(serialized, "utf8").toString("base64"),
+      });
+    }
+    setVoiceCallStateRuntime({
+      state: {
+        resolveStateDir: () => "",
+        openKeyedStore: (() => {
+          throw new Error("openKeyedStore is not used by voice-call store tests");
+        }) as never,
+        openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          const store = createPluginStateSyncKeyedStoreForTests<T>("voice-call", options);
+          if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
+            return store;
+          }
+          return {
+            ...store,
+            register: () => {
+              throw new Error("simulated write failure");
+            },
+          };
+        },
+        openChannelIngressQueue: (() => {
+          throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+        }) as never,
+      },
+    });
+    expect(() =>
+      persistCallRecord(
+        storePath,
+        CallRecordSchema.parse(makePersistedCall({ callId: "call-fail" })),
+      ),
+    ).toThrow("simulated write failure");
+
+    installStateRuntime();
+    expect(events.entries()).toHaveLength(MAX_CALL_RECORD_EVENTS + 1);
+    const history = await getCallHistoryFromStore(storePath, MAX_CALL_RECORD_EVENTS + 10);
+    expect(history.some((call) => call.callId === "call-seed-0")).toBe(true);
+    expect(history.some((call) => call.callId === "call-fail")).toBe(false);
   });
 
   it("removes stranded partial records on restore", () => {
