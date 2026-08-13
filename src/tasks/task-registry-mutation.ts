@@ -26,6 +26,7 @@ import {
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
+  hydrateWarmProjectedTaskForMutation,
   taskRegistryLog,
   rebuildRunIdIndex,
   taskDeliveryStates,
@@ -157,12 +158,21 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
+  const touchesDeferredField =
+    Object.hasOwn(patch, "terminalSummary") || Object.hasOwn(patch, "detail");
+  const mutationBase =
+    isWarmProjectedTaskRecord(current) && touchesDeferredField
+      ? hydrateWarmProjectedTaskForMutation(current)
+      : current;
+  if (!mutationBase) {
+    return null;
+  }
   let next = normalizeTaskTimestamps({
-    ...current,
+    ...mutationBase,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
   });
-  if (isWarmProjectedTaskRecord(current)) {
+  if (isWarmProjectedTaskRecord(current) && !touchesDeferredField) {
     next = markWarmProjectedTaskRecord(next);
   }
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {

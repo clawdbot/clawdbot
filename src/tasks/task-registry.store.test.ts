@@ -690,6 +690,44 @@ describe("task-registry store runtime", () => {
     );
   });
 
+  it("persists explicit deferred-field corrections after a projected warm restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-late-terminal-correction-" },
+      async () => {
+        const original: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-late-terminal-correction",
+          runId: "run-late-terminal-correction",
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          endedAt: 200,
+          terminalSummary: "original terminal summary",
+          detail: { version: "original", payload: "d".repeat(4_000) },
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([[original.taskId, original]]),
+          deliveryStates: new Map(),
+        });
+        reloadTaskRegistryFromStore();
+
+        const terminalSummary = "corrected terminal summary";
+        const detail = { version: "corrected", payload: "n".repeat(4_000) };
+        expect(
+          markTaskTerminalById({
+            taskId: original.taskId,
+            status: "succeeded",
+            endedAt: 300,
+            terminalSummary,
+            detail,
+          }),
+        ).toMatchObject({ terminalSummary, detail });
+
+        reloadTaskRegistryFromStore();
+        expect(getTaskById(original.taskId)).toMatchObject({ terminalSummary, detail });
+      },
+    );
+  });
+
   it("bounds startup hydration across large settled history", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-bounded-warm-" },
