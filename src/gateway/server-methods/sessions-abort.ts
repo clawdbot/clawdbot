@@ -33,6 +33,10 @@ import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  killControlledSubagentAbortSnapshot,
+  snapshotControlledSubagentAbort,
+} from "./chat-abort-runtime.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -384,6 +388,28 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     );
     if (!chatAbortSucceeded) {
       return;
+    }
+    if (!requestedRunId) {
+      const subagentResult = await killControlledSubagentAbortSnapshot(
+        cfg,
+        snapshotControlledSubagentAbort({
+          cfg,
+          sessionKey: canonicalKey,
+          agentId: abortAgentId,
+        }),
+      );
+      if (subagentResult && subagentResult.status !== "ok") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session stopped, but descendant cancellation was incomplete: ${subagentResult.error}`,
+          ),
+        );
+        return;
+      }
+      aborted ||= Boolean(subagentResult?.killed);
     }
     respond(
       true,

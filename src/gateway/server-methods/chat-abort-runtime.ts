@@ -1,4 +1,10 @@
 import {
+  killAllControlledSubagentRuns,
+  resolveSubagentController,
+} from "../../agents/subagents/registry/subagent-control.js";
+import { listSubagentRunsForController } from "../../agents/subagents/registry/subagent-registry-read.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
   abortChatRunById,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
@@ -24,6 +30,41 @@ import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.
 import type { GatewayRequestContext } from "./types.js";
 
 type AbortOrigin = "rpc" | "stop-command";
+
+export function snapshotControlledSubagentAbort(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  requesterTurnRunId?: string;
+}) {
+  const controller = resolveSubagentController({
+    cfg: params.cfg,
+    agentSessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  const runs = listSubagentRunsForController(
+    controller.controllerSessionKey,
+    controller.controllerAgentId,
+  ).filter(
+    (entry) =>
+      params.requesterTurnRunId === undefined ||
+      entry.requesterTurnRunId === params.requesterTurnRunId,
+  );
+  return { controller, runs };
+}
+
+export async function killControlledSubagentAbortSnapshot(
+  cfg: OpenClawConfig,
+  snapshot: ReturnType<typeof snapshotControlledSubagentAbort>,
+) {
+  return snapshot.runs.length === 0
+    ? undefined
+    : await killAllControlledSubagentRuns({
+        cfg,
+        ...snapshot,
+        suppressTaskDelivery: true,
+      });
+}
 
 const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
 

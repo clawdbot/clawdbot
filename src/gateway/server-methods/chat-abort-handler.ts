@@ -28,7 +28,9 @@ import {
   abortChatRunsForSessionKeyWithPartials,
   cancelWorkerInferenceForSession,
   createChatAbortOps,
+  killControlledSubagentAbortSnapshot,
   persistAbortedPartials,
+  snapshotControlledSubagentAbort,
 } from "./chat-abort-runtime.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
@@ -292,6 +294,12 @@ export async function handleChatAbortRequestWithLifecycle(
   if (!authorizeRunTarget(active)) {
     return;
   }
+  const controlledSubagents = snapshotControlledSubagentAbort({
+    cfg: abortCfg,
+    sessionKey: active.sessionKey,
+    agentId: active.agentId,
+    requesterTurnRunId: runId,
+  });
 
   const partialText = context.chatRunState.resolveBuffer(runId).text;
   const res = abortChatRunById(ops, {
@@ -313,6 +321,18 @@ export async function handleChatAbortRequestWithLifecycle(
         },
       ],
     });
+  }
+  const subagentResult = await killControlledSubagentAbortSnapshot(abortCfg, controlledSubagents);
+  if (subagentResult && subagentResult.status !== "ok") {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Parent run stopped, but descendant cancellation was incomplete: ${subagentResult.error}`,
+      ),
+    );
+    return;
   }
   respondWithWorkerRuns(res.aborted ? [runId] : [], active.sessionId);
 }
