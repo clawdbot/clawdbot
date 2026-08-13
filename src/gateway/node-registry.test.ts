@@ -25,6 +25,7 @@ import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import {
   createNodeRegistryRuntime,
   isNodeRunnerSessionHost,
+  setNodeRunnerInventoryChangedListener,
   updateNodeRunnerInventory,
 } from "./node-registry-private.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
@@ -469,6 +470,53 @@ describe("gateway/node-registry", () => {
         pairingGeneration: "generation-b",
       }),
     ).toBe(true);
+  });
+
+  it("notifies when same-node replacement removes runner eligibility", async () => {
+    const inventoryChanged = vi.fn();
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    setNodeRunnerInventoryChangedListener(nodeRegistry, inventoryChanged);
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    ).toEqual({ changed: true });
+    expect(inventoryChanged).toHaveBeenCalledTimes(1);
+
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-2", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+
+    expect(inventoryChanged).toHaveBeenCalledTimes(2);
+    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
+    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    expect(
+      isNodeRunnerSessionHost({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-2",
+        pairingGeneration: "generation-a",
+      }),
+    ).toBe(false);
   });
 
   it("fences a retained private proof after the advertised worker build changes", async () => {

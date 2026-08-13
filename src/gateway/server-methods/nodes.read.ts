@@ -16,7 +16,6 @@ import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
-import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "../events.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
@@ -405,13 +404,6 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     if (!nodeId || !updated) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
       return;
-    }
-    if (updated.changed) {
-      context.broadcast(
-        GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
-        { nodeId },
-        { dropIfSlow: true },
-      );
     }
     respond(true, { nodeId }, undefined);
   },

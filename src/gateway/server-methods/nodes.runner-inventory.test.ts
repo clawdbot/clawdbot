@@ -2,8 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "../events.js";
-import { createNodeRegistryRuntime } from "../node-registry-private.js";
+import {
+  createNodeRegistryRuntime,
+  setNodeRunnerInventoryChangedListener,
+} from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeHandlers } from "./nodes.js";
@@ -32,7 +34,7 @@ function runnerInventoryOptions(params: {
     client: params.client as never,
     isWebchatConnect: () => false,
     respond: vi.fn(),
-    context: { nodeRegistry: params.nodeRegistry, broadcast: vi.fn() },
+    context: { nodeRegistry: params.nodeRegistry },
   } as unknown as GatewayRequestHandlerOptions;
 }
 
@@ -43,7 +45,9 @@ const runnerInventoryHandler = expectDefined(
 
 describe("nodeHandlers node.runnerInventory.update", () => {
   it("publishes the atomic runner inventory for the exact authenticated node session", async () => {
+    const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -61,11 +65,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await runnerInventoryHandler(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
-    expect(opts.context.broadcast).toHaveBeenCalledWith(
-      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
-      { nodeId: "node-1" },
-      { dropIfSlow: true },
-    );
+    expect(inventoryChanged).toHaveBeenCalledWith("node-1");
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
@@ -106,8 +106,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("does not broadcast an identical inventory publication", async () => {
+  it("does not notify for an identical inventory publication", async () => {
+    const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -131,8 +133,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await runnerInventoryHandler(first);
     await runnerInventoryHandler(second);
 
-    expect(first.context.broadcast).toHaveBeenCalledOnce();
-    expect(second.context.broadcast).not.toHaveBeenCalled();
+    expect(inventoryChanged).toHaveBeenCalledTimes(1);
     runtime.nodeRegistry.unregister("conn-1");
   });
 
