@@ -47,6 +47,7 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
+  agentDir: string;
   contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
@@ -218,6 +219,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
           provider: providerUsed,
           model: modelUsed,
           config: cfg,
+          agentDir: params.agentDir,
         }),
       }),
     );

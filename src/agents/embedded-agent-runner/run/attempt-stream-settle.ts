@@ -629,6 +629,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
         `(${attempt.provider}/${attempt.modelId})`,
     );
   }
+  session.agent.transport = effectiveAgentTransport;
   return {
     effectiveAgentTransport,
     effectiveExtraParams,

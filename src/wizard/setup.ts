@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
-import { ConfigMutationConflictError, resolveGatewayPort } from "../config/config.js";
+import { ConfigMutationConflictError } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -289,7 +289,7 @@ async function runSetupWizardOnce(
 
   const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(
     baseConfig,
-    wizardFlow === "quickstart" ? opts : undefined,
+    opts,
   );
 
   if (flow === "quickstart") {
@@ -341,13 +341,13 @@ async function runSetupWizardOnce(
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
-  const localPort = resolveGatewayPort(baseConfig);
+  const localPort = quickstartGateway.port;
   const localUrl = `ws://127.0.0.1:${localPort}`;
   let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   try {
     const resolvedGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
+      value: quickstartGateway.token,
       path: "gateway.auth.token",
       env: process.env,
     });
@@ -367,7 +367,7 @@ async function runSetupWizardOnce(
   try {
     const resolvedGatewayPassword = await resolveSetupSecretInputString({
       config: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
+      value: quickstartGateway.password,
       path: "gateway.auth.password",
       env: process.env,
     });

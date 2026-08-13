@@ -1754,6 +1754,23 @@ describe("refreshChatMetadata", () => {
 });
 
 describe("refreshChatModelAuthStatus", () => {
+  it("scopes auth status to the selected session agent", async () => {
+    const request = vi.fn(async () => ({ ts: 1, providers: [] }));
+    const state = {
+      client: { request },
+      connected: true,
+      connectionEpoch: 1,
+      sessionKey: "agent:work:dashboard:current",
+      assistantAgentId: "main",
+      modelAuthStatusResult: null,
+      modelAuthStatusError: null,
+    } as unknown as ChatPageHost;
+
+    await refreshChatModelAuthStatus(state);
+
+    expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+  });
+
   it.each(["success", "failure"] as const)(
     "ignores a stale auth status %s after reconnecting the same client",
     async (outcome) => {

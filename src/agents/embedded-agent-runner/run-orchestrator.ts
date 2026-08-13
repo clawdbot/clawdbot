@@ -26,9 +26,9 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -250,7 +250,9 @@ async function runEmbeddedAgentInternal(
         config,
         agentId: requestedWorkspaceResolution.agentId,
         agentDir: requestedAgentDir,
-        inheritedAuthDir: resolveDefaultAgentDir(config),
+        // Shared credential inheritance stays anchored to its compatibility owner;
+        // the selected session agent already owns this prepared runtime.
+        inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),

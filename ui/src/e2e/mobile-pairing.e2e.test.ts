@@ -70,7 +70,7 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("/pair ");
         await page.getByRole("button", { name: "Send message" }).click();
 
-        const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
+        const dialog = page.getByRole("dialog", { name: "Pair a device" });
         await dialog.waitFor();
         expect(await gateway.getRequests("chat.send")).toEqual([]);
         expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
