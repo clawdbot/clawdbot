@@ -639,6 +639,96 @@ describe("createDiscordMessageHandler queue behavior", () => {
     });
   });
 
+  it.each(["returns", "throws"] as const)(
+    "preserves retry facts when a started durable Discord job %s after cancellation",
+    async (outcome) => {
+      await withDiscordQueue(async (queue) => {
+        const id = `started-cancelled-${outcome}`;
+        const raw = createRawMessage(id, "lane-a");
+        await queue.enqueue(
+          id,
+          { version: 1, receivedAt: 10, rawMessage: raw },
+          { laneKey: "channel:lane-a", receivedAt: 10 },
+        );
+        const failedClaim = await queue.claim(id, { ownerId: "failed-owner" });
+        expect(failedClaim).not.toBeNull();
+        if (!failedClaim) {
+          return;
+        }
+        await queue.release(failedClaim, {
+          lastError: "previous genuine failure",
+          releasedAt: 20,
+        });
+        const before = (await queue.listPending())[0];
+        const processingStarted = createDeferred<void>();
+        const finishProcessing = createDeferred<void>();
+        let processingSignal: AbortSignal | undefined;
+        const processDiscordMessage = vi.fn(async (ctx: { abortSignal?: AbortSignal }) => {
+          processingSignal = ctx.abortSignal;
+          processingStarted.resolve();
+          await finishProcessing.promise;
+          if (outcome === "throws") {
+            throw new Error("processing stopped after cancellation");
+          }
+        });
+        const params = createDiscordHandlerParams();
+        const handler = createDurableDiscordMessageHandler({
+          ...params,
+          client: {} as never,
+          testing: {
+            preflightDiscordMessage: (async (preflightParams: {
+              abortSignal?: AbortSignal;
+              data: ReturnType<typeof createTextMessageData>;
+              turnAdoptionLifecycle?: DiscordIngressLifecycle;
+            }) => ({
+              ...createPreflightContextForMessage(preflightParams.data),
+              abortSignal: preflightParams.abortSignal,
+              turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
+            })) as never,
+            processDiscordMessage: processDiscordMessage as never,
+            createIngressMonitor: (monitorParams) =>
+              createDiscordIngressMonitor({ ...monitorParams, queue }),
+          },
+        });
+
+        await processingStarted.promise;
+        const deactivation = handler.deactivate();
+        await vi.waitFor(() => expect(processingSignal?.aborted).toBe(true));
+        finishProcessing.resolve();
+        await deactivation;
+
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id,
+            attempts: before?.attempts,
+            lastAttemptAt: before?.lastAttemptAt,
+            lastError: before?.lastError,
+          }),
+        ]);
+
+        const recovered = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+          await lifecycle.onAdopted();
+        });
+        const replacement = createDiscordIngressMonitor({
+          accountId: "default",
+          client: {} as never,
+          runtime: params.runtime,
+          queue,
+          dispatch: recovered,
+        });
+        replacement.start();
+        try {
+          await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1));
+          await expect(queue.enqueue(id, {} as DiscordIngressPayload)).resolves.toMatchObject({
+            kind: "completed",
+          });
+        } finally {
+          await replacement.stop();
+        }
+      });
+    },
+  );
+
   it("preserves retry facts when deactivation skips a queued durable Discord job", async () => {
     await withDiscordQueue(async (queue) => {
       const raw = createRawMessage("queued-cancelled", "lane-a");

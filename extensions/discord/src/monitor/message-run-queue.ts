@@ -45,12 +45,18 @@ async function processDiscordQueuedMessage(params: {
       (await loadMessageProcessRuntime()).processDiscordMessage;
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
     if (abortSignal?.aborted) {
-      await params.job.ingressSettlement?.abandon(abortSignal.reason);
+      // Cancellation ended ownership before delivery; retain prior retry facts
+      // so the durable claim can replay under a replacement lifecycle.
+      await params.job.ingressSettlement?.cancel();
     } else {
       await params.job.ingressSettlement?.settle();
     }
   } catch (error) {
-    await params.job.ingressSettlement?.abandon(error);
+    if (abortSignal?.aborted) {
+      await params.job.ingressSettlement?.cancel();
+    } else {
+      await params.job.ingressSettlement?.abandon(error);
+    }
     throw error;
   }
 }
