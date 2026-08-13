@@ -265,6 +265,30 @@ describe("node-host worker supervisor commands", () => {
     expect(payload.stdout).toBe(payload.workspaceDir);
   });
 
+  it("accepts the bounded script-sized argv used by workspace manifest capture", async () => {
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-script-"),
+      env: { PATH: process.env.PATH },
+    });
+    const script = `/* ${"x".repeat(16 * 1024)} */ process.stdout.write("captured")`;
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["node", "-e", script],
+      }),
+      workspace,
+    });
+
+    if (!result?.ok) {
+      throw new Error(`workspace script invoke failed: ${JSON.stringify(result)}`);
+    }
+    expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({ stdout: "captured" });
+  });
+
   it("returns completed worker output without internal process fields", async () => {
     const input = launchInput();
     const resultJson = JSON.stringify({

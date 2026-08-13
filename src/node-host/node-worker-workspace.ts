@@ -12,6 +12,7 @@ import {
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
+import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -43,7 +44,12 @@ function resolveArgumentPath(workspaceDir: string, arg: string): string | undefi
 function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
   // This private transport owns cwd and direct path operands; it is not the user-facing
   // system.run policy domain, so absolute/relative escapes must never cross its workspace.
-  for (const arg of argv) {
+  for (const [index, arg] of argv.entries()) {
+    // Canonical workspace helpers travel as the source operand to `node -e`.
+    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
+    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+      continue;
+    }
     const candidate = resolveArgumentPath(workspaceDir, arg);
     if (!candidate) {
       continue;
@@ -121,6 +127,7 @@ export class NodeWorkerWorkspaceRuntime {
   async exec(
     input: NodeWorkerWorkspaceExecInput,
     signal?: AbortSignal,
+    gateway?: { url: string; tlsFingerprint?: string },
   ): Promise<NodeWorkerWorkspaceExecResult> {
     const gatewayRoot = ensureContainedDirectory(this.root, input.gatewayNamespace);
     const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
@@ -134,6 +141,46 @@ export class NodeWorkerWorkspaceRuntime {
     );
     const workspaceName = String(input.generation);
     const workspacePath = path.join(sessionRoot, workspaceName);
+    if (input.transfer) {
+      if (input.resetWorkspace) {
+        throw new Error("INVALID_REQUEST: workspace transfer owns its atomic replacement");
+      }
+      if (!gateway?.url) {
+        throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
+      }
+      try {
+        const stats = fs.lstatSync(workspacePath);
+        const resolved = fs.realpathSync.native(workspacePath);
+        if (
+          stats.isSymbolicLink() ||
+          !stats.isDirectory() ||
+          !isPathInside(sessionRoot, resolved)
+        ) {
+          throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      const stdout = await runNodeWorkerWorkspaceTransfer({
+        gatewayUrl: gateway.url,
+        gatewayTlsFingerprint: gateway.tlsFingerprint,
+        environmentId: input.environmentId,
+        workspaceDir: workspacePath,
+        manifestHome: sessionRoot,
+        transfer: input.transfer,
+        signal,
+      });
+      return projectWorkspaceResult(workspacePath, {
+        stdout: `${stdout}\n`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    }
     if (input.resetWorkspace) {
       try {
         const stats = fs.lstatSync(workspacePath);
@@ -157,8 +204,8 @@ export class NodeWorkerWorkspaceRuntime {
     assertWorkspaceArgv(workspaceDir, input.argv);
     const commandEnv = {
       ...this.env,
-      HOME: workspaceDir,
-      ...(process.platform === "win32" ? { USERPROFILE: workspaceDir } : {}),
+      HOME: sessionRoot,
+      ...(process.platform === "win32" ? { USERPROFILE: sessionRoot } : {}),
     };
     const result = await runCommandWithTimeout(input.argv, {
       cwd: workspaceDir,
