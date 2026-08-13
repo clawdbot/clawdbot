@@ -55,7 +55,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     onRefresh: () => {},
     onCancel: () => {},
     onOpenTaskDetail: undefined,
-    onSelectTask: () => {},
     ...overrides,
   };
 }

@@ -35,7 +35,6 @@ function backgroundTasks(task: TaskSummary): BackgroundTasksProps {
     onToggleFinished: () => undefined,
     onRefresh: () => undefined,
     onCancel: () => undefined,
-    onSelectTask: () => undefined,
   };
 }
 

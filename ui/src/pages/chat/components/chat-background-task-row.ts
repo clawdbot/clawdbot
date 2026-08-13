@@ -100,14 +100,14 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
         if (target instanceof Element && target.closest("button, a")) {
           return;
         }
-        props.onSelectTask(task);
+        props.onOpenTaskDetail?.(task);
       }}
     >
       <div class="chat-tasks-rail__task-head">
         <button
           class="chat-tasks-rail__task-open"
           type="button"
-          @click=${() => props.onSelectTask(task)}
+          @click=${() => props.onOpenTaskDetail?.(task)}
         >
           ${task.status === "running"
             ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`

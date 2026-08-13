@@ -602,6 +602,5 @@ export function createBackgroundTasksProps(
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
     onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
     onOpenTaskDetail: opts.onOpenTaskDetail,
-    onSelectTask: (task) => opts.onOpenTaskDetail?.(task),
   };
 }

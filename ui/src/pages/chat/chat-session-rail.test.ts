@@ -67,7 +67,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onSelectTask: () => {},
   };
 }
 

@@ -879,7 +879,6 @@ function createBackgroundTasks(
     onToggleFinished: () => undefined,
     onRefresh: () => undefined,
     onCancel: () => undefined,
-    onSelectTask: () => undefined,
     ...overrides,
   };
 }

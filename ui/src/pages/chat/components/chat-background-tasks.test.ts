@@ -87,7 +87,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTas
     onToggleFinished: () => {},
     onRefresh: () => {},
     onCancel: () => {},
-    onSelectTask: () => {},
     ...overrides,
   };
 }
@@ -256,7 +255,7 @@ describe("background tasks rail state", () => {
       openTaskId: running.id,
       onOpenTaskDetail,
     });
-    selected.onSelectTask(running);
+    selected.onOpenTaskDetail?.(running);
     expect(onOpenTaskDetail).toHaveBeenCalledWith(running);
     expect(selected.openTaskId).toBe(running.id);
     expect(request).not.toHaveBeenCalledWith("tasks.get", expect.anything());
@@ -544,7 +543,7 @@ describe("background tasks rail events", () => {
 describe("background tasks rail rendering", () => {
   it("routes every task runtime to the panel and highlights the open task", () => {
     const onCancel = vi.fn();
-    const onSelectTask = vi.fn();
+    const onOpenTaskDetail = vi.fn();
     const container = renderTaskRail({
       canCancel: true,
       openTaskId: "task-2",
@@ -563,7 +562,7 @@ describe("background tasks rail rendering", () => {
         }),
       ],
       onCancel,
-      onSelectTask,
+      onOpenTaskDetail,
     });
 
     const rows = container.querySelectorAll(".chat-tasks-rail__task");
@@ -573,13 +572,13 @@ describe("background tasks rail rendering", () => {
     expect(stop).not.toBeNull();
     stop?.click();
     expect(onCancel).toHaveBeenCalledWith("task-1");
-    expect(onSelectTask).not.toHaveBeenCalled();
+    expect(onOpenTaskDetail).not.toHaveBeenCalled();
 
     const cliTask = container.querySelector('[data-task-id="task-2"]');
     expect(cliTask?.classList.contains("chat-tasks-rail__task--open")).toBe(true);
     expect(cliTask?.getAttribute("aria-current")).toBe("true");
     cliTask?.querySelector<HTMLButtonElement>(".chat-tasks-rail__task-open")?.click();
-    expect(onSelectTask).toHaveBeenCalledWith(expect.objectContaining({ id: "task-2" }));
+    expect(onOpenTaskDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "task-2" }));
   });
 
   it("shows live tool activity for running tasks and duration for finished tasks", () => {
