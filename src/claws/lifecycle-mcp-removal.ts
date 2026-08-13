@@ -7,6 +7,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { ClawRemoveError } from "./lifecycle-delete-support.js";
 import type { RemovedMcpServer } from "./lifecycle-remove-contract.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
+import { withClawMcpLifecycleLease } from "./mcp-lifecycle-lease.js";
 import { deleteClawMcpServerRef, digestClawMcpServer, planClawMcpServerRemoval } from "./mcp.js";
 import type { ClawReferencedCleanup } from "./package-remove.js";
 
@@ -16,6 +17,7 @@ type RemoveMcpServerOptions = OpenClawStateDatabaseOptions & {
   listMcpServers?: typeof listConfiguredMcpServers;
   referencedCleanup?: ClawReferencedCleanup;
   unsetMcpServer?: typeof unsetConfiguredMcpServer;
+  withMcpLifecycleLease?: typeof withClawMcpLifecycleLease;
 };
 
 export async function removeClawMcpServers(params: {
@@ -39,46 +41,53 @@ export async function removeClawMcpServers(params: {
         params.options.sourceMcpServers ?? params.options.config?.mcp?.servers,
       );
   const unsetMcpServer = params.options.unsetMcpServer ?? unsetConfiguredMcpServer;
+  const withMcpLifecycleLease = params.options.withMcpLifecycleLease ?? withClawMcpLifecycleLease;
   const mcpServers: RemovedMcpServer[] = [];
   for (const server of params.servers) {
-    const ownerAction = planClawMcpServerRemoval(server, params.options).action;
-    if (ownerAction === "release") {
-      deleteClawMcpServerRef(params.agentId, server.name, params.options);
-      mcpServers.push({
-        name: server.name,
-        action: server.state === "missing" ? "missing" : "released",
-      });
-      continue;
-    }
-    const expectedServer = configured[server.name];
-    if (!expectedServer) {
-      if (server.state === "present") {
+    let removalError: string | undefined;
+    await withMcpLifecycleLease(server.name, params.options, async () => {
+      const ownerAction = planClawMcpServerRemoval(server, params.options).action;
+      if (ownerAction === "release") {
+        deleteClawMcpServerRef(params.agentId, server.name, params.options);
+        mcpServers.push({
+          name: server.name,
+          action: server.state === "missing" ? "missing" : "released",
+        });
+        return;
+      }
+      const expectedServer = configured[server.name];
+      if (!expectedServer) {
+        if (server.state === "present") {
+          throw new ClawRemoveError(
+            "mcp_cleanup_changed",
+            `MCP server ${JSON.stringify(server.name)} disappeared during removal.`,
+          );
+        }
+        deleteClawMcpServerRef(params.agentId, server.name, params.options);
+        mcpServers.push({ name: server.name, action: "missing" });
+        return;
+      }
+      if (digestClawMcpServer(expectedServer) !== server.configDigest) {
         throw new ClawRemoveError(
           "mcp_cleanup_changed",
-          `MCP server ${JSON.stringify(server.name)} disappeared during removal.`,
+          `MCP server ${JSON.stringify(server.name)} changed during removal.`,
         );
       }
-      deleteClawMcpServerRef(params.agentId, server.name, params.options);
-      mcpServers.push({ name: server.name, action: "missing" });
-      continue;
-    }
-    if (digestClawMcpServer(expectedServer) !== server.configDigest) {
-      throw new ClawRemoveError(
-        "mcp_cleanup_changed",
-        `MCP server ${JSON.stringify(server.name)} changed during removal.`,
-      );
-    }
-    try {
-      const result = await unsetMcpServer({ name: server.name, expectedServer });
-      if (!result.ok) {
-        throw new Error(result.error);
+      try {
+        const result = await unsetMcpServer({ name: server.name, expectedServer });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        deleteClawMcpServerRef(params.agentId, server.name, params.options);
+        mcpServers.push({ name: server.name, action: result.removed ? "removed" : "missing" });
+      } catch (cause) {
+        const message = coerceErrorMessage(cause);
+        mcpServers.push({ name: server.name, action: "error", message });
+        removalError = message;
       }
-      deleteClawMcpServerRef(params.agentId, server.name, params.options);
-      mcpServers.push({ name: server.name, action: result.removed ? "removed" : "missing" });
-    } catch (error) {
-      const message = coerceErrorMessage(error);
-      mcpServers.push({ name: server.name, action: "error", message });
-      return { mcpServers, error: message };
+    });
+    if (removalError) {
+      return { mcpServers, error: removalError };
     }
   }
   return { mcpServers };

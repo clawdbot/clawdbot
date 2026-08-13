@@ -28,7 +28,7 @@ type ClawInstallSchemaVersionSnapshot =
     }
   | { kind: "uninitialized" };
 
-// Install provenance is process-stable; only the state lifecycle and Claw mutations refresh it.
+// Refresh on every runtime config snapshot because another process may mutate Claw provenance.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
 
@@ -142,9 +142,7 @@ export function initializeCachedClawInstallSchemaVersions(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   const path = resolveSnapshotPath(options);
-  if (snapshotsByPath.has(path)) {
-    return;
-  }
+  const previous = snapshotsByPath.get(path);
   try {
     const snapshot = withExistingOpenClawStateDatabaseReadOnly(({ db, path: pathname }) => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
@@ -155,7 +153,7 @@ export function initializeCachedClawInstallSchemaVersions(
     snapshotsByPath.set(path, {
       kind: "state-error",
       error,
-      knownAgentIds: new Set(),
+      knownAgentIds: knownAgentIds(previous),
       ownershipUnknown: true,
     });
   }

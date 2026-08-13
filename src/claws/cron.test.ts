@@ -8,8 +8,8 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 async function fixture() {
   const root = tempDirs.make("openclaw-claw-cron-");
@@ -122,6 +122,25 @@ describe("installClawCronJobs", () => {
     ).resolves.toMatchObject([{ schedulerJobId: "scheduler-123", status: "complete" }]);
     expect(waitUntilAgentAvailable).not.toHaveBeenCalled();
     expect(add).not.toHaveBeenCalled();
+  });
+
+  it("repairs complete ownership when the scheduler job disappeared", async () => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const list = vi.fn().mockResolvedValue({ jobs: [] });
+    const add = vi.fn().mockResolvedValue({ id: "scheduler-recreated" });
+
+    const refs = await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add, list },
+    });
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(add).toHaveBeenCalledOnce();
+    expect(refs).toMatchObject([{ schedulerJobId: "scheduler-recreated", status: "complete" }]);
   });
 
   it("preserves an ambiguous pending reference when cron.add fails", async () => {

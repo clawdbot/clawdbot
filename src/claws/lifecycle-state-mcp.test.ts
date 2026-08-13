@@ -11,8 +11,8 @@ import { installClawMcpServers } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const sourceServer = {
   command: "uvx",

@@ -497,6 +497,9 @@ export async function runClawsAddCommand(
   }
 
   let addResult;
+  if (!opts.json) {
+    logExperimentalWarning(runtime);
+  }
   try {
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
@@ -530,7 +533,6 @@ export async function runClawsAddCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, addResult);
   } else {
-    logExperimentalWarning(runtime);
     runtime.log(`Added agent: ${addResult.agent.finalId}`);
     runtime.log(`Workspace: ${addResult.agent.workspace}`);
     runtime.log(`Status: ${addResult.status}`);

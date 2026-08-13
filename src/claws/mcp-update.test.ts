@@ -23,8 +23,8 @@ const remote: ClawMcpServer = {
   auth: "oauth",
 };
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function ref(name: string, server: ClawMcpServer): PersistedClawMcpServerRef {
   return {
@@ -81,6 +81,14 @@ function manifest(): ClawManifest {
     mcpServers: { docs: newDocs, remote },
     cronJobs: [],
   };
+}
+
+async function runWithoutMcpLease<T>(
+  _name: string,
+  _options: unknown,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await run();
 }
 
 describe("applyClawMcpUpdate", () => {
@@ -141,6 +149,7 @@ describe("applyClawMcpUpdate", () => {
         unsetServer,
         upsertRef,
         deleteRef,
+        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -211,6 +220,7 @@ describe("applyClawMcpUpdate", () => {
         unsetServer,
         upsertRef,
         deleteRef,
+        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -242,6 +252,7 @@ describe("applyClawMcpUpdate", () => {
           readRefs: () => [previous],
           planRemoval: () => ({ action: "remove" }),
           deleteRef,
+          withMcpLifecycleLease: runWithoutMcpLease,
         },
       ),
     ).rejects.toThrow("no longer safely releasable");
@@ -284,6 +295,10 @@ describe("applyClawMcpUpdate", () => {
   });
 
   it("does not compensate a config write rejected before mutation", async () => {
+    const root = tempDirs.make("openclaw-mcp-update-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+    const previous = ref("docs", oldDocs);
+    upsertClawMcpServerRef(previous, stateOptions);
     const setServer = vi.fn(async () => ({ ok: false as const, path: "config", error: "changed" }));
     const unsetServer = vi.fn();
 
@@ -301,17 +316,83 @@ describe("applyClawMcpUpdate", () => {
         ]),
         manifest(),
         {
+          ...stateOptions,
           config: { mcp: { servers: { docs: oldDocs } } },
           sourceMcpServers: { docs: oldDocs },
-          readRefs: () => [ref("docs", oldDocs)],
           setServer,
           unsetServer,
-          upsertRef: vi.fn(),
         },
       ),
     ).rejects.toThrow("changed");
     expect(setServer).toHaveBeenCalledTimes(1);
     expect(unsetServer).not.toHaveBeenCalled();
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
+  });
+
+  it("deletes pending ownership when an added server write is rejected", async () => {
+    const root = tempDirs.make("openclaw-mcp-add-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "remote",
+            action: "add",
+            target: "mcp.servers.remote",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          ...stateOptions,
+          config: {},
+          sourceMcpServers: {},
+          setServer: vi.fn(async () => ({
+            ok: false as const,
+            path: "config",
+            error: "changed",
+          })),
+        },
+      ),
+    ).rejects.toThrow("changed");
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([]);
+  });
+
+  it("restores complete ownership when a removal write is rejected", async () => {
+    const root = tempDirs.make("openclaw-mcp-remove-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+    const previous = ref("legacy", legacy);
+    upsertClawMcpServerRef(previous, stateOptions);
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "legacy",
+            action: "remove",
+            target: "mcp.servers.legacy",
+            blocked: false,
+            reason: "removed",
+          },
+        ]),
+        manifest(),
+        {
+          ...stateOptions,
+          config: { mcp: { servers: { legacy } } },
+          sourceMcpServers: { legacy },
+          unsetServer: vi.fn(async () => ({
+            ok: false as const,
+            path: "config",
+            error: "changed",
+          })),
+        },
+      ),
+    ).rejects.toThrow("changed");
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
   });
 
   it("does not overwrite an unowned server that appears before apply", async () => {
@@ -334,6 +415,7 @@ describe("applyClawMcpUpdate", () => {
           sourceMcpServers: { remote },
           readRefs: () => [],
           setServer,
+          withMcpLifecycleLease: runWithoutMcpLease,
         },
       ),
     ).rejects.toThrow("was not claimed");

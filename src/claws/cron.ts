@@ -317,18 +317,42 @@ export async function installClawCronJobs(
       message: details.message,
       ...(details.delivery ? { delivery: details.delivery } : {}),
     };
-    const pending = persistPendingRef(plan, job, options);
+    let pending = persistPendingRef(plan, job, options);
     refs.push(pending);
-    if (pending.status === "complete" && pending.schedulerJobId) {
-      continue;
-    }
     let result: { id: string } | undefined;
+    let listed = false;
+    if (pending.status === "complete" && pending.schedulerJobId) {
+      if (!options.gateway.list) {
+        continue;
+      }
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
+      result = schedulerJobByDeclarationKey(
+        await options.gateway.list(plan.agent.finalId),
+        pending.declarationKey,
+      );
+      listed = true;
+      if (result) {
+        if (result.id !== pending.schedulerJobId) {
+          refs[refs.length - 1] = updateRef(
+            pending,
+            { status: "complete", schedulerJobId: result.id },
+            options,
+          );
+        }
+        continue;
+      }
+      pending = updateRef(pending, { status: "pending" }, options);
+      refs[refs.length - 1] = pending;
+    }
     try {
       if (!agentAvailable) {
         await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
         agentAvailable = true;
       }
-      if (options.gateway.list) {
+      if (options.gateway.list && !listed) {
         result = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,
