@@ -133,6 +133,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/release-preflight.mts",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/error-format.mts",
+    "scripts/lib/failed-trailer.mts",
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
@@ -184,6 +185,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stderr).toContain(
       'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
     );
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe("[release-preflight] FAILED (exit 1)");
   });
 
   it("keeps multi-argument invocations on the tsx shim", () => {
