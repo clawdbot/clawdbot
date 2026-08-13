@@ -36,7 +36,7 @@ type BrowserPanelInputState = {
   noticeText: string | null;
 };
 
-export interface BrowserPanelInputHost extends BrowserPanelInputState {
+interface BrowserPanelInputHost extends BrowserPanelInputState {
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
     readonly updateComplete: Promise<boolean>;
