@@ -186,6 +186,7 @@ describe("shared ip helpers", () => {
     const loopback = parseCanonicalIpAddress("::1");
     const multicast = parseCanonicalIpAddress("ff02::1");
     const siteLocal = parseCanonicalIpAddress("fec0::1"); // deprecated fec0::/10
+    const localUseNat64 = parseCanonicalIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe");
 
     if (
       !loopback ||
@@ -193,7 +194,9 @@ describe("shared ip helpers", () => {
       !multicast ||
       !isIpv6Address(multicast) ||
       !siteLocal ||
-      !isIpv6Address(siteLocal)
+      !isIpv6Address(siteLocal) ||
+      !localUseNat64 ||
+      !isIpv6Address(localUseNat64)
     ) {
       throw new Error("expected ipv6 fixtures");
     }
@@ -202,6 +205,7 @@ describe("shared ip helpers", () => {
       expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);
       expect(isBlockedSpecialUseIpv6Address(multicast, options)).toBe(true);
       expect(isBlockedSpecialUseIpv6Address(siteLocal, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(localUseNat64, options)).toBe(true);
     }
   });
 });

@@ -256,17 +256,17 @@ export function isBlockedSpecialUseIpv6Address(
   // ipaddr.js returns "discard" at runtime for 100::/64, but its published
   // TypeScript IPv6Range union omits that literal.
   const range = address.range() as BlockedIpv6Range;
-  if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
-    // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
-    // to fc00::/7 reaching the network — same intent as
-    // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
-    return false;
-  }
   if (isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts))) {
     // RFC8215 local-use NAT64 can carry deployment-specific more-specific
     // prefixes, so the literal alone cannot prove which IPv4 bits a router
     // will use. Block the allocation instead of guessing a public decoy.
     return true;
+  }
+  if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
+    // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
+    // to fc00::/7 reaching the network — same intent as
+    // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
+    return false;
   }
   if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;

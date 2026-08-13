@@ -131,6 +131,15 @@ describe("ssrf ip classification", () => {
   it("does not treat hostnames as ip literals", () => {
     expectIpPrivacyCases(nonIpHostnameCases, false);
   });
+
+  it("keeps local-use NAT64 blocked when fake-ip ranges are allowed", () => {
+    expect(
+      isPrivateIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe", {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("HTTP base URL SSRF policy builders", () => {
