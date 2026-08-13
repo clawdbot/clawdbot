@@ -213,7 +213,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("empty response detected");
   });
