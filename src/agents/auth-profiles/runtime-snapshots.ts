@@ -10,6 +10,7 @@ import { mergeAuthProfileStores } from "./persisted.js";
 import {
   clearAllRuntimeAuthMaterializations,
   clearRuntimeAuthMaterializations,
+  clearRuntimeAuthMaterializationsAtDatabasePath,
 } from "./runtime-materializations.js";
 import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
@@ -316,7 +317,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   );
   for (const key of new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()])) {
     if (authProfilesChanged(runtimeAuthStoreSnapshots.get(key), next.get(key))) {
-      clearRuntimeAuthMaterializations(path.dirname(key));
+      clearRuntimeAuthMaterializationsAtDatabasePath(key);
     }
   }
   recordChangedSnapshotRevisions(entries);
@@ -364,18 +365,17 @@ export function clearRuntimeAuthProfileStoreSnapshotCore(agentDir?: string): boo
   }
   advanceRuntimeAuthStoreSnapshotsRevision();
   runtimeAuthStoreSnapshots.delete(key);
-  clearRuntimeAuthMaterializations(agentDir);
+  clearRuntimeAuthMaterializationsAtDatabasePath(key);
   runtimeAuthStoreSnapshotRevisions.delete(key);
   notifyRuntimeAuthStoreMutation(agentDir);
   return true;
 }
 
-/** Stores a cloned runtime auth profile snapshot for an agent dir. */
-export function setRuntimeAuthProfileStoreSnapshot(
+function setRuntimeAuthProfileStoreSnapshotAtKey(
   store: RuntimeAuthProfileStore,
-  agentDir?: string,
+  key: string,
+  agentDir: string | undefined,
 ): void {
-  const key = resolveRuntimeStoreKey(agentDir);
   const credentialsChanged = !isDeepStrictEqual(
     credentialState(
       runtimeAuthStoreSnapshots.has(key) ? [[key, runtimeAuthStoreSnapshots.get(key)!]] : [],
@@ -387,7 +387,7 @@ export function setRuntimeAuthProfileStoreSnapshot(
   }
   const previousStore = runtimeAuthStoreSnapshots.get(key);
   if (authProfilesChanged(previousStore, store)) {
-    clearRuntimeAuthMaterializations(agentDir);
+    clearRuntimeAuthMaterializationsAtDatabasePath(key);
   }
   const ownerChanged = !isDeepStrictEqual(ownerState(previousStore), ownerState(store));
   const snapshotChanged = !isDeepStrictEqual(previousStore, store);
@@ -399,6 +399,23 @@ export function setRuntimeAuthProfileStoreSnapshot(
   if (ownerChanged) {
     notifyRuntimeAuthStoreMutation(agentDir);
   }
+}
+
+/** Stores a cloned runtime auth profile snapshot for an agent dir. */
+export function setRuntimeAuthProfileStoreSnapshot(
+  store: RuntimeAuthProfileStore,
+  agentDir?: string,
+): void {
+  setRuntimeAuthProfileStoreSnapshotAtKey(store, resolveRuntimeStoreKey(agentDir), agentDir);
+}
+
+/** Stores a cloned snapshot under an already resolved canonical database owner. */
+export function setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+  store: RuntimeAuthProfileStore,
+  databasePath: string,
+  agentDir?: string,
+): void {
+  setRuntimeAuthProfileStoreSnapshotAtKey(store, databasePath, agentDir);
 }
 
 /**
@@ -548,10 +565,14 @@ export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
 
 /** Process-local generation for one exact runtime snapshot rollback owner. */
 export function getRuntimeAuthProfileStoreSnapshotRevision(agentDir?: string): number {
-  return (
-    runtimeAuthStoreSnapshotRevisions.get(resolveRuntimeStoreKey(agentDir)) ??
-    runtimeAuthStoreSnapshotsRevision
-  );
+  return getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(resolveRuntimeStoreKey(agentDir));
+}
+
+/** Process-local generation for an already resolved canonical snapshot owner. */
+export function getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
+  databasePath: string,
+): number {
+  return runtimeAuthStoreSnapshotRevisions.get(databasePath) ?? runtimeAuthStoreSnapshotsRevision;
 }
 
 const testing = {
