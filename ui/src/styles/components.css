@@ -5508,6 +5508,14 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
+.session-row-badge--cloud[data-disk-space-status="warning"] {
+  color: var(--warn);
+}
+
+.session-row-badge--cloud[data-disk-space-status="critical"] {
+  color: var(--danger);
+}
+
 .session-row-badge svg {
   width: 12px;
   height: 12px;

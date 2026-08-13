@@ -1,4 +1,7 @@
-import type { SessionPlacement } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPlacement,
+  SessionPlacementDiskSpace,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
 export type WorkerSessionPlacementReader = {
@@ -8,6 +11,7 @@ export type WorkerSessionPlacementReader = {
 /** Removes gateway-only identity and turn-claim fields from the operator projection. */
 export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
+  diskSpace?: SessionPlacementDiskSpace,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -64,6 +68,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...(diskSpace ? { diskSpace } : {}),
         ...conflict,
       };
     case "draining":

@@ -224,10 +224,17 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("reuses a completed result until the session mutation version advances", async () => {
+  it("reuses a completed result until a projection fence advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
-      const context = requestContext(config);
+      let diskSpaceVersion = 0;
+      const context = {
+        ...requestContext(config),
+        workerPlacementDiskSpaceReader: {
+          read: () => undefined,
+          version: () => diskSpaceVersion,
+        },
+      };
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
@@ -238,9 +245,13 @@ describe("sessions.list single-flight", () => {
       expect(cached).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
-      emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
+      diskSpaceVersion += 1;
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(2);
+
+      emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(3);
     });
   });
 

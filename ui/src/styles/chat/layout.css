@@ -174,10 +174,33 @@ openclaw-chat-page {
   color: var(--muted);
 }
 
-.chat-workspace-conflict-notice {
+.chat-workspace-conflict-notice,
+.chat-cloud-disk-space-notice {
   flex: 0 0 auto;
   margin: 12px 16px 0;
   color: var(--text);
+}
+
+.chat-cloud-disk-space-notice {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-cloud-disk-space-notice p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.chat-cloud-disk-space-notice__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-cloud-disk-space-notice__title svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
 }
 
 .chat-workspace-conflict-notice__content {
