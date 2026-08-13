@@ -65,7 +65,7 @@ function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
     return trimmed;
   }
   if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveHome(env)));
+    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
   }
   return path.resolve(trimmed);
 }

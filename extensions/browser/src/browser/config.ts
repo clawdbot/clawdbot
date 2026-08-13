@@ -183,7 +183,7 @@ function normalizeExecutablePath(raw: string | undefined): string | undefined {
   if (!/^~(?=$|[\\/])/.test(value)) {
     return value;
   }
-  return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
+  return path.resolve(value.replace(/^~(?=$|[\\/])/, () => os.homedir()));
 }
 
 function normalizeExistingSessionCdpUrl(
