@@ -1,5 +1,6 @@
 // Focused incomplete-turn behavior coverage.
 import { beforeEach, describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   REASONING_ONLY_RETRY_INSTRUCTION,
   SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
@@ -403,7 +404,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
-  it("continues once after settled side-effecting tools finish without a final answer", async () => {
+  it("finalizes once after a provider error follows settled side-effecting tools", async () => {
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [
@@ -421,6 +422,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
+        promptError: new Error("Selected model is at capacity. Please try a different model."),
+        promptErrorSource: "prompt",
+        settledTurnFinalizationContext: {
+          source: "openclaw-transcript",
+          messages: settledToolResults,
+        },
         latestMcpAppChannelView: { viewId: "view-after-tools" },
         toolMetas: [{ toolName: "write", meta: "path=note.txt" }, { toolName: "cron" }],
         successfulNestedToolNames: ["read"],
@@ -449,10 +456,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       .mockReturnValueOnce([])
       .mockReturnValueOnce([{ text: "Write completed. Here is the final answer." }]);
 
-    const result = await runEmbeddedAgent(makeRunParams("run-tool-use-terminal-continuation"));
+    const result = await runEmbeddedAgent(
+      makeRunParams("run-tool-use-terminal-continuation", {
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
+    expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
     expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-after-tools" });
     expect(result.successfulCronAdds).toBe(1);
     expect(result.meta.toolSummary).toEqual({
@@ -476,6 +490,39 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
+
+  it.each(["usageLimitExceeded", "unauthorized"])(
+    "does not finalize settled tools after a %s provider failure",
+    async (failure) => {
+      const toolUseAssistant = makeLastAssistant({
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "tool_write", name: "write", arguments: {} }],
+      });
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+        markUserMessagePersisted(attemptParams);
+        return makeAttemptResult({
+          assistantTexts: [],
+          promptError: new Error(failure),
+          promptErrorSource: "prompt",
+          toolMetas: [{ toolName: "write" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+        });
+      });
+
+      const result = await runEmbeddedAgent(makeRunParams(`run-settled-${failure}`));
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+      expect(result.meta.error?.fallbackSafe).toBe(false);
+    },
+  );
 
   it.each([
     { label: "interactive user", trigger: "user" as const },

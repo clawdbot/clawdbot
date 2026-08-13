@@ -90,7 +90,7 @@ export const mockedIsRateLimitAssistantError = vi.fn(
 );
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-export const mockedResolveModelAsync = vi.fn(async (provider?: string, modelId?: string) =>
+const mockedResolveModelAsync = vi.fn(async (provider?: string, modelId?: string) =>
   createResolvedModel(provider, modelId),
 );
 export const mockedSleepWithAbort = vi.fn(

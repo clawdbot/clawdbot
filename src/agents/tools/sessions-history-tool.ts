@@ -37,12 +37,12 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
@@ -412,6 +412,7 @@ export function createSessionsHistoryTool(opts?: {
           ? { kind: "none" as const }
           : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
       const resolvedSession = await resolveSessionReference({
+        action: "history",
         sessionKey: sessionKeyParam,
         ...(isCurrentSession
           ? { agentId: requesterAgentId }
@@ -469,20 +470,23 @@ export function createSessionsHistoryTool(opts?: {
         requesterAgentId,
       });
 
-      const visibilityGuard = await createSessionVisibilityGuard({
-        action: "history",
-        defaultAgentId: requesterAgentId,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-        callGateway: gatewayCall,
-      });
       const authorizationKey =
         targetAgentId !== requesterAgentId && !parseAgentSessionKey(resolvedKey)
           ? `agent:${targetAgentId}:${resolvedKey}`
           : resolvedKey;
-      const access = visibilityGuard.check(authorizationKey);
+      const access = await resolveSessionToolAccess({
+        action: "history",
+        defaultAgentId: requesterAgentId,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        authorizationTargetSessionKey: authorizationKey,
+        targetAgentId,
+        targetSessionKey: resolvedKey,
+        requesterOwned: visibleSession.requesterOwned,
+        visibility,
+        a2aPolicy,
+        callGateway: gatewayCall,
+      });
       if (!access.allowed) {
         return jsonResult({
           status: access.status,

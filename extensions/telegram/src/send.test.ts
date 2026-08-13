@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -587,6 +588,38 @@ describe("sent-message-cache", () => {
       fs.rmSync(customStorePath, { force: true });
       fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
     }
+  });
+
+  it("keeps sent-message ownership isolated across differently routed accounts", () => {
+    const multiAgentCfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {} },
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            primary: { botToken: "123456:primary" },
+            alerts: { botToken: "123456:alerts" },
+          },
+        },
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "telegram", accountId: "primary" } },
+        { agentId: "ops", match: { channel: "telegram", accountId: "alerts" } },
+      ],
+      session: {
+        store: "/tmp/openclaw-telegram-sent-owner/{agentId}/sessions.json",
+      },
+    } as OpenClawConfig;
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "primary" });
+
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "primary" })).toBe(true);
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(false);
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "alerts" });
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(true);
   });
 
   it("shares sent-message state across distinct module instances", async () => {

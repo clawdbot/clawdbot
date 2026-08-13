@@ -391,6 +391,24 @@ function createDiscoveryResult(): PluginDiscoveryResult {
   };
 }
 
+function mergeCandidateInstallOwner(
+  existing: PluginCandidate,
+  candidateOwner: string | undefined,
+  candidateOwnerAmbiguous: boolean,
+): void {
+  const existingOwner = resolvePluginCandidateInstallOwner(existing);
+  const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
+  if (
+    isPluginCandidateInstallOwnerAmbiguous(existing) ||
+    candidateOwnerAmbiguous ||
+    ownerConflict
+  ) {
+    recordPluginCandidateInstallOwner(existing, undefined, true);
+  } else if (candidateOwner) {
+    recordPluginCandidateInstallOwner(existing, candidateOwner);
+  }
+}
+
 function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
@@ -404,18 +422,11 @@ function mergeDiscoveryResult(
     const key = safeRealpathSync(candidate.source, realpathCache) ?? path.resolve(candidate.source);
     const existing = candidatesBySource.get(key);
     if (existing) {
-      const existingOwner = resolvePluginCandidateInstallOwner(existing);
-      const candidateOwner = resolvePluginCandidateInstallOwner(candidate);
-      const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
-      if (
-        isPluginCandidateInstallOwnerAmbiguous(existing) ||
-        isPluginCandidateInstallOwnerAmbiguous(candidate) ||
-        ownerConflict
-      ) {
-        recordPluginCandidateInstallOwner(existing, undefined, true);
-      } else if (candidateOwner) {
-        recordPluginCandidateInstallOwner(existing, candidateOwner);
-      }
+      mergeCandidateInstallOwner(
+        existing,
+        resolvePluginCandidateInstallOwner(candidate),
+        isPluginCandidateInstallOwnerAmbiguous(candidate),
+      );
       continue;
     }
     candidatesBySource.set(key, candidate);
@@ -802,6 +813,14 @@ function addCandidate(params: {
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
+    const existing = params.candidates.find((candidate) => candidate.source === resolved);
+    if (existing) {
+      mergeCandidateInstallOwner(
+        existing,
+        params.installOwner,
+        params.installOwnerAmbiguous === true,
+      );
+    }
     return;
   }
   const resolvedRoot =

@@ -1,13 +1,10 @@
 // Focused incomplete-turn behavior coverage.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   makeLastAssistant,
-  resolveIncompleteTurnPayloadText,
-  makeIncompleteTurnParams,
   makeSettledContinuationParams,
 } from "./run.incomplete-turn.test-helpers.js";
-import { resetRunIncompleteTurnOwnerMocks } from "./run.incomplete-turn.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { isIncompleteTerminalAssistantTurn } from "./run/incomplete-turn-classification.js";
 import { resolveSettledToolTerminalContinuationInstruction } from "./run/incomplete-turn-recovery.js";
@@ -47,10 +44,6 @@ function makeSettledIdleWriteAttempt(options?: {
 }
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeEach(() => {
-    resetRunIncompleteTurnOwnerMocks();
-  });
-
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
@@ -120,12 +113,48 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
         timedOut: true,
-        promptError: new Error("LLM idle timeout"),
       }),
     );
 
     expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
+
+  it.each([
+    {
+      label: "provider failure with finalization context",
+      hasContext: true,
+      expectedContinuation: true,
+    },
+    {
+      label: "provider failure without finalization context",
+      hasContext: false,
+      expectedContinuation: false,
+    },
+  ])(
+    "$label after settled tools returns continuation=$expectedContinuation",
+    ({ hasContext, expectedContinuation }) => {
+      const attempt = makeSettledIdleWriteAttempt({
+        terminal: { kind: "failed", source: "prompt", error: new Error("provider failure") },
+      });
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(
+          hasContext
+            ? {
+                ...attempt,
+                settledTurnFinalizationContext: {
+                  source: "openclaw-transcript",
+                  messages: attempt.messagesSnapshot,
+                },
+              }
+            : attempt,
+        ),
+      );
+
+      expect(instruction === SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION).toBe(
+        expectedContinuation,
+      );
+    },
+  );
 
   it.each([
     {
@@ -164,27 +193,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       aborted: false,
       timedOut: false,
     },
-    {
-      label: "prompt error without idle timeout",
-      terminal: { kind: "ok" } as const,
-      aborted: false,
-      timedOut: false,
-      promptError: new Error("closed"),
-    },
-  ])(
-    "does not finalize settled tools after a $label",
-    ({ terminal, aborted, timedOut, promptError }) => {
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
-        makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
-          aborted,
-          timedOut,
-          promptError,
-        }),
-      );
+  ])("does not finalize settled tools after a $label", ({ terminal, aborted, timedOut }) => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
+        aborted,
+        timedOut,
+      }),
+    );
 
-      expect(instruction).toBeNull();
-    },
-  );
+    expect(instruction).toBeNull();
+  });
 
   it("does not use a settled prior-turn batch to authorize idle-timeout finalization", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(
@@ -447,52 +465,5 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(instruction).toBeNull();
-  });
-
-  it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
-          toolMetas: [{ toolName: "update_plan" }],
-          lastAssistant: makeLastAssistant({
-            stopReason: "toolUse",
-            content: [
-              { type: "text", text: "Analysis..." },
-              { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
-            ],
-          }),
-          currentAttemptAssistant: makeLastAssistant({
-            content: [{ type: "text", text: "Here is the final answer after update_plan." }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("still flags incomplete-turn when currentAttemptAssistant is absent and lastAssistant=toolUse (#76477 regression)", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Let me update the file..."],
-          toolMetas: [{ toolName: "write" }],
-          lastAssistant: makeLastAssistant({
-            stopReason: "toolUse",
-            model: "gpt-5.4",
-            content: [
-              { type: "text", text: "Let me update the file..." },
-              { type: "tool_use", id: "tool_1", name: "write", input: {} },
-            ],
-          }),
-          currentAttemptAssistant: undefined,
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 });

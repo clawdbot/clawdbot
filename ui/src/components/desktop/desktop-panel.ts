@@ -23,7 +23,9 @@ import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
+import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
 import { desktopPanelStyles } from "./desktop-panel-styles.ts";
+import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
@@ -38,7 +40,6 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-type DesktopPanelState = "picker" | "credentials" | "connecting" | "connected" | "disconnected";
 type DesktopAppId = WorkerDesktopAppId;
 type DesktopCredentials = { username?: string; password?: string };
 type PendingDesktopConnection = {
@@ -48,16 +49,6 @@ type PendingDesktopConnection = {
   operationId: number;
 };
 type ObservedDesktopConnection = PendingDesktopConnection & { observed: DesktopObserveResult };
-
-function desktopSourceForEnvironment(environment: Pick<EnvironmentSummary, "id">): DesktopSource {
-  if (environment.id === "gateway") {
-    return { kind: "host" };
-  }
-  if (environment.id.startsWith("node:") && environment.id.length > "node:".length) {
-    return { kind: "node", nodeId: environment.id.slice("node:".length) };
-  }
-  return { kind: "environment", environmentId: environment.id };
-}
 
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
@@ -151,7 +142,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const wasOpen = this.dockLayout.open;
     this.dockLayout.setOpen(true);
     if (detail?.environmentId) {
-      void this.connectEnvironment(detail.environmentId, false);
+      void this.connectRequestedEnvironment(detail.environmentId);
     } else if (!wasOpen) {
       void this.refreshEnvironments();
     } else if (detail?.open !== true) {
@@ -191,29 +182,47 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchErrorText = null;
   }
 
-  private async refreshEnvironments(): Promise<void> {
+  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
     const client = this.client;
     if (!client || !this.available) {
-      return;
+      return false;
     }
-    const operationId = ++this.operationId;
+    const operationId = expectedOperationId ?? ++this.operationId;
     this.loading = true;
     this.errorText = null;
     try {
       const result = await client.request<EnvironmentsListResult>("environments.list", {});
       if (operationId !== this.operationId) {
-        return;
+        return false;
       }
       this.environments = result.environments.filter((environment) => environment.desktop === true);
+      return true;
     } catch (error) {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
       }
+      return false;
     } finally {
       if (operationId === this.operationId) {
         this.loading = false;
       }
     }
+  }
+
+  private async connectRequestedEnvironment(environmentId: string): Promise<void> {
+    this.returnToPicker();
+    this.environmentId = environmentId;
+    this.state = "connecting";
+    const operationId = this.operationId;
+    const inventoryLoaded = await this.refreshEnvironments(operationId);
+    if (operationId !== this.operationId) {
+      return;
+    }
+    if (!inventoryLoaded) {
+      this.state = "inventory-error";
+      return;
+    }
+    void this.connectEnvironment(environmentId, false);
   }
 
   private async connectEnvironment(
@@ -229,11 +238,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       this.clearLaunchState();
       this.credentials = undefined;
       this.credentialAuth = undefined;
-      this.desktopApps = [
-        ...(this.environments.find((environment) => environment.id === environmentId)?.worker
-          ?.desktopApps ?? []),
-      ];
     }
+    this.desktopApps = [
+      ...(this.environments.find((environment) => environment.id === environmentId)?.worker
+        ?.desktopApps ?? []),
+    ];
     this.disconnectConnection();
     const operationId = this.operationId;
     const environment = this.environments.find((candidate) => candidate.id === environmentId) ?? {
@@ -628,27 +637,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     `;
   }
 
-  private renderDisconnected() {
-    return html`
-      <div class="desktop-status">
-        <div>
-          ${t("desktop.disconnected", {
-            reason: this.disconnectedReason ?? t("desktop.unknownReason"),
-          })}
-        </div>
-        <button
-          class="desktop-button desktop-button--primary"
-          type="button"
-          @click=${() =>
-            this.environmentId &&
-            void this.connectEnvironment(this.environmentId, this.controlling)}
-        >
-          ${t("desktop.reconnect")}
-        </button>
-      </div>
-    `;
-  }
-
   private renderCredentials() {
     const ardAccount = this.credentialAuth === "ard-account";
     return html`
@@ -710,10 +698,18 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
               : nothing}
           ${this.state === "picker"
             ? this.renderPicker()
-            : this.state === "credentials"
-              ? this.renderCredentials()
-              : this.state === "disconnected"
-                ? this.renderDisconnected()
+            : this.state === "inventory-error" || this.state === "disconnected"
+              ? renderDesktopPanelRecovery({
+                  inventoryError: this.state === "inventory-error",
+                  reason: this.disconnectedReason,
+                  onRetry: () =>
+                    this.environmentId &&
+                    void (this.state === "inventory-error"
+                      ? this.connectRequestedEnvironment(this.environmentId)
+                      : this.connectEnvironment(this.environmentId, this.controlling)),
+                })
+              : this.state === "credentials"
+                ? this.renderCredentials()
                 : this.renderConnection()}
         </div>
       </section>

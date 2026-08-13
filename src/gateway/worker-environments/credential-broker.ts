@@ -1,5 +1,12 @@
-import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import {
+  type WorkerAdmissionHandshake,
+  WORKER_RPC_SET_VERSION,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  resolveLocalWorkerBuild,
+  verifyWorkerAdmissionHandshake,
+  type ExpectedWorkerBuild,
+} from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -14,6 +21,7 @@ import type { WorkerEnvironmentState } from "./state.js";
 import {
   type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
+  type WorkerEnvironmentTransitionPatch,
   WorkerSessionAlreadyAttachedError,
 } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -114,6 +122,33 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     return grant;
   };
 
+  const commitReady = (
+    record: WorkerEnvironmentRecord,
+    receipt: WorkerAdmissionHandshake & { installKind: "bundle" | "local" },
+    patch: WorkerEnvironmentTransitionPatch = {},
+  ) => {
+    const material = credentialMaterial();
+    // Receipt, owner epoch, and credential hash commit together. A failed write leaves the
+    // durable lease retryable without ever admitting a partial identity.
+    const ready = move(record, "ready", {
+      ...patch,
+      bootstrapReceipt: receipt,
+      credential: {
+        credentialHash: material.credentialHash,
+        sessionId: null,
+        rpcSetVersion: WORKER_RPC_SET_VERSION,
+        expiresAtMs: credentialExpiry(),
+      },
+    });
+    stageCredential(
+      grantFrom({
+        credential: material.credential,
+        record: store.getCredential(record.environmentId),
+      }),
+    );
+    return ready;
+  };
+
   const ensurePendingCredential = (record: WorkerEnvironmentRecord, sessionId: string | null) => {
     const credential = store.getCredential(record.environmentId);
     const pending = pendingCredentials.get(record.environmentId);
@@ -183,9 +218,11 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       if (current.state !== "ready" && current.state !== "idle") {
         throw serviceError("invalid_state", `Cannot attach worker in state: ${current.state}`);
       }
-      let currentBuild: WorkerInstallationArtifact;
+      let currentBuild: ExpectedWorkerBuild;
       try {
-        currentBuild = await options.prepareInstallation("bundle");
+        currentBuild =
+          resolveLocalWorkerBuild(current.bootstrapReceipt) ??
+          (await options.prepareInstallation("bundle"));
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
@@ -337,6 +374,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     attachSession,
     clear: () => pendingCredentials.clear(),
     clearEnvironment: (environmentId: string) => pendingCredentials.delete(environmentId),
+    commitReady,
     credentialExpiry,
     credentialMaterial,
     ensurePendingCredential,

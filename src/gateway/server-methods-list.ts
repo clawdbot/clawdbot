@@ -85,4 +85,5 @@ export const GATEWAY_EVENTS = [
   "terminal.data",
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  "portal.changed",
 ];

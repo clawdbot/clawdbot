@@ -55,10 +55,6 @@ export function resolveIncompleteTurnPayloadText(
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
 }
 
-export function makeBaseRunParams(runId: string, overrides: Partial<RunParams> = {}): RunParams {
-  return { ...overflowBaseRunParams, runId, ...overrides };
-}
-
 export function makeRunParams(runId: string, overrides: Partial<RunParams> = {}): RunParams {
   return {
     ...overflowBaseRunParams,

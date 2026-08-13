@@ -97,6 +97,14 @@ describe("sidebar entries", () => {
     expect(isSettingsNavigationRoute("apps")).toBe(false);
   });
 
+  it("keeps Portals as a first-class customizable workspace route", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("portals");
+    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:portals");
+    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("portals");
+    expect(settingsRoutes).not.toContain("portals");
+    expect(isSettingsNavigationRoute("portals")).toBe(false);
+  });
+
   it("keeps the plugin manager in customizable workspace routes", () => {
     expect(normalizeSidebarEntries(["route:plugins", "route:usage", "route:plugins"])).toEqual([
       "route:plugins",

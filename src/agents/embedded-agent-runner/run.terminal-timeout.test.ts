@@ -63,6 +63,20 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     ]);
   });
 
+  it("preserves an accepted child spawn while surfacing the parent timeout", () => {
+    const acceptedSessionSpawns = [
+      { runId: "run-child", childSessionKey: "agent:claude:subagent:child" },
+    ];
+    const result = resolveEmbeddedRunTerminalTimeout(
+      makeTimeoutInput(makeTimedOutAttempt({ acceptedSessionSpawns })),
+    );
+
+    expect(result?.payloads).toEqual([
+      { text: expect.stringContaining("timed out"), isError: true },
+    ]);
+    expect(result?.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+  });
+
   it("prefers harness timeout metadata while retaining terminal attribution", () => {
     const setTerminalLifecycleMeta = vi.fn();
     const attempt = makeTimedOutAttempt({

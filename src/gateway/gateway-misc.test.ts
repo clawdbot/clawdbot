@@ -110,7 +110,11 @@ describe("GatewayClient", () => {
   ) {
     const { res } = makeControlUiResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method ?? "GET" } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method ?? "GET",
+        headers: { host: "gateway.example.test" },
+      } as IncomingMessage,
       res,
       { root: { kind: "resolved", path: tmp } },
     );

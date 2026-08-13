@@ -619,14 +619,23 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
   });
 
-  it("omits terminal for sandboxed agents", () => {
+  it("omits host UI runtime tools for sandboxed agents", () => {
     expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "terminal")).toBe(
+      true,
+    );
+    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "portal")).toBe(
       true,
     );
     expect(
       hasTool(
         createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
         "terminal",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        "portal",
       ),
     ).toBe(false);
   });

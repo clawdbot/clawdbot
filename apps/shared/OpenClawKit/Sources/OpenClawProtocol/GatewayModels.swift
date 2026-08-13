@@ -1139,6 +1139,7 @@ public struct ConnectParams: Codable, Sendable {
     public let client: [String: AnyCodable]
     public let caps: [String]?
     public let commands: [String]?
+    public let workerruns: WorkerAdmissionHandshake?
     public let permissions: [String: AnyCodable]?
     public let pathenv: String?
     public let role: String?
@@ -1154,6 +1155,7 @@ public struct ConnectParams: Codable, Sendable {
         client: [String: AnyCodable],
         caps: [String]? = nil,
         commands: [String]? = nil,
+        workerruns: WorkerAdmissionHandshake? = nil,
         permissions: [String: AnyCodable]? = nil,
         pathenv: String? = nil,
         role: String? = nil,
@@ -1168,6 +1170,7 @@ public struct ConnectParams: Codable, Sendable {
         self.client = client
         self.caps = caps
         self.commands = commands
+        self.workerruns = workerruns
         self.permissions = permissions
         self.pathenv = pathenv
         self.role = role
@@ -1184,6 +1187,7 @@ public struct ConnectParams: Codable, Sendable {
         case client
         case caps
         case commands
+        case workerruns = "workerRuns"
         case permissions
         case pathenv = "pathEnv"
         case role
@@ -19321,6 +19325,190 @@ public struct ShutdownEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
+    }
+}
+
+public struct PortalSummary: Codable, Sendable {
+    public let id: String
+    public let title: String
+    public let port: Int
+    public let listenport: Int
+    public let tokenquery: String?
+    public let url: String?
+    public let publicurl: String
+    public let path: String?
+    public let description: String?
+    public let createdatms: Int
+
+    public init(
+        id: String,
+        title: String,
+        port: Int,
+        listenport: Int,
+        tokenquery: String? = nil,
+        url: String? = nil,
+        publicurl: String,
+        path: String? = nil,
+        description: String? = nil,
+        createdatms: Int)
+    {
+        self.id = id
+        self.title = title
+        self.port = port
+        self.listenport = listenport
+        self.tokenquery = tokenquery
+        self.url = url
+        self.publicurl = publicurl
+        self.path = path
+        self.description = description
+        self.createdatms = createdatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case port
+        case listenport = "listenPort"
+        case tokenquery = "tokenQuery"
+        case url
+        case publicurl = "publicUrl"
+        case path
+        case description
+        case createdatms = "createdAtMs"
+    }
+}
+
+public struct PortalListParams: Codable, Sendable {}
+
+public struct PortalListResult: Codable, Sendable {
+    public let portals: [PortalSummary]
+
+    public init(
+        portals: [PortalSummary])
+    {
+        self.portals = portals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case portals
+    }
+}
+
+public struct PortalOpenParams: Codable, Sendable {
+    public let port: Int
+    public let title: String?
+    public let description: String?
+    public let path: String?
+
+    public init(
+        port: Int,
+        title: String? = nil,
+        description: String? = nil,
+        path: String? = nil)
+    {
+        self.port = port
+        self.title = title
+        self.description = description
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case port
+        case title
+        case description
+        case path
+    }
+}
+
+public struct PortalOpenResult: Codable, Sendable {
+    public let id: String
+    public let title: String
+    public let port: Int
+    public let listenport: Int
+    public let tokenquery: String
+    public let url: String
+    public let publicurl: String
+    public let path: String?
+    public let description: String?
+    public let createdatms: Int
+
+    public init(
+        id: String,
+        title: String,
+        port: Int,
+        listenport: Int,
+        tokenquery: String,
+        url: String,
+        publicurl: String,
+        path: String? = nil,
+        description: String? = nil,
+        createdatms: Int)
+    {
+        self.id = id
+        self.title = title
+        self.port = port
+        self.listenport = listenport
+        self.tokenquery = tokenquery
+        self.url = url
+        self.publicurl = publicurl
+        self.path = path
+        self.description = description
+        self.createdatms = createdatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case port
+        case listenport = "listenPort"
+        case tokenquery = "tokenQuery"
+        case url
+        case publicurl = "publicUrl"
+        case path
+        case description
+        case createdatms = "createdAtMs"
+    }
+}
+
+public struct PortalCloseParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct PortalCloseResult: Codable, Sendable {
+    public let closed: Bool
+
+    public init(
+        closed: Bool)
+    {
+        self.closed = closed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case closed
+    }
+}
+
+public struct PortalChangedEvent: Codable, Sendable {
+    public let portals: [PortalSummary]
+
+    public init(
+        portals: [PortalSummary])
+    {
+        self.portals = portals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case portals
     }
 }
 

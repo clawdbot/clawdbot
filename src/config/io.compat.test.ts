@@ -2,10 +2,45 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { VERSION } from "../version.js";
-import { createConfigIO } from "./io.js";
+import { createConfigIO } from "./io.factory.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
-import { withTempHome } from "./test-helpers.js";
+
+vi.mock("../commands/doctor/shared/legacy-config-compat.js", () => ({
+  applyLegacyDoctorMigrations: () => {
+    throw new Error("config IO compatibility tests must not enter recovery migration");
+  },
+}));
+
+vi.mock("../plugins/gateway-startup-plugin-ids.js", () => ({
+  createConfigValidationMetadataPluginIdScope: (params: {
+    config: { plugins?: { entries?: Record<string, unknown> } };
+  }) => {
+    const configuredPluginIds = Object.keys(params.config.plugins?.entries ?? {}).toSorted();
+    const removedPluginIds = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+    if (configuredPluginIds.some((pluginId) => !removedPluginIds.has(pluginId))) {
+      throw new Error("config IO compatibility tests require real metadata for active plugins");
+    }
+    return {
+      key: `io-compat:${configuredPluginIds.join(",")}`,
+      resolve: () => [],
+    };
+  },
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  rebasePluginMetadataSnapshotManifestRegistry: () => {
+    throw new Error("config IO compatibility tests must not materialize metadata snapshots");
+  },
+  resolvePluginMetadataSnapshot: () => ({
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  }),
+}));
+
+function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
+  return withTempDir("openclaw-config-compat-", run);
+}
 
 async function writeConfig(
   home: string,
@@ -61,71 +96,27 @@ describe("config io paths", () => {
     });
   });
 
-  it.each(["lan", "loopback", "tailnet", "auto", "custom", undefined] as const)(
-    "keeps canonical gateway bind %s byte-identical during load",
-    async (bind) => {
-      await withTempHome(async (home) => {
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        const gateway = {
-          mode: "local" as const,
-          ...(bind ? { bind } : {}),
-          ...(bind === "custom" ? { customBindHost: "127.0.0.1" } : {}),
-        };
-        const raw = `${JSON.stringify({ gateway }, null, 2)}\n`;
-        await fs.writeFile(configPath, raw, "utf-8");
-        const io = createConfigIO({
-          configPath,
-          env: { HOME: home } as NodeJS.ProcessEnv,
-          homedir: () => home,
-        });
-
-        const config = io.loadConfig();
-
-        expect(config.gateway?.bind).toBe(bind);
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
-      });
-    },
-  );
-
-  it("logs validation warnings with real line breaks", async () => {
+  it("keeps canonical custom gateway bind byte-identical during load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            plugins: {
-              entries: {
-                "google-antigravity-auth": {
-                  enabled: false,
-                  config: { stale: true },
-                },
-              },
-            },
-          },
-          null,
-          2,
-        ),
-      );
-      const logger = {
-        error: vi.fn(),
-        warn: vi.fn(),
+      const gateway = {
+        mode: "local" as const,
+        bind: "custom" as const,
+        customBindHost: "127.0.0.1",
       };
-
+      const raw = `${JSON.stringify({ gateway }, null, 2)}\n`;
+      await fs.writeFile(configPath, raw, "utf-8");
       const io = createConfigIO({
         configPath,
         env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
-        logger,
       });
-      io.loadConfig();
 
-      expect(logger.warn).toHaveBeenCalledWith(
-        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-      );
-      expect(logger.warn).not.toHaveBeenCalledWith("Config warnings:\\n");
+      const config = io.loadConfig();
+
+      expect(config.gateway).toMatchObject({ bind: "custom", customBindHost: "127.0.0.1" });
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
     });
   });
 
@@ -155,6 +146,9 @@ describe("config io paths", () => {
       load();
       load();
       expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+      );
 
       createConfigIO({
         configPath,

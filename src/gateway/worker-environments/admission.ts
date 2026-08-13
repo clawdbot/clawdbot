@@ -19,6 +19,13 @@ export type ExpectedWorkerBuild = {
   protocolFeatures: readonly string[];
 };
 
+/** Local-install receipts pin the node's paired-machine claim instead of Gateway bundle bytes. */
+export function resolveLocalWorkerBuild(
+  receipt: (WorkerAdmissionHandshake & { installKind?: "bundle" | "local" }) | null | undefined,
+): ExpectedWorkerBuild | undefined {
+  return receipt?.installKind === "local" ? receipt : undefined;
+}
+
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
