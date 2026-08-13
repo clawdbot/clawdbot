@@ -22,7 +22,10 @@ import {
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
-import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import {
+  runSubagentAnnounceDispatch,
+  type SubagentAnnounceDeliveryResult,
+} from "../announce/subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -2834,6 +2837,39 @@ describe("subagent registry lifecycle hardening", () => {
 
     await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe(lastDropReason));
     expect(entry.delivery?.lastError).toBe(lastError);
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(persist).toHaveBeenCalledWith(entry.runId);
+  });
+
+  it("persists steer_dropped after completion direct failure plus dropped steer fallback", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        const delivery = await runSubagentAnnounceDispatch({
+          expectsCompletionMessage: true,
+          steer: async () => ({ status: "dropped" }),
+          direct: async () => ({
+            delivered: false,
+            path: "direct",
+            error: "failed",
+          }),
+        });
+        announceParams.onDeliveryResult?.(delivery);
+        return "retryable" as const;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+
+    await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe("steer_dropped"));
+    expect(entry.delivery?.lastError).toBe("failed; steer_dropped; direct-primary: failed");
     expect(entry.delivery?.status).toBe("suspended");
     expect(persist).toHaveBeenCalledWith(entry.runId);
   });

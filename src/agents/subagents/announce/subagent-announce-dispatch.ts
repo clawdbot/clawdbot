@@ -182,5 +182,10 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(fallbackSteer);
   }
 
-  return withPhases(primaryDirect);
+  // Dropped fallback is not terminal, so completion keeps the failed direct
+  // result. Carry the fallback reason so registry cleanup can persist
+  // steer_dropped instead of only seeing path: "direct".
+  return withPhases(
+    fallbackSteer.reason ? { ...primaryDirect, reason: fallbackSteer.reason } : primaryDirect,
+  );
 }

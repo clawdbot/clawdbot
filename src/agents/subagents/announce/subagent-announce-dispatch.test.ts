@@ -175,6 +175,7 @@ describe("runSubagentAnnounceDispatch", () => {
     {
       name: "cannot deliver",
       steerStatus: "none" as const,
+      expectedReason: undefined,
       fallbackPhase: {
         phase: "steer-fallback" as const,
         delivered: false,
@@ -185,6 +186,7 @@ describe("runSubagentAnnounceDispatch", () => {
     {
       name: "drops the new item",
       steerStatus: "dropped" as const,
+      expectedReason: "steer_dropped" as const,
       fallbackPhase: {
         phase: "steer-fallback" as const,
         delivered: false,
@@ -195,7 +197,7 @@ describe("runSubagentAnnounceDispatch", () => {
     },
   ])(
     "returns direct failure when completion fallback steering $name",
-    async ({ steerStatus, fallbackPhase }) => {
+    async ({ steerStatus, expectedReason, fallbackPhase }) => {
       const steer = vi.fn(async () => ({ status: steerStatus }));
       const direct = vi.fn(async () => ({
         delivered: false,
@@ -212,7 +214,7 @@ describe("runSubagentAnnounceDispatch", () => {
       expect(result.delivered).toBe(false);
       expect(result.path).toBe("direct");
       expect(result.error).toBe("failed");
-      expect(result.reason).toBeUndefined();
+      expect(result.reason).toBe(expectedReason);
       expect(result.terminal).toBeUndefined();
       expect(result.phases).toEqual([
         { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
