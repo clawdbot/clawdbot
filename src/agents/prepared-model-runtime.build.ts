@@ -189,7 +189,9 @@ function createFullModelCatalogAccess(params: {
       try {
         assertCurrent();
       } catch (error) {
-        return Promise.reject(error);
+        return Promise.reject(
+          error instanceof Error ? error : new Error(toStringifiedError(error)),
+        );
       }
       if (!options?.refresh && fullCatalog) {
         return Promise.resolve(fullCatalog);

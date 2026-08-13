@@ -47,17 +47,16 @@ import {
 } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
+import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -464,29 +463,17 @@ function apiKeyProviderCapabilities(params: {
   metadataSnapshot: PluginMetadataSnapshot;
   workspaceDir: string;
 }): ApiKeyProviderCapabilities {
-  const capabilities = new Map<string, boolean>();
-  const resolveProvider = (provider: string) =>
-    resolveProviderIdForAuth(provider, {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-  for (const choice of resolveManifestProviderAuthChoices({
+  const { capabilities, resolveProvider } = resolveModelProviderCapabilities({
     config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    includeUntrustedWorkspacePlugins: false,
     metadataSnapshot: params.metadataSnapshot,
-  })) {
-    const provider = resolveProvider(choice.providerId);
-    capabilities.set(
-      provider,
-      capabilities.get(provider) === true || choice.methodId === "api-key",
-    );
-  }
-  return { providers: capabilities, resolveProvider };
+    workspaceDir: params.workspaceDir,
+  });
+  return {
+    providers: new Map(
+      capabilities.map(({ provider, apiKeySupported }) => [provider, apiKeySupported]),
+    ),
+    resolveProvider,
+  };
 }
 
 type BuildModelsListResultParams = {

@@ -115,8 +115,9 @@ describe("auth external oauth helpers", () => {
   });
 
   it("refreshes and removes a prepared built-in CLI profile authoritatively", () => {
+    const expires = createUsableOAuthExpiry();
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "startup-access", refresh: "startup-refresh" }),
+      createCredential({ access: "startup-access", refresh: "startup-refresh", expires }),
     );
     const startup = overlayExternalAuthProfiles(
       {
@@ -139,7 +140,7 @@ describe("auth external oauth helpers", () => {
     expect(getRuntimeExternalCliProfileIds(retained)).toEqual(["openai:default"]);
 
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "rotated-access", refresh: "rotated-refresh" }),
+      createCredential({ access: "rotated-access", refresh: "rotated-refresh", expires }),
     );
     const rotated = overlayExternalCliAuthProfiles(retained, {
       externalCliProfileIds: ["openai:default"],

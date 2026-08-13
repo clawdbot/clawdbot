@@ -307,9 +307,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   const connectionEpoch = host.connectionEpoch;
   host.chatModelsLoading = true;
   try {
-    const models = await loadModels(client, {
-      ...(agentId ? { agentId } : {}),
-    });
+    const models = await loadModels(client, agentId ? { agentId } : {});
     if (
       host.client === client &&
       host.connected &&

@@ -108,7 +108,16 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
   for (;;) {
-    const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+    let loaded: Awaited<ReturnType<typeof loadGatewayModelCatalogOwnerSnapshot>>;
+    try {
+      loaded = await loadGatewayModelCatalogOwnerSnapshot(params);
+    } catch (error) {
+      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        continue;
+      }
+      throw error;
+    }
+    const { candidate, owner } = loaded;
     let refreshedAuth: Awaited<ReturnType<typeof loadPreparedModelRuntimeAuth>>;
     try {
       refreshedAuth = params?.refreshAuth
@@ -153,7 +162,7 @@ export async function loadGatewayModelCatalogSnapshot(
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
-  return (await loadGatewayModelCatalogOwnerSnapshot(params)).owner.modelCatalog.entries;
+  return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }
 
 /** Reads the already-published startup catalog without starting provider discovery. */

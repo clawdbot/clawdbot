@@ -265,6 +265,26 @@ describe("gateway prepared model catalog", () => {
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("retries owner acquisition when a cached catalog generation is superseded", async () => {
+    const config = ownerConfig();
+    const currentCatalog: ModelCatalogSnapshot = {
+      entries: [{ provider: "openai", id: "current", name: "Current" }],
+      routeVariants: [],
+    };
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi
+      .fn()
+      .mockRejectedValueOnce(new PreparedModelRuntimePublicationSupersededError("superseded"))
+      .mockResolvedValueOnce(ownerSnapshot(config, currentCatalog));
+
+    await expect(
+      loadGatewayModelCatalog({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toEqual(currentCatalog.entries);
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects an ambiguous owner without an authoritative agent identity", async () => {
     const config = {
       agents: {
