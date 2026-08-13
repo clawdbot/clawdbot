@@ -27,6 +27,21 @@ function sessionsList(placement: "local" | "active") {
   };
 }
 
+const workerDesktopEnvironment = {
+  id: "worker-desktop-1",
+  type: "worker",
+  status: "available",
+  desktop: true,
+  worker: {
+    providerId: "crabbox",
+    state: "attached",
+    ageMs: 1_000,
+    attachedSessionIds: ["main"],
+    tunnelStatus: "connected",
+    desktopApps: ["browser", "terminal"],
+  },
+} as const;
+
 async function openPalette(page: import("playwright").Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
@@ -130,22 +145,7 @@ suite.define(() => {
         methodResponses: {
           "sessions.list": sessionsList("active"),
           "environments.list": {
-            environments: [
-              {
-                id: "worker-desktop-1",
-                type: "worker",
-                status: "available",
-                desktop: true,
-                worker: {
-                  providerId: "crabbox",
-                  state: "attached",
-                  ageMs: 1_000,
-                  attachedSessionIds: ["main"],
-                  tunnelStatus: "connected",
-                  desktopApps: ["browser", "terminal"],
-                },
-              },
-            ],
+            environments: [workerDesktopEnvironment],
           },
           "desktop.observe": {
             transport: "rfb",
@@ -240,6 +240,32 @@ suite.define(() => {
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
       expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
       expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
+
+      await gateway.setMethodResponse("environments.list", {
+        environments: [workerDesktopEnvironment],
+      });
+      await installDesktopClientFake(panel);
+      const requestCount = (await gateway.getRequests()).length;
+      await panel.getByRole("button", { name: "Retry", exact: true }).click();
+
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(2);
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
+      expect(
+        (await gateway.getRequests())
+          .slice(requestCount)
+          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .map((request) => request.method),
+      ).toEqual(["environments.list", "desktop.observe"]);
+      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+      expect(await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
     });
   });
 
