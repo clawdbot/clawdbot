@@ -173,7 +173,7 @@ describe.concurrent("gateway startup-migration refusal", () => {
     }
   }, 45_000);
 
-  it("reuses the state-migration checkpoint when the config file remains absent", async () => {
+  it("skips state-only checkpoint work when config and state remain absent", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
     const runtimeRoot = createSourceRuntime(root);
     const stateDir = path.join(root, "state");
@@ -239,9 +239,12 @@ describe.concurrent("gateway startup-migration refusal", () => {
     const first = readResult(await run());
     const second = readResult(await run());
 
-    expect(first).toEqual({ activeLease: false, stateMigrationsImported: true });
+    // This direct preflight is state-only. Gateway startup requests the readiness checkpoint and
+    // still imports it; the preceding process case proves migration failures refuse readiness.
+    expect(first).toEqual({ activeLease: false, stateMigrationsImported: false });
     expect(second).toEqual({ activeLease: false, stateMigrationsImported: false });
     expect(fs.existsSync(configPath)).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
   }, 150_000);
 
   it("reloads tool ownership after updater-managed manifest repair", async () => {
