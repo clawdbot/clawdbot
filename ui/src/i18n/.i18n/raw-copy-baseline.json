@@ -592,6 +592,13 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/skills/view.test-support.ts",
+      "text": "Skill description"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/usage/query.ts",
       "text": "agent:"

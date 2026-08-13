@@ -263,9 +263,15 @@ struct ClawHubSearchResponseLite: Decodable {
 
 struct ClawHubSearchResultLite: Decodable {
     let slug: String
+    let installRef: String?
     let displayName: String
     let summary: String?
     let version: String?
+
+    /// Several publishers can share one slug, so install must send the Gateway-supplied reference.
+    var reference: String {
+        self.installRef ?? self.slug
+    }
 }
 
 struct ClawHubInstallParams: Encodable {
