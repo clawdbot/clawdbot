@@ -869,61 +869,18 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-      # Canonical main cannot be cancelled by a newer push. Publish the sole
-      # dependency snapshot here before fanout. Blacksmith may expose a fresh
-      # commit only to a later run; readers retain the marker-checked fallback.
-      - name: Refresh sticky dependency snapshot
-        if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.manifest.outputs.run_node == 'true'
+      # Publish one immutable semantic dependency archive before same-repo
+      # Blacksmith jobs fan out. Pull-request archives remain merge-ref scoped;
+      # main archives seed later pull requests through the default-branch scope.
+      - name: Publish exact dependency cache
+        if: github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
         uses: ./.github/actions/setup-node-env
         with:
+          dependency-cache: "true"
           install-bun: "false"
-          save-sticky-disk: "true"
-          sticky-disk: "true"
-          use-actions-cache: "false"
-
-      - name: Maintain sticky dependency store budget
-        if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.manifest.outputs.run_node == 'true'
-        shell: bash
-        env:
-          OPENCLAW_PNPM_STORE_MAX_KIB: "8388608"
-        run: |
-          set -euo pipefail
-          store_dir="${PNPM_CONFIG_STORE_DIR:?}"
-          before_kib="$(du -sk "$store_dir" | cut -f1)"
-          after_kib="$before_kib"
-          pruned=false
-
-          if [ "$before_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
-            echo "pnpm store is ${before_kib} KiB; pruning above ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
-            PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune
-            after_kib="$(du -sk "$store_dir" | cut -f1)"
-            pruned=true
-          else
-            echo "pnpm store is ${before_kib} KiB; below ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
-          fi
-
-          {
-            echo "### Dependency store maintenance"
-            echo
-            echo "- Before: ${before_kib} KiB"
-            echo "- After: ${after_kib} KiB"
-            echo "- Pruned: ${pruned}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
-            echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
-          fi
-
-          # StickyDisk's pinned on-change mode compares whole-filesystem
-          # allocation to its mount-time baseline. Only a successful real
-          # dependency capture creates this runner-local signal. Force and
-          # verify the delta after pruning so a same-size rebuild commits while
-          # validated warm restores remain read-only.
-          if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]; then
-            bash "$GITHUB_WORKSPACE/.github/actions/setup-node-env/sticky-importers.sh" \
-              ensure-change /var/tmp/openclaw-node-deps \
-              "${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"
-          fi
+          save-actions-cache: "true"
+          save-dependency-cache: "true"
+          use-actions-cache: "true"
 
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
@@ -1129,13 +1086,14 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Warm the lockfile- and pnpm-pinned Actions cache for PR and manual runs.
-  # Canonical main publishes its sticky snapshot in preflight before fanout.
+  # Warm the lockfile- and pnpm-pinned Actions cache for fork PRs, manual runs,
+  # and docs-only same-repo PRs. Node-relevant canonical main and same-repo PRs
+  # already publish it through the exact dependency-cache writer in preflight.
   pnpm-store-warmup:
     permissions:
       contents: read
     needs: [preflight]
-    if: ${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true') }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
@@ -1228,10 +1186,9 @@ jobs:
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
@@ -1498,7 +1455,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Download exact-run built runtime
@@ -1534,10 +1491,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify native app i18n source
@@ -1577,10 +1533,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - &install_playwright_chromium
@@ -1645,8 +1600,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
-          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          # Hosted paths use the pnpm store cache; first-attempt same-repo
+          # Blacksmith runs restore the preflight-published dependency tree.
+          dependency-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - *install_playwright_chromium
@@ -1682,8 +1638,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
-          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          # Hosted paths use the pnpm store cache; first-attempt same-repo
+          # Blacksmith runs restore the preflight-published dependency tree.
+          dependency-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - *install_playwright_chromium
@@ -1719,10 +1676,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify Control UI i18n source
@@ -1808,10 +1764,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
@@ -1914,10 +1869,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Set up Blacksmith Docker layer cache
@@ -2095,10 +2049,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run plugin contract shard
@@ -2138,10 +2091,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run channel contract shard
@@ -2215,10 +2167,9 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Only the preflight writer saves an archive. Same-repo Blacksmith
+          # shards restore it; hosted and non-Node-24 paths use the pnpm store.
+          dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
@@ -2352,10 +2303,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
@@ -2645,10 +2595,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
@@ -2911,10 +2860,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Blacksmith same-repo runs clone dependencies from a sticky disk.
-          # Fork PRs must keep actions/cache: sticky snapshots are writable,
-          # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          # Same-repo Blacksmith runs restore the dependency cache published by
+          # preflight; hosted paths use the pnpm store cache instead.
+          dependency-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting

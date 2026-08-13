@@ -1,6 +1,5 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -9,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -2877,27 +2877,126 @@ NODE
     });
   });
 
-  it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
-    const workflow = readCiWorkflow();
-    const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
-      const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
-      return typeof runsOn === "string" && runsOn.includes("blacksmith-");
+  it("owns one exact immutable semantic dependency cache", () => {
+    const actionSource = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
+    const ciSource = readFileSync(".github/workflows/ci.yml", "utf8");
+    const action = parse(actionSource);
+    const workflow = parse(ciSource);
+    const actionSteps = action.runs.steps as WorkflowStep[];
+    const step = (name: string) =>
+      expectDefined(
+        actionSteps.find((candidate) => candidate.name === name),
+        name,
+      );
+    const configureStore = step("Configure dependency cache store");
+    const resolve = step("Resolve dependency cache key");
+    const prepare = step("Prepare dependency cache restore");
+    const restore = step("Restore exact dependency cache");
+    const prepareFallback = step("Prepare dependency cache miss fallback");
+    const setupPnpm = step("Setup pnpm");
+    const install = step("Install dependencies");
+    const installScript = expectDefined(install.run, "Install dependencies script");
+    const save = step("Save exact dependency cache");
+    const cachePaths =
+      "node_modules\nui/node_modules\npackages/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
+
+    expect(action.inputs["dependency-cache"].default).toBe("false");
+    expect(action.inputs["save-dependency-cache"].default).toBe("false");
+    expect(action.inputs).not.toHaveProperty("sticky-disk");
+    expect(action.inputs).not.toHaveProperty("save-sticky-disk");
+    expect(actionSource).not.toContain("useblacksmith/stickydisk");
+
+    expect(configureStore.if).toBe("inputs.dependency-cache == 'true'");
+    expect(configureStore.run).toContain(
+      'echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"',
+    );
+    expect(resolve.if).toBe("inputs.dependency-cache == 'true'");
+    expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
+    expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v2");
+    expect(resolve.run).toContain("${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}");
+    expect(resolve.run).toContain("node-$(node --version)-${deps_input_fingerprint:?}");
+    expect(resolve.run).not.toMatch(/GITHUB_(?:REF|SHA|RUN_ID)|RUN_(?:ID|ATTEMPT)/u);
+    expect(actionSteps.indexOf(resolve)).toBeLessThan(actionSteps.indexOf(restore));
+    for (const cleanup of [prepare, prepareFallback]) {
+      expect(cleanup.run).toContain('rm -rf "$GITHUB_WORKSPACE/node_modules"');
+      expect(cleanup.run).toContain('"$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"');
+      expect(cleanup.run).toContain('"$GITHUB_WORKSPACE/packages"');
+      expect(cleanup.run).toContain("-name node_modules");
+    }
+    expect(actionSteps.indexOf(prepare)).toBeLessThan(actionSteps.indexOf(restore));
+    expect(restore).toMatchObject({
+      if: "inputs.dependency-cache == 'true'",
+      uses: CACHE_V5,
+      with: { key: "${{ steps.dependency-cache-key.outputs.key }}", path: cachePaths },
     });
-    const stickySteps = Object.entries(workflow.jobs).flatMap(([jobName, job]) => {
-      const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
-      return steps.flatMap((step) => {
-        const stepWith = step.with;
-        if (!stepWith || stepWith["sticky-disk"] === undefined) {
-          return [];
-        }
-        return [{ jobName, stepWith }];
-      });
+    expect((restore as WorkflowStep & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(
+      true,
+    );
+    expect(restore.with).not.toHaveProperty("restore-keys");
+    expect(prepareFallback.if).toContain("steps.dependency-cache.outputs.cache-hit != 'true'");
+    expect(prepareFallback.run).toContain(
+      "actions/cache treats service, download, and extraction failures as",
+    );
+    expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(prepareFallback));
+    expect(actionSteps.indexOf(prepareFallback)).toBeLessThan(actionSteps.indexOf(setupPnpm));
+    expect(setupPnpm.with?.["use-actions-cache"]).toContain(
+      "steps.dependency-cache.outputs.cache-hit != 'true'",
+    );
+    expect(setupPnpm.with?.["use-actions-cache"]).toContain(
+      "inputs.dependency-cache != 'true' && inputs.use-actions-cache == 'true'",
+    );
+    expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(setupPnpm));
+
+    expect(installScript).toContain("install_args+=(--package-import-method=hardlink)");
+    expect(installScript).toContain("run_pnpm_install --offline");
+    expect(installScript).toContain("run_pnpm_install --prefer-offline");
+    expect(installScript).toContain('[ "$DEPENDENCY_CACHE_HIT" = "true" ]');
+    expect(installScript).toContain('rm -rf "$GITHUB_WORKSPACE/node_modules"');
+    expect(installScript).toContain('"$GITHUB_WORKSPACE/packages"');
+    expect(installScript).toContain("-name node_modules");
+    expect(installScript).toContain('"${PNPM_CONFIG_STORE_DIR:?}"');
+    expect(installScript.match(/run_pnpm_install/g)).toHaveLength(5);
+    expect(installScript).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"');
+    expect(installScript).toContain(
+      'echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"',
+    );
+    expect(save).toMatchObject({
+      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: { key: "${{ steps.dependency-cache-key.outputs.key }}", path: cachePaths },
     });
-    const preflightWriter = stickySteps.find((entry) => entry.jobName === "preflight");
-    const stickyConsumers = stickySteps.filter((entry) => entry.jobName !== "preflight");
-    // Every Linux Blacksmith lane that installs Node dependencies consumes
-    // the snapshot; missing entries silently pay the full install again.
-    expect(stickyConsumers.map((entry) => entry.jobName).toSorted()).toEqual([
+    expect(save.if).toContain("inputs.save-dependency-cache == 'true'");
+    expect(save.if).toContain("steps.dependency-cache.outputs.cache-hit != 'true'");
+    expect((save as WorkflowStep & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(
+      true,
+    );
+    expect(actionSteps.indexOf(save)).toBe(actionSteps.indexOf(install) + 1);
+
+    const dependencySetups = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+      ((job as { steps?: WorkflowStep[] }).steps ?? []).flatMap((candidate) =>
+        candidate.uses === "./.github/actions/setup-node-env" &&
+        candidate.with?.["dependency-cache"] !== undefined
+          ? [{ jobName, step: candidate }]
+          : [],
+      ),
+    );
+    const writers = dependencySetups.filter(
+      ({ step: candidate }) => candidate.with?.["save-dependency-cache"] === "true",
+    );
+    expect(writers).toHaveLength(1);
+    expect(writers[0]?.jobName).toBe("preflight");
+    expect(writers[0]?.step).toMatchObject({
+      if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
+      with: {
+        "dependency-cache": "true",
+        "save-actions-cache": "true",
+        "save-dependency-cache": "true",
+        "use-actions-cache": "true",
+      },
+    });
+    expect(writers[0]?.step.if).toContain("github.ref == 'refs/heads/main'");
+    expect(writers[0]?.step.if).toContain("github.event_name == 'pull_request'");
+    const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
+    expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
       "build-artifacts",
       "check-additional-shard",
       "check-docs",
@@ -2914,277 +3013,204 @@ NODE
       "qa-smoke-ci-profile",
       "sqlite-session-lifecycle",
     ]);
-    const hostedRetryJobs = new Set(["checks-ui-e2e", "checks-ui-e2e-real-gateway"]);
-    for (const { jobName, stepWith } of stickyConsumers) {
-      const stickyCondition = stepWith["sticky-disk"];
-      const cacheCondition = stepWith["use-actions-cache"];
-      if (hostedRetryJobs.has(jobName)) {
-        continue;
-      }
-      expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
-      expect(cacheCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
-      expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
-      expect(stickyCondition, jobName).toContain(
-        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-      );
-      expect(cacheCondition, jobName).toContain(
-        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-      );
+    for (const { jobName, step: consumer } of consumers) {
+      const needs = workflow.jobs[jobName].needs;
+      expect(Array.isArray(needs) ? needs : [needs], jobName).toContain("preflight");
+      expect(consumer.with, jobName).not.toHaveProperty("save-dependency-cache");
+      expect(consumer.with?.["dependency-cache"], jobName).toContain("'true' || 'false'");
+      expect(consumer.with?.["use-actions-cache"], jobName).toContain("'false' || 'true'");
     }
-    // Required CI jobs only clone the snapshot. The disposable warmer below
-    // owns commits so writer coalescing cannot cancel a required build job.
-    for (const { jobName, stepWith } of stickyConsumers) {
-      expect(stepWith["save-sticky-disk"], jobName).toBeUndefined();
+    for (const { jobName, step: setup } of Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+      ((job as { steps?: WorkflowStep[] }).steps ?? [])
+        .filter((candidate) => candidate.uses === "./.github/actions/setup-node-env")
+        .map((candidate) => ({ jobName, step: candidate })),
+    )) {
+      expect(setup.with, jobName).not.toHaveProperty("sticky-disk");
+      expect(setup.with, jobName).not.toHaveProperty("save-sticky-disk");
     }
-    expect(preflightWriter?.stepWith).toMatchObject({
-      "save-sticky-disk": "true",
-      "sticky-disk": "true",
-      "use-actions-cache": "false",
-    });
-    const preflightSteps = workflow.jobs.preflight.steps as WorkflowStep[];
-    const refreshStep = preflightSteps.find(
-      (step: WorkflowStep) => step.name === "Refresh sticky dependency snapshot",
-    )!;
-    const maintainStep = preflightSteps.find(
-      (step: WorkflowStep) => step.name === "Maintain sticky dependency store budget",
-    )!;
-    expect(refreshStep.if).toContain("github.event_name == 'push'");
-    expect(refreshStep.if).toContain("github.repository == 'openclaw/openclaw'");
-    expect(refreshStep.if).toContain("github.ref == 'refs/heads/main'");
-    expect(refreshStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
-    expect(maintainStep.if).toBe(refreshStep.if);
-    expect(preflightSteps.indexOf(refreshStep)).toBeLessThan(preflightSteps.indexOf(maintainStep));
-    expect(maintainStep.env?.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
-    expect(maintainStep.run).toContain('store_dir="${PNPM_CONFIG_STORE_DIR:?}"');
-    expect(maintainStep.run).toContain('PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune');
-    expect(maintainStep.run).toContain('>> "$GITHUB_STEP_SUMMARY"');
-    expect(maintainStep.run).toContain('if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]');
-    expect(maintainStep.run).toContain("ensure-change /var/tmp/openclaw-node-deps");
-    expect(maintainStep.run).toContain('"${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"');
-    expect(workflow.jobs["pnpm-store-warmup"].if).toContain("github.ref == 'refs/heads/main'");
-    expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
-      "github.repository == 'openclaw/openclaw'",
-    );
-    // Current sticky consumers all use the single supported Node line. A
-    // planner-provided version would silently create a writerless disk.
-    for (const { jobName, stepWith } of stickyConsumers) {
-      const nodeVersion = stepWith["node-version"];
-      expect(
-        nodeVersion === undefined ||
-          nodeVersion === "24.x" ||
-          nodeVersion === "${{ matrix.node_version || '24.x' }}",
-        `${jobName} must resolve to the writer's 24.x snapshot key (got ${String(nodeVersion)})`,
-      ).toBe(true);
-      if (nodeVersion === "${{ matrix.node_version || '24.x' }}") {
-        expect(stepWith["sticky-disk"], jobName).toContain(
-          "matrix.node_version == null || matrix.node_version == '24.x'",
-        );
-      }
-    }
-    const warmWorkflow = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
-    const warmSetupStep = warmWorkflow.jobs.warm.steps.find(
-      (step: WorkflowStep) => step.name === "Setup Node environment",
-    );
-    expect(warmSetupStep.with["save-sticky-disk"]).toBeUndefined();
-    expect(warmSetupStep.with["sticky-disk"]).toBe("false");
-    expect(warmWorkflow.on).not.toHaveProperty("pull_request");
-    expect(warmWorkflow.on).not.toHaveProperty("workflow_dispatch");
-    expect(warmWorkflow.on).not.toHaveProperty("workflow_run");
-    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
-    const validateLayoutStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
-    );
-    const setupPnpmStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Setup pnpm",
-    );
-    const mountStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
-    );
-    const baselineStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Record sticky disk allocation baseline",
-    );
-    const cleanupStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Register sticky bind cleanup",
-    );
-    const bindStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Bind sticky node_modules into workspace",
-    );
-    const installStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Install dependencies",
-    );
-
-    expect(blacksmithJobs.length).toBeGreaterThan(0);
-    for (const [jobName, job] of blacksmithJobs) {
-      expect(
-        (job as { "runs-on": string })["runs-on"],
-        `${jobName} must route fork pull requests to GitHub-hosted runners`,
-      ).toContain(
-        "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-      );
-    }
-    expect(action.inputs["sticky-disk"].default).toBe("false");
-    // Writers omit node-version, so the default is the writers' key segment.
-    expect(action.inputs["node-version"].default).toBe("24.x");
-    expect(action.inputs["save-sticky-disk"].default).toBe("false");
-    expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
-    expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
-    expect(validateLayoutStep.run).toContain('config_value="$(pnpm config get "$config_name")"');
-    expect(validateLayoutStep.run).toContain(
-      "sticky mode requires pnpm's stock node_modules layout",
-    );
-    expect(action.runs.steps.indexOf(setupPnpmStep)).toBeLessThan(
-      action.runs.steps.indexOf(validateLayoutStep),
-    );
-    expect(action.runs.steps.indexOf(validateLayoutStep)).toBeLessThan(
-      action.runs.steps.indexOf(mountStep),
-    );
-    expect(mountStep).toMatchObject({
-      if: "inputs.sticky-disk == 'true'",
-      uses: "useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494",
-      with: {
-        path: "/var/tmp/openclaw-node-deps",
-      },
-    });
-    // Bounded disks: Blacksmith caps sticky disks per installation, and the old
-    // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
-    // runtime patches belong in the marker, not the backing-disk key.
-    expect(mountStep.with.key).toBe(
-      "${{ github.repository }}-node-deps-bind-v7-${{ inputs.node-version }}",
-    );
-    expect(mountStep.with.commit).toBe(
-      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
-    );
-    expect(baselineStep).toMatchObject({
-      if: "inputs.sticky-disk == 'true' && inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request'",
-    });
-    expect(baselineStep.run).toContain('df -B1 --output=used "$sticky_root"');
-    expect(baselineStep.run).toContain(
-      'echo "OPENCLAW_STICKY_INITIAL_USAGE_BYTES=$initial_usage_bytes"',
-    );
-    expect(baselineStep.run).toContain('echo "OPENCLAW_STICKY_REBUILD_SIGNAL=$rebuild_signal"');
-    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
-      action.runs.steps.indexOf(baselineStep),
-    );
-    expect(cleanupStep).toMatchObject({
-      if: "inputs.sticky-disk == 'true'",
-      uses: "./.github/actions/register-bind-mount-cleanup",
-      with: { path: "${{ github.workspace }}/node_modules" },
-    });
-    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
-      action.runs.steps.indexOf(cleanupStep),
-    );
-    expect(action.runs.steps.indexOf(cleanupStep)).toBeLessThan(
-      action.runs.steps.indexOf(bindStep),
-    );
-    expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
-    expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
-    expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
-    expect(bindStep.run).toContain(
-      'deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"',
-    );
-    expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$deps_fingerprint"');
-    expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
-    expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    // Compute from the checkout before the bind mount adds snapshot-internal
-    // manifests. Ordinary package scripts must not rotate dependency trees.
-    expect(bindStep.env.FROZEN_LOCKFILE).toBe("${{ inputs.frozen-lockfile }}");
-    expect(bindStep.env).not.toHaveProperty("DEPS_INPUT_FINGERPRINT");
-    expect(bindStep.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
-    expect(bindStep.run.indexOf("dependency-fingerprint.mjs")).toBeLessThan(
-      bindStep.run.indexOf('sudo mount --bind "$sticky_modules" "$workspace_modules"'),
-    );
-    expect(installStep.env).toMatchObject({
-      STICKY_DISK: "${{ inputs.sticky-disk }}",
-      STICKY_ROOT: "/var/tmp/openclaw-node-deps",
-      STICKY_WRITER:
-        "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
-    });
-    expect(installStep.run).toContain('sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"');
-    expect(installStep.run).toContain(
-      '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
-    );
-    expect(installStep.run).toContain('sticky_fingerprint_matches="true"');
-    expect(installStep.run).toContain(
-      "Sticky dependency fingerprint matches, but restored importer contents are incomplete; reinstalling",
-    );
-    expect(installStep.run).toContain('[ "$STICKY_WRITER" != "true" ]');
-    expect(installStep.run).toContain('sudo umount "$GITHUB_WORKSPACE/node_modules"');
-    expect(installStep.run).toContain('ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"');
-    expect(installStep.run).toContain(
-      "Sticky dependency snapshot is unusable; using runner-local storage for this read-only run",
-    );
-    expect(installStep.run).toContain(
-      'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
-    );
-    expect(installStep.run).toContain(
-      "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
-    );
-    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
-    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 15m");
-    expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
-    const forceStickyWriterInstall =
-      'if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&\n' +
-      '  [ "$sticky_snapshot_matches" != "true" ]; then';
-    expect(installStep.run).toContain(forceStickyWriterInstall);
-    const clearStickyModules =
-      'find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +';
-    expect(installStep.run).toContain(clearStickyModules);
-    expect(installStep.run).toContain("install_args+=(--force)");
-    expect(installStep.run).toContain('sticky_writer_rebuild="true"');
-    expect(installStep.run).toContain('if [ "$sticky_writer_rebuild" = "true" ]; then');
-    expect(installStep.run).toContain("install_attempts=1");
-    expect(installStep.run.indexOf(forceStickyWriterInstall)).toBeLessThan(
-      installStep.run.indexOf(clearStickyModules),
-    );
-    expect(installStep.run.indexOf(clearStickyModules)).toBeLessThan(
-      installStep.run.indexOf("run_pnpm_install()"),
-    );
-    expect(installStep.run).toContain("install_attempts=2");
-    expect(installStep.run).toContain("install_attempts=3");
-    expect(installStep.run).toContain(
-      "for (( attempt = 1; attempt <= install_attempts; attempt += 1 )); do",
-    );
-    expect(installStep.run).toContain('if [ "$install_status" -ne 0 ]; then');
-    expect(installStep.run).not.toContain("accepting the populated sticky tree");
-    // Read-only consumers never capture; only the designated writer refreshes
-    // the archive and publishes the fingerprint after a successful install.
-    expect(installStep.run).toContain('[ "$STICKY_WRITER" = "true" ]');
-    expect(installStep.run.indexOf('pnpm "${install_args[@]}"')).toBeLessThan(
-      installStep.run.indexOf(
-        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
-      ),
-    );
-    expect(installStep.run).toContain('"${OPENCLAW_STICKY_REBUILD_SIGNAL:?}"');
-    // The content-validated snapshot or successful install already owns
-    // dependency validation. pnpm's redundant check sees intentionally pruned
-    // plugin importers as stale, so it must not mutate during shard fanout.
-    const disableImplicitInstall =
-      'echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"';
-    expect(installStep.run).toContain('if [ "$STICKY_DISK" = "true" ]; then');
-    expect(installStep.run).not.toContain("pnpm_config_verify_deps_before_run=install pnpm exec");
-    expect(installStep.run).toContain(disableImplicitInstall);
-    expect(installStep.run.indexOf('sticky-importers.sh" restore')).toBeLessThan(
-      installStep.run.indexOf(disableImplicitInstall),
-    );
-    const cleanupAction = parse(
-      readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
-    );
-    expect(cleanupAction.runs).toMatchObject({
-      using: "node24",
-      main: "main.cjs",
-      post: "post.cjs",
-      "post-if": "always()",
-    });
-    const cleanupPost = readFileSync(
-      ".github/actions/register-bind-mount-cleanup/post.cjs",
-      "utf8",
-    );
-    expect(cleanupPost).toContain("mountpoint.status === 32");
-    expect(cleanupPost).toContain('spawnSync("sudo", ["umount", mountPath]');
-    expect(readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8")).toContain(
-      "actions/cache/restore@",
-    );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves pnpm hard links and validates cached importers offline",
+    () => {
+      const root = tempDirs.make("openclaw-dependency-cache-");
+      const source = path.join(root, "source");
+      const registry = path.join(root, "registry");
+      const workspace = path.join(root, "workspace");
+      const consumer = path.join(workspace, "packages", "consumer");
+      const store = path.join(workspace, ".cache", "openclaw-pnpm-store");
+      const readyFile = path.join(root, "registry-ready");
+      mkdirSync(source, { recursive: true });
+      mkdirSync(registry, { recursive: true });
+      mkdirSync(consumer, { recursive: true });
+      writeFileSync(
+        path.join(source, "package.json"),
+        JSON.stringify({ files: ["index.js"], name: "cache-proof-dep", version: "1.0.0" }),
+      );
+      writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
+      execFileSync("pnpm", ["pack", "--pack-destination", registry], {
+        cwd: source,
+        env: { ...process.env, CI: "true" },
+        stdio: "pipe",
+      });
+      const tarball = path.join(registry, "cache-proof-dep-1.0.0.tgz");
+      const registryScript = String.raw`
+const { createHash } = require("node:crypto");
+const { readFileSync, writeFileSync } = require("node:fs");
+const { createServer } = require("node:http");
+const tarballPath = process.argv[1];
+const readyPath = process.argv[2];
+const tarball = readFileSync(tarballPath);
+const server = createServer((request, response) => {
+  if (request.url === "/cache-proof-dep") {
+    const port = server.address().port;
+    const metadata = {
+      name: "cache-proof-dep",
+      "dist-tags": { latest: "1.0.0" },
+      versions: {
+        "1.0.0": {
+          name: "cache-proof-dep",
+          version: "1.0.0",
+          dist: {
+            tarball: "http://127.0.0.1:" + port + "/cache-proof-dep-1.0.0.tgz",
+            shasum: createHash("sha1").update(tarball).digest("hex"),
+            integrity: "sha512-" + createHash("sha512").update(tarball).digest("base64"),
+          },
+        },
+      },
+    };
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(metadata));
+    return;
+  }
+  if (request.url === "/cache-proof-dep-1.0.0.tgz") {
+    response.setHeader("content-type", "application/octet-stream");
+    response.end(tarball);
+    return;
+  }
+  response.statusCode = 404;
+  response.end();
+});
+server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.address().port)));
+`;
+      const registryServer = spawn(process.execPath, ["-e", registryScript, tarball, readyFile], {
+        stdio: "ignore",
+      });
+      try {
+        for (let attempt = 0; attempt < 200 && !existsSync(readyFile); attempt += 1) {
+          if (registryServer.exitCode !== null) {
+            throw new Error(`fixture registry exited with ${registryServer.exitCode}`);
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+        expect(existsSync(readyFile)).toBe(true);
+        const registryUrl = `http://127.0.0.1:${readFileSync(readyFile, "utf8")}`;
+        writeFileSync(
+          path.join(workspace, "package.json"),
+          JSON.stringify({
+            dependencies: { "cache-proof-dep": "1.0.0" },
+            name: "cache-proof-root",
+            private: true,
+          }),
+        );
+        writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+        writeFileSync(
+          path.join(consumer, "package.json"),
+          JSON.stringify({
+            dependencies: { "cache-proof-dep": "1.0.0" },
+            name: "cache-proof-consumer",
+            private: true,
+          }),
+        );
+        execFileSync(
+          "pnpm",
+          [
+            "install",
+            `--registry=${registryUrl}`,
+            `--store-dir=${store}`,
+            "--package-import-method=hardlink",
+            "--ignore-scripts",
+            "--config.engine-strict=false",
+          ],
+          { cwd: workspace, env: { ...process.env, CI: "true" }, stdio: "pipe" },
+        );
+
+        const findSameFile = (directory: string, referencePath: string): string | undefined => {
+          const reference = statSync(referencePath);
+          for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            const entryPath = path.join(directory, entry.name);
+            if (entry.isDirectory()) {
+              const nested = findSameFile(entryPath, referencePath);
+              if (nested) {
+                return nested;
+              }
+            } else if (entry.isFile()) {
+              const candidate = statSync(entryPath);
+              if (candidate.dev === reference.dev && candidate.ino === reference.ino) {
+                return entryPath;
+              }
+            }
+          }
+          return undefined;
+        };
+        const rootPackageFile = path.join(workspace, "node_modules", "cache-proof-dep", "index.js");
+        expect(findSameFile(store, rootPackageFile)).toBeDefined();
+
+        const archive = path.join(root, "dependency-cache.tar");
+        execFileSync(
+          "tar",
+          [
+            "-cf",
+            archive,
+            "-C",
+            workspace,
+            "node_modules",
+            "packages/consumer/node_modules",
+            ".cache/openclaw-pnpm-store",
+          ],
+          { stdio: "pipe" },
+        );
+
+        rmSync(path.join(workspace, "node_modules"), { force: true, recursive: true });
+        rmSync(path.join(consumer, "node_modules"), { force: true, recursive: true });
+        rmSync(store, { force: true, recursive: true });
+        execFileSync("tar", ["-xf", archive, "-C", workspace], { stdio: "pipe" });
+
+        const restoredPackageFile = path.join(
+          workspace,
+          "node_modules",
+          "cache-proof-dep",
+          "index.js",
+        );
+        expect(findSameFile(store, restoredPackageFile)).toBeDefined();
+        expect(
+          readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
+        ).toBe('module.exports = "cache-proof-v1";\n');
+
+        registryServer.kill("SIGTERM");
+        rmSync(registry, { force: true, recursive: true });
+        const reconciliation = execFileSync(
+          "pnpm",
+          [
+            "install",
+            "--offline",
+            "--frozen-lockfile",
+            `--store-dir=${store}`,
+            "--package-import-method=hardlink",
+            "--ignore-scripts",
+            "--config.engine-strict=false",
+          ],
+          { cwd: workspace, encoding: "utf8", env: { ...process.env, CI: "true" } },
+        );
+        expect(reconciliation).toContain("Already up to date");
+        expect(
+          readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
+        ).toBe('module.exports = "cache-proof-v1";\n');
+      } finally {
+        registryServer.kill("SIGTERM");
+      }
+    },
+  );
 
   it("persists content-validated public full-build declarations", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
@@ -3290,213 +3316,6 @@ NODE
         "retention-days": 14,
       },
     });
-  });
-
-  it("restores importer-local node_modules from sticky snapshots", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
-    try {
-      const workspace = path.join(root, "workspace");
-      const stickyRoot = path.join(root, "sticky");
-      const importerRoot = path.join(workspace, "packages", "example");
-      const rootModules = path.join(workspace, "node_modules");
-      const importerModules = path.join(importerRoot, "node_modules");
-      const rootDependency = path.join(rootModules, "ipaddr.js");
-      const rootOptionalDependency = path.join(rootModules, "optional-ipaddr");
-      const importerDependency = path.join(importerModules, "ipaddr.js");
-      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
-      const rebuildSignal = path.join(root, "rebuilt");
-      const lockfile = [
-        "lockfileVersion: '9.0'",
-        "importers:",
-        "  packages/example:",
-        "    dependencies:",
-        "      ipaddr.js:",
-        "        specifier: 2.4.0",
-        "        version: 2.4.0",
-        "      aliased-ipaddr:",
-        "        specifier: npm:ipaddr.js@2.4.0",
-        "        version: ipaddr.js@2.4.0",
-        "      local-helper:",
-        "        specifier: file:../local-helper",
-        "        version: file:../local-helper",
-        "    optionalDependencies:",
-        "      optional-ipaddr:",
-        "        specifier: npm:ipaddr.js@2.4.0",
-        "        version: ipaddr.js@2.4.0",
-        "      unsupported-optional:",
-        "        specifier: 3.0.0",
-        "        version: 3.0.0",
-        "",
-      ].join("\n");
-      mkdirSync(workspace, { recursive: true });
-      writeFileSync(path.join(workspace, "pnpm-lock.yaml"), lockfile, "utf8");
-      mkdirSync(rootDependency, { recursive: true });
-      mkdirSync(rootOptionalDependency, { recursive: true });
-      mkdirSync(importerDependency, { recursive: true });
-      writeFileSync(
-        path.join(rootDependency, "package.json"),
-        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
-        "utf8",
-      );
-      writeFileSync(
-        path.join(rootOptionalDependency, "package.json"),
-        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
-        "utf8",
-      );
-      writeFileSync(
-        path.join(importerDependency, "package.json"),
-        JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
-        "utf8",
-      );
-      for (const dependencyName of ["aliased-ipaddr", "optional-ipaddr"]) {
-        const dependencyRoot = path.join(importerModules, dependencyName);
-        mkdirSync(dependencyRoot, { recursive: true });
-        writeFileSync(
-          path.join(dependencyRoot, "package.json"),
-          JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
-          "utf8",
-        );
-      }
-      writeFileSync(
-        path.join(rootModules, ".modules.yaml"),
-        JSON.stringify({
-          hoistedLocations: {
-            "ipaddr.js@1.9.1": ["node_modules/ipaddr.js", "node_modules/optional-ipaddr"],
-            "ipaddr.js@2.4.0": [
-              "packages/example/node_modules/ipaddr.js",
-              "packages/example/node_modules/aliased-ipaddr",
-              "packages/example/node_modules/optional-ipaddr",
-            ],
-          },
-        }),
-        "utf8",
-      );
-      writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
-
-      execFileSync("bash", [
-        helper,
-        "capture",
-        stickyRoot,
-        workspace,
-        "fingerprint-a",
-        rebuildSignal,
-      ]);
-      expect(existsSync(rebuildSignal)).toBe(true);
-      rmSync(importerModules, { recursive: true });
-      writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
-      execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
-
-      expect(
-        JSON.parse(readFileSync(path.join(importerDependency, "package.json"), "utf8")),
-      ).toMatchObject({ version: "2.4.0" });
-      expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
-      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
-        "fingerprint-a\n",
-      );
-      rmSync(rebuildSignal);
-      execFileSync("bash", [
-        helper,
-        "capture",
-        stickyRoot,
-        workspace,
-        "fingerprint-b",
-        rebuildSignal,
-      ]);
-      expect(existsSync(rebuildSignal)).toBe(true);
-      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
-        "fingerprint-b\n",
-      );
-
-      // Recreate the reported failure shape: a marker-matching archive can be
-      // structurally valid yet omit the importer-local override, causing Node
-      // to fall through to the stale root-hoisted version.
-      rmSync(importerModules, { recursive: true });
-      const archive = path.join(stickyRoot, "importer-node-modules.tar");
-      execFileSync("tar", ["--create", "--file", archive, "--files-from", "/dev/null"]);
-      const manifest = path.join(stickyRoot, "importer-node-modules.manifest");
-      const archiveChecksum = createHash("sha256").update(readFileSync(archive)).digest("hex");
-      const manifestChecksum = createHash("sha256").update(readFileSync(manifest)).digest("hex");
-      writeFileSync(
-        path.join(stickyRoot, ".openclaw-importer-archive.sha256"),
-        `${archiveChecksum}\n${manifestChecksum}\n`,
-        "utf8",
-      );
-      const failedRestore = spawnSync("bash", [helper, "restore", stickyRoot, workspace], {
-        encoding: "utf8",
-      });
-      expect(failedRestore.status).toBe(1);
-      expect(failedRestore.stderr).toContain(
-        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
-      );
-      expect(existsSync(importerModules)).toBe(false);
-
-      rmSync(rebuildSignal);
-      const failedCapture = spawnSync(
-        "bash",
-        [helper, "capture", stickyRoot, workspace, "fingerprint-c", rebuildSignal],
-        { encoding: "utf8" },
-      );
-      expect(failedCapture.status).toBe(1);
-      expect(existsSync(rebuildSignal)).toBe(false);
-      expect(failedCapture.stderr).toContain(
-        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("forces StickyDisk's allocation delta after a successful rebuild", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-allocation-"));
-    try {
-      const fakeBin = path.join(root, "bin");
-      const stickyRoot = path.join(root, "sticky");
-      const usageFile = path.join(root, "usage");
-      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
-      mkdirSync(fakeBin, { recursive: true });
-      mkdirSync(stickyRoot, { recursive: true });
-      // Start one allocation block below the action's baseline. A fixed append
-      // can be cancelled by this shrink; the helper must measure the net delta.
-      writeFileSync(usageFile, "995904\n", "utf8");
-      writeFileSync(
-        path.join(fakeBin, "df"),
-        '#!/usr/bin/env bash\necho Used\ncat "$OPENCLAW_TEST_USAGE_FILE"\n',
-        "utf8",
-      );
-      writeFileSync(
-        path.join(fakeBin, "dd"),
-        `#!/usr/bin/env bash
-set -euo pipefail
-count=0
-for arg in "$@"; do
-  case "$arg" in count=*) count="\${arg#count=}" ;; esac
-done
-usage="$(<"$OPENCLAW_TEST_USAGE_FILE")"
-printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
-`,
-        "utf8",
-      );
-      writeFileSync(path.join(fakeBin, "sync"), "#!/usr/bin/env bash\nexit 0\n", "utf8");
-      for (const command of ["df", "dd", "sync"]) {
-        chmodSync(path.join(fakeBin, command), 0o755);
-      }
-
-      const result = spawnSync("bash", [helper, "ensure-change", stickyRoot, "1000000"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_USAGE_FILE: usageFile,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        },
-      });
-
-      expect(result.status, result.stderr).toBe(0);
-      const finalUsage = Number(readFileSync(usageFile, "utf8").trim());
-      expect(Math.abs(finalUsage - 1_000_000)).toBeGreaterThan(65_536);
-      expect(result.stdout).toContain("Sticky dependency rebuild changed allocation");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it("fingerprints dependency install inputs without ordinary script churn", () => {
@@ -3763,7 +3582,6 @@ printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
   it("warms protected caches without main-run cancellation", () => {
     const warmerSource = readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8");
     const warmer = parse(warmerSource);
-    const workflow = readCiWorkflow();
     const warmerSetup = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
@@ -3779,9 +3597,6 @@ printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
     const maintainStoreStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Maintain dependency store budget",
     );
-    const maintainStickyStoreStep = workflow.jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Maintain sticky dependency store budget",
-    )!;
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
     expect(warmer.concurrency.group).toBe("vitest-cache-warm");
@@ -3804,38 +3619,15 @@ printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
       "save-actions-cache": "true",
       "save-node-compile-cache": "true",
       "save-vitest-fs-cache": "true",
-      "sticky-disk": "false",
       "use-actions-cache": "true",
     });
+    expect(warmerSetup.with).not.toHaveProperty("dependency-cache");
     // CI is restore-only, so no per-PR runtime cache family or close-time
     // cleanup workflow exists. Actions cache LRU/TTL expires old warmers.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
     expect(seedStep.if).toBeUndefined();
     expect(warmStep.if).toBeUndefined();
     expect(maintainStoreStep).toBeUndefined();
-    expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
-
-    const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
-    try {
-      const storeDir = path.join(maintenanceRoot, "store");
-      const summaryPath = path.join(maintenanceRoot, "summary.md");
-      mkdirSync(storeDir);
-      const result = spawnSync("bash", ["-c", maintainStickyStoreStep.run], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_STEP_SUMMARY: summaryPath,
-          OPENCLAW_PNPM_STORE_MAX_KIB: "-1",
-          OPENCLAW_STICKY_REBUILD_SIGNAL: path.join(maintenanceRoot, "not-rebuilt"),
-          PNPM_CONFIG_STORE_DIR: storeDir,
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("pruning above -1 KiB ceiling");
-      expect(readFileSync(summaryPath, "utf8")).toContain("- Pruned: true");
-    } finally {
-      rmSync(maintenanceRoot, { force: true, recursive: true });
-    }
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -5716,7 +5508,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const expectedUiE2eSetup = {
       "node-version": "24.x",
       "install-bun": "false",
-      "sticky-disk":
+      "dependency-cache":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
       "use-actions-cache":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
@@ -5751,7 +5543,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "true", useActionsCache: "false" },
       },
       {
         name: "same-repo pull request retry",
@@ -5761,7 +5553,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
         name: "fork pull request",
@@ -5771,7 +5563,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
         name: "workflow dispatch",
@@ -5780,7 +5572,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
         name: "canonical push retry",
@@ -5789,7 +5581,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "true", useActionsCache: "false" },
       },
     ] as const;
     for (const { blacksmithRunner, job, name: jobName, setup } of routedUiE2eJobs) {
@@ -5805,9 +5597,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           expectedRunner,
         );
         expect(
-          evaluateWorkflowExpression(setup.with?.["sticky-disk"], context),
+          evaluateWorkflowExpression(setup.with?.["dependency-cache"], context),
           assertionName,
-        ).toBe(expected.stickyDisk);
+        ).toBe(expected.dependencyCache);
         expect(
           evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context),
           assertionName,
