@@ -221,6 +221,79 @@ function runCandidatePrep(fixture: ReturnType<typeof candidateFixture>) {
   return { manifestPath, result };
 }
 
+function addPrepublishPluginSchedulerFixture(fixture: ReturnType<typeof candidateFixture>) {
+  const packageNames = ["@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"];
+  for (const packageName of packageNames) {
+    const packageDir = path.join(fixture.root, "extensions", packageName.split("/")[1]!);
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: packageName,
+        version: fixture.version,
+        openclaw: { release: { publishToNpm: true } },
+      }),
+    );
+  }
+
+  const scriptsLibDir = path.join(fixture.root, "scripts", "lib");
+  mkdirSync(scriptsLibDir, { recursive: true });
+  writeFileSync(path.join(scriptsLibDir, "plugin-npm-runtime-build.mjs"), "process.exit(0);\n");
+  writeFileSync(
+    path.join(scriptsLibDir, "plugin-npm-package-manifest.mjs"),
+    `import { spawnSync } from "node:child_process";
+import path from "node:path";
+const runIndex = process.argv.indexOf("--run");
+const separator = process.argv.indexOf("--");
+const packageDir = process.argv[runIndex + 1];
+const command = process.argv[separator + 1];
+const args = process.argv.slice(separator + 2);
+const result = spawnSync(command, args, {
+  cwd: path.resolve(process.cwd(), packageDir),
+  stdio: "inherit",
+});
+process.exit(result.status ?? 1);
+`,
+  );
+
+  const survivorScript = path.join(fixture.root, "scripts", "e2e", "upgrade-survivor-docker.sh");
+  mkdirSync(path.dirname(survivorScript), { recursive: true });
+  writeFileSync(
+    survivorScript,
+    `#!/usr/bin/env bash
+set -euo pipefail
+node - <<'NODE'
+const fs = require("node:fs");
+const keys = [
+  "OPENCLAW_DOCKER_E2E_SELECTED_SHA",
+  "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+  "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION",
+  "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256",
+];
+fs.writeFileSync(
+  process.env.OPENCLAW_TEST_ENV_CAPTURE,
+  JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key]]))),
+);
+NODE
+`,
+  );
+  chmodSync(survivorScript, 0o755);
+
+  execFileSync("git", ["add", "."], { cwd: fixture.root });
+  execFileSync(
+    "git",
+    ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "companions"],
+    { cwd: fixture.root },
+  );
+  return {
+    ...fixture,
+    sourceSha: execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.root,
+      encoding: "utf8",
+    }).trim(),
+  };
+}
+
 function addRegistry(
   fixture: ReturnType<typeof candidateFixture>,
   packageNames = ["@openclaw/discord", "@openclaw/feishu"],
@@ -403,6 +476,89 @@ describe("scripts/test-docker-all scheduler", () => {
     const result = runCandidatePrep(fixture).result;
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("working-tree changes");
+  });
+
+  posixIt("prepares required plugin companions for normal current-tree execution", () => {
+    const fixture = addPrepublishPluginSchedulerFixture(candidateFixture());
+    const capturePath = path.join(fixture.root, "lane-env.json");
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      "OPENCLAW_DOCKER_E2E_SELECTED_SHA",
+      "OPENCLAW_CURRENT_PACKAGE_TGZ",
+      "OPENCLAW_CURRENT_PACKAGE_VERSION",
+      "OPENCLAW_CURRENT_PACKAGE_SHA256",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256",
+    ]) {
+      delete env[key];
+    }
+    Object.assign(env, {
+      OPENCLAW_DOCKER_ALL_BUILD: "0",
+      OPENCLAW_DOCKER_ALL_LANES: "upgrade-survivor",
+      OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
+      OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+      OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.root,
+      OPENCLAW_TEST_ENV_CAPTURE: capturePath,
+    });
+
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const captured = JSON.parse(readFileSync(capturePath, "utf8")) as Record<string, string>;
+    expect(captured.OPENCLAW_DOCKER_E2E_SELECTED_SHA).toBe(fixture.sourceSha);
+    expect(captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION).toBe(fixture.version);
+    expect(captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256).toMatch(/^[0-9a-f]{64}$/u);
+    const registryDir = captured.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+    expect(path.isAbsolute(registryDir)).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(path.join(registryDir, "prepublish-plugin-registry.json"), "utf8"),
+    ) as { packages: Array<{ name: string }> };
+    expect(manifest.packages.map((entry) => entry.name)).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/whatsapp",
+    ]);
+  });
+
+  posixIt("rejects a supplied package without its required plugin registry", () => {
+    const fixture = candidateFixture();
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      "OPENCLAW_DOCKER_E2E_SELECTED_SHA",
+      "OPENCLAW_CURRENT_PACKAGE_VERSION",
+      "OPENCLAW_CURRENT_PACKAGE_SHA256",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256",
+    ]) {
+      delete env[key];
+    }
+    Object.assign(env, {
+      OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+      OPENCLAW_DOCKER_ALL_BUILD: "0",
+      OPENCLAW_DOCKER_ALL_LANES: "upgrade-survivor",
+      OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
+      OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+      OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.root,
+    });
+
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "requires a prepublish plugin registry tuple for the supplied package",
+    );
   });
 
   it.each([

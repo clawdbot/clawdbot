@@ -140,6 +140,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("prepares unpublished plugin companions for the upgrade survivor", () => {
+    expect(readPackageJson().scripts["test:docker:upgrade-survivor"]).toBe(
+      "node --import tsx scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=upgrade-survivor -- node scripts/test-docker-all.mjs",
+    );
+  });
+
   it("runs browser extension bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
       "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",

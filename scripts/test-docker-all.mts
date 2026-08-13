@@ -1186,7 +1186,7 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
     baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
     baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
     console.log(`==> OpenClaw package: ${packageTgz}`);
-    return;
+    return false;
   }
 
   const packDir = path.join(logDir, "openclaw-package");
@@ -1205,6 +1205,67 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
   baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
+  return true;
+}
+
+type PreparedPrepublishPluginRegistry = {
+  candidateVersion: string;
+  dir: string;
+  manifestSha256: string;
+};
+
+function preparePrepublishPluginRegistry(params: {
+  allowCreate: boolean;
+  baseEnv: NodeJS.ProcessEnv;
+  candidateVersion: string;
+  logDir: string;
+  plan: DockerCandidatePlan;
+  sourceSha: string;
+}): PreparedPrepublishPluginRegistry | null {
+  if (!params.plan.needs.prepublishPluginRegistry) {
+    return null;
+  }
+  const supplied = readCompleteTuple(
+    params.baseEnv,
+    REGISTRY_ENV_KEYS,
+    "Docker candidate registry",
+  );
+  if (supplied) {
+    params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = path.resolve(
+      supplied.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+    );
+    validateRegistryEnvironment(params.baseEnv, params.plan);
+    return {
+      candidateVersion: supplied.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
+      dir: params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+      manifestSha256: supplied.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
+    };
+  }
+  if (!params.allowCreate) {
+    throw new Error(
+      "Docker plan requires a prepublish plugin registry tuple for the supplied package",
+    );
+  }
+
+  const registryDir = path.join(params.logDir, "prepublish-plugin-registry");
+  fs.rmSync(registryDir, { force: true, recursive: true });
+  const artifact = createPrepublishPluginRegistryArtifact({
+    repoRoot: ROOT_DIR,
+    outputDir: registryDir,
+    sourceSha: params.sourceSha,
+    candidateVersion: params.candidateVersion,
+    requiredPackages: params.plan.requiredPrepublishPluginPackages,
+  });
+  params.baseEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA = params.sourceSha;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = registryDir;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION = params.candidateVersion;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = artifact.manifestSha256;
+  validateRegistryEnvironment(params.baseEnv, params.plan);
+  return {
+    candidateVersion: params.candidateVersion,
+    dir: registryDir,
+    manifestSha256: artifact.manifestSha256,
+  };
 }
 
 async function prepareDockerCandidate(
@@ -1222,6 +1283,7 @@ async function prepareDockerCandidate(
     for (const key of [...CANDIDATE_ENV_KEYS, ...REGISTRY_ENV_KEYS]) {
       delete candidateEnv[key];
     }
+    candidateEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA = sourceSha;
     await prepareOpenClawPackage(candidateEnv, logDir);
     const packagePath = candidateEnv.OPENCLAW_CURRENT_PACKAGE_TGZ!;
     const packed = inspectNpmPackageTarball(packagePath);
@@ -1229,23 +1291,14 @@ async function prepareDockerCandidate(
     if (packed.packageJson.name !== "openclaw" || packed.packageJson.version !== version) {
       throw new Error("packed Docker candidate name or version differs from the root package");
     }
-    let registry = null;
-    if (plan.needs.prepublishPluginRegistry) {
-      const registryDir = path.join(logDir, "prepublish-plugin-registry");
-      fs.rmSync(registryDir, { force: true, recursive: true });
-      const artifact = createPrepublishPluginRegistryArtifact({
-        repoRoot: ROOT_DIR,
-        outputDir: registryDir,
-        sourceSha,
-        candidateVersion: version,
-        requiredPackages: plan.requiredPrepublishPluginPackages,
-      });
-      registry = {
-        dir: registryDir,
-        candidateVersion: version,
-        manifestSha256: artifact.manifestSha256,
-      };
-    }
+    const registry = preparePrepublishPluginRegistry({
+      allowCreate: true,
+      baseEnv: candidateEnv,
+      candidateVersion: version,
+      logDir,
+      plan,
+      sourceSha,
+    });
     candidate = {
       package: { path: packagePath, name: packed.packageJson.name, version, sha256: packed.sha256 },
       registry,
@@ -1921,13 +1974,23 @@ async function main() {
       });
     },
   );
+  let preparedCurrentTreePackage = false;
   if (lanesNeedOpenClawPackage(scheduledLanes)) {
     await runPhase(phases, "prepare-openclaw-package", {}, async () => {
-      await prepareOpenClawPackage(baseEnv, logDir);
+      preparedCurrentTreePackage = await prepareOpenClawPackage(baseEnv, logDir);
     });
   } else {
     console.log("==> OpenClaw package: not needed for selected lanes");
   }
+  preparePrepublishPluginRegistry({
+    allowCreate: preparedCurrentTreePackage,
+    baseEnv,
+    candidateVersion: rootPackageVersion(ROOT_DIR),
+    logDir,
+    plan,
+    sourceSha: gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
+  });
+  validateDockerCandidateEnvironment(baseEnv, plan);
 
   if (buildEnabled) {
     const buildEntries: ForegroundEntry[] = [];

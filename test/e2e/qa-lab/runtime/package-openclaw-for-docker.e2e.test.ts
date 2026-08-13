@@ -483,8 +483,19 @@ describe("package-openclaw-for-docker", () => {
       2,
     )}\n`;
     const installedAiPath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
+    const normalizationCoreWorkspace = path.join(sourceDir, "packages", "normalization-core");
+    const aiPackNormalizationCore = path.join(
+      sourceDir,
+      "packages",
+      "ai",
+      "node_modules",
+      "@openclaw",
+      "normalization-core",
+    );
     fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
     fs.writeFileSync(path.join(sourceDir, "packages", "ai", "package.json"), "{}\n");
+    fs.mkdirSync(normalizationCoreWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(normalizationCoreWorkspace, "package.json"), "{}\n");
     fs.mkdirSync(installedAiPath, { recursive: true });
     fs.writeFileSync(path.join(installedAiPath, "original-marker"), "workspace package");
     fs.writeFileSync(packageJsonPath, originalPackageJson);
@@ -494,6 +505,9 @@ describe("package-openclaw-for-docker", () => {
         sourceDir,
         outputDir,
         async (command: string, args: string[], cwd: string) => {
+          expect(fs.realpathSync(aiPackNormalizationCore)).toBe(
+            fs.realpathSync(normalizationCoreWorkspace),
+          );
           expect({ args, command, cwd }).toEqual({
             args: ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
             command: "pnpm",
@@ -543,6 +557,7 @@ describe("package-openclaw-for-docker", () => {
         "workspace package",
       );
       expect(fs.existsSync(path.join(outputDir, "openclaw-ai-2026.6.17.tgz"))).toBe(false);
+      expect(fs.existsSync(aiPackNormalizationCore)).toBe(false);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(outputDir, { recursive: true, force: true });

@@ -1851,7 +1851,7 @@
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
-    "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:upgrade-survivor": "node --import tsx scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:skip-inventory:report": "node --import tsx scripts/test-skip-inventory.ts",
     "test:type-suppression-inventory:report": "node --import tsx scripts/type-suppression-inventory.ts",

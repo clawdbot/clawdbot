@@ -104,6 +104,18 @@ function hasErrorCode(error: unknown, code: string) {
   return isRecord(error) && error.code === code;
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 const ACTIVE_CHILD_KILLERS = new Set<KillChild>();
 const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
   "OPENCLAW_EXTENSIONS",
@@ -628,6 +640,10 @@ export async function prepareBundledAiRuntimePackage(
 ) {
   const packageJsonPath = path.join(sourceDir, "package.json");
   const aiRuntimePackageJsonPath = path.join(sourceDir, "packages", "ai", "package.json");
+  const normalizationCoreWorkspacePath = path.join(sourceDir, "packages", "normalization-core");
+  const aiPackNodeModulesPath = path.join(sourceDir, "packages", "ai", "node_modules");
+  const aiPackDependencyScopePath = path.join(aiPackNodeModulesPath, "@openclaw");
+  const aiPackNormalizationCorePath = path.join(aiPackDependencyScopePath, "normalization-core");
   const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
   const aiRuntimeBackupPath = path.join(
     sourceDir,
@@ -721,18 +737,45 @@ export async function prepareBundledAiRuntimePackage(
   };
 
   try {
-    await runCaptureImpl(
-      "pnpm",
-      ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
-      sourceDir,
-      {
-        deferForwardedSignalExit: true,
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      },
-    );
+    const hadAiPackNodeModules = await pathExists(aiPackNodeModulesPath);
+    const hadAiPackDependencyScope = await pathExists(aiPackDependencyScopePath);
+    const stagedAiPackNormalizationCore =
+      !(await pathExists(aiPackNormalizationCorePath)) &&
+      (await pathExists(path.join(normalizationCoreWorkspacePath, "package.json")));
+    if (stagedAiPackNormalizationCore) {
+      await fs.mkdir(aiPackDependencyScopePath, { recursive: true });
+      await fs.symlink(
+        process.platform === "win32"
+          ? normalizationCoreWorkspacePath
+          : path.relative(aiPackDependencyScopePath, normalizationCoreWorkspacePath),
+        aiPackNormalizationCorePath,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    try {
+      await runCaptureImpl(
+        "pnpm",
+        ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+        sourceDir,
+        {
+          deferForwardedSignalExit: true,
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        },
+      );
+    } finally {
+      if (stagedAiPackNormalizationCore) {
+        await fs.rm(aiPackNormalizationCorePath, { force: true });
+        if (!hadAiPackDependencyScope) {
+          await fs.rm(aiPackDependencyScopePath, { force: true, recursive: true });
+        }
+        if (!hadAiPackNodeModules) {
+          await fs.rm(aiPackNodeModulesPath, { force: true, recursive: true });
+        }
+      }
+    }
     packedAiTarballs = (await fs.readdir(outputDir))
       .filter(isPackedAiRuntimeTarball)
       .map((filename) => path.join(outputDir, filename));
