@@ -10,7 +10,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
@@ -520,6 +520,7 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  archivedAt?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -815,11 +816,16 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingDefault?: string;
   supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
+
+export type ModelCatalogProviderOutcome =
+  import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

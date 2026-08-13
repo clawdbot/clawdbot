@@ -489,7 +489,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Packaged installs omit workspace manifests; preserve the exact curated subpaths
 // instead of expanding aliases from package exports.
 const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
-  ["gateway-client", ["", "readiness", "timeouts"]],
+  ["gateway-client", ["", "readiness", "timeouts", "websocket-data"]],
   [
     "gateway-protocol",
     [
@@ -517,21 +517,6 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
     ],
   ],
   ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
-  [
-    "media-core",
-    [
-      "",
-      "base64",
-      "constants",
-      "content-length",
-      "file-name",
-      "inbound-path-policy",
-      "inline-image-data-url",
-      "media-source-url",
-      "mime",
-      "read-byte-stream-with-limit",
-    ],
-  ],
   ["retry", [""]],
   [
     "terminal-core",
@@ -669,14 +654,7 @@ export function listWorkspacePackageExportAliasEntries(params: {
     params.packageDir,
     "package.json",
   );
-  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
-  const packageJson =
-    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
-    (fallbackPackageRoot
-      ? tryReadJsonSync<PluginSdkPackageJson>(
-          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
-        )
-      : null);
+  const packageJson = tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath);
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
     return listRootPackagedWorkspacePackageAliasEntries(params);
@@ -914,7 +892,7 @@ function resolveWorkspacePackageAliasMap(params: {
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...["normalization-core", "acp-core"].flatMap((packageDir) =>
+    ...["media-core", "normalization-core", "acp-core"].flatMap((packageDir) =>
       listWorkspacePackageExportAliasEntries({
         packageRoot,
         packageName: `@openclaw/${packageDir}`,

@@ -70,6 +70,12 @@
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/browser": ["./packages/gateway-client/src/browser.ts"],
+      "@openclaw/gateway-client/scope-upgrade": [
+        "./packages/gateway-client/src/scope-upgrade.ts"
+      ],
+      "@openclaw/gateway-client/websocket-data": [
+        "./packages/gateway-client/src/websocket-data.ts"
+      ],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
       "@openclaw/gateway-protocol/client-info": [
@@ -105,6 +111,9 @@
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
       "@openclaw/media-core": ["./packages/media-core/src/index.ts"],
+      "@openclaw/media-core/attachment-classify": [
+        "./packages/media-core/src/attachment-classify.ts"
+      ],
       "@openclaw/media-core/base64": ["./packages/media-core/src/base64.ts"],
       "@openclaw/media-core/constants": ["./packages/media-core/src/constants.ts"],
       "@openclaw/media-core/content-length": ["./packages/media-core/src/content-length.ts"],
@@ -152,6 +161,9 @@
         "./packages/normalization-core/src/error-coercion.ts"
       ],
       "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
+      "@openclaw/normalization-core/json-coercion": [
+        "./packages/normalization-core/src/json-coercion.ts"
+      ],
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
       ],
@@ -160,6 +172,9 @@
       ],
       "@openclaw/normalization-core/phone-presentation": [
         "./packages/normalization-core/src/phone-presentation.ts"
+      ],
+      "@openclaw/normalization-core/promise-like": [
+        "./packages/normalization-core/src/promise-like.ts"
       ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"

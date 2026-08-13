@@ -8,7 +8,7 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
-import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -1116,7 +1116,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(section).toEqual([
       "## Skill Workshop",
       "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-      "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+      "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch it now; the configured autonomous mode disables repair, leaves it pending, or applies it immediately. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
+      "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
       "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
       "",
     ]);
@@ -1135,7 +1136,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
-    expect(withTool).toContain("Generated = pending proposal");
+    expect(withTool).toContain("Used skill proved wrong or incomplete");
+    expect(withTool).toContain("Other generated work = pending proposal");
   });
 
   it("appends available skills when provided", () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../types.js";
-import { isConfiguredContextSizeOverflowError, isContextOverflow } from "./overflow.js";
+import {
+  isConfiguredContextSizeOverflowError,
+  isContextOverflow,
+  matchesContextOverflowMessage,
+} from "./overflow.js";
 
 function errorMessage(message: string): AssistantMessage {
   return {
@@ -62,6 +66,25 @@ describe("provider overflow messages", () => {
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
+});
+
+describe("scoped overflow messages", () => {
+  it("recognizes the provider input-length wording in the strict failover scope", () => {
+    expect(
+      matchesContextOverflowMessage(
+        "input length 14295 tokens exceeds the model limit",
+        "failover-explicit",
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["too many tokens per day", "token limit exceeded for your billing plan"])(
+    "keeps the broad assistant fallback out of strict failover matching: %s",
+    (message) => {
+      expect(matchesContextOverflowMessage(message, "assistant-error")).toBe(true);
+      expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
+    },
+  );
 });
 
 describe("bodyless HTTP errors", () => {

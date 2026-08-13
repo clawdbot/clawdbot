@@ -3,6 +3,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
   formatExtraPaths,
@@ -30,7 +31,6 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
@@ -65,7 +65,7 @@ type LlamaCppRuntimeStatus = {
 function readLlamaCppRuntimeStatus(
   status: ReturnType<MemoryManager["status"]>,
 ): LlamaCppRuntimeStatus | null {
-  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  const runtime = asNullableRecord(asNullableRecord(status.custom)?.llamaCppRuntime);
   return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
 }
 function formatMemoryIndexIdentityWarning(
@@ -75,7 +75,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
   const reason =
     (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
     typeof indexIdentity.reason === "string"

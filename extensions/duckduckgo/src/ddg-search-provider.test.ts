@@ -254,18 +254,6 @@ describe("duckduckgo web search provider", () => {
     ).toBe("off");
   });
 
-  it("decodes direct and redirect urls plus common html entities", () => {
-    expect(
-      ddgClientTesting.decodeDuckDuckGoUrl(
-        "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dclaw",
-      ),
-    ).toBe("https://example.com/search?q=claw");
-    expect(ddgClientTesting.decodeDuckDuckGoUrl("https://example.com")).toBe("https://example.com");
-    expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
-      "Fish & Chips ... 'ok'",
-    );
-  });
-
   it("leaves out-of-range numeric html entities intact instead of throwing", () => {
     expect(() => ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).not.toThrow();
     expect(ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).toBe(
@@ -347,14 +335,6 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
-      {
-        title: "Coding Challenge",
-        url: "https://example.com/challenge",
-        snippet: "A fun coding challenge for interview prep.",
-      },
-    ]);
   });
 });

@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.js";
+import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {

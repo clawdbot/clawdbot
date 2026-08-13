@@ -291,23 +291,23 @@ export function firstRouteReplyCall(): Record<string, unknown> {
 export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: params.id,
-        source: "test",
-        plugin: {
-          ...plugin,
-          config: defaultAccountId
-            ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
-            : plugin.config,
-          threading: {
-            resolveReplyToMode: () => "all",
-          },
+  const registry = createTestRegistry([
+    {
+      pluginId: params.id,
+      source: "test",
+      plugin: {
+        ...plugin,
+        config: defaultAccountId
+          ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
+          : plugin.config,
+        threading: {
+          resolveReplyToMode: () => "all",
         },
       },
-    ]),
-  );
+    },
+  ]);
+  setActivePluginRegistry(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
 }
 
 export function installCaptionedVoiceTestPlugin(id: string) {
@@ -318,15 +318,15 @@ export function installCaptionedVoiceTestPlugin(id: string) {
       tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
     },
   });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: id,
-        source: "test",
-        plugin,
-      },
-    ]),
-  );
+  const registry = createTestRegistry([
+    {
+      pluginId: id,
+      source: "test",
+      plugin,
+    },
+  ]);
+  setActivePluginRegistry(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
 }
 
 export function requireToolResultHandler(
@@ -501,12 +501,6 @@ export const describe0BeforeEach0 = () => {
   diagnosticMocks.logMessageProcessed.mockClear();
   diagnosticMocks.logSessionStateChange.mockClear();
   diagnosticMocks.markDiagnosticSessionProgress.mockClear();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
-    status: "skipped",
-    action: "keep_lane",
-    reason: "active_reply_work",
-  });
   diagnosticMocks.logMessageDispatchStarted.mockClear();
   diagnosticMocks.logMessageDispatchCompleted.mockClear();
   hookMocks.runner.hasHooks.mockClear();
@@ -564,8 +558,8 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStore.mockReturnValue({});
   sessionStoreMocks.readSessionEntry.mockReset();
   sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveStorePath.mockReset();
-  sessionStoreMocks.resolveStorePath.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset();
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
   sessionStoreMocks.resolveSessionStoreEntry.mockReset();
   sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
     (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
@@ -615,6 +609,13 @@ export const describe1BeforeEach0 = () => {
 };
 
 export const describe2BeforeEach0 = () => {
+  // This suite swaps global registries between cases; keep each request on a live
+  // snapshot so later retirement cannot invalidate the dispatch under test.
+  const activeRegistry = getActivePluginRegistry();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+    activeRegistry ? { ...activeRegistry } : createTestRegistry([]),
+  );
   resetInboundDedupe();
   // Same routeReply reset as the sibling suite setups: queued once-values and
   // persistent overrides must not leak between tests.

@@ -4,8 +4,8 @@ import { createChangedCheckPlan } from "../../scripts/check-changed.mts";
 
 describe("generated extension asset lint planning", () => {
   it("still lints extension tests alongside a generated browser asset", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const extensionTest = "extensions/browser/chrome-extension/modules/copilot-gateway.test.ts";
+    const generatedAsset = "extensions/canvas/src/host/a2ui/a2ui.bundle.js";
+    const extensionTest = "extensions/canvas/scripts/bundle-a2ui.test.ts";
     const result = detectChangedLanes([generatedAsset, extensionTest]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
@@ -29,8 +29,8 @@ describe("generated extension asset lint planning", () => {
   });
 
   it("keeps fallback extension lint for a manifest beside a generated browser asset", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const manifest = "extensions/browser/openclaw.plugin.json";
+    const generatedAsset = "extensions/canvas/src/host/a2ui/a2ui.bundle.js";
+    const manifest = "extensions/canvas/openclaw.plugin.json";
     const result = detectChangedLanes([generatedAsset, manifest]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 

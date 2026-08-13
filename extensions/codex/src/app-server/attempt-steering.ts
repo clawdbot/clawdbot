@@ -4,7 +4,7 @@
  */
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -272,7 +272,9 @@ export function createCodexSteeringQueue(params: {
         options?.onQueueAccepted?.(false);
         throw unavailableError;
       }
-      const pendingUserInput = params.claimPendingUserInput();
+      // Only operator ingress can answer a pending prompt; internal steering stays transcript input.
+      const pendingUserInput =
+        options?.isInboundUserMessage === true ? params.claimPendingUserInput() : undefined;
       if (pendingUserInput) {
         if (!options?.images?.length) {
           const answered = pendingUserInput.answer(text);

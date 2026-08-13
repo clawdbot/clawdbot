@@ -22,7 +22,7 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
-} from "../infra/clawhub.js";
+} from "../infra/clawhub-skills.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
@@ -384,9 +384,7 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
     lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
   }
   for (const overlap of status.overlaps) {
-    lines.push(
-      `Possible overlap: ${overlap.left} ~ ${overlap.right} — merge via /learn if desired`,
-    );
+    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -597,22 +595,14 @@ export function registerSkillsCli(program: Command) {
         }
         for (const entry of results) {
           const installRef = normalizeOptionalString(entry.installRef);
-          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-          const slug = formatClawHubSearchText(entry.slug);
-          const skillsShInstallRef =
-            installRef?.startsWith("skills-sh:") &&
-            entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE
-              ? installRef
-              : undefined;
-          const skillRef = skillsShInstallRef
-            ? formatClawHubSearchText(skillsShInstallRef)
-            : ownerHandle
-              ? `@${formatClawHubSearchText(ownerHandle)}/${slug}`
-              : slug;
+          const skillRef = formatClawHubSearchText(installRef ?? entry.slug);
+          const isExternalSource =
+            installRef?.startsWith("skills-sh:") === true &&
+            entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE;
           const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
           const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
           const displayName = formatClawHubSearchText(entry.displayName);
-          const trust = skillsShInstallRef ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
+          const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
       } catch (err) {

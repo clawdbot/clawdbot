@@ -1,5 +1,4 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
@@ -24,15 +23,10 @@ import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockTargetKey,
-  resolveSessionWriteLockOptions,
-} from "../session-write-lock.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
-import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
+import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
 import { resolveCompactionFailureReason } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
@@ -119,21 +113,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
     });
-    const sessionLock =
-      (await acquireOwnedSessionTranscriptWriteLock({
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        sessionTarget,
-      })) ??
-      (await acquireSessionWriteLock({
-        sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
-        targetKind: "session-key",
-        ...resolveSessionWriteLockOptions(params.config, {
-          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-            timeoutMs: compactionTimeoutMs,
-          }),
-        }),
-      }));
     try {
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
@@ -239,21 +218,24 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // shaping, and the embedded system prompt all reflect the fallback level.
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
-        let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+        let session: AgentSession | undefined;
         try {
-          const createdSession = await createAgentSession({
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          });
+          const createdSession = await createAgentSessionForEmbeddedRunner(
+            {
+              cwd: effectiveCwd,
+              agentDir,
+              authStorage,
+              modelRegistry,
+              model: effectiveModel,
+              thinkingLevel: mapThinkingLevel(thinkLevel),
+              tools: sessionToolAllowlist,
+              customTools,
+              sessionManager,
+              settingsManager,
+              resourceLoader,
+            },
+            {},
+          );
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);
           applySystemPromptToSession(session, systemPromptText);
@@ -566,7 +548,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }
     } finally {
       await runtime.disposeToolRuntimes();
-      await sessionLock.release();
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

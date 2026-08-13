@@ -245,6 +245,14 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   return registered.cfg;
 }
 
+function requireRegisteredMSTeamsMediaMaxBytes(): number {
+  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1];
+  if (!registered) {
+    throw new Error("expected registered MSTeams handler dependencies");
+  }
+  return registered.mediaMaxBytes;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -344,6 +352,49 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!result.app) {
       throw new Error("expected named Teams monitor app");
     }
+  });
+
+  it("prefers the Teams media limit over the agent default", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, { mediaMaxMb: 12 });
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      ...createStores(),
+    });
+
+    await waitForMSTeamsTestState(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(12 * 1024 * 1024);
+
+    abort.abort();
+    await task;
+  });
+
+  it("falls back to the agent media limit when Teams has no override", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      ...createStores(),
+    });
+
+    await waitForMSTeamsTestState(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(3 * 1024 * 1024);
+
+    abort.abort();
+    await task;
   });
 
   it("rejects startup when the webhook port is already in use", async () => {

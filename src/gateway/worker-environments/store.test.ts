@@ -20,11 +20,14 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import {
   createWorkerEnvironmentStore,
+  normalizeWorkerDesktopEndpoint,
   normalizeWorkerSshEndpoint,
   type WorkerEnvironmentStore,
 } from "./store.js";
 
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
+  installKind?: "bundle" | "local";
+};
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 
@@ -45,6 +48,14 @@ const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
   passwordFilePath: "/var/lib/crabbox/vnc.password",
+  apps: [
+    {
+      id: "browser",
+      executablePath: "/usr/local/bin/openclaw-worker-browser",
+      cdpPort: 9222,
+    },
+    { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+  ],
 };
 const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
   bundleHash: "a".repeat(64),
@@ -371,6 +382,78 @@ describe("worker environment store", () => {
     ).toThrow("SSH fallback ports");
   });
 
+  it.each([
+    ["a non-array app list", "browser", "desktop apps must be an array"],
+    [
+      "more than eight apps",
+      Array.from({ length: 9 }, () => ({
+        id: "terminal",
+        executablePath: "/usr/bin/xfce4-terminal",
+      })),
+      "desktop apps cannot exceed 8",
+    ],
+    [
+      "an unknown app id",
+      [{ id: "editor", executablePath: "/usr/bin/editor" }],
+      'desktop app id must be "browser" or "terminal"',
+    ],
+    [
+      "duplicate app ids",
+      [
+        { id: "terminal", executablePath: "/usr/bin/xfce4-terminal" },
+        { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+      ],
+      "desktop app id terminal must be unique",
+    ],
+    [
+      "a relative executable path",
+      [{ id: "terminal", executablePath: "bin/xfce4-terminal" }],
+      "desktop app executable path must be absolute",
+    ],
+    [
+      "an invalid browser CDP port",
+      [
+        {
+          id: "browser",
+          executablePath: "/usr/local/bin/openclaw-worker-browser",
+          cdpPort: 65_536,
+        },
+      ],
+      "browser CDP port must be an integer",
+    ],
+    [
+      "an unknown browser field",
+      [
+        {
+          id: "browser",
+          executablePath: "/usr/local/bin/openclaw-worker-browser",
+          cdpPort: 9222,
+          args: ["--headless"],
+        },
+      ],
+      "browser desktop app contains unknown fields",
+    ],
+    [
+      "an unknown terminal field",
+      [
+        {
+          id: "terminal",
+          executablePath: "/usr/local/bin/openclaw-worker-terminal",
+          env: { DISPLAY: ":99" },
+        },
+      ],
+      "terminal desktop app contains unknown fields",
+    ],
+  ])("rejects %s", (_name, apps, error) => {
+    expect(() =>
+      normalizeWorkerDesktopEndpoint({
+        protocol: "rfb",
+        port: 5900,
+        apps,
+      } as unknown as WorkerDesktopEndpoint),
+    ).toThrow(error);
+  });
+
   it("round-trips desktop metadata and clears it with the provider lease", () => {
     createIntent("worker-desktop");
     store.transition({
@@ -557,6 +640,14 @@ describe("worker environment store", () => {
         patch: { leaseId: "lease-1" },
       }),
     ).toThrow("requires an SSH endpoint reference");
+    expect(() =>
+      store.transition({
+        environmentId: "worker-1",
+        from: "provisioning",
+        to: "ready",
+        patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
+      }),
+    ).toThrow("requires bootstrap proof or a node lease");
 
     store.transition({
       environmentId: "worker-1",
@@ -579,6 +670,48 @@ describe("worker environment store", () => {
         patch: { leaseId: "different-lease" },
       }),
     ).toThrow("lease id is immutable");
+  });
+
+  it("persists a credential-bound local receipt without SSH metadata", () => {
+    createIntent("worker-node", { settings: { device: "device-1" } });
+    store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
+
+    const ready = store.transition({
+      environmentId: "worker-node",
+      from: "provisioning",
+      to: "ready",
+      patch: {
+        leaseId: "device-lease-1",
+        sshEndpoint: null,
+        sharedHost: true,
+        ...readyPatch({ ...BOOTSTRAP_RECEIPT, installKind: "local" }),
+      },
+    });
+
+    expect(ready).toMatchObject({
+      state: "ready",
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      bootstrapReceipt: {
+        ...BOOTSTRAP_RECEIPT,
+        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+        installKind: "local",
+      },
+      sharedHost: true,
+      ownerEpoch: 1,
+    });
+    expect(store.get("worker-node")).toEqual(ready);
+    expect(
+      database.db
+        .prepare(
+          "SELECT ssh_host, ssh_host_key, bootstrap_install_kind FROM worker_environments WHERE environment_id = ?",
+        )
+        .get("worker-node"),
+    ).toEqual({
+      ssh_host: null,
+      ssh_host_key: null,
+      bootstrap_install_kind: "local",
+    });
   });
 
   it("enforces one credential-bound session and teardown fencing", () => {

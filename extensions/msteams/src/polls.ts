@@ -267,11 +267,7 @@ function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
 }
 
 function parseTimestamp(value?: string): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 function pruneExpired<T extends { createdAt: string; updatedAt?: string }>(
@@ -483,3 +479,4 @@ export function createMSTeamsPollStoreState(
 
   return { createPoll, getPoll, recordVote };
 }
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";

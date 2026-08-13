@@ -1,10 +1,6 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
-import type {
-  PreparedModelRuntimeInput,
-  PreparedModelRuntimeSnapshot,
-} from "./prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 export type PreparedInboundRegistryLoader = (input: PreparedModelRuntimeInput) => PluginRegistry;
@@ -58,10 +54,12 @@ export function prepareWorkspacePluginRegistries(
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
 } {
-  if (input.readOnly) {
+  // Read-only catalog owners stay runtime-free, but setup probes carry an exact harness selection.
+  // That selected registry must belong to the generation instead of leaking from an outer scope.
+  if (input.readOnly && !input.runtimePluginSelections) {
     return {};
   }
-  const inboundPluginRegistry = loadInboundRegistry?.(input);
+  const inboundPluginRegistry = input.readOnly ? undefined : loadInboundRegistry?.(input);
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
@@ -75,46 +73,5 @@ export function prepareWorkspacePluginRegistries(
   return {
     runtimePluginRegistry,
     ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-  };
-}
-
-type PreparedInboundRegistryLifecycleHost<Owner> = Readonly<{
-  isGatewayLifecycleActive: () => boolean;
-  getPendingReplacement: () => Promise<void> | undefined;
-  resolveConfiguredOwner: (agentId: string) => Owner | undefined;
-  getPublishedSnapshot: (owner: Owner) => PreparedModelRuntimeSnapshot | undefined;
-  prepareSnapshot: (owner: Owner) => Promise<PreparedModelRuntimeSnapshot>;
-}>;
-
-function requireInboundRegistry(snapshot: PreparedModelRuntimeSnapshot): PluginRegistry {
-  if (!snapshot.inboundPluginRegistry) {
-    throw new Error(`prepared inbound plugin registry was not published for ${snapshot.agentDir}`);
-  }
-  return snapshot.inboundPluginRegistry;
-}
-
-/** Binds Gateway turns to the configured owner without exposing mutable lifecycle state. */
-export function createPublishedGatewayInboundPluginRegistryLoader<Owner>(
-  host: PreparedInboundRegistryLifecycleHost<Owner>,
-): (params: { agentId: string }) => Promise<PluginRegistry | undefined> {
-  return async ({ agentId }) => {
-    if (!host.isGatewayLifecycleActive()) {
-      return undefined;
-    }
-    for (;;) {
-      const replacement = host.getPendingReplacement();
-      if (replacement) {
-        await replacement;
-        continue;
-      }
-      const owner = host.resolveConfiguredOwner(agentId);
-      if (!owner) {
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared inbound plugin registry owner was not published for ${agentId}`,
-        );
-      }
-      const published = host.getPublishedSnapshot(owner);
-      return requireInboundRegistry(published ?? (await host.prepareSnapshot(owner)));
-    }
   };
 }

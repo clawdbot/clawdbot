@@ -18,6 +18,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { toQaError } from "./errors.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -218,10 +219,6 @@ function sanitizeControlUiPublicUrl(url: string | null): string | null {
 
 function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
-}
-
-function normalizeQaLabCleanupError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
 function detectQaEvidenceArtifactContentType(filePath: string): string {
@@ -589,7 +586,7 @@ export async function startQaLabServer(
             return;
           }
           fs.createReadStream(artifactFile)
-            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .on("error", (error) => res.destroy(toQaError(error)))
             .pipe(res);
           return;
         }
@@ -951,13 +948,20 @@ export async function startQaLabServer(
   const stopLabServerResources = async (): Promise<Error | undefined> => {
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
+    let cleanupError: Error | undefined;
+    // Gateway shutdown can flush completed work through this server, so the
+    // bus must remain reachable until the gateway has fully stopped.
+    try {
+      await gateway?.stop();
+    } catch (error) {
+      cleanupError = toQaError(error);
+    }
     const results = await Promise.allSettled([
-      Promise.resolve().then(() => gateway?.stop()),
       Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
       Promise.resolve().then(releaseCaptureStore),
     ]);
     const failed = results.find((result) => result.status === "rejected");
-    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
   };
 
   try {

@@ -1,3 +1,4 @@
+import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 // Codex tests cover native subagent monitor plugin behavior.
 import type {
   AgentHarnessScopedSetDeliveryStatusParams,
@@ -713,6 +714,78 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     expect(client.request).not.toHaveBeenCalled();
     client.close();
+  });
+
+  it("publishes child assistant and tool activity under the mirrored thread run id", async () => {
+    const events: Array<{ runId: string; stream: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    try {
+      registerParent(monitor);
+      await notifyChildStarted(client);
+      await client.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "child-thread",
+          turnId: "child-turn",
+          itemId: "assistant-1",
+          delta: "Inspecting the registry",
+        },
+      });
+      await client.notify({
+        method: "item/reasoning/summaryTextDelta",
+        params: {
+          threadId: "child-thread",
+          turnId: "child-turn",
+          itemId: "reasoning-1",
+          summaryIndex: 0,
+          delta: "Planning the fix",
+        },
+      });
+      await client.notify({
+        method: "item/started",
+        params: {
+          threadId: "child-thread",
+          turnId: "child-turn",
+          item: {
+            type: "commandExecution",
+            id: "command-1",
+            command: "pnpm test",
+            cwd: "/workspace",
+            status: "inProgress",
+          },
+        },
+      });
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            stream: "assistant",
+            data: expect.objectContaining({ delta: "Inspecting the registry" }),
+          }),
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            stream: "thinking",
+            data: expect.objectContaining({ delta: "Planning the fix" }),
+          }),
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            stream: "tool",
+            data: expect.objectContaining({
+              phase: "start",
+              name: "bash",
+              toolCallId: "command-1",
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      unsubscribe();
+      client.close();
+    }
   });
 
   it("delivers a completed child turn from its terminal snapshot", async () => {

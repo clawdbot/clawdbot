@@ -38,6 +38,21 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts a typed wizard cancel and rejects unknown cancel fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel", reason: "user" },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,

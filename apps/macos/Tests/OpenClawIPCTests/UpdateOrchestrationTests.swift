@@ -7,6 +7,19 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct UpdateOrchestrationTests {
+    @MainActor
+    @Test func `post update performs no service work under active profile`() {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        NodeServiceManager._testResetPersistentServiceCalls()
+        GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+        #expect(!PostUpdateController.shared.startIfNeeded(profile: profile))
+        let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
+        #expect(snapshot.commands.isEmpty)
+        #expect(snapshot.ownershipReads == 0)
+        #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+    }
+
     @Test func `Sparkle receipt appears only after the target app launches`() throws {
         let suite = "UpdateOrchestrationTests.post-update.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -340,7 +353,7 @@ struct UpdateOrchestrationTests {
             onStart: { starts += 1 })
 
         updater.startAfterResolvingGatewayUpdateChannel()
-        for _ in 0 ..< 10 where !updater.isAvailable {
+        for _ in 0..<10 where !updater.isAvailable {
             await Task.yield()
         }
 
@@ -356,7 +369,7 @@ struct UpdateOrchestrationTests {
             onStart: { starts += 1 })
 
         updater.startAfterResolvingGatewayUpdateChannel()
-        for _ in 0 ..< 10 where !updater.isAvailable {
+        for _ in 0..<10 where !updater.isAvailable {
             await Task.yield()
         }
 

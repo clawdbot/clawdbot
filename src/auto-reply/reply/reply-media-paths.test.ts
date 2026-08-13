@@ -31,13 +31,13 @@ type NormalizedReply = {
   text?: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value)).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectRecord(value)).toBe(true);
+  if (!isObjectRecord(value)) {
     throw new Error(`${label} was not an object`);
   }
   return value;
@@ -203,11 +203,20 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(result.text).toBe("⚠️ Media failed.");
   });
 
-  it("drops host file URLs when no sandbox mapping applies", async () => {
+  it.each([
+    ["lowercase triple-slash", "file:///Users/peter/Documents/report.pdf"],
+    ["uppercase triple-slash", "FILE:///Users/peter/Documents/report.pdf"],
+    ["lowercase single-slash", "file:/Users/peter/Documents/report.pdf"],
+    ["uppercase single-slash", "FILE:/Users/peter/Documents/report.pdf"],
+    ["remote host", "file://server/share/report.pdf"],
+    ["network path", "FILE:////server/share/report.pdf"],
+    ["encoded slash", "file:/Users/peter/Documents/%2Freport.pdf"],
+    ["encoded backslash", "FILE:/Users/peter/Documents/%5Creport.pdf"],
+  ])("drops %s host file URLs when no sandbox mapping applies", async (_label, mediaUrl) => {
     const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
-      mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
+      mediaUrls: [mediaUrl],
     });
 
     expectNoMedia(result);

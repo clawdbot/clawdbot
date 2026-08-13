@@ -83,6 +83,8 @@ const TerminalSessionPlacementProperties = {
   workerBundleHash: Type.Optional(WorkerBundleHashSchema),
   ...SessionPlacementAckProperties,
   ...SessionPlacementConflictProperties,
+  terminalReason: Type.Optional(NonEmptyString),
+  terminalAtMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
 };
 
 function createUnownedSessionPlacementSchema<const State extends "local" | "requested">(
@@ -161,12 +163,22 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
-/** Requests one-way dispatch of an existing local session to a configured worker profile. */
-export const SessionsDispatchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  profileId: NonEmptyString,
-});
+/** Requests one-way dispatch of an existing local session to exactly one worker target. */
+export const SessionsDispatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    profileId: Type.Optional(NonEmptyString),
+    deviceId: Type.Optional(NonEmptyString),
+  },
+  {
+    additionalProperties: false,
+    oneOf: [
+      { required: ["profileId"], not: { required: ["deviceId"] } },
+      { required: ["deviceId"], not: { required: ["profileId"] } },
+    ],
+  },
+);
 
 /** Result returned once session dispatch reaches durable worker ownership. */
 export const SessionsDispatchResultSchema = closedObject({

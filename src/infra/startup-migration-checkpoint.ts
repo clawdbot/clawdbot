@@ -11,6 +11,7 @@ import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-re
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import {
   executeSqliteQuerySync,
@@ -156,8 +157,12 @@ function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
   callback: (db: DatabaseSync) => T,
 ): T {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
   return withStartupMigrationCheckpointDatabase(env, (db) =>
-    runSqliteImmediateTransactionSync(db, () => callback(db)),
+    runSqliteImmediateTransactionSync(db, () => {
+      assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+      return callback(db);
+    }),
   );
 }
 

@@ -273,7 +273,7 @@ describe("telegram exec approvals", () => {
     ).toBe(true);
   });
 
-  it("rejects unbound foreign-channel approvals in multi-account telegram configs", () => {
+  it("reports each eligible foreign-channel account as a raw route candidate", () => {
     const cfg = buildMultiAccountTelegramConfig({});
     const request = makeForeignChannelApprovalRequest({ id: "req-3" });
 
@@ -283,14 +283,33 @@ describe("telegram exec approvals", () => {
         accountId: "default",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldHandleTelegramExecApprovalRequest({
         cfg,
         accountId: "ops",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("reports each eligible same-channel account as a raw route candidate", () => {
+    const cfg = buildMultiAccountTelegramConfig({});
+    const request: TelegramExecApprovalRequest = {
+      id: "req-same-channel-unbound",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "telegram",
+        sessionKey: "agent:ops:missing",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "default", request })).toBe(
+      true,
+    );
+    expect(shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(true);
   });
 
   it("allows unbound foreign-channel approvals when only one telegram account can handle them", () => {
@@ -384,8 +403,18 @@ describe("telegram exec approvals", () => {
   });
 
   it("preserves unscoped telegram targets when mixed with scoped target accountIds", () => {
+    const baseCfg = buildMultiAccountTelegramConfig({});
     const cfg = {
-      ...buildMultiAccountTelegramConfig({}),
+      ...baseCfg,
+      channels: {
+        telegram: {
+          ...baseCfg.channels?.telegram,
+          accounts: {
+            ...baseCfg.channels?.telegram?.accounts,
+            other: telegramAccount("other", { enabled: true, approvers: ["123"] }),
+          },
+        },
+      },
       approvals: {
         exec: {
           enabled: true,
@@ -421,6 +450,13 @@ describe("telegram exec approvals", () => {
         request,
       }),
     ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "other",
+        request,
+      }),
+    ).toBe(false);
   });
 
   it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {

@@ -11,8 +11,8 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,

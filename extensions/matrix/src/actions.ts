@@ -92,7 +92,7 @@ function createMatrixExposedActions(params: {
   if (params.gate("channelInfo")) {
     actions.add("channel-info");
   }
-  if (params.encryptionEnabled && params.gate("verification")) {
+  if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
     actions.add("permissions");
   }
   return actions;
@@ -336,6 +336,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
+      if (ctx.senderIsOwner !== true) {
+        throw new ToolAuthorizationError("Matrix verification actions require owner access.");
+      }
       const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
           readStringParam(params, "mode") ??

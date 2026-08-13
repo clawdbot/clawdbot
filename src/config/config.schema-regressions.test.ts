@@ -148,6 +148,32 @@ describe("config schema regressions", () => {
     ).toBe(true);
   });
 
+  it("accepts mixed extra memory path entries", () => {
+    expect(
+      validateConfigObject({
+        memory: {
+          search: {
+            extraPaths: ["../team-notes", { path: "../shared", pattern: "runbooks/**/*.md" }],
+          },
+        },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    { pattern: "**/*.md" },
+    { path: "../shared", pattern: 42 },
+    { path: "../shared", name: "legacy-qmd-name" },
+  ])("rejects invalid extra memory path object %j", (entry) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { extraPaths: [entry] } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects local memorySearch GPU policy", () => {
     const res = validateConfigObject({
       memory: {

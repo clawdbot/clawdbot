@@ -172,6 +172,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Suppress standalone tool/progress text even when verbose progress is enabled. */
+  suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
   allowToolLifecycleWhenProgressHidden?: boolean;
   /**
@@ -228,6 +230,7 @@ export type GetReplyOptions = {
     summary?: string;
     progressText?: string;
     meta?: string;
+    commandBearing?: boolean;
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;

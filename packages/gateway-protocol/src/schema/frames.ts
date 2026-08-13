@@ -5,11 +5,14 @@ import { closedObject } from "./closed-object.js";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
+  TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
 } as const;
 
 /**
@@ -45,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
   commands: Type.Optional(Type.Array(NonEmptyString)),
+  /** Additive node-local worker build identity; presence advertises session hosting. */
+  workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
   pathEnv: Type.Optional(Type.String()),
   role: Type.Optional(NonEmptyString),
@@ -120,6 +125,8 @@ export const HelloOkSchema = closedObject({
   ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
+    recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

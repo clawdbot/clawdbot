@@ -11,6 +11,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -110,6 +111,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutByRunBudget,
   } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
+  const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
@@ -136,6 +138,40 @@ export async function recoverEmbeddedRunAttempt(input: {
         : updates.lastRetryFailoverReason,
     thinkLevel: updates?.thinkLevel ?? runtime.thinkLevel,
   });
+
+  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
+    const errorText = formatErrorMessage(promptError);
+    const replayInvalid = resolveReplayInvalidForAttempt();
+    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
+    return {
+      action: "complete",
+      result: buildEmbeddedRunBlockedResult({
+        text: errorText,
+        errorKind: "hook_block",
+        errorMessage: errorText,
+        durationMs: Date.now() - runInput.startedAtMs,
+        agentMeta: buildErrorAgentMeta({
+          sessionId: sessionIdUsed,
+          sessionFile: sessionPromptState.sessionFile,
+          provider: preparedRuntime.provider,
+          model: preparedRuntime.model.id,
+          ...runtime.outerContextTokenMeta,
+          usageAccumulator: input.usageAccumulator,
+          lastRunPromptUsage: input.lastRunPromptUsage,
+          currentAttemptAssistant,
+        }),
+        attempt,
+        replayInvalid,
+      }),
+    };
+  }
+  if (!currentAttemptReplaySafe) {
+    return {
+      action: "proceed",
+      shouldSurfaceCodexCompletionTimeout:
+        attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
+    };
+  }
 
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
@@ -166,7 +202,10 @@ export async function recoverEmbeddedRunAttempt(input: {
       provider: preparedRuntime.provider,
       model: preparedRuntime.modelId,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: preparedRuntime.lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === preparedRuntime.lockedProfileId
+          ? "user"
+          : "auto",
     },
     requested: requestedSelection,
   });
@@ -252,32 +291,6 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
-    const errorText = formatErrorMessage(promptError);
-    const replayInvalid = resolveReplayInvalidForAttempt();
-    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-    return {
-      action: "complete",
-      result: buildEmbeddedRunBlockedResult({
-        text: errorText,
-        errorKind: "hook_block",
-        errorMessage: errorText,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
-        attempt,
-        replayInvalid,
-      }),
-    };
-  }
   const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
   );
@@ -351,9 +364,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
       resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
-      maybeEscalateRateLimitProfileFallback:
-        failoverRetryController.maybeEscalateRateLimitProfileFallback,
-      advanceAttemptAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
+      advanceAuthProfile: failoverRetryController.advanceAuthProfile,
+      advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
       maybeBackoffBeforeOverloadFailover:
         failoverRetryController.maybeBackoffBeforeOverloadFailover,

@@ -25,6 +25,16 @@ const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
 const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
+export class GoogleChatApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GoogleChatApiError";
+  }
+}
+
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
     return GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS;
@@ -97,7 +107,10 @@ async function withGoogleChatResponse<T>(params: {
   try {
     if (!response.ok) {
       const text = await readGoogleChatErrorResponse(response, errorPrefix);
-      throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
+      throw new GoogleChatApiError(
+        response.status,
+        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+      );
     }
     return await handleResponse(response);
   } finally {

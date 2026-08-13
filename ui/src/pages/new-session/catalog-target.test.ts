@@ -5,6 +5,7 @@ import {
   resolveAgentId,
   resolveCreateTarget,
   routeKey,
+  routeKeyFromSearch,
 } from "./catalog-target.ts";
 
 describe("new-session catalog target", () => {
@@ -45,6 +46,20 @@ describe("new-session catalog target", () => {
     // Only a navigation changes the requested agent or the target.
     expect(routeKey({ ...resolved, requestedAgentId: "main" })).not.toBe(routeKey(resolved));
     expect(routeKey({ ...resolved, catalogId: "codex" })).not.toBe(routeKey(resolved));
+  });
+
+  it("derives pending draft ownership from browser route intent", () => {
+    const pending = {
+      agentId: "",
+      requestedAgentId: "research",
+      catalogId: "claude",
+      model: "",
+      catalogLabel: "",
+      startTerminal: false,
+    };
+
+    expect(routeKeyFromSearch("?agent=research&catalog=claude")).toBe(routeKey(pending));
+    expect(routeKeyFromSearch("?agent=main&catalog=claude")).not.toBe(routeKey(pending));
   });
 
   it("fails closed when the requested creation capability is unavailable", async () => {

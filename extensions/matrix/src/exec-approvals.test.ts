@@ -422,7 +422,7 @@ describe("matrix exec approvals", () => {
     ).toBe(true);
   });
 
-  it("rejects unbound foreign-channel approvals in multi-account matrix configs", () => {
+  it("reports each eligible foreign-channel account as a raw route candidate", () => {
     const cfg = buildMultiAccountMatrixConfig({});
     const request = makeForeignChannelApprovalRequest({ id: "req-4" });
 
@@ -432,14 +432,29 @@ describe("matrix exec approvals", () => {
         accountId: "default",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldHandleMatrixExecApprovalRequest({
         cfg,
         accountId: "ops",
         request,
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("reports each eligible same-channel account as a raw route candidate", () => {
+    const cfg = buildMultiAccountMatrixConfig({});
+    const request: MatrixExecApprovalRequest = {
+      id: "req-same-channel-unbound",
+      request: { command: "echo hi", turnSourceChannel: "matrix" },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(shouldHandleMatrixExecApprovalRequest({ cfg, accountId: "default", request })).toBe(
+      true,
+    );
+    expect(shouldHandleMatrixExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(true);
   });
 
   it("allows unbound foreign-channel approvals when only one matrix account can handle them", () => {

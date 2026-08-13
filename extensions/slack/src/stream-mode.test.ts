@@ -3,8 +3,16 @@ import { describe, expect, it } from "vitest";
 import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "./stream-mode.js";
 
 describe("resolveSlackStreamingConfig", () => {
-  it("defaults to partial mode with native streaming enabled", () => {
+  it("defaults to progress mode with native streaming enabled", () => {
     expect(resolveSlackStreamingConfig({})).toEqual({
+      mode: "progress",
+      nativeStreaming: true,
+      draftMode: "status_final",
+    });
+  });
+
+  it("keeps explicit partial mode on the replace draft path", () => {
+    expect(resolveSlackStreamingConfig({ streaming: { mode: "partial" } })).toEqual({
       mode: "partial",
       nativeStreaming: true,
       draftMode: "replace",

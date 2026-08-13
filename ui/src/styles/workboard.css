@@ -34,19 +34,6 @@
   min-height: 0;
 }
 
-.workboard-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .workboard-toolbar {
   display: flex;
   justify-content: space-between;
@@ -441,39 +428,6 @@
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
 }
 
-.workboard-select__option {
-  color: var(--text);
-}
-
-.workboard-select [slot="start"] {
-  display: inline-flex;
-  align-items: center;
-}
-
-.workboard-select__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 650;
-}
-
-.workboard-select__copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workboard-select__description {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: normal;
-}
-
 .workboard-field--wide {
   grid-column: 1 / -1;
 }
@@ -655,7 +609,7 @@
   gap: 9px;
   box-shadow:
     0 1px 0 color-mix(in srgb, white 3%, transparent) inset,
-    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+    0 8px 22px color-mix(in srgb, black 18%, transparent);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
@@ -681,7 +635,7 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, var(--bg) 16%);
   box-shadow:
     0 1px 0 color-mix(in srgb, white 4%, transparent) inset,
-    0 12px 28px color-mix(in srgb, #000 24%, transparent);
+    0 12px 28px color-mix(in srgb, black 24%, transparent);
   transform: translateY(-1px);
 }
 
@@ -701,7 +655,7 @@
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--workboard-health-highlight-color) 42%, transparent),
     0 0 0 4px color-mix(in srgb, var(--workboard-health-highlight-color) 14%, transparent),
-    0 12px 30px color-mix(in srgb, #000 26%, transparent);
+    0 12px 30px color-mix(in srgb, black 26%, transparent);
 }
 
 .workboard-card--health-highlight-running {
@@ -739,7 +693,7 @@
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
-    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+    0 8px 22px color-mix(in srgb, black 18%, transparent);
   transform: scale(0.985);
   cursor: grabbing;
 }
@@ -1355,7 +1309,7 @@ openclaw-workboard-card-dashboard {
   border: 0;
   color: var(--muted);
   background: transparent;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .workboard-card-dashboard__toggle:focus-visible {

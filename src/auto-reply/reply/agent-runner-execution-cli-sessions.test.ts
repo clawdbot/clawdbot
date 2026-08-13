@@ -198,6 +198,12 @@ describe("executeAgentTurn: CLI session routing", () => {
       suppressNextUserMessagePersistence: false,
       persistAssistantTranscript: true,
       storePath: "/tmp/sessions.json",
+      sessionTarget: {
+        agentId: "agent",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath: "/tmp/sessions.json",
+      },
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
     const callParams = requireRecord(call[0], "CLI runtime");

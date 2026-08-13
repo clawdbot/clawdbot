@@ -5,6 +5,9 @@ export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
 
 export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
 
+/** Additional memory root, optionally narrowed by a root-relative glob. */
+export type MemoryExtraPath = string | { path: string; pattern?: string };
+
 export type MemoryEntryProvenance = {
   originClass: MemoryOriginClass;
   sessionKind: MemorySessionKind;
@@ -108,7 +111,7 @@ export type MemoryProviderStatus = {
   dirty?: boolean;
   workspaceDir?: string;
   dbPath?: string;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   sources?: MemorySource[];
   sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };

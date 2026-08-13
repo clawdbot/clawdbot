@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type BrowserAnnotationAttachment = {
@@ -24,6 +25,19 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+export type ChatComposerDraftRetry = {
+  expectedDraftRevision: number;
+  draftRevision: number;
+};
+
+export type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
+};
+
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;
@@ -36,6 +50,8 @@ export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  orderKey?: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
@@ -69,11 +85,20 @@ export type ChatQueueItem = {
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
-  | { kind: "notice"; key: string; text: string; timestamp: number }
+  | {
+      kind: "notice";
+      key: string;
+      text: string;
+      timestamp: number;
+      icon?: keyof typeof toolIcons;
+      label?: string;
+      startsTurn?: true;
+    }
   | {
       kind: "divider";
       key: string;
       label: string;
+      icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
@@ -118,7 +143,6 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
-  turnSucceeded?: boolean;
 };
 
 /** Content item types in a normalized message */
@@ -160,6 +184,7 @@ export type NormalizedMessage = {
   senderLabel?: string | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
+  replyPreview?: { text: string; senderLabel?: string | null };
   replyTarget?:
     | {
         kind: "current";
@@ -181,6 +206,8 @@ export type ToolCard = {
   outputText?: string;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
+  /** Monotonic edit counts while a live tool call is still receiving input. */
+  liveDiffStat?: { added: number; removed: number };
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;

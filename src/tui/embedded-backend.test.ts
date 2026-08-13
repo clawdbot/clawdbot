@@ -125,7 +125,7 @@ vi.mock("../config/sessions.js", () => ({
     goal ? `Goal: ${goal.objective ?? ""}` : "No goal for this session.",
   getSessionGoal: (...args: unknown[]) => getSessionGoalMock(...args),
   resolveAgentMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  resolveSessionStorePathCore: () => "/tmp/openclaw-sessions.json",
   updateSessionGoalObjective: (...args: unknown[]) => updateSessionGoalObjectiveMock(...args),
   updateSessionGoalStatus: (...args: unknown[]) => updateSessionGoalStatusMock(...args),
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
@@ -228,18 +228,19 @@ vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-  loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
+  loadCombinedSessionStoreForGatewayCore: (...args: unknown[]) =>
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
+  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+  resolveGatewaySessionStoreTargetWithStore: ({ key }: { key: string }) => ({
     canonicalKey: key,
+    storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
@@ -763,6 +764,9 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:main",
     });
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
+    );
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
@@ -782,6 +786,9 @@ describe("EmbeddedTuiBackend", () => {
       AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
     );
 
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionKeys: expect.anything() }),
+    );
     expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({ storeKey: sessionKey, existingEntry: undefined }),
     );
@@ -1844,7 +1851,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
       "active-session",
       "steer this turn",
-      { steeringMode: "all", debounceMs: 500 },
+      { steeringMode: "all", debounceMs: 500, isInboundUserMessage: true },
     );
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 

@@ -498,41 +498,27 @@ function formatOptionalSignedBytes(value: number | null): string {
   return typeof value === "number" ? formatSignedBytesAsMb(value) : "n/a";
 }
 
-function pushChangeRows(
+function pushRows<Entry>(
   lines: string[],
-  entries: GroupedTestComparison["groups"],
-  options: { limit: number },
+  entries: Entry[],
+  limit: number,
+  formatRow: (entry: Entry, index: number) => string,
 ): void {
-  const selected = entries.slice(0, options.limit);
+  const selected = entries.slice(0, limit);
   if (selected.length === 0) {
     lines.push("  (none)");
-    return;
-  }
-
-  for (const [index, entry] of selected.entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | files=${formatCountDelta(entry.delta.fileCount ?? 0).padStart(4, " ")} tests=${formatCountDelta(entry.delta.testCount ?? 0).padStart(5, " ")} | ${entry.key}`,
-    );
+  } else {
+    for (const [index, entry] of selected.entries()) {
+      lines.push(formatRow(entry, index));
+    }
   }
 }
 
-function pushFileChangeRows(
-  lines: string[],
-  entries: GroupedTestComparison["files"],
-  options: { limit: number },
-): void {
-  const selected = entries.slice(0, options.limit);
-  if (selected.length === 0) {
-    lines.push("  (none)");
-    return;
-  }
+const formatChangeRow = (entry: GroupedTestComparison["groups"][number], index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | files=${formatCountDelta(entry.delta.fileCount ?? 0).padStart(4, " ")} tests=${formatCountDelta(entry.delta.testCount ?? 0).padStart(5, " ")} | ${entry.key}`;
 
-  for (const [index, entry] of selected.entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`,
-    );
-  }
-}
+const formatFileChangeRow = (entry: GroupedTestComparison["files"][number], index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`;
 
 /**
  * Renders a grouped test comparison as CLI-friendly text.
@@ -561,16 +547,16 @@ export function renderGroupedTestComparison(
     "",
     `Top group regressions (${Math.min(limit, groupRegressions.length)} of ${groupRegressions.length})`,
   );
-  pushChangeRows(lines, groupRegressions, { limit });
+  pushRows(lines, groupRegressions, limit, formatChangeRow);
 
   lines.push("", `Top group gains (${Math.min(limit, groupGains.length)} of ${groupGains.length})`);
-  pushChangeRows(lines, groupGains, { limit });
+  pushRows(lines, groupGains, limit, formatChangeRow);
 
   lines.push(
     "",
     `Config duration deltas (${Math.min(limit, comparison.configs.length)} of ${comparison.configs.length})`,
   );
-  pushChangeRows(lines, comparison.configs, { limit });
+  pushRows(lines, comparison.configs, limit, formatChangeRow);
 
   if (comparison.runs.length > 0) {
     lines.push(
@@ -588,10 +574,10 @@ export function renderGroupedTestComparison(
     "",
     `Top file regressions (${Math.min(topFiles, fileRegressions.length)} of ${fileRegressions.length})`,
   );
-  pushFileChangeRows(lines, fileRegressions, { limit: topFiles });
+  pushRows(lines, fileRegressions, topFiles, formatFileChangeRow);
 
   lines.push("", `Top file gains (${Math.min(topFiles, fileGains.length)} of ${fileGains.length})`);
-  pushFileChangeRows(lines, fileGains, { limit: topFiles });
+  pushRows(lines, fileGains, topFiles, formatFileChangeRow);
 
   return lines.join("\n");
 }

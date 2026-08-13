@@ -17,15 +17,14 @@ import {
   validateTerminalInputParams,
   validateTerminalOpenParams,
   validateTerminalResizeParams,
-  validateTerminalTextParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
-import { renderTerminalBufferText } from "../terminal/buffer-text.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -483,6 +482,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       const catalog = p.catalog;
       resolveCatalogPlan = async () =>
         await openTerminal.call(provider, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(),
           hostId: catalog.hostId,
           threadId: catalog.threadId,
         });
@@ -617,31 +617,5 @@ export const terminalHandlers: GatewayRequestHandlers = {
           }))
         : [];
     respond(true, { sessions });
-  },
-
-  "terminal.text": async (opts) => {
-    const { params, respond, context } = opts;
-    if (!assertValidParams(params, validateTerminalTextParams, "terminal.text", respond)) {
-      return;
-    }
-    const connId = requireConnId(opts);
-    if (!connId) {
-      return;
-    }
-    const p = params as { sessionId: string };
-    if (!context.terminalSessions || !terminalEnabled(context)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
-      return;
-    }
-    const raw = context.terminalSessions.snapshot(p.sessionId);
-    if (raw === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
-      );
-      return;
-    }
-    respond(true, { text: renderTerminalBufferText(raw) });
   },
 };

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -30,7 +31,6 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -464,7 +464,36 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  if (!serviceState.running) {
+  if (serviceMatchesMutationRoot === false) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.muted(
+          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
+        ),
+      );
+    }
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      // Keep checking additional git mutation roots for this active supervisor.
+      running: true,
+      ...serviceOwnership,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
+  // need the handoff marker to distinguish that transition from operator-stopped state.
+  const launchAgentMayRespawn =
+    process.platform === "darwin" &&
+    serviceState.loaded &&
+    (await service.isEnabled?.({ env: serviceState.env })) === true;
+  const handoffSupervisorMayRespawn =
+    process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
+  const supervisorMayRespawn =
+    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+  if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
       serviceEnv: serviceState.env,
@@ -489,24 +518,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       running: true,
       ...serviceOwnership,
       blockMessage,
-      serviceEnv: serviceState.env,
-    };
-  }
-
-  if (serviceMatchesMutationRoot === false) {
-    if (!params.jsonMode) {
-      defaultRuntime.log(
-        theme.muted(
-          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
-        ),
-      );
-    }
-    return {
-      stopped: false,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      ...serviceOwnership,
       serviceEnv: serviceState.env,
     };
   }
@@ -554,7 +565,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     stopped: true,
     inspected: true,
     runtimeInspected: true,
-    running: true,
+    running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
     serviceDefinitionEnv: serviceState.command?.environment,

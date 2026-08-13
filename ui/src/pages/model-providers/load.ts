@@ -4,8 +4,13 @@
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigSnapshot, ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import type {
+  ConfigSnapshot,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../api/types.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -21,6 +26,7 @@ export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   catalogModels: ModelCatalogEntry[] | null;
+  providerOutcomes: ModelCatalogProviderOutcome[];
   config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
   costByProvider: SessionModelUsage[] | null;
@@ -28,10 +34,16 @@ export type ModelProvidersData = {
   error: string | null;
 };
 
+type ModelProvidersCatalogResult = {
+  models: ModelCatalogEntry[];
+  providerOutcomes?: ModelCatalogProviderOutcome[];
+};
+
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
   catalogModels: null,
+  providerOutcomes: [],
   config: null,
   providerUsage: null,
   costByProvider: null,
@@ -65,18 +77,18 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
+  const [authStatus, models, catalogResult, config, providerUsage, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
         (error: unknown) => ({ ok: false as const, error }),
       ),
       loadModels(client, opts).catch(() => null),
-      request<{ models?: ModelCatalogEntry[] }>("models.list", {
+      request<ModelProvidersCatalogResult>("models.list", {
         view: "all",
         includeProviderCapabilities: true,
       })
-        .then((result) => result?.models ?? null)
+        .then((result) => result ?? null)
         .catch(() => null),
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
@@ -95,7 +107,8 @@ export async function loadModelProvidersData(
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
-    catalogModels,
+    catalogModels: catalogResult?.models ?? null,
+    providerOutcomes: catalogResult?.providerOutcomes ?? [],
     config,
     providerUsage,
     costByProvider,

@@ -1,4 +1,5 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +13,6 @@ import {
 } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { hasErrnoCode } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -20,12 +20,12 @@ import {
   validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
   parseConfigSetValue,
   type PathSegment,
-  toDotPath,
   validatePathSegments,
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode, ConfigSetDryRunResult } from "./config-set-dryrun.js";
@@ -91,10 +91,10 @@ export function configPatchModeError(message: string): Error {
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
   const source = raw.trim();
-  if (source === "env" || source === "file" || source === "exec") {
+  if (source === "env" || source === "file" || source === "exec" || source === "store") {
     return source;
   }
-  throw new Error(`${label} must be one of: env, file, exec.`);
+  throw new Error(`${label} must be one of: env, file, exec, store.`);
 }
 
 function parseSecretRefBuilder(params: {
@@ -120,6 +120,11 @@ function parseSecretRefBuilder(params: {
   }
   if (source === "env" && !isValidEnvSecretRefId(id)) {
     throw new Error(`${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for env refs.`);
+  }
+  if (source === "store" && !isValidEnvSecretRefId(id)) {
+    throw new Error(
+      `${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for store refs.`,
+    );
   }
   if (source === "file" && !isValidFileSecretRefId(id)) {
     throw new Error(
@@ -233,6 +238,8 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
     };
+  } else if (source === "store") {
+    provider = { source: "store" };
   } else {
     const command = opts.providerCommand?.trim();
     if (!command) {
@@ -418,7 +425,7 @@ function buildSingleSetOperations(params: {
     }
     if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
       throw modeError(
-        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec>, and --ref-id <id>.",
+        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec|store>, and --ref-id <id>.",
       );
     }
     return [

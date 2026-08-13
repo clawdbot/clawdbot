@@ -203,7 +203,11 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.sources":
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "memory.search.extraPaths":
-    "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+    "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "memory.search.extraPaths.*.path":
+    "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
+  "memory.search.extraPaths.*.pattern":
+    'Limits a directory entry to supported files matching this root-relative glob, for example "runbooks/**/*.md". Omit it to scan all supported files recursively.',
   "memory.search.multimodal":
     'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "memory.search.multimodal.enabled":

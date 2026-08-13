@@ -100,7 +100,7 @@ function backfillSessionNodes(db: DatabaseSync): void {
         ${jsonText("$.label")},
         ${jsonText("$.displayName")},
         ${jsonText("$.category")},
-        ${jsonText("$.icon")},
+        NULL,
         ${jsonNumber("$.pinnedAt")},
         ${jsonNumber("$.archivedAt")},
         ${jsonNumber("$.lastReadAt")},

@@ -7,9 +7,12 @@ import {
   clearOpenClawStateDatabaseOpenFailure,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
-  STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  assertOpenClawStateWriteAllowed,
+  runWithOpenClawStateWriteAccess,
+} from "../state/openclaw-state-ownership.js";
 import {
   compactDoctorSqliteFile,
   type DoctorSqliteCompactSnapshot,
@@ -66,38 +69,42 @@ export async function runDoctorStateSqliteCompact(
     env,
     operation: "state SQLite compaction",
     protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
-    run: () => {
-      if (isOpenClawStateDatabaseOpen()) {
-        throw new Error(
-          "The shared OpenClaw state database is already open in this process. Stop OpenClaw and retry.",
-        );
-      }
-
-      const compact = compactDoctorSqliteFile({
-        afterSuccess: () => {
-          if (!clearOpenClawDatabaseQuarantine(sqlitePath, { env })) {
+    run: () =>
+      runWithOpenClawStateWriteAccess(
+        { databasePath: sqlitePath, env },
+        "state SQLite compaction",
+        () => {
+          if (isOpenClawStateDatabaseOpen()) {
             throw new Error(
-              `OpenClaw state database ${sqlitePath} was compacted, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+              "The shared OpenClaw state database is already open in this process. Stop OpenClaw and retry.",
             );
           }
-          clearOpenClawStateDatabaseOpenFailure(sqlitePath);
-          ensureOpenClawStatePermissions(sqlitePath, env);
+
+          const compact = compactDoctorSqliteFile({
+            afterSuccess: () => {
+              if (!clearOpenClawDatabaseQuarantine(sqlitePath, { env })) {
+                throw new Error(
+                  `OpenClaw state database ${sqlitePath} was compacted, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+                );
+              }
+              clearOpenClawStateDatabaseOpenFailure(sqlitePath);
+              ensureOpenClawStatePermissions(sqlitePath, env);
+            },
+            ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
+            sqlitePath,
+            validateBeforeMutation: (database) => {
+              assertOpenClawStateWriteAllowed({ database, databasePath: sqlitePath, env });
+              assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath });
+            },
+          });
+          return {
+            ...compact,
+            mode: "compact",
+            path: sqlitePath,
+            skipped: false,
+          };
         },
-        ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
-        sqlitePath,
-        validateBeforeMutation: (database) =>
-          assertOpenClawStateDatabaseForMaintenance(database, {
-            pathname: sqlitePath,
-            allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
-          }),
-      });
-      return {
-        ...compact,
-        mode: "compact",
-        path: sqlitePath,
-        skipped: false,
-      };
-    },
+      ),
   });
 }
 

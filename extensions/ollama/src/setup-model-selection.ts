@@ -158,7 +158,9 @@ export async function discoverOllamaModelsForSetup(params: {
   inspectTools?: boolean;
   signal?: AbortSignal;
 }) {
-  const { reachable, models } = await fetchOllamaModels(params.baseUrl);
+  const { reachable, models } = await fetchOllamaModels(params.baseUrl, {
+    signal: params.signal,
+  });
   const firstModels = models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT);
   const inspection: { inspected: OllamaModelWithContext[]; inspectionFailures: string[] } =
     !reachable
@@ -166,7 +168,9 @@ export async function discoverOllamaModelsForSetup(params: {
       : params.inspectTools
         ? await inspectOllamaModelsForSetup(params.baseUrl, firstModels, params.signal)
         : {
-            inspected: await enrichOllamaModelsWithContext(params.baseUrl, firstModels),
+            inspected: await enrichOllamaModelsWithContext(params.baseUrl, firstModels, {
+              signal: params.signal,
+            }),
             inspectionFailures: [],
           };
   if (

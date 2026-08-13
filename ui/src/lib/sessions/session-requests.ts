@@ -79,6 +79,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
+  if (options.includeLastMessage === true) {
+    params.includeLastMessage = true;
+  }
   if (options.archivedFilter === "archived") {
     params.archived = true;
   } else if (options.archivedFilter === "all") {
@@ -133,9 +136,14 @@ export function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
-  options: { agentId?: string | null } = {},
+  options: { agentId?: string | null; expectedSessionId?: string | null } = {},
 ): Promise<SessionsPatchResult> {
-  const params = { ...buildSessionRequestParams(key, options.agentId), ...patch };
+  const expectedSessionId = options.expectedSessionId?.trim();
+  const params = {
+    ...buildSessionRequestParams(key, options.agentId),
+    ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...patch,
+  };
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);

@@ -23,6 +23,11 @@ import {
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
+import {
+  loadCronRuntimeAuthorities,
+  repairCronRuntimeAuthorityRows,
+  replaceCronRuntimeAuthorityRows,
+} from "./store/runtime-authority-store.js";
 import type {
   CronQuarantinedJob,
   LoadedCronStore,
@@ -91,7 +96,17 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   const database = openOpenClawStateDatabase().db;
   const rows = loadCronRows(database, storeKey);
   if (rows.length > 0) {
-    return loadedCronStoreFromRows(rows);
+    const loaded = loadedCronStoreFromRows(rows);
+    const authority = loadCronRuntimeAuthorities({
+      db: database,
+      storeKey,
+      jobs: loaded.store.jobs,
+    });
+    repairLoadedCronRuntimeAuthority({
+      storeKey,
+      jobIds: authority.repairJobIds,
+    });
+    return loaded;
   }
   return {
     store: { version: 1, jobs: [] },
@@ -100,6 +115,35 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
+}
+
+function repairLoadedCronRuntimeAuthority(params: {
+  storeKey: string;
+  jobIds: readonly string[];
+}): void {
+  if (params.jobIds.length === 0) {
+    return;
+  }
+  const repaired = runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const rows = loadCronRows(db, params.storeKey);
+      if (rows.length === 0) {
+        return false;
+      }
+      const loaded = loadedCronStoreFromRows(rows);
+      return repairCronRuntimeAuthorityRows({
+        db,
+        storeKey: params.storeKey,
+        jobs: loaded.store.jobs,
+        jobIds: params.jobIds,
+      });
+    },
+    {},
+    { operationLabel: "cron.runtime-authority-repair" },
+  );
+  if (repaired) {
+    noteCronJobsStoreCommit(params.storeKey);
+  }
 }
 
 /** Removes an owned declarative job family left under obsolete absolute store keys. */
@@ -151,7 +195,9 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
     }
     const rows = loadCronRows(db, storeKey);
     if (rows.length > 0) {
-      return loadedCronStoreFromRows(rows);
+      const loaded = loadedCronStoreFromRows(rows);
+      loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
+      return loaded;
     }
     return emptyLoadedCronStore();
   } finally {
@@ -171,7 +217,17 @@ export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
   const database = openOpenClawStateDatabase().db;
   const rows = loadCronRows(database, storeKey);
   if (rows.length > 0) {
-    return loadedCronStoreFromRows(rows).store;
+    const loaded = loadedCronStoreFromRows(rows);
+    const authority = loadCronRuntimeAuthorities({
+      db: database,
+      storeKey,
+      jobs: loaded.store.jobs,
+    });
+    repairLoadedCronRuntimeAuthority({
+      storeKey,
+      jobIds: authority.repairJobIds,
+    });
+    return loaded.store;
   }
   return { version: 1, jobs: [] };
 }
@@ -214,7 +270,8 @@ export async function saveCronJobsStore(
       updateCronRuntimeRows(database.db, storeKey, store);
       return;
     }
-    replaceCronRows(database.db, storeKey, store);
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
   });
   noteCronJobsStoreCommit(storeKey);
 }
@@ -241,7 +298,8 @@ export async function saveCronJobsStoreWithMetadata(
         database,
       });
     }
-    replaceCronRows(database.db, storeKey, store);
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     return true;
   });
   if (committed) {

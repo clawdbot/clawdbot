@@ -972,7 +972,6 @@ describe("processResponsesStream", () => {
           },
         }),
         buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-        formatError: (error) => (error instanceof Error ? error.message : String(error)),
       });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -1048,7 +1047,6 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requestMaxRetries).toBe(expected);
@@ -1121,7 +1119,6 @@ describe("processResponsesStream", () => {
         }),
         stream: true,
       }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requests).toHaveLength(2);
@@ -1604,7 +1601,6 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(lifecycleOutput.stopReason).toBe("error");

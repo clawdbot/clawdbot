@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -23,7 +24,7 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
@@ -39,8 +40,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -769,8 +769,8 @@ export function getActiveEmbeddedRunSnapshot(
 /**
  * Wait for active embedded runs to drain.
  *
- * Used during restarts so in-flight runs can release session write locks before
- * the next lifecycle starts. If no timeout is passed, waits indefinitely.
+ * Used during restarts so in-flight runs can finish transcript writes before the
+ * next lifecycle starts. If no timeout is passed, waits indefinitely.
  */
 export async function waitForActiveEmbeddedRuns(
   timeoutMs?: number,
@@ -967,6 +967,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
 }
 
 type ForceClearSessionSnapshot = {
+  agentId: string;
   startedAt?: number;
   storePath: string;
   updatedAt: number;
@@ -977,13 +978,14 @@ function tryLoadForceClearSessionSnapshot(
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const entry = loadSessionEntry({ sessionKey, storePath });
+    const agentId = resolveSessionAgentId({ config: cfg, sessionKey });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+    const entry = loadSessionEntry({ agentId, sessionKey, storePath });
     if (!entry || entry.status !== "running") {
       return undefined;
     }
     return {
+      agentId,
       ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
       storePath,
       updatedAt: entry.updatedAt,
@@ -998,6 +1000,7 @@ function tryLoadForceClearSessionSnapshot(
 
 /** Persists terminal state when a forced registry clear cannot emit normal lifecycle. */
 async function persistForceClearedEmbeddedRunTerminalState(params: {
+  agentId: string;
   sessionId: string;
   sessionKey: string;
   startedAt?: number;
@@ -1006,7 +1009,11 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
 }): Promise<void> {
   try {
     await updateSessionEntry(
-      { sessionKey: params.sessionKey, storePath: params.storePath },
+      {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
       (storedEntry) => {
         const entry = storedEntry as InternalSessionEntry;
         // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.

@@ -12,6 +12,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -28,6 +29,10 @@ import {
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import {
+  isPluginManifestInstallOwnerAmbiguous,
+  resolvePluginManifestInstallOwner,
+} from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
@@ -154,17 +159,27 @@ export function matchesScopedPluginOrDreamingSidecar(params: {
 export function createPluginCandidatesFromManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginCandidate[] {
-  return manifestRegistry.plugins.map((record) => ({
-    idHint: record.id,
-    rootDir: record.rootDir,
-    source: record.source,
-    ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
-    origin: record.origin,
-    ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
-    ...(record.format !== undefined ? { format: record.format } : {}),
-    ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
-    ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
-  }));
+  return manifestRegistry.plugins.map((record) => {
+    const installOwner = resolvePluginManifestInstallOwner(record);
+    return recordPluginCandidateInstallOwner(
+      {
+        idHint: record.id,
+        effectivePluginId: record.id,
+        rootDir: record.rootDir,
+        source: record.source,
+        ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
+        origin: record.origin,
+        ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
+        ...(record.format !== undefined ? { format: record.format } : {}),
+        ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
+        ...(record.packageManifest !== undefined
+          ? { packageManifest: record.packageManifest }
+          : {}),
+      },
+      installOwner,
+      isPluginManifestInstallOwnerAmbiguous(record),
+    );
+  });
 }
 
 class PluginLoadFailureError extends Error {

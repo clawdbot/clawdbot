@@ -43,25 +43,6 @@ describe("toggleSessionWorkspace", () => {
   });
 });
 
-describe("custodian panel toggle", () => {
-  it("is available only while the gateway is connected and advertises chat", () => {
-    const state = {
-      client: null,
-      connected: false,
-      handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["openclaw.chat"]),
-      requestUpdate: vi.fn(),
-      sessionKey: "agent:main:current",
-      sessions: {},
-    } as unknown as SessionWorkspaceHost;
-
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeUndefined();
-
-    state.connected = true;
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeTypeOf("function");
-  });
-});
-
 describe("session workspace artifacts", () => {
   function createArtifactHost(params: { data: string; mimeType: string; title?: string }) {
     const handleOpenSidebar = vi.fn();

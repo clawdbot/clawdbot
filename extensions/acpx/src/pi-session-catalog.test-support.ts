@@ -92,9 +92,13 @@ export async function installFakePiFixture(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-pi-cli-"),
   );
   temporaryDirectories.push(directory);
-  const executable = path.join(directory, "pi");
-  await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
-  await fs.chmod(executable, 0o755);
+  const bareExecutable = path.join(directory, "pi");
+  await fs.writeFile(bareExecutable, "#!/bin/sh\nexit 0\n");
+  if (process.platform === "win32") {
+    await fs.writeFile(path.join(directory, "pi.cmd"), "@echo off\r\nexit /b 0\r\n");
+  } else {
+    await fs.chmod(bareExecutable, 0o755);
+  }
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   return directory;
 }

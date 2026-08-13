@@ -3,7 +3,7 @@ import {
   embeddedAgentLog,
   runAgentHarnessAfterToolCallHook,
   type AgentMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Usage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";

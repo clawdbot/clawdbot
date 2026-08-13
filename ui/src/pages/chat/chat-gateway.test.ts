@@ -374,6 +374,27 @@ describe("handleChatGatewayEvent", () => {
     ).toEqual([payload.message]);
   });
 
+  it("caches one background final when three retained panes receive the same event", () => {
+    const cache = new Map();
+    const states = ["one", "two", "three"].map((sessionKey) =>
+      createState({ chatMessagesBySession: cache, sessionKey }),
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "background",
+      state: "final",
+      message: createTextChatMessage("assistant", "background final"),
+    };
+
+    for (const state of states) {
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    }
+
+    expect(readChatMessagesFromCache(cache, states[0]!, { sessionKey: "background" })).toEqual([
+      payload.message,
+    ]);
+  });
+
   it.each([
     {
       name: "canonical default-session finals under the main alias",

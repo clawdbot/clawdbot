@@ -2,16 +2,20 @@
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
 import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listSessionEntriesReadOnly,
+  loadExactSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -19,7 +23,9 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -36,6 +42,7 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
@@ -256,6 +263,7 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -327,11 +335,36 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    const heartbeatSession = resolveHeartbeatSessionKey(
+      cfg,
+      agent.id,
+      summary.session === undefined ? undefined : { session: summary.session },
+    );
+    // Status must not create, register, or migrate an absent session database.
+    const entry = loadExactSessionEntryReadOnly({
+      agentId: agent.id,
+      storePath: heartbeatSession.storePath,
+      sessionKey: heartbeatSession.sessionKey,
+    })?.entry;
+    const route = deliveryContextFromSession(entry);
+    const heartbeat = {
+      ...cfg.agents?.defaults?.heartbeat,
+      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+    };
+    // Owner status uses the runner's synchronous stage-1 decision.
+    // The shared probe requires positive direct proof before reporting ready.
+    const hasDeliveryRoute =
+      summary.target === "last"
+        ? Boolean(route?.channel && route.to)
+        : summary.target === "owner"
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, entry, heartbeat })
+          : true;
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      waitingForRoute: summary.enabled && !hasDeliveryRoute,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -343,7 +376,7 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveMainSessionKey(cfg);
+  const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance();
@@ -518,7 +551,7 @@ export async function getStatusSummary(
 
   const storeSources = agentList.agents.map((agent) => ({
     agentId: agent.id,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
   }));
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
@@ -529,7 +562,7 @@ export async function getStatusSummary(
 
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
@@ -558,9 +591,16 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

@@ -5,7 +5,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -25,7 +24,6 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
-import { shouldIncludeChannelSetupFeatureForConfig } from "./bundled-setup-policy.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -409,30 +407,6 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function listBundledChannelPluginIdsForSetupFeature(
-  rootScope: BundledChannelRootScope,
-  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig; pluginIds?: readonly string[] } = {},
-): readonly ChannelId[] {
-  const scopedPluginIds = options.pluginIds ? new Set(options.pluginIds) : null;
-  const eligible = listBundledChannelMetadata(rootScope).filter(
-    (metadata) =>
-      (!scopedPluginIds ||
-        scopedPluginIds.has(metadata.manifest.id) ||
-        metadata.manifest.channels?.some((channelId) => scopedPluginIds.has(channelId))) &&
-      shouldIncludeChannelSetupFeatureForConfig({
-        plugin: metadata.manifest,
-        config: options.config,
-      }),
-  );
-  const hinted = eligible.filter(
-    (metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true,
-  );
-  return (hinted.length > 0 ? hinted : eligible)
-    .map((metadata) => metadata.manifest.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
 }
@@ -626,25 +600,6 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
     const plugin = getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext);
     return plugin ? [plugin] : [];
   });
-}
-
-export function listBundledChannelLegacySessionSurfaces(
-  options: { config?: OpenClawConfig } = {},
-): readonly BundledChannelLegacySessionSurface[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", options)
-    .map((id) => {
-      const entry = getBundledChannelArtifactForRoot("setupEntry", id, rootScope, loadContext);
-      const surface = entry?.loadLegacySessionSurface?.();
-      if (surface) {
-        return surface;
-      }
-      if (entry?.features?.legacySessionSurfaces !== true) {
-        return undefined;
-      }
-      return getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext)?.messaging;
-    })
-    .filter((surface): surface is BundledChannelLegacySessionSurface => surface !== undefined);
 }
 
 export function getBundledChannelAccountInspector(

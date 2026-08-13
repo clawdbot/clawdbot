@@ -6,7 +6,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -72,6 +72,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
@@ -94,6 +95,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
     localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
@@ -226,6 +228,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
   },
   runtime: RuntimeEnv,
@@ -248,6 +251,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
     );
@@ -260,6 +264,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
@@ -290,6 +295,7 @@ export async function healthCommand(
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
         config: cfg,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
       });
       logGatewayConnectionDetails({
@@ -306,7 +312,9 @@ export async function healthCommand(
         ? agents
         : await Promise.all(
             localAgents.ordered.map(async (entry) => {
-              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: entry.id,
+              });
               return {
                 agentId: entry.id,
                 name: entry.name,
@@ -382,7 +390,9 @@ export async function healthCommand(
         const preferred = resolvePreferredAccountId({
           accountIds,
           defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
+          boundAccounts: defaultAgentId
+            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+            : [],
         });
         return [plugin.id, [preferred] as string[]] as const;
       }),
@@ -447,7 +457,9 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,

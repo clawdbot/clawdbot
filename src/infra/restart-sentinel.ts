@@ -10,6 +10,7 @@ import {
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveCommitHash } from "./git-commit.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
   readRestartSentinelRowSync,
@@ -21,11 +22,19 @@ import {
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
 export type {
   RestartSentinelContinuation,
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+
+export type VerifiedGitUpdateReceipt = {
+  root: string;
+  sha: string;
+  upstreamRef?: string;
+  installedAtMs: number;
+};
 
 const sentinelLog = createSubsystemLogger("restart-sentinel");
 
@@ -88,11 +97,32 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
   commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
+  const snapshot = await readRestartSentinel(env);
+  if (!snapshot || snapshot.payload.kind !== "update") {
+    return null;
+  }
+  const snapshotRoot = snapshot.payload.stats?.root;
+  const expectedRoot =
+    typeof snapshotRoot === "string" ? resolveUpdateInstallRoot(snapshotRoot) : null;
+  const discoveredRoot = expectedRoot
+    ? (runningRoot ??
+      (await resolveOpenClawPackageRoot({
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+      })))
+    : null;
+  const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
+
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const current = readRestartSentinelRowSync(db);
-      if (current.kind !== "valid" || current.sentinel.payload.kind !== "update") {
+      if (
+        current.kind !== "valid" ||
+        current.sentinel.revision !== snapshot.revision ||
+        current.sentinel.payload.kind !== "update"
+      ) {
         return null;
       }
 
@@ -104,6 +134,10 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
         after.version = version;
         changed = true;
       }
+      if (expectedRoot && stats.root !== expectedRoot) {
+        stats.root = expectedRoot;
+        changed = true;
+      }
 
       const before = isPlainRecord(stats.before) ? stats.before : {};
       const beforeSha = typeof before.sha === "string" ? before.sha.trim() : "";
@@ -111,10 +145,22 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       const actualSha = commit?.trim() ?? "";
       const verifiesGitRevision =
         stats.mode !== "git" || (expectedSha.length > 0 && commitsMatch(expectedSha, actualSha));
+      const verifiesInstallRoot =
+        expectedRoot !== null && actualRoot !== null && expectedRoot === actualRoot;
       const changedInstall =
         stats.mode !== "git" ||
         (beforeSha.length > 0 && expectedSha.length > 0 && !commitsMatch(beforeSha, expectedSha));
-      if (payload.status === "ok" && stats.mode === "git" && expectedSha && !verifiesGitRevision) {
+      if (payload.status === "ok" && expectedRoot && !verifiesInstallRoot) {
+        payload.status = "error";
+        stats.reason = actualRoot ? "restart-root-mismatch" : "restart-root-unavailable";
+        delete payload.continuation;
+        changed = true;
+      } else if (
+        payload.status === "ok" &&
+        stats.mode === "git" &&
+        expectedSha &&
+        !verifiesGitRevision
+      ) {
         payload.status = "error";
         stats.reason = actualSha ? "restart-revision-mismatch" : "restart-revision-unavailable";
         delete payload.continuation;
@@ -129,7 +175,10 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       if (!finalized) {
         return null;
       }
-      if (payload.status === "ok" && verifiesGitRevision && changedInstall) {
+      // This receipt records the install fact proven by the running process. Post-install
+      // failures such as managed-service-handoff-failed keep the sentinel in error without
+      // erasing the upstream fallback for campaign-managed detached installs (#121634).
+      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
         writeUpdateInstallReceiptRowSync(db, payload);
       }
       return changed ? finalized : null;
@@ -206,7 +255,7 @@ export async function readRestartSentinel(
   }
 }
 
-export async function readUpdateInstallReceipt(
+async function readUpdateInstallReceiptPayload(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinelPayload | null> {
   try {
@@ -216,6 +265,41 @@ export async function readUpdateInstallReceipt(
     sentinelLog.warn(`Failed to read update install receipt: ${formatErrorMessage(err)}`);
     return null;
   }
+}
+
+function normalizeVerifiedGitUpdateReceipt(
+  payload: RestartSentinelPayload | null,
+): VerifiedGitUpdateReceipt | null {
+  // Receipt rows are only written after the running install verifies root and revision.
+  // An error status records a post-install failure, not an untrusted install.
+  if (
+    payload?.kind !== "update" ||
+    payload.stats?.mode !== "git" ||
+    !isPlainRecord(payload.stats.after)
+  ) {
+    return null;
+  }
+  const root = typeof payload.stats.root === "string" ? payload.stats.root.trim() : "";
+  const sha = typeof payload.stats.after.sha === "string" ? payload.stats.after.sha.trim() : "";
+  if (!root || !sha) {
+    return null;
+  }
+  const upstreamRef =
+    typeof payload.stats.after.upstreamRef === "string"
+      ? payload.stats.after.upstreamRef.trim()
+      : "";
+  return {
+    root,
+    sha,
+    ...(upstreamRef ? { upstreamRef } : {}),
+    installedAtMs: payload.ts,
+  };
+}
+
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {

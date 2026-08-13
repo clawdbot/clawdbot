@@ -752,7 +752,14 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
-    extraPaths: z.array(z.string()).optional(),
+    extraPaths: z
+      .array(
+        z.union([
+          z.string(),
+          z.object({ path: z.string(), pattern: z.string().optional() }).strict(),
+        ]),
+      )
+      .optional(),
     multimodal: z
       .object({
         enabled: z.boolean().optional(),
@@ -878,7 +885,6 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),

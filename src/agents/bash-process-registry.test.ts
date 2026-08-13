@@ -3,18 +3,19 @@
  * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
  * state for background exec sessions.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
   addSession,
   appendOutput,
-  createSessionSlug,
   deleteSession,
+  drainFinishedSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
+  getFinishedSessionForProcess,
+  isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
@@ -26,6 +27,7 @@ import {
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createSessionSlug } from "./session-slug.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
@@ -45,7 +47,6 @@ describe("bash process registry", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,
@@ -209,8 +210,27 @@ describe("bash process registry", () => {
         tail: "",
         truncated: false,
         totalOutputChars: 0,
+        unreadOutput: { stdout: "", stderr: "", outputDropped: false },
       },
     ]);
+  });
+
+  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+    const session = createRegistrySession({
+      id: "exact-finished-output",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "terminal output\n");
+    markExited(session, 0, null, "completed");
+
+    const finished = getFinishedSessionForProcess(session);
+    expect(finished).toBe(getFinishedSession(session.id));
+    expect(finished && drainFinishedSession(finished).stdout).toBe("terminal output\n");
+    expect(finished && drainFinishedSession(finished).stdout).toBe("");
+    expect(drainSession(session).stdout).toBe("");
   });
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
@@ -349,11 +369,11 @@ describe("bash process registry", () => {
     addSession(session);
     markBackgrounded(session);
     deleteSession(session.id);
-    expect(createSessionSlug()).toBe("amber-atlas-2");
+    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
 
     session.backgrounded = false;
     markExited(session, 0, null, "completed");
-    expect(createSessionSlug()).toBe("amber-atlas");
+    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
   });
 
   it("clears background activity in the test reset", () => {
@@ -411,7 +431,6 @@ describe("cursorKeyMode", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,

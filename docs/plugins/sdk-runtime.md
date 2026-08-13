@@ -82,7 +82,7 @@ these actions with `{ modelPicker: true }`; channels without a picker
 capability continue to fail closed instead of treating the action as an opaque
 callback.
 
-Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
 
@@ -110,6 +110,7 @@ return {
     conversationId: "channel-1",
     senderId: "bot-a",
     receiverId: "bot-b",
+    eventId: providerEvent.id,
     config: channelConfig.botLoopProtection,
     defaultsConfig: runtimeConfig.channels?.defaults?.botLoopProtection,
     defaultEnabled: allowBotsMode !== "off",
@@ -734,7 +735,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
-    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Pass `{ heartbeat: { target: "last" } }` to force delivery to the last active channel instead of the default `target: "none"` suppression.
+    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
     truncation counts, `code`, `signal`, `killed`, `termination`, and

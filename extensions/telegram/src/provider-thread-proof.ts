@@ -24,6 +24,22 @@ export function resolveTelegramProviderObservedThreadId(params: {
     : undefined;
 }
 
+export function resolveTelegramProviderObservedThreadSpec(params: {
+  message: TelegramThreadMessage;
+  successfulSendThread?: TelegramThreadSpec;
+}): TelegramThreadSpec | undefined {
+  const providerThreadId = resolveTelegramProviderObservedThreadId(params);
+  const successfulSendThread = params.successfulSendThread;
+  if (
+    providerThreadId === undefined ||
+    successfulSendThread?.id !== providerThreadId ||
+    successfulSendThread.scope === "none"
+  ) {
+    return undefined;
+  }
+  return { scope: successfulSendThread.scope, id: providerThreadId };
+}
+
 export function assertTelegramProviderThread(params: {
   message: TelegramThreadMessage;
   successfulSendThread?: TelegramThreadSpec;

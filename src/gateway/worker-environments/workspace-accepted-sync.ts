@@ -10,13 +10,14 @@ import {
   parseAcceptedWorkspaceSettlement,
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
+import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
-  parseManifestRef,
+  captureRemoteWorkspaceManifest,
   WORKER_WORKSPACE_RSYNC_DESTINATION,
   workerAcceptedWorkspaceRsyncReceiverPath,
   workerWorkspaceCommandSucceeded,
@@ -67,6 +68,8 @@ function createAcceptedWorkspacePublisher(params: {
   localPath: string;
   remoteWorkspaceDir: string;
   remoteManifest: WorkerWorkspaceManifest;
+  hashMemo: WorkspaceHashMemo;
+  metrics: WorkspaceReconcileMetrics;
 }) {
   return async (accepted: {
     manifestRef: string;
@@ -96,21 +99,14 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const verifyAcceptedWorkspace = async () => {
-      const verified = await params.runWorkspaceCommand({
-        transportRetry: "idempotent",
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          params.remoteWorkspaceDir,
-          accepted.manifest.baseCommit ?? "",
-          ...(accepted.manifest.baseCommit ? ["eligible", acceptedDigest] : []),
-        ],
+      const verifiedRef = await captureRemoteWorkspaceManifest({
+        runWorkspaceCommand: params.runWorkspaceCommand,
+        remoteWorkspaceDir: params.remoteWorkspaceDir,
+        baseCommit: accepted.manifest.baseCommit,
+        priorManifestDigests: accepted.manifest.baseCommit ? [acceptedDigest] : [],
+        hashMemo: params.hashMemo,
+        metrics: params.metrics,
       });
-      if (!workerWorkspaceCommandSucceeded(verified)) {
-        throw workspaceSyncError(verified);
-      }
-      const verifiedRef = parseManifestRef(verified.stdout.trim());
       if (verifiedRef !== accepted.manifestRef) {
         throw new Error(
           `Worker workspace does not match its accepted manifest: expected ${accepted.manifestRef}, got ${verifiedRef}`,

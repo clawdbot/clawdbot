@@ -4,13 +4,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
+import { hasUsableOAuthCredential } from "../../../agents/auth-profiles/credential-state.js";
 import {
   isLegacyOAuthRef,
   LEGACY_OAUTH_REF_PROVIDER,
 } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
 import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
@@ -94,10 +94,10 @@ function shouldRemoveLocalOAuthShadow(params: {
   if (areOAuthCredentialsEquivalent(local, main)) {
     return true;
   }
-  if (!hasUsableOAuthCredential(main, now)) {
+  if (!hasUsableOAuthCredential(main, { now })) {
     return false;
   }
-  if (!hasUsableOAuthCredential(local, now)) {
+  if (!hasUsableOAuthCredential(local, { now })) {
     return true;
   }
   const localExpires = Number.isFinite(local.expires) ? local.expires : 0;

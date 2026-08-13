@@ -19,24 +19,7 @@ import {
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
-import { persistSessionEntry as persistSessionEntryBase } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
-
-type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath: string;
-  initialEntry: SessionEntry;
-  entry: SessionEntry;
-};
-
-export async function persistSessionEntry(
-  params: PersistSessionEntryParams & {
-    shouldPersist?: (entry: SessionEntry | undefined) => boolean;
-  },
-): Promise<SessionEntry | undefined> {
-  return await persistSessionEntryBase(params);
-}
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
   return {

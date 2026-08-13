@@ -66,7 +66,7 @@ vi.mock("./tools/image-tool.js", () => ({
   createImageTool: () => mocks.stubTool("image"),
 }));
 
-vi.mock("./tools/message-tool.js", () => ({
+vi.mock("./tools/message-tool-execution.js", () => ({
   createMessageTool: () => mocks.stubTool("message"),
 }));
 
@@ -408,18 +408,20 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      agentAccountId: "bot-a",
-      creatorToolAllowlist: undefined,
-      currentDeliveryContext: {
-        channel: "matrix",
-        to: "room:!AbCdEf1234567890:example.org",
-        accountId: "bot-a",
-        threadId: "$RootEvent:Example.Org",
-      },
-      runId: undefined,
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        agentAccountId: "bot-a",
+        creatorToolAllowlist: undefined,
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!AbCdEf1234567890:example.org",
+          accountId: "bot-a",
+          threadId: "$RootEvent:Example.Org",
+        },
+        runId: undefined,
+      }),
+    );
   });
 
   it("uses agent route context when auto-threading context is unavailable", async () => {
@@ -433,18 +435,20 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      agentAccountId: "bot-a",
-      creatorToolAllowlist: undefined,
-      currentDeliveryContext: {
-        channel: "matrix",
-        to: "room:!FallbackRoom:Example.Org",
-        accountId: "bot-a",
-        threadId: "$FallbackThread:Example.Org",
-      },
-      runId: undefined,
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        agentAccountId: "bot-a",
+        creatorToolAllowlist: undefined,
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!FallbackRoom:Example.Org",
+          accountId: "bot-a",
+          threadId: "$FallbackThread:Example.Org",
+        },
+        runId: undefined,
+      }),
+    );
   });
 
   it("passes self-remove scope into the cron tool", async () => {
@@ -455,15 +459,17 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:cron:job-current",
-      currentDeliveryContext: {
-        channel: undefined,
-        to: undefined,
-        accountId: undefined,
-        threadId: undefined,
-      },
-      selfRemoveOnlyJobId: "job-current",
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:job-current",
+        currentDeliveryContext: {
+          channel: undefined,
+          to: undefined,
+          accountId: undefined,
+          threadId: undefined,
+        },
+        selfRemoveOnlyJobId: "job-current",
+      }),
+    );
   });
 });

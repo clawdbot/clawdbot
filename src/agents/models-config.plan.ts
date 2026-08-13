@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import {
@@ -110,6 +111,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
+    onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -147,6 +149,9 @@ async function resolveProvidersForModelsJsonWithDeps(
       ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
       : {}),
     ...(params.providerDiscoveryEntriesOnly === true ? { providerDiscoveryEntriesOnly: true } : {}),
+    ...(params.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: params.onProviderCatalogOutcome }
+      : {}),
   });
   return mergeProviders({
     implicit: implicitProviders,
@@ -230,6 +235,7 @@ async function planOpenClawModelsJsonWithDeps(
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
+    onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -257,6 +263,9 @@ async function planOpenClawModelsJsonWithDeps(
         : {}),
       ...(params.providerDiscoveryEntriesOnly === true
         ? { providerDiscoveryEntriesOnly: true }
+        : {}),
+      ...(params.onProviderCatalogOutcome
+        ? { onProviderCatalogOutcome: params.onProviderCatalogOutcome }
         : {}),
     },
     deps,

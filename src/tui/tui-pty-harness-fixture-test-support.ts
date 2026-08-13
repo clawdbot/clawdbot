@@ -296,9 +296,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             const sourceReplyPayloads = isSourceReplyProof
               ? buildEmbeddedRunPayloads({
                   assistantTexts: [],
-                  toolMetas: [],
                   lastAssistant: undefined,
-                  inlineToolResultsAllowed: false,
                   sessionKey: opts.sessionKey,
                   sourceReplyDeliveryMode: "message_tool_only",
                   messagingToolSourceReplyPayloads: [

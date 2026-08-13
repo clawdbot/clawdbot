@@ -78,7 +78,7 @@ export function shouldDeliverTtsAsVoice(params: {
   return params.voiceCompatible === true || delivery.transcodesAudio === true;
 }
 
-export async function textToSpeech(
+export async function textToSpeechCore(
   params: {
     text: string;
     cfg: OpenClawConfig;

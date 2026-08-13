@@ -209,12 +209,14 @@ describe("renderChatComposer controls", () => {
         actionLabel: "Unarchive",
         onAction,
       },
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("This session is archived.");
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();
     button(container, t("chat.runControls.stopGenerating")).click();
@@ -290,7 +292,7 @@ describe("renderChatComposer controls", () => {
         { deviceId: "studio-mic", label: "Studio microphone" },
         { deviceId: "headset", label: "USB headset" },
       ],
-      warning: null,
+      issue: null,
     });
     patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
     const container = document.createElement("div");
@@ -344,10 +346,55 @@ describe("renderChatComposer controls", () => {
     expect(dropdown?.open).toBe(true);
   });
 
-  it("shows discovery warnings and the next-session hint during active Talk", async () => {
+  it.each([
+    ["none-found", "chat.composer.microphoneNoneFound", false],
+    ["list-unsupported", "chat.composer.microphoneListUnsupported", false],
+    ["permission-blocked", "chat.composer.microphonePermissionBlocked", true],
+    ["busy", "chat.composer.microphoneBusy", true],
+    ["page-inactive", "chat.composer.microphonePageInactive", true],
+    ["failed", "chat.composer.microphoneAccessFailed", true],
+  ] as const)(
+    "renders %s as one empty state with no claimed selection",
+    async (issue, messageKey, fault) => {
+      discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const composerProps = props({
+        onToggleRealtimeTalk: vi.fn(),
+        realtimeTalkActive: true,
+        realtimeTalkStatus: "listening",
+      });
+      const draw = () => render(renderChatComposer(composerProps), container);
+      composerProps.onRequestUpdate = draw;
+      draw();
+
+      const dropdown = container.querySelector<
+        HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+      >("wa-dropdown.chat-talk-input-picker");
+      await dropdown?.updateComplete;
+      button(container, t("chat.composer.microphoneInput")).click();
+      const empty = await vi.waitFor(() => {
+        const node = container.querySelector(".chat-talk-input-picker__empty");
+        expect(node?.textContent?.trim()).toBe(t(messageKey));
+        return node;
+      });
+
+      // One designed state: never a checked System default row, a second
+      // negative note, or a hint about a selection that cannot be made.
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0);
+      expect(container.querySelector(".chat-talk-input-picker__note")).toBeNull();
+      expect(container.querySelector(".chat-talk-input-picker__warning")).toBeNull();
+      expect(container.querySelector(".chat-talk-input-picker__hint")).toBeNull();
+      expect(container.querySelectorAll(".chat-talk-input-picker__empty")).toHaveLength(1);
+      expect(empty?.getAttribute("role")).toBe("status");
+      expect(empty?.classList.contains("chat-talk-input-picker__empty--fault")).toBe(fault);
+    },
+  );
+
+  it("keeps the list plus one warning when inputs exist but discovery reported an issue", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
-      devices: [],
-      warning: "Microphone permission is blocked.",
+      devices: [{ deviceId: "headset", label: "USB headset" }],
+      issue: "busy",
     });
     const container = document.createElement("div");
     document.body.append(container);
@@ -366,17 +413,13 @@ describe("renderChatComposer controls", () => {
     await dropdown?.updateComplete;
     button(container, t("chat.composer.microphoneInput")).click();
     await vi.waitFor(() =>
-      expect(container.querySelector(".chat-talk-input-picker__warning")?.textContent).toContain(
-        "Microphone permission is blocked.",
-      ),
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
     );
 
-    expect(container.querySelector(".chat-talk-input-picker__warning")?.getAttribute("role")).toBe(
-      "alert",
+    expect(container.querySelector(".chat-talk-input-picker__warning")?.textContent?.trim()).toBe(
+      t("chat.composer.microphoneBusy"),
     );
-    expect(container.querySelector(".chat-talk-input-picker__note")?.textContent).toContain(
-      t("chat.composer.noMicrophones"),
-    );
+    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
     expect(container.querySelector(".chat-talk-input-picker__hint")?.textContent).toContain(
       t("chat.composer.microphoneAppliesNextSession"),
     );
@@ -386,6 +429,92 @@ describe("renderChatComposer controls", () => {
     );
     await dropdown?.updateComplete;
     expect(dropdown?.open).toBe(false);
+  });
+
+  it("marks the selected input with a single trailing check", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [{ deviceId: "headset", label: "USB headset" }],
+      issue: null,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    const items = await vi.waitFor(() => {
+      const rows = [...container.querySelectorAll(".chat-talk-input-picker__item")];
+      expect(rows).toHaveLength(2);
+      return rows;
+    });
+
+    // type="checkbox" would make wa-dropdown-item paint its own leading check
+    // and toggle it on click, so the row would show two disagreeing marks.
+    expect(items.map((item) => item.getAttribute("type"))).toEqual(["normal", "normal"]);
+    expect(items.map((item) => item.querySelectorAll("svg").length)).toEqual([1, 0]);
+    expect(items[0]?.querySelector(".chat-talk-input-picker__check")?.getAttribute("slot")).toBe(
+      "details",
+    );
+    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+  });
+
+  it("follows devicechange while open and stops listening once closed", async () => {
+    const mediaDevices = new EventTarget();
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-talk-input-picker__empty")?.textContent?.trim()).toBe(
+        t("chat.composer.microphoneNoneFound"),
+      ),
+    );
+
+    // The empty state promises the list keeps up, so plugging in has to land
+    // without reopening the popover.
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [{ deviceId: "usb", label: "USB Audio Interface" }],
+      issue: null,
+    });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
+    );
+    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
+
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0),
+    );
+
+    dropdown?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await dropdown?.updateComplete;
+    const callsWhileClosed = discoverRealtimeTalkInputsMock.mock.calls.length;
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await Promise.resolve();
+    expect(discoverRealtimeTalkInputsMock.mock.calls.length).toBe(callsWhileClosed);
   });
 
   it("offers camera only inside a video-capable active talk session", () => {
@@ -716,6 +845,7 @@ describe("renderChatComposer status", () => {
       gatewayQuestionPrompts: [],
       composerControls: html`<button type="button">Model</button>`,
       onRequestUpdate: vi.fn(),
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
     composerProps.onDraftChange = (next) => {
       composerProps.draft = next;
@@ -740,6 +870,7 @@ describe("renderChatComposer status", () => {
     await panel.updateComplete;
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
     expect(composerProps.draft).toBe("Keep this draft while composing");
 

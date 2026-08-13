@@ -514,6 +514,62 @@ describe("Code Mode bridge settlement and cancellation", () => {
     });
   });
 
+  it("returns an actionable bounded result when a nested tool result exceeds the output budget", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const oversizedSearch = pluginToolWithExecute(
+      "fake_oversized_search",
+      "Oversized search result",
+      async () =>
+        jsonResult({
+          matches: [
+            { path: "src/first.ts", line: 1, text: "first useful match" },
+            { path: "src/large.ts", line: 2, text: "🦞".repeat(2_048) },
+          ],
+        }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, oversizedSearch],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-oversized-search",
+        {
+          code: 'return await tools.callValue("fake_oversized_search", {});',
+        },
+      ),
+    );
+
+    expect(details.status).toBe("completed");
+    expect(oversizedSearch.execute).toHaveBeenCalledOnce();
+    expect(details.value).toMatchObject({
+      truncated: true,
+      omittedBytes: expect.any(Number),
+      guidance: expect.stringContaining("rerun with narrower args"),
+      prefix: expect.stringContaining("first useful match"),
+    });
+    const outputBytes = Buffer.byteLength(JSON.stringify(details.output), "utf8");
+    const valueBytes = Buffer.byteLength(JSON.stringify(details.value), "utf8");
+    expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);
+  });
+
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {
     const catalogRef = createToolSearchCatalogRef();
     // Long timeout so a missing abort short-circuit would block the whole test.

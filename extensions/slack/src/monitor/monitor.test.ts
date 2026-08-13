@@ -162,6 +162,93 @@ describe("resolveSlackChannelConfig", () => {
     });
   });
 
+  it("prefers a workspace-qualified channel over the same channel ID in another workspace", () => {
+    const channels = {
+      "team:T11111111:channel:C01234567": { enabled: true, requireMention: false },
+      "team:T22222222:channel:C01234567": { enabled: false, requireMention: true },
+    };
+
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: true,
+        requireMention: false,
+        matchKey: "team:T11111111:channel:C01234567",
+        matchSource: "direct",
+      },
+    );
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: false,
+        requireMention: true,
+        matchKey: "team:T22222222:channel:C01234567",
+        matchSource: "direct",
+      },
+    );
+  });
+
+  it("does not match a bare channel ID when workspace scope is required", () => {
+    const channels = { C01234567: { enabled: true, requireMention: false } };
+
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channels,
+      }),
+      { allowed: false, requireMention: true },
+    );
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        allowUnscoped: true,
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: true,
+        requireMention: false,
+        matchKey: "C01234567",
+        matchSource: "direct",
+      },
+    );
+  });
+
+  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
+    const channels = {
+      "team:T11111111:channel:C01234567": {
+        users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
+      },
+      "team:T22222222:channel:C01234567": {
+        users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
+      },
+    };
+
+    expect(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channels,
+      })?.users,
+    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
+    expect(
+      resolveSlackChannelConfig({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channels,
+      })?.users,
+    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
+  });
+
   it("blocks channel-name route matches by default", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",

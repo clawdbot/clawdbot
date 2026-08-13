@@ -111,7 +111,7 @@ export function formatAge(value: number | undefined): string {
   if (!value) {
     return "";
   }
-  return formatDurationCompact(Math.max(0, Date.now() - value), { spaced: true }) ?? "0ms";
+  return formatDurationCompact(Math.max(0, Date.now() - value)) ?? "0ms";
 }
 
 export function canMutate(props: WorkboardProps): boolean {

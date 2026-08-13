@@ -44,7 +44,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
       - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains supported and resolves to the same tier.
     - Adding or reauthenticating OpenAI preserves an existing explicit primary model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade the model.
     - **xAI OAuth**: device-code browser sign-in with no localhost callback required, so it works over SSH/Docker/VPS too (`--auth-choice xai-oauth`).
     - **xAI API key**: prompts for `XAI_API_KEY` (`--auth-choice xai-api-key`).
@@ -96,7 +96,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
+      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, `exec`, and `store` providers for onboarding probe/dashboard bootstrap.
       - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
     - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
@@ -186,7 +186,7 @@ Gateway token SecretRef in non-interactive mode:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \

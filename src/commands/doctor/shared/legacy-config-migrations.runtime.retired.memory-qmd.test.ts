@@ -103,7 +103,8 @@ describe("retired QMD memory config migration", () => {
       "notes",
       "/tmp/shared",
       "/tmp/global",
-      "/tmp/patterned",
+      { path: "/tmp/patterned", pattern: "notes/*.md" },
+      { path: "/tmp/shared", pattern: "**/*.md" },
       "/tmp/search",
     ]);
     expect(result.raw).toHaveProperty("agents.defaults.memory.search.extraPaths", [
@@ -113,17 +114,11 @@ describe("retired QMD memory config migration", () => {
     expect(result.raw).toHaveProperty("agents.entries.research.memory.search.enabled", false);
     expect(result.raw).toHaveProperty("agents.entries.research.memory.search.extraPaths", [
       "/tmp/existing",
-      "/tmp/research",
+      { path: "/tmp/research", pattern: "*.md" },
     ]);
     expect(result.raw).toHaveProperty("agents.list.0.memory.search.extraPaths", ["/tmp/list"]);
     expect(result.changes).toContain(
-      "Migrated 3 external QMD paths from memory.qmd.paths and memory.search.qmd.extraCollections → memory.search.extraPaths.",
-    );
-    expect(result.changes).toContain(
-      "Removed 1 QMD path pattern filter from memory.qmd.paths and memory.search.qmd.extraCollections; builtin memory indexes supported files under the preserved paths.",
-    );
-    expect(result.changes).toContain(
-      "Removed 1 QMD path pattern filter from agents.entries.research.memory.search.qmd.extraCollections; builtin memory indexes supported files under the preserved paths.",
+      "Migrated 4 external QMD paths from memory.qmd.paths and memory.search.qmd.extraCollections → memory.search.extraPaths.",
     );
     expect(result.changes).toContain(
       "Removed retired QMD memory configuration; builtin memory is now the only memory engine.",

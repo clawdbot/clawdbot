@@ -79,6 +79,9 @@ const mocks = vi.hoisted(() => ({
     config: {},
   })),
   handleReset: vi.fn(async () => {}),
+  withSetupMigrationTargetLock: vi.fn(
+    async (_stateDir: string, run: () => Promise<unknown>) => await run(),
+  ),
 }));
 
 vi.mock("./onboard-interactive.js", () => ({
@@ -104,6 +107,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
+}));
+
+vi.mock("../wizard/setup.migration-snapshot.js", () => ({
+  withSetupMigrationTargetLock: mocks.withSetupMigrationTargetLock,
 }));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
@@ -262,13 +269,16 @@ describe("setupWizardCommand", () => {
 
     await setupWizardCommand({ reset: true, nonInteractive: true, acceptRisk: true }, runtime);
 
+    expect(mocks.withSetupMigrationTargetLock).toHaveBeenCalledOnce();
     expect(mocks.handleReset).toHaveBeenCalledOnce();
     expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+    const lockOrder = mocks.withSetupMigrationTargetLock.mock.invocationCallOrder[0];
     const resetOrder = mocks.handleReset.mock.invocationCallOrder[0];
     const setupOrder = mocks.runNonInteractiveSetup.mock.invocationCallOrder[0];
-    if (resetOrder === undefined || setupOrder === undefined) {
-      throw new Error("expected reset and non-interactive setup calls");
+    if (lockOrder === undefined || resetOrder === undefined || setupOrder === undefined) {
+      throw new Error("expected lock, reset, and non-interactive setup calls");
     }
+    expect(lockOrder).toBeLessThan(resetOrder);
     expect(resetOrder).toBeLessThan(setupOrder);
   });
 

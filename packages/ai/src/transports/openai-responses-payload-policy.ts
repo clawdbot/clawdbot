@@ -4,7 +4,10 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
  * Classifies endpoint capabilities and applies store, prompt-cache,
  * server-compaction, service-tier, and reasoning payload rules.
  */
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -85,11 +88,6 @@ const MOONSHOT_NATIVE_BASE_URLS = new Set([
   "https://api.moonshot.ai/v1",
   "https://api.moonshot.cn/v1",
 ]);
-
-function normalizeLowercaseString(value: unknown): string | undefined {
-  const stringValue = readStringValue(value)?.trim().toLowerCase();
-  return stringValue ? stringValue : undefined;
-}
 
 function normalizeComparableBaseUrl(value: unknown): string | undefined {
   const trimmed = readStringValue(value)?.trim();
@@ -228,8 +226,8 @@ function readCompatPayloadBoolean(
 function resolveOpenAIResponsesPayloadCapabilities(
   model: OpenAIResponsesPayloadModel,
 ): OpenAIResponsesPayloadCapabilities {
-  const provider = normalizeLowercaseString(model.provider);
-  const api = normalizeLowercaseString(model.api);
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const api = normalizeOptionalLowercaseString(model.api);
   const isOpenAIProvider = provider === "openai";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
@@ -359,7 +357,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = isOpenAIResponsesApi(normalizeLowercaseString(model.api));
+  const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
     (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));

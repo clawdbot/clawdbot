@@ -311,6 +311,10 @@ export interface Usage {
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
+/** Stable error codes for provider outcomes that cannot be replayed safely. */
+export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
+export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";

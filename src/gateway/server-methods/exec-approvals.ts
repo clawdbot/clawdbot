@@ -28,7 +28,7 @@ import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
-  safeParseJson,
+  parseGatewayPayload,
 } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -259,7 +259,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         isMacAppNode(nodeSession) ? { includeResolvedDefaults: true } : {},
       // Node invocations can return structured payloads or JSON strings
       // depending on the transport; normalize before echoing the RPC response.
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      readPayload: (res) => (res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload),
       validatePayload: validateExecApprovalsNodeSnapshot,
     });
   },
@@ -277,7 +277,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         "native" in parsedParams
           ? { ...parsedParams.native, baseHash: parsedParams.baseHash }
           : { file: parsedParams.file, baseHash: parsedParams.baseHash },
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      readPayload: (res) => (res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload),
     });
   },
 };

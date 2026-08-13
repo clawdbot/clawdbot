@@ -7,7 +7,7 @@ import { formatError } from "./server-utils.js";
 
 type TalkConnectionCleanupKind = "browser-control" | "realtime-relay" | "transcription-relay";
 
-export type UnifiedTalkSessionRecord =
+type UnifiedTalkSessionRecord =
   | {
       kind: "realtime-relay";
       connId: string;

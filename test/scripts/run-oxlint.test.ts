@@ -16,6 +16,7 @@ import {
   resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
+  shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mts";
 import {
@@ -192,6 +193,27 @@ describe("run-oxlint", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--type-aware"])).toBe(true);
+    expect(
+      shouldPrepareExtensionPackageBoundaryArtifacts([
+        "--tsconfig",
+        "config/tsconfig/oxlint.extensions.json",
+        "extensions/telegram/src/index.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      shouldPrepareExtensionPackageBoundaryArtifacts([
+        "--tsconfig=config/tsconfig/oxlint.core.json",
+        "--tsconfig=config/tsconfig/oxlint.extensions.json",
+      ]),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/index.ts"],
+    ["--tsconfig=config/tsconfig/oxlint.core.json", "src/index.ts"],
+    ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
+  ])("skips extension artifacts for an exact source-backed config: %s", (...args) => {
+    expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
   });
 
   it("skips artifact preparation for metadata-only oxlint commands", () => {
@@ -199,6 +221,15 @@ describe("run-oxlint", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--version"])).toBe(false);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--print-config"])).toBe(false);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--rules"])).toBe(false);
+  });
+
+  it("prepares shard artifacts only when a selected config consumes them", () => {
+    const core = oxlintShard("core", "core", "src");
+    const scripts = oxlintShard("scripts", "scripts", "scripts");
+    const extensions = oxlintShard("extensions", "extensions", "extensions");
+
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, scripts])).toBe(false);
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, extensions])).toBe(true);
   });
 
   it("does not run package-boundary artifact prep twice in pnpm check", () => {

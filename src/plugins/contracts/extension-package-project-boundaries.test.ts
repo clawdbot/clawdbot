@@ -57,6 +57,7 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/error-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
@@ -226,12 +227,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/acp-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./channel-streaming"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-streaming.d.ts",
-    );
     expect(packageJson.exports?.["./cli-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/cli-runtime.d.ts",
     );
@@ -290,10 +285,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );

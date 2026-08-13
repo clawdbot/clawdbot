@@ -56,7 +56,9 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -464,7 +466,11 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -610,7 +616,12 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -1392,5 +1403,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

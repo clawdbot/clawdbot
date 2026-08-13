@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -92,46 +93,58 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedAgent({
-      sessionId,
-      sessionKey,
-      sessionManager: SessionManager.inMemory(workspaceDir),
+    const runId = `slug-gen-${Date.now()}`;
+    const preparedRunAdmission = prepareSystemAgentRunAdmission(
+      params.cfg,
+      runId,
       agentId,
-      workspaceDir,
-      agentDir,
-      config: params.cfg,
-      prompt,
-      model: params.model,
-      timeoutMs,
-      runId: `slug-gen-${Date.now()}`,
-      disableTrajectory: true,
-      cleanupBundleMcpOnRunEnd: true,
-      // Internal helper run: route failures lane-local so an upstream 400/billing
-      // here cannot poison the shared profile (#71709).
-      authProfileFailurePolicy: "local",
-    });
+      "hooks.slug-generator",
+    );
+    try {
+      const result = await runEmbeddedAgent({
+        preparedRunAdmission,
+        sessionId,
+        sessionKey,
+        sessionManager: SessionManager.inMemory(workspaceDir),
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: params.cfg,
+        prompt,
+        model: params.model,
+        timeoutMs,
+        runId,
+        disableTrajectory: true,
+        cleanupBundleMcpOnRunEnd: true,
+        // Internal helper run: route failures lane-local so an upstream 400/billing
+        // here cannot poison the shared profile (#71709).
+        authProfileFailurePolicy: "local",
+      });
 
-    // Extract text from payloads
-    if (result.payloads && result.payloads.length > 0) {
-      const payload = result.payloads[0];
-      const text = payload?.text;
-      if (text) {
-        if (isErrorSlugPayload(payload)) {
-          return null;
+      // Extract text from payloads
+      if (result.payloads && result.payloads.length > 0) {
+        const payload = result.payloads[0];
+        const text = payload?.text;
+        if (text) {
+          if (isErrorSlugPayload(payload)) {
+            return null;
+          }
+          // Clean up the response - extract just the slug
+          const slug = normalizeLowercaseStringOrEmpty(text)
+            .replace(/[^a-z0-9-]/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 30)
+            .replace(/^-+|-+$/g, ""); // Max 30 chars
+
+          return slug || null;
         }
-        // Clean up the response - extract just the slug
-        const slug = normalizeLowercaseStringOrEmpty(text)
-          .replace(/[^a-z0-9-]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 30)
-          .replace(/^-+|-+$/g, ""); // Max 30 chars
-
-        return slug || null;
       }
-    }
 
-    return null;
+      return null;
+    } finally {
+      preparedRunAdmission.close();
+    }
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     log.error(`Failed to generate slug: ${message}`);

@@ -4,7 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+
+function draftRouteKey(requestedAgentId: string, catalogId: string): string {
+  return JSON.stringify([requestedAgentId, catalogId]);
+}
 
 /**
  * Which draft a new-session route has open. This keys on the requested agent,
@@ -13,7 +17,12 @@ import type { NewSessionRouteData } from "./location.ts";
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return JSON.stringify([data?.requestedAgentId ?? "", data?.catalogId ?? ""]);
+  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "");
+}
+
+export function routeKeyFromSearch(search: string): string {
+  const location = newSessionLocationFromSearch(search);
+  return draftRouteKey(location.agentId, location.catalogId);
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {

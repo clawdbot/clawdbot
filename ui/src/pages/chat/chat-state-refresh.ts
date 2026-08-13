@@ -48,6 +48,7 @@ type ChatMetadataRequest = {
 
 type ChatMetadataRefreshOptions = {
   preserveModelCatalogOnFallback?: boolean;
+  refreshModelCatalog?: boolean;
   requestVersion?: number;
 };
 
@@ -175,8 +176,17 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   );
 }
 
-async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
-  const models = await loadModels(request.client);
+async function refreshCompatibilityModelCatalog(
+  request: ChatMetadataRequest,
+  opts?: { refresh?: boolean },
+) {
+  const agentId = canUseCompatibilityModelCatalog(request.host, request.agentId)
+    ? undefined
+    : request.agentId?.trim() || undefined;
+  const models = await loadModels(request.client, {
+    ...(agentId ? { agentId } : {}),
+    ...(opts?.refresh ? { refresh: true } : {}),
+  });
   if (ownsChatMetadataRequest(request)) {
     request.host.chatModelCatalog = models;
   }
@@ -212,13 +222,10 @@ async function refreshMissingChatMetadata(
   const modelsRefresh =
     applied.models || preserveModels
       ? Promise.resolve()
-      : canUseCompatibilityModelCatalog(request.host, request.agentId)
-        ? refreshCompatibilityModelCatalog(request)
-        : Promise.resolve().then(() => {
-            if (ownsChatMetadataRequest(request)) {
-              request.host.chatModelCatalog = [];
-            }
-          });
+      : refreshCompatibilityModelCatalog(
+          request,
+          opts?.refreshModelCatalog ? { refresh: true } : undefined,
+        );
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
 }
 
@@ -273,7 +280,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
   try {
-    const result = await loadModelAuthStatus(client, opts);
+    const result = await loadModelAuthStatus(client, {
+      ...opts,
+      agentId: resolveChatAgentId(host),
+    });
     if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
@@ -319,7 +329,11 @@ async function refreshChat(
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
-      archivedFilter: host.sessionsArchivedFilter,
+      // The routed chat remains visible after archive even though the active
+      // roster excludes it. Keep its descriptor in shared session state until
+      // navigation changes; otherwise the pane briefly falls back to the raw
+      // key while the sidebar lineage reload catches up.
+      archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
     const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
     if (reconciled) {
@@ -431,11 +445,11 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
           return;
         }
         rememberChatMetadata(client, agentId, metadata);
-        const applied = applyChatMetadataResult(host, client, agentId, metadata);
+        // Startup metadata stays on the published static catalog so opening chat never waits on
+        // provider discovery. The explicit models.list read below owns the live picker inventory.
+        const applied = applyChatMetadataResult(host, client, agentId, metadata, { models: false });
         if (!applied.models || !applied.commands) {
-          // chat.startup owns the first metadata load. Fill only omitted fields here;
-          // a parallel chat.metadata request would repeat the same catalog discovery.
-          await refreshMissingChatMetadata(request, applied);
+          await refreshMissingChatMetadata(request, applied, { refreshModelCatalog: true });
         }
       } finally {
         if (ownsChatMetadataRequest(request)) {

@@ -35,6 +35,7 @@ function createCooldownStore(): PluginStateSyncKeyedStore<number> {
 
 function createPrepared(params: {
   userId: string;
+  teamId?: string;
   channelId?: string;
   channelType?: "im" | "mpim" | "channel" | "group";
   threadId?: string;
@@ -50,6 +51,7 @@ function createPrepared(params: {
       channel: channelId,
       channel_type: channelType,
     },
+    ...(params.teamId ? { eventScope: { teamId: params.teamId, client: {} as never } } : {}),
     route: {
       agentId: "main",
       accountId: "default",
@@ -182,6 +184,60 @@ describe("Slack presence monitor", () => {
         deliveryContext: expect.objectContaining({
           to: "channel:CNEW",
           threadId: "2.000",
+        }),
+      }),
+    );
+  });
+
+  it("isolates Enterprise presence clients, state, cooldowns, and delivery by workspace", async () => {
+    const teamOnePresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "active" });
+    const teamTwoPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "active" });
+    const resolveClient = vi.fn((teamId?: string) => {
+      if (teamId === "T11111111") {
+        return { getPresence: teamOnePresence } as never;
+      }
+      if (teamId === "T22222222") {
+        return { getPresence: teamTwoPresence } as never;
+      }
+      throw new Error(`unexpected team ${teamId}`);
+    });
+    const enqueue = vi.fn(() => true);
+    const monitor = createSlackPresenceMonitor({
+      accountId: "org",
+      accountConfig: { mode: "auto" },
+      resolveClient,
+      cooldownStore: createCooldownStore(),
+      enqueue,
+      wake: vi.fn(),
+    });
+    monitor.observe(createPrepared({ userId: "U12345678", teamId: "T11111111" }));
+    monitor.observe(createPrepared({ userId: "U12345678", teamId: "T22222222" }));
+
+    await monitor.pollOnce();
+    await monitor.pollOnce();
+
+    expect(resolveClient).toHaveBeenCalledWith("T11111111");
+    expect(resolveClient).toHaveBeenCalledWith("T22222222");
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.stringContaining('team_id="T11111111"'),
+      expect.objectContaining({
+        deliveryContext: expect.objectContaining({
+          to: "team:T11111111:user:U12345678",
+        }),
+      }),
+    );
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.stringContaining('team_id="T22222222"'),
+      expect.objectContaining({
+        deliveryContext: expect.objectContaining({
+          to: "team:T22222222:user:U12345678",
         }),
       }),
     );

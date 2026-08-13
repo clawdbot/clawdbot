@@ -14,8 +14,6 @@ const mocks = vi.hoisted(() => ({
   sessionsArchiveCommand: vi.fn(),
   sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
-  commitmentsListCommand: vi.fn(),
-  commitmentsDismissCommand: vi.fn(),
   tasksListCommand: vi.fn(),
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
@@ -42,8 +40,6 @@ const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
 const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
-const commitmentsListCommand = mocks.commitmentsListCommand;
-const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
 const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
@@ -110,11 +106,6 @@ vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
 
-vi.mock("../../commands/commitments.js", () => ({
-  commitmentsListCommand: mocks.commitmentsListCommand,
-  commitmentsDismissCommand: mocks.commitmentsDismissCommand,
-}));
-
 vi.mock("../../commands/tasks.js", () => ({
   tasksListCommand: mocks.tasksListCommand,
   tasksAuditCommand: mocks.tasksAuditCommand,
@@ -157,8 +148,6 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsArchiveCommand.mockResolvedValue(undefined);
     sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
-    commitmentsListCommand.mockResolvedValue(undefined);
-    commitmentsDismissCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
@@ -685,25 +674,6 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     expectCommandOptions(tasksCancelCommand, {
       lookup: "run-123",
-    });
-  });
-
-  it("runs commitments list with filters", async () => {
-    await runCli(["commitments", "--json", "--agent", "work", "--status", "snoozed"]);
-
-    expectCommandOptions(commitmentsListCommand, {
-      json: true,
-      agent: "work",
-      status: "snoozed",
-      all: false,
-    });
-  });
-
-  it("runs commitments dismiss with id forwarding", async () => {
-    await runCli(["commitments", "dismiss", "cm_1", "cm_2"]);
-
-    expectCommandOptions(commitmentsDismissCommand, {
-      ids: ["cm_1", "cm_2"],
     });
   });
 

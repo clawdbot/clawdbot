@@ -10,6 +10,7 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mts";
+import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
@@ -283,23 +284,28 @@ export async function main(
     const selectedShards = filterOxlintShards(shards, shardArgs.only);
 
     ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
-    const prepareResult = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-      ],
-      {
-        stdio: "inherit",
-        env,
-      },
-    );
+    const prepareResult = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
+      selectedShards,
+      shardArgs.oxlintArgs,
+    )
+      ? spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
+          ],
+          {
+            stdio: "inherit",
+            env,
+          },
+        )
+      : undefined;
 
-    if (prepareResult.error) {
+    if (prepareResult?.error) {
       throw prepareResult.error;
     }
-    if ((prepareResult.status ?? 1) !== 0) {
+    if (prepareResult && (prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
       const shardConcurrency = resolveOxlintShardConcurrency({
@@ -395,6 +401,15 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
 
   return shards.filter((shard) =>
     selectors.some((selector) => matchesShardSelector(shard, selector)),
+  );
+}
+
+export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(
+  shards: readonly OxlintShard[],
+  extraArgs: readonly string[] = [],
+) {
+  return shards.some((shard) =>
+    shouldPrepareExtensionPackageBoundaryArtifacts([...shard.args, ...extraArgs]),
   );
 }
 

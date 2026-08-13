@@ -329,6 +329,7 @@ jobs:
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      trusted_ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
       allow_failures: ${{ inputs.allow_failures }}

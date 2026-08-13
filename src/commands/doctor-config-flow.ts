@@ -1,10 +1,11 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { readAgentRosterProperty, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +13,7 @@ import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
+  noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
@@ -29,7 +31,6 @@ import {
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
-import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -168,14 +169,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pluginMetadataSnapshotState.current = undefined;
     pluginMetadataSnapshotScope.invalidate();
   };
-  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
-    runWithPluginMetadataSnapshot(
+  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
+    const soleAgentId = tryResolveSoleAgentId(config);
+    return runWithPluginMetadataSnapshot(
       {
         config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
       },
       run,
     );
+  };
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
     candidate: structuredClone(baseCfg),
@@ -209,6 +212,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
+  const rawRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
+    .filter((source) => source !== undefined)
+    .map((source) => migratePersistedImplicitMainRoster(source));
+  const rosterMigrations = rawRosterMigrations.filter((migration) => migration.changed);
+  const rosterMigrationNeeded = rosterMigrations.length > 0;
+  const legacyDefaultAgentId = rawRosterMigrations
+    .map((migration) => migration.retainedLegacyDefaultAgentId)
+    .find((agentId) => agentId !== undefined);
   const legacyStep = runWithCurrentPluginMetadata(state.candidate, () =>
     applyLegacyCompatibilityStep({
       snapshot,
@@ -218,27 +229,42 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }),
   );
   state = legacyStep.state;
+  if (legacyDefaultAgentId) {
+    retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
+    retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
+  }
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
-  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
-    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
-  );
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
-    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
+    const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
+    const stampsExplicitOwnership =
+      legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
-        ...state.candidate,
+        ...migrated,
         agents: {
           ...candidateAgents,
+          ...(stampsExplicitOwnership ? { ownership: "explicit" as const } : {}),
           entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
         },
       },
-      changes: ["Prepared agents.entries with exactly one explicit default agent for persistence."],
+      changes: [
+        ...new Set(
+          rosterMigrations
+            .flatMap((migration) => migration.diagnostics)
+            .concat(
+              "Prepared the canonical agent roster without retired default markers for persistence.",
+              ...(stampsExplicitOwnership
+                ? ["Stamped the multi-agent roster for explicit per-surface ownership."]
+                : []),
+            ),
+        ),
+      ],
     };
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
@@ -246,10 +272,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     // Read-time normalization already exposes this roster in the runtime shape.
     // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
     explicitSetPaths.push(["agents", "entries"]);
+    if (stampsExplicitOwnership) {
+      explicitSetPaths.push(["agents", "ownership"]);
+    }
   }
-  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
-    fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
-  });
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(state.candidate);
@@ -425,6 +451,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       applyConfigMutation(staleCleanup, {
         fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
         sanitize: true,
+        emitWarnings: true,
       });
     }
   }
@@ -546,6 +573,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
+  noteMcpOriginWarning(cfg);
 
   return {
     cfg,

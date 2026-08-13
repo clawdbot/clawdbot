@@ -6,7 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
-import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreCredentialMutationToken,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
@@ -14,9 +18,7 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
-  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
@@ -681,6 +683,7 @@ describe("secrets apply", () => {
     const secondStorePath = resolveAuthProfileDatabasePath(secondAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
+        ownership: "explicit",
         entries: {
           first: { agentDir: firstAgentDir },
           second: { agentDir: secondAgentDir },
@@ -755,6 +758,7 @@ describe("secrets apply", () => {
       registerResolvedAgentDir({ agentId: "second", agentDir: secondAgentDir });
       await writeJsonFile(fixture.configPath, {
         agents: {
+          ownership: "explicit",
           entries: {
             first: { agentDir: firstAgentDir },
             second: { agentDir: secondAgentDir },

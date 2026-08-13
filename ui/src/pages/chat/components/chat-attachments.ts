@@ -475,14 +475,6 @@ export function renderChatAttachmentMenuTrigger(disabled: boolean | undefined) {
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${t("chat.composer.addAttachment")}
-      @pointerdown=${(event: PointerEvent) => {
-        const composer = (event.currentTarget as HTMLElement)
-          .closest(".agent-chat__composer-shell")
-          ?.querySelector("textarea");
-        if (document.activeElement === composer) {
-          event.preventDefault();
-        }
-      }}
     >
       ${icons.plus}
     </button>

@@ -151,38 +151,74 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
     };
 
+    const context = buildRequestContext();
+    const agentRuntimeIdentity = client.internal?.agentRuntimeIdentity;
+    if (
+      agentRuntimeIdentity &&
+      context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) !== true
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      );
+      setCloseCause("agent-runtime-authority-closed", { method: req.method });
+      close(4001, "agent runtime authority closed");
+      return;
+    }
+    const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
+      if (
+        agentRuntimeIdentity &&
+        context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) !== true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+        );
+        setCloseCause("agent-runtime-authority-closed", { method: req.method });
+        close(4001, "agent runtime authority closed");
+        return;
+      }
+      respond(ok, payload, error, meta);
+    };
+
     const executeRequest = async () => {
-      // One-shot CLI clients cancel by closing their authenticated socket;
-      // leave long-lived SDK/UI invocations independent of connection teardown.
-      const nodeInvocationController =
-        req.method === "node.invoke" &&
-        client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
-        client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI
-          ? new AbortController()
-          : undefined;
-      const cancelNodeInvocation = () => nodeInvocationController?.abort();
-      if (nodeInvocationController) {
-        client.socket.once("close", cancelNodeInvocation);
+      // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
+      // without their requester there is no safe recipient for a late answer.
+      const cancelOnDisconnect =
+        req.method === "sessions.companion.ask" ||
+        (req.method === "node.invoke" &&
+          client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
+          client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
+      const requestController = cancelOnDisconnect ? new AbortController() : undefined;
+      const cancelRequest = () => requestController?.abort();
+      if (requestController) {
+        client.socket.once("close", cancelRequest);
       }
       try {
         const { handleGatewayRequest } = await loadGatewayServerMethods();
         await handleGatewayRequest({
           req,
-          respond,
+          respond: respondWithAuthority,
           client,
           isWebchatConnect: params.isWebchatConnect,
           extraHandlers,
           methodRegistry: getMethodRegistry?.(),
-          context: buildRequestContext(),
-          ...(nodeInvocationController ? { signal: nodeInvocationController.signal } : {}),
+          context,
+          ...(requestController ? { signal: requestController.signal } : {}),
         });
       } catch (err) {
         // Failure diagnostics and responses belong to the same request trace as the handler.
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+        respondWithAuthority(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+        );
       } finally {
-        if (nodeInvocationController) {
-          client.socket.off("close", cancelNodeInvocation);
+        if (requestController) {
+          client.socket.off("close", cancelRequest);
         }
       }
     };

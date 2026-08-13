@@ -387,7 +387,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  it("answers pending user input without steering", async () => {
+  it("answers pending user input only for an inbound user message", async () => {
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
     const answerPendingUserInput = vi.fn(() => true);
     const queue = createQueue(request, {
@@ -398,9 +398,59 @@ describe("Codex app-server steering queue", () => {
     });
     const onQueueAccepted = vi.fn();
 
-    await queue.queue("answer locally", { debounceMs: 0, onQueueAccepted });
+    await queue.queue("answer locally", {
+      debounceMs: 0,
+      isInboundUserMessage: true,
+      onQueueAccepted,
+    });
     expect(answerPendingUserInput).toHaveBeenCalledWith("answer locally");
     expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("steers internal completion messages without claiming pending user input", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const claimPendingUserInput = vi.fn(() => ({
+      answer: vi.fn(() => true),
+      cancel: vi.fn(() => true),
+    }));
+    const queue = createQueue(request, { claimPendingUserInput });
+
+    const queued = queue.queue("subagent completed", { debounceMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(claimPendingUserInput).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "turn/steer",
+      expect.objectContaining({
+        input: [{ type: "text", text: "subagent completed", text_elements: [] }],
+      }),
+      steerRequestOptions,
+    );
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+    await queued;
+  });
+
+  it("rejects sealed inbound admission before claiming pending user input", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const claimPendingUserInput = vi.fn(() => ({
+      answer: vi.fn(() => true),
+      cancel: vi.fn(() => true),
+    }));
+    const queue = createQueue(request, { claimPendingUserInput });
+    const onQueueAccepted = vi.fn();
+
+    queue.sealAdmission();
+    await expect(
+      queue.queue("too late", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        onQueueAccepted,
+      }),
+    ).rejects.toThrow("queue admission sealed");
+
+    expect(claimPendingUserInput).not.toHaveBeenCalled();
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -416,6 +466,7 @@ describe("Codex app-server steering queue", () => {
     });
 
     const queued = queue.queue("compare these", {
+      isInboundUserMessage: true,
       images: [
         { type: "image", data: PNG_1X1, mimeType: "image/png" },
         { type: "image", data: PNG_1X1, mimeType: "image/png" },
@@ -470,6 +521,7 @@ describe("Codex app-server steering queue", () => {
     });
 
     const imageQueued = queue.queue("image reply", {
+      isInboundUserMessage: true,
       images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -509,6 +561,7 @@ describe("Codex app-server steering queue", () => {
     });
 
     const queued = queue.queue("compare this", {
+      isInboundUserMessage: true,
       images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
     });
     const rejected = expect(queued).rejects.toThrow("cannot steer this turn");

@@ -33,6 +33,10 @@ import {
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../local-user-ingress.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -50,6 +54,7 @@ import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import type {
@@ -115,7 +120,7 @@ export async function attachAuthenticatedGatewayConnect(
     maxProtocol,
     usesLegacyNodeProtocol,
     role,
-    scopes,
+    scopes: deviceScopes,
     device,
     devicePublicKey,
     deviceToken,
@@ -186,6 +191,23 @@ export async function attachAuthenticatedGatewayConnect(
     authResult.tailscaleIdentity &&
     classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
   );
+  // Device pairing owns persistent access. Verified identity grants only shape
+  // this connection, after device-less self-declared scopes have been cleared.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: authenticatedUserId,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    upgradeReq: context.handler.upgradeReq,
+  });
+  const scopes = effectiveScopes.scopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  if (authenticatedUserId && effectiveScopes.addedIdentityScopes.length > 0) {
+    logGateway.warn(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${effectiveScopes.addedIdentityScopes.join(",")} conn=${connId}`,
+    );
+  }
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -299,6 +321,20 @@ export async function attachAuthenticatedGatewayConnect(
             : {}),
         }
       : undefined;
+  const localUserIngress = prepareGatewayLocalUserIngress({
+    authMethod,
+    authenticatedUserExpected: Boolean(authenticatedUserId),
+    ...(authenticatedUserProfile
+      ? {
+          profile: {
+            profileId: authenticatedUserProfile.profileId,
+            displayName: authenticatedUserProfile.displayName,
+          },
+        }
+      : {}),
+    ...(device?.id ? { pairedDeviceId: device.id } : {}),
+    isLocalClient,
+  });
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
@@ -334,6 +370,7 @@ export async function attachAuthenticatedGatewayConnect(
       ? { pluginNodeCapabilitySurfaces }
       : {}),
   };
+  attachGatewayLocalUserIngress(nextClient, localUserIngress);
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,
@@ -557,7 +594,7 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  await sendGatewayHello(context, state, pluginSurfaceUrls);
+  await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
   const tailscaleProfileId = authenticatedUserProfile?.profileId;

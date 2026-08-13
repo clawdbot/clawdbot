@@ -100,6 +100,7 @@ export async function tryDispatchAcpReplyHook(
     originatingChatType: event.originatingChatType,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
     shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
+    shouldSendFullToolDetails: event.shouldSendFullToolDetails,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
     recordProcessed: ctx.recordProcessed,

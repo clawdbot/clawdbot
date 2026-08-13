@@ -47,6 +47,17 @@ class BackgroundTaskTest {
   }
 
   @Test
+  fun runningTaskPrefersLiveActivityOverProgressSummary() {
+    val task =
+      parseBackgroundTasks(
+        json,
+        """{"tasks":[{"id":"task-activity","status":"running","runtime":"subagent","lastActivity":"Editing timeline rows","progressSummary":"Initial milestone"}]}""",
+      ).single()
+
+    assertEquals("Editing timeline rows", task.output)
+  }
+
+  @Test
   fun listsActiveAndRecentTasksWithoutRequestingPrompts() =
     runTest {
       val calls = mutableListOf<Pair<String, String?>>()

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -18,12 +19,11 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { formatByteSize } from "../../../lib/format.ts";
@@ -38,7 +38,6 @@ import {
   resolveAgentIdFromSessionKey,
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -65,10 +64,8 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
-  onToggleCustodian?: () => void;
-  /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
+  /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
-  diffNotGit?: boolean;
 };
 
 type SessionWorkspaceState = {
@@ -375,12 +372,25 @@ function loadWorkspace(
         const reload = current.pendingReload;
         current.pendingReload = false;
         if (reload) {
-          loadWorkspace(state, current, true);
+          loadWorkspace(state, current);
         }
       }
       requestUpdate(state);
     }
   })();
+}
+
+/** Refresh workspace facts after a run, which may have created a git checkout. */
+export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = state.sessionWorkspaceState;
+  if (!workspace || workspace.sessionKey !== state.sessionKey) {
+    return;
+  }
+  if (workspace.loading) {
+    workspace.pendingReload = true;
+  } else {
+    loadWorkspace(state, workspace);
+  }
 }
 
 function beginOpenRequest(
@@ -755,6 +765,11 @@ export function createSessionWorkspaceProps(
   ) {
     loadWorkspace(state, workspace);
   }
+  const canOpenDiff =
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    workspace.list?.sessionKey === state.sessionKey &&
+    workspace.list.gitCheckout !== false;
   return {
     collapsed: workspace.collapsed,
     sessionKey: state.sessionKey,
@@ -811,32 +826,52 @@ export function createSessionWorkspaceProps(
           window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
-    onToggleCustodian:
-      state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
-        ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
-        : undefined,
-    diffNotGit: workspace.list?.gitCheckout === false,
-    onOpenDiff:
-      isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
-        ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
-        : undefined,
+    onOpenDiff: canOpenDiff
+      ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
+      : undefined,
   };
 }
 
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
 function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
   const sessionKey = state.sessionKey;
+  const canLoadFileText =
+    isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   return {
     kind: "session-diff",
-    load: async () => {
+    load: async (scope) => {
       if (!state.client) {
         throw new Error(t("chat.sessionDiff.disconnected"));
       }
       return await state.client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...scopedAgentParamsForSession(state, sessionKey),
+        ...scope,
       });
     },
+    loadFileText: canLoadFileText
+      ? async (path) => {
+          try {
+            const result = await state.sessions.getFile(sessionKey, path, {
+              agentId: scopedAgentParamsForSession(state, sessionKey).agentId,
+            });
+            const file = result?.file;
+            if (
+              !file ||
+              (file.previewKind !== undefined && file.previewKind !== "text") ||
+              (file.contentEncoding !== undefined && file.contentEncoding !== "utf8") ||
+              typeof file.content !== "string"
+            ) {
+              return null;
+            }
+            return file.content;
+          } catch {
+            return null;
+          }
+        }
+      : undefined,
+    openFile: (path) => openFile(state, getWorkspaceState(state), path),
+    revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
 }
 
@@ -913,8 +948,7 @@ export function renderSessionWorkspaceToggle(
   `;
 }
 
-/** Session diff button shown beside the workspace toggle; hidden when the
- * gateway does not advertise sessions.diff. */
+/** Session diff button shown beside the workspace toggle when available. */
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -922,17 +956,15 @@ export function renderSessionDiffToggle(
     return nothing;
   }
   const label = t("chat.sessionDiff.show");
-  const tooltip = sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : label;
   return html`
-    <openclaw-tooltip .content=${tooltip}>
+    <openclaw-tooltip .content=${label}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
-        ?disabled=${sessionWorkspace.diffNotGit === true}
         @click=${sessionWorkspace.onOpenDiff}
       >
-        ${icons.gitBranch}
+        ${icons.diff}
       </button>
     </openclaw-tooltip>
   `;
@@ -949,67 +981,6 @@ export function renderSessionWorkspaceRail(
   // Narrow panes always present the rail as a bottom strip; a side column
   // would crush the thread below its readable minimum.
   const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
-  const terminalButton = sessionWorkspace.onToggleTerminal
-    ? html`
-        <openclaw-tooltip .content=${t("terminal.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("terminal.toggle")}
-            @click=${sessionWorkspace.onToggleTerminal}
-          >
-            ${icons.terminal}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const browserButton = sessionWorkspace.onToggleBrowser
-    ? html`
-        <openclaw-tooltip .content=${t("browser.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("browser.toggle")}
-            @click=${sessionWorkspace.onToggleBrowser}
-          >
-            ${icons.globe}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const custodianButton = sessionWorkspace.onToggleCustodian
-    ? html`
-        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("custodian.panel.toggle")}
-            @click=${sessionWorkspace.onToggleCustodian}
-          >
-            ${icons.lobster}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const diffButton = sessionWorkspace.onOpenDiff
-    ? html`
-        <openclaw-tooltip
-          .content=${sessionWorkspace.diffNotGit
-            ? t("chat.sessionDiff.notGit")
-            : t("chat.sessionDiff.show")}
-        >
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal chat-session-diff-toggle"
-            aria-label=${t("chat.sessionDiff.show")}
-            ?disabled=${sessionWorkspace.diffNotGit === true}
-            @click=${sessionWorkspace.onOpenDiff}
-          >
-            ${icons.gitBranch}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
   const readFiles = files.filter((file) => file.kind === "read");
@@ -1299,7 +1270,6 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`

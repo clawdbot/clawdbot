@@ -40,6 +40,7 @@ const buildSessionLookup = (
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  agentId: "main",
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
@@ -98,9 +99,11 @@ const runtimeMocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER:
+    "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  upsertSessionEntry: vi.fn(),
+  upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -148,7 +151,10 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
+vi.mock("./server-node-events.runtime.js", () => ({
+  ...runtimeMocks,
+  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
+}));
 vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
@@ -168,7 +174,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const upsertSessionEntryMock = runtimeMocks.upsertSessionEntry;
+const upsertSessionEntryMock = runtimeMocks.upsertSessionEntryCore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
@@ -342,7 +348,7 @@ describe("node exec events", () => {
     loadOrCreateProcessDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     persistInboundImagesForTranscriptMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
+    persistInboundImagesForTranscriptMock.mockResolvedValue({ entries: [], omission: "none" });
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     updatePairedDevicePresenceMock.mockClear();
     updatePairedDevicePresenceMock.mockResolvedValue(true);
@@ -1636,7 +1642,7 @@ describe("agent request events", () => {
     runtimeMocks.resolveSessionModelRef.mockClear();
     runtimeMocks.resolveGatewayModelSupportsImages.mockClear();
     persistInboundImagesForTranscriptMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
+    persistInboundImagesForTranscriptMock.mockResolvedValue({ entries: [], omission: "none" });
     runtimeMocks.deleteMediaBuffer.mockClear();
     upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
@@ -1776,14 +1782,18 @@ describe("agent request events", () => {
   });
 
   it("cleans persisted transcript media when detached agent admission is revoked", async () => {
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
-      {
-        id: "saved-after-admission",
-        path: "/media/inbound/saved-after-admission.png",
-        size: 5,
-        contentType: "image/png",
-      },
-    ]);
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [
+        {
+          id: "saved-after-admission",
+          path: "/media/inbound/saved-after-admission.png",
+          sourceIndex: 0,
+          imageKind: "inline",
+          fact: { url: "media://inbound/saved-after-admission.png", contentType: "image/png" },
+        },
+      ],
+      omission: "none",
+    });
     let currentnessChecks = 0;
     const isConnectionCurrent = vi.fn(async () => {
       currentnessChecks += 1;
@@ -1960,7 +1970,7 @@ describe("agent request events", () => {
   it("passes ordered durable media metadata to the agent transcript recorder", async () => {
     parseMessageWithAttachmentsMock.mockResolvedValueOnce({
       message: "describe\n[media attached: media://inbound/offloaded]",
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 1 }],
       imageOrder: ["offloaded", "inline"],
       offloadedRefs: [
         {
@@ -1971,23 +1981,29 @@ describe("agent request events", () => {
           mimeType: "image/png",
           label: "offloaded.png",
           sizeBytes: 2_100_000,
+          sourceIndex: 0,
         },
       ],
     });
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
-      {
-        id: "offloaded",
-        path: "/media/inbound/offloaded.png",
-        size: 2_100_000,
-        contentType: "image/png",
-      },
-      {
-        id: "saved-inline",
-        path: "/media/inbound/saved-inline.jpg",
-        size: 5,
-        contentType: "image/jpeg",
-      },
-    ]);
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [
+        {
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          sourceIndex: 0,
+          imageKind: "offloaded",
+          fact: { url: "media://inbound/offloaded", contentType: "image/png" },
+        },
+        {
+          id: "saved-inline",
+          path: "/media/inbound/saved-inline.jpg",
+          sourceIndex: 1,
+          imageKind: "inline",
+          fact: { url: "media://inbound/saved-inline", contentType: "image/jpeg" },
+        },
+      ],
+      omission: "none",
+    });
 
     await handleNodeEvent(buildCtx(), "node-media", {
       event: "agent.request",
@@ -1998,17 +2014,43 @@ describe("agent request events", () => {
       }),
     });
 
-    expect(persistInboundImagesForTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({ imageOrder: ["offloaded", "inline"] }),
-    );
+    expect(persistInboundImagesForTranscriptMock).toHaveBeenCalledOnce();
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectFields(mockCallArg(agentCommandMock), {
       message: "describe\n[media attached: media://inbound/offloaded]",
       transcriptMessage: "describe",
       transcriptMedia: [
-        { path: "/media/inbound/offloaded.png", contentType: "image/png" },
-        { path: "/media/inbound/saved-inline.jpg", contentType: "image/jpeg" },
+        { url: "media://inbound/offloaded", contentType: "image/png" },
+        { url: "media://inbound/saved-inline", contentType: "image/jpeg" },
       ],
+    });
+  });
+
+  it("records a visible durable omission when inline image persistence fails", async () => {
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "describe",
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 0 }],
+      imageOrder: ["inline"],
+      offloadedRefs: [],
+    });
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [],
+      omission: "inline-image-save-failed",
+    });
+
+    await handleNodeEvent(buildCtx(), "node-media-omission", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe",
+        sessionKey: "agent:main:main",
+        attachments: [{ type: "image", mimeType: "image/jpeg", content: "AAAA" }],
+      }),
+    });
+
+    expectFields(mockCallArg(agentCommandMock), {
+      message: "describe",
+      transcriptMessage:
+        "describe\n[image attachment omitted: durable managed media claim unavailable]",
     });
   });
 

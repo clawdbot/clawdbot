@@ -18,7 +18,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";

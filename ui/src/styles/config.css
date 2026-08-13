@@ -332,6 +332,8 @@
   background: var(--theme-chip-accent-2);
 }
 
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
+/* stylelint-disable color-no-hex */
 .settings-theme-card--claw {
   --theme-chip-bg: #0e1015;
   --theme-chip-accent: #ff5c5c;
@@ -367,6 +369,7 @@
   --theme-chip-accent: #6e4828;
   --theme-chip-accent-2: #6a4e30;
 }
+/* stylelint-enable color-no-hex */
 
 .settings-theme-card--custom {
   --theme-chip-bg: var(--bg);
@@ -678,7 +681,7 @@
 
 /* Collapsible nested-object summary behaves like a nav row. */
 .cfg-object__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
   transition: background var(--duration-fast) ease;
 }

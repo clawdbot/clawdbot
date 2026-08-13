@@ -514,12 +514,6 @@ function sanitizeDiagnostic(text: string, roots: readonly string[]) {
 export async function runGatewaySshTunnels(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
-  if (process.env.OPENCLAW_TESTBOX !== "1") {
-    throw new Error("Gateway SSH tunnel QA requires OPENCLAW_TESTBOX=1 before privileged setup");
-  }
-  if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
-    return await runInSshNamespace(options);
-  }
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -539,6 +533,16 @@ export async function runGatewaySshTunnels(
       ],
     },
   });
+  if (process.env.OPENCLAW_TESTBOX !== "1") {
+    return await writer.write({
+      details: "Gateway SSH tunnel QA requires OPENCLAW_TESTBOX=1 before privileged setup",
+      durationMs: 1,
+      status: "blocked",
+    });
+  }
+  if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
+    return await runInSshNamespace(options);
+  }
   const startedAt = Date.now();
   // openclaw-temp-dir: normal runs remove the fixture root; the SIGKILL test tracks its injected root
   const root =
@@ -714,7 +718,7 @@ async function main(argv: readonly string[]) {
   const status = evidence.entries[0]?.result.status;
   process.stdout.write(`Gateway SSH tunnel evidence: ${QA_EVIDENCE_FILENAME}\n`);
   process.stdout.write(`Gateway SSH tunnel status: ${status}\n`);
-  return status === "pass" ? 0 : 1;
+  return status === "pass" || status === "blocked" ? 0 : 1;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

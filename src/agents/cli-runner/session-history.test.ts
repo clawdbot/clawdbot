@@ -23,7 +23,17 @@ const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const RESEED_CURRENCY_GUIDANCE =
+  "[Recovered history may be stale; verify current and time-sensitive facts before acting.]";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function withReseedGuidanceBudget(historyChars: number): number {
+  return RESEED_CURRENCY_GUIDANCE.length + "\n".length + historyChars;
+}
+
+function extractReseedHistory(prompt: string | undefined): string {
+  return prompt?.match(/<conversation_history>\n([\s\S]*?)\n<\/conversation_history>/)?.[1] ?? "";
+}
 
 function createSessionTranscript(params: {
   rootDir: string;
@@ -703,9 +713,12 @@ describe("loadCliSessionReseedMessages", () => {
           role: "user",
           content: `raw-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
         });
-        expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
-          "raw-25",
+        expect(requireRecord(reseed[0], "first raw reseed message").timestamp).toBe(
+          "1970-01-01T00:00:00.026Z",
         );
+        const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
+        expect(prompt).toContain("[1970-01-01T00:00:00.026Z] User: raw-25");
+        expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -826,9 +839,15 @@ describe("loadCliSessionReseedMessages", () => {
         expect(reseed).toHaveLength(2);
         expectCompactionSummary(reseed[0], "safe compacted summary");
         expectMessageFields(reseed[1], { role: "user", content: "post-compaction ask" });
-        expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
-          "Compaction summary: safe compacted summary",
+        expect(reseed.map((message) => requireRecord(message, "reseed message").timestamp)).toEqual(
+          ["1970-01-01T00:00:00.002Z", "1970-01-01T00:00:00.003Z"],
         );
+        const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
+        expect(prompt).toContain(
+          "[1970-01-01T00:00:00.002Z] Compaction summary: safe compacted summary",
+        );
+        expect(prompt).toContain("[1970-01-01T00:00:00.003Z] User: post-compaction ask");
+        expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -851,6 +870,29 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("<next_user_message>\nnew ask\n</next_user_message>");
   });
 
+  it("renders canonical saved timestamps and omits invalid or noncanonical timestamps", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [
+        { role: "user", content: "dated ask", timestamp: "2026-06-17T16:00:00.000Z" },
+        { role: "assistant", content: "zero date answer", timestamp: "0" },
+        { role: "user", content: "year-only ask", timestamp: "2026" },
+        { role: "assistant", content: "invalid date answer", timestamp: "not-a-date" },
+        { role: "user", content: "offset date ask", timestamp: "2026-06-17T12:00:00-04:00" },
+        { role: "assistant", content: "undated answer" },
+      ],
+      prompt: "new ask",
+    });
+
+    expect(prompt).toContain("[2026-06-17T16:00:00.000Z] User: dated ask");
+    expect(prompt).toMatch(
+      /Assistant: zero date answer[\s\S]*User: year-only ask[\s\S]*Assistant: invalid date answer[\s\S]*User: offset date ask[\s\S]*Assistant: undated answer/u,
+    );
+    expect(prompt).not.toMatch(
+      /\[(?:2000-01-01T00:00:00\.000Z|2026-01-01T00:00:00\.000Z|not-a-date|2026-06-17T12:00:00-04:00)\]/u,
+    );
+    expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
+  });
+
   it("skips reseed text when the transcript has no renderable conversation", () => {
     expect(
       buildCliSessionHistoryPrompt({
@@ -861,13 +903,14 @@ describe("buildCliSessionHistoryPrompt", () => {
   });
 
   it("caps rendered reseed history before adding the next user message", () => {
+    const maxHistoryChars = withReseedGuidanceBudget(80);
     const prompt = buildCliSessionHistoryPrompt({
       messages: [
         { role: "user", content: "x".repeat(100) },
         { role: "assistant", content: "y".repeat(100) },
       ],
       prompt: "current ask must survive",
-      maxHistoryChars: 20,
+      maxHistoryChars,
     });
 
     expect(prompt).toContain("[OpenClaw reseed history truncated; older turns dropped]");
@@ -875,17 +918,18 @@ describe("buildCliSessionHistoryPrompt", () => {
     // Older 100-char prefix must be dropped by the tail slice; the
     // post-cap rendered tail is shorter than the dropped prefix.
     expect(prompt).not.toContain("x".repeat(80));
+    expect(extractReseedHistory(prompt).length).toBeLessThanOrEqual(maxHistoryChars);
   });
 
   it("keeps a whole code point when the retained history tail starts inside an emoji", () => {
     const prompt = buildCliSessionHistoryPrompt({
       messages: [{ role: "user", content: "prefix😀tail" }],
       prompt: "next",
-      maxHistoryChars: 5,
+      maxHistoryChars: withReseedGuidanceBudget(5),
     });
 
     expect(prompt).toContain(
-      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\ntail\n</conversation_history>",
+      `<conversation_history>\n${RESEED_CURRENCY_GUIDANCE}\ntail\n</conversation_history>`,
     );
   });
 
@@ -953,6 +997,9 @@ describe("buildCliSessionHistoryPrompt", () => {
     // dropped so the cap is honored.
     expect(prompt).not.toContain("z".repeat(8000));
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
+    expect(extractReseedHistory(prompt).length).toBeLessThanOrEqual(
+      MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
+    );
   });
 
   it("caps oversize compaction summary while preserving recent post-summary tail", () => {
@@ -966,7 +1013,8 @@ describe("buildCliSessionHistoryPrompt", () => {
     //    The summary must itself be truncated to fit the budget while still
     //    preserving the recent post-summary exact turns.
     const summaryText = "OVERSIZE_SUMMARY_MARKER ".repeat(50).trim();
-    const maxHistoryChars = 200;
+    const historyBudget = 200;
+    const maxHistoryChars = withReseedGuidanceBudget(historyBudget);
     const prompt = buildCliSessionHistoryPrompt({
       messages: [
         { role: "compactionSummary", summary: summaryText },
@@ -1009,30 +1057,25 @@ describe("buildCliSessionHistoryPrompt", () => {
     const prompt = buildCliSessionHistoryPrompt({
       messages: [{ role: "compactionSummary", summary: `aa😀${"z".repeat(100)}` }],
       prompt: "next",
-      maxHistoryChars: 80,
+      maxHistoryChars: withReseedGuidanceBudget(80),
     });
 
     expect(prompt).toContain(
-      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\nCompaction summary: aa\n</conversation_history>",
+      `<conversation_history>\n${RESEED_CURRENCY_GUIDANCE}\n[OpenClaw reseed history truncated; older turns dropped]\nCompaction summary: aa\n</conversation_history>`,
     );
   });
 
   it("honors the cap when the summary block plus marker crosses it", () => {
-    // Edge case: `summaryRendered.length < maxHistoryChars` (the gate that
-    // routes to the oversize-summary branch is not taken) BUT
-    // `summaryBlock.length >= maxHistoryChars` once the `\n\n` separator
-    // is appended, making `remainingBudget <= 0`. Without summary
-    // truncation in that branch, the rendered history block is
-    // `summary + separator + marker` — well over `maxHistoryChars`. A
-    // 199-char rendered summary under a 200-char cap would otherwise
-    // produce a 257-char history block.
-    const maxHistoryChars = 200;
-    // `renderHistoryMessage` prefixes "Compaction summary: " (20 chars)
-    // before the summary text, so a 179-char summary renders to 199 chars
-    // — strictly less than the cap, but `summaryBlock = rendered + "\n\n"`
-    // is 201 chars and `remainingBudget` is negative.
+    // Edge case: the summary fits but leaves too little room for the
+    // truncation marker plus a useful exact tail. Rebalance the summary and
+    // tail instead of exceeding the cap or silently dropping the marker.
+    const historyBudget = 200;
+    const maxHistoryChars = withReseedGuidanceBudget(historyBudget);
+    const remainingBudget = 10;
     const summaryPrefix = "Compaction summary: ";
-    const summaryText = "S".repeat(maxHistoryChars - 1 - summaryPrefix.length);
+    const summaryText = "S".repeat(
+      historyBudget - remainingBudget - "\n\n".length - summaryPrefix.length,
+    );
     const prompt = buildCliSessionHistoryPrompt({
       messages: [
         { role: "compactionSummary", summary: summaryText },
@@ -1055,5 +1098,26 @@ describe("buildCliSessionHistoryPrompt", () => {
     // Near-cap summaries still reserve room for the newest exact turns.
     expect(prompt).toContain("POST_SUMMARY_TAIL_USER");
     expect(prompt).toContain("POST_SUMMARY_TAIL_ASSISTANT");
+  });
+
+  it("keeps fitting post-summary history without a false truncation marker", () => {
+    const historyBudget = 200;
+    const remainingBudget = 10;
+    const summaryPrefix = "Compaction summary: ";
+    const summaryText = "S".repeat(
+      historyBudget - remainingBudget - "\n\n".length - summaryPrefix.length,
+    );
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [
+        { role: "compactionSummary", summary: summaryText },
+        { role: "user", content: "tail" },
+      ],
+      prompt: "next ask",
+      maxHistoryChars: withReseedGuidanceBudget(historyBudget),
+    });
+
+    expect(prompt).toContain(`Compaction summary: ${summaryText}`);
+    expect(prompt).toContain("User: tail");
+    expect(prompt).not.toContain("[OpenClaw reseed history truncated; older turns dropped]");
   });
 });

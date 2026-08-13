@@ -198,6 +198,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
+  "gateway.publicOrigin":
+    "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
@@ -258,6 +260,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Controls whether this headless node host may advertise Claude CLI agent turns to the gateway.",
   "nodeHost.agentRuns.claude.enabled":
     "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
+  "nodeHost.workerRuns":
+    "Opt in to full OpenClaw worker session hosting from this headless node's local installation. Disabled by default.",
+  "nodeHost.workerRuns.enabled":
+    "Advertise this paired node as a session host and pin its local OpenClaw build identity (default: false). The node version must exactly match the gateway.",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -457,7 +463,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals through the normal scanner-gated Workshop path. Default: "auto".',
+    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs daily scanner-gated cleanup that can rewrite or drop eligible writable skills. Default: "auto".',
   "skills.workshop.allowSymlinkTargetWrites":
     "Allows Skill Workshop apply to write through symlinked workspace skill paths whose real target is already trusted by skills.load.allowSymlinkTargets. Keep disabled unless operators intentionally want generated proposal applies to mutate those shared skill roots.",
   approvals:

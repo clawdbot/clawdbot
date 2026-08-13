@@ -121,11 +121,6 @@
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-.chat-tool-msg-summary--error .chat-tool-msg-summary__icon,
-.chat-tool-msg-summary--error .chat-tool-msg-summary__label {
-  color: var(--destructive, var(--danger, #c0392b));
-}
-
 /* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
@@ -191,7 +186,7 @@
 }
 
 .chat-tool-row--running .chat-tool-msg-summary__icon {
-  color: var(--accent-2, #14b8a6);
+  color: var(--accent-2);
 }
 
 /* Active-task text wave: a subtle left-to-right color sweep across the
@@ -248,7 +243,7 @@
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full, 999px);
-  background: var(--accent-2, #14b8a6);
+  background: var(--accent-2);
   animation: chatToolRowPulse 1.1s ease-in-out infinite;
 }
 
@@ -277,8 +272,8 @@
   margin-left: auto;
   padding: 1px 6px;
   border-radius: var(--radius-full, 999px);
-  background: color-mix(in srgb, var(--destructive, #ef4444) 14%, transparent);
-  color: var(--destructive, #ef4444);
+  background: color-mix(in srgb, var(--destructive) 14%, transparent);
+  color: var(--destructive);
   font-size: 11px;
   font-weight: 600;
   line-height: 1.5;
@@ -296,11 +291,11 @@
 }
 
 .chat-diffstat__add {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-diffstat__del {
-  color: var(--destructive, #ef4444);
+  color: var(--destructive);
 }
 
 /* ── Inline diff ── */
@@ -324,19 +319,19 @@
 }
 
 .chat-diff__row--add {
-  background: color-mix(in srgb, var(--ok, #22c55e) 13%, transparent);
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
 }
 
 .chat-diff__row--add .chat-diff__sign {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-diff__row--del {
-  background: color-mix(in srgb, var(--destructive, #ef4444) 12%, transparent);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 
 .chat-diff__row--del .chat-diff__sign {
-  color: var(--destructive, #ef4444);
+  color: var(--destructive);
 }
 
 .chat-diff__row--file {
@@ -437,7 +432,7 @@
 }
 
 .chat-tool-term--error .chat-tool-term__out {
-  color: color-mix(in srgb, var(--destructive, #ef4444) 70%, var(--text) 30%);
+  color: color-mix(in srgb, var(--destructive) 70%, var(--text) 30%);
 }
 
 /* Command/diff text reuses <code> for semantics only; kill the markdown pill. */
@@ -454,16 +449,16 @@
 
 /* ── Command token colors (display-only highlighting) ── */
 .chat-cmd--name {
-  color: var(--accent-2, #14b8a6);
+  color: var(--accent-2);
   font-weight: 600;
 }
 
 .chat-cmd--str {
-  color: color-mix(in srgb, var(--ok, #22c55e) 78%, var(--text) 22%);
+  color: color-mix(in srgb, var(--ok) 78%, var(--text) 22%);
 }
 
 .chat-cmd--num {
-  color: color-mix(in srgb, var(--accent, #ff5c5c) 82%, var(--text) 18%);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text) 18%);
 }
 
 .chat-cmd--flag {
@@ -471,7 +466,7 @@
 }
 
 .chat-cmd--op {
-  color: color-mix(in srgb, var(--accent-2, #14b8a6) 60%, var(--muted) 40%);
+  color: color-mix(in srgb, var(--accent-2) 60%, var(--muted) 40%);
 }
 
 /* ── Key-value args (generic tools) ── */
@@ -635,7 +630,7 @@
   background: transparent;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-tool-card__detail-link:hover,
@@ -783,9 +778,15 @@
 
 .chat-tool-card__widget-actions::part(menu) {
   min-width: 176px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
-.chat-tool-card__widget-actions-trigger {
+.chat-tool-card__widget-actions-trigger,
+.chat-tool-card__widget-action {
   width: 26px;
   height: 26px;
   min-height: 26px;
@@ -794,12 +795,15 @@
 }
 
 .chat-tool-card__widget-actions-trigger:hover,
-.chat-tool-card__widget-actions-trigger:focus-visible {
+.chat-tool-card__widget-actions-trigger:focus-visible,
+.chat-tool-card__widget-action:hover,
+.chat-tool-card__widget-action:focus-visible {
   color: var(--text);
   background: var(--bg-hover);
 }
 
-.chat-tool-card__widget-actions-trigger svg {
+.chat-tool-card__widget-actions-trigger svg,
+.chat-tool-card__widget-action svg {
   width: 16px;
   height: 16px;
 }
@@ -814,24 +818,13 @@
   opacity: 1;
 }
 
-.chat-tool-card__widget-action {
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-
-.chat-tool-card__widget-action:hover,
-.chat-tool-card__widget-action:focus-visible {
-  color: var(--text);
+.chat-tool-card__widget-action[data-pinned] {
+  color: var(--accent);
 }
 
 .chat-tool-card__widget-action:disabled {
   cursor: default;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .chat-tool-card__preview-panel {
@@ -1034,10 +1027,6 @@
   background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
 }
 
-.chat-activity-group__summary--error {
-  color: var(--destructive, var(--danger, #c0392b));
-}
-
 .chat-activity-group__icon {
   display: inline-flex;
   align-items: center;
@@ -1047,10 +1036,6 @@
 
 .chat-activity-group__icon {
   color: var(--muted);
-}
-
-.chat-activity-group__summary--error .chat-activity-group__icon {
-  color: inherit;
 }
 
 .chat-activity-group__icon svg {
@@ -1106,10 +1091,6 @@
 
 .chat-work-group .chat-activity-group__label {
   color: var(--muted);
-}
-
-.chat-work-group .chat-activity-group__summary--error .chat-activity-group__label {
-  color: inherit;
 }
 
 /* Reading indicator = working claw: the brand pincer claws in place where the
@@ -1966,7 +1947,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
   text-underline-offset: 2px;
@@ -2033,6 +2014,103 @@ openclaw-tooltip.chat-tasks-status__preview {
 
 @media (prefers-reduced-motion: reduce) {
   .chat-tasks-status__claw {
+    animation: none;
+  }
+}
+
+.chat-subagent-activity {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 3px;
+}
+
+.chat-subagent-activity__row {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-subagent-activity__row--interactive {
+  width: 100%;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.chat-subagent-activity__row--interactive:hover,
+.chat-subagent-activity__row--interactive:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--text);
+}
+
+.chat-subagent-activity__row--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chat-subagent-activity__indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.chat-subagent-activity__indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-subagent-activity__indicator--finished {
+  color: var(--ok);
+}
+
+.chat-subagent-activity__indicator--failed {
+  color: var(--destructive);
+}
+
+.chat-subagent-activity__label {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-subagent-activity__snippet {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-activity__snippet--updated {
+  animation: chatSubagentSnippetUpdate 180ms ease-out both;
+}
+
+.chat-subagent-activity__overflow {
+  margin-left: 25px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+@keyframes chatSubagentSnippetUpdate {
+  from {
+    opacity: 0.35;
+    transform: translateY(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-subagent-activity__snippet--updated {
     animation: none;
   }
 }

@@ -82,7 +82,7 @@ export function resolveSlackStreamingMode(
   if (typeof params.streaming === "boolean") {
     return params.streaming ? "partial" : "off";
   }
-  return "partial";
+  return "progress";
 }
 
 export function resolveSlackNativeStreaming(

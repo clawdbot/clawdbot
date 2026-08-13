@@ -6,9 +6,9 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import {
   deleteCloudDraftSession,
   deleteRecoveredCloudDraftSession,
-  renderCloudProfileMenuItems,
   startCloudInitialTurn,
-} from "./cloud-target.ts";
+} from "../../lib/sessions/cloud-startup.ts";
+import { renderCloudProfileMenuItems } from "./cloud-target.ts";
 
 const params = {
   key: "agent:cloud:test",

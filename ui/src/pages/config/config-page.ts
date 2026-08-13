@@ -4,7 +4,10 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsCatalogListResult,
+  SystemInfoResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -34,11 +37,12 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
@@ -52,6 +56,8 @@ import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  observeRealtimeTalkDevices,
+  realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
@@ -111,6 +117,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
 };
 
 const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
+const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -241,6 +248,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
   @state() private sessionObserverModelsUnavailable = false;
+  private mediaDeviceWatch: (() => void) | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphonePermissionRequired = true;
   @state() private microphoneLoading = false;
@@ -334,6 +342,42 @@ export class ConfigPage extends OpenClawLightDomElement {
       }
     },
   });
+  private readonly hiddenSessionCatalogLabelsTask = new Task(this, {
+    args: () => {
+      const gateway = this.context?.gateway.snapshot;
+      const hiddenCatalogIds = [...this.hiddenSessionCatalogIds].toSorted();
+      const client =
+        this.pageId === "appearance" &&
+        hiddenCatalogIds.length > 0 &&
+        canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
+          ? gateway?.client
+          : null;
+      return [
+        client,
+        this.context?.agentSelection.state.selectedId ?? null,
+        hiddenCatalogIds.join("\0"),
+      ] as const;
+    },
+    task: async ([client, agentId], { signal }) => {
+      if (!client) {
+        return EMPTY_SESSION_CATALOG_LABELS;
+      }
+      try {
+        const result = await client.request<SessionsCatalogListResult>(
+          "sessions.catalog.list",
+          {
+            ...(agentId ? { agentId } : {}),
+            limitPerHost: 1,
+          },
+          { signal },
+        );
+        return new Map(result.catalogs.map((catalog) => [catalog.id, catalog.label]));
+      } catch {
+        // Recovery must remain available when catalog discovery is unsupported or offline.
+        return EMPTY_SESSION_CATALOG_LABELS;
+      }
+    },
+  });
   private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -389,6 +433,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.theme.serverSelection,
     );
     this.settings = loadSettings();
+    // Passive refresh only: the media rows already own the permission prompt
+    // behind their own controls, and a hardware change must never turn into an
+    // unasked-for browser dialog on a settings page.
+    this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
+      void this.refreshMicrophones(false);
+      void this.refreshCameras(false);
+    });
     this.syncRouteData();
   }
 
@@ -398,6 +449,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.hiddenSessionCatalogsChanged,
     );
     this.customThemeImportOwner.retireImport();
+    this.mediaDeviceWatch?.();
+    this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
     this.updateCountdownPolling.stop();
     this.invalidateSystemInfoRequest();
@@ -454,7 +507,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkInputs(requestPermission);
       this.microphoneDevices = result.devices;
       this.microphonePermissionRequired = result.permissionRequired;
-      this.microphoneError = result.warning;
+      this.microphoneError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "audioinput")
+        : null;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
@@ -483,7 +538,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkCameras(requestPermission);
       this.cameraDevices = result.devices;
       this.cameraPermissionRequired = result.permissionRequired;
-      this.cameraError = result.warning;
+      this.cameraError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
+        : null;
     } catch (error) {
       this.cameraError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -964,6 +1021,26 @@ export class ConfigPage extends OpenClawLightDomElement {
     return update.updateRunning || update.updateReconciliationPending;
   }
 
+  // The update dialog outlives this page and the connection, so it reads live
+  // snapshots rather than the values captured during a render.
+  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const banner = this.context.overlays.snapshot.updateStatusBanner;
+      listener({
+        busy: this.isUpdateBusy(),
+        connected: this.context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = this.context.overlays.subscribe(emit);
+    const stopGateway = this.context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
     return (
@@ -1005,7 +1082,16 @@ export class ConfigPage extends OpenClawLightDomElement {
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
-        onUpdateNow: () => void this.context.overlays.runUpdate(),
+        onUpdateNow: () =>
+          void confirmAndStartUpdate({
+            startGatewayUpdate: () => void this.context.overlays.runUpdate(),
+            watchUpdateProgress: this.watchUpdateProgress,
+            updateAvailable: overlaySnapshot.updateAvailable,
+            updateSchedule: overlaySnapshot.updateSchedule,
+            // This row has no native-decline listener, so a handoff the Mac app
+            // refuses would end in silence. Keep it on the Gateway route.
+            viaNativeApp: false,
+          }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
       });
     }
@@ -1124,15 +1210,11 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
-      setSessionCatalogHidden: (catalogId, hidden) => {
-        const next = new Set(this.hiddenSessionCatalogIds);
-        if (hidden) {
-          next.add(catalogId);
-        } else {
-          next.delete(catalogId);
-        }
-        storeHiddenSessionCatalogIds(next);
-      },
+      hiddenSessionCatalogLabels:
+        this.hiddenSessionCatalogLabelsTask.status === TaskStatus.COMPLETE
+          ? (this.hiddenSessionCatalogLabelsTask.value ?? EMPTY_SESSION_CATALOG_LABELS)
+          : EMPTY_SESSION_CATALOG_LABELS,
+      setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
@@ -1166,6 +1248,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       },
       lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       setLobsterPetVisits: (enabled) => this.applySettings({ lobsterPetVisits: enabled }),
+      sessionDeleteConfirm:
+        this.settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
+      setSessionDeleteConfirm: (enabled) => this.applySettings({ sessionDeleteConfirm: enabled }),
       lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
       setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),

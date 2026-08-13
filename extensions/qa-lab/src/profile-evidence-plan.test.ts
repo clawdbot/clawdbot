@@ -47,6 +47,7 @@ describe("QA profile evidence plan", () => {
     expect(plan.missingCells).toEqual([
       { scenarioId: portable.id, executionKind: "flow", channel: "matrix" },
     ]);
+    expect(qaProfileEvidencePlan.attest(plan).plan).toEqual(plan);
     expect(() => qaProfileEvidencePlan.attest(plan, true)).toThrow(
       "successful QA profile evidence is missing 1 expected execution cell",
     );

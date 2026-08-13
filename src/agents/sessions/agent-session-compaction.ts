@@ -41,18 +41,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions, "none"),
+    return await this.runWithSessionWriteSettlement(
+      async () => await this.compactWithSessionWriteSettlement(customInstructions, "none"),
     );
   }
 
   async [agentSessionAutomaticCompaction](customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions, "retry-invalid-once"),
+    return await this.runWithSessionWriteSettlement(
+      async () =>
+        await this.compactWithSessionWriteSettlement(customInstructions, "retry-invalid-once"),
     );
   }
 
-  private async compactWithSessionWriteLock(
+  private async compactWithSessionWriteSettlement(
     customInstructions?: string,
     summaryOutputPolicy: SummaryOutputPolicy = "none",
   ): Promise<CompactionResult> {

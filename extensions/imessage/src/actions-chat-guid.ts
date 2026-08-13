@@ -4,6 +4,7 @@ import {
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString as stringFromUnknown } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageActionTransportOptions } from "./actions-rpc.js";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { createIMessageRpcClient } from "./client.js";
@@ -41,10 +42,6 @@ function numberFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : parseStrictInteger(value);
 }
 
-function stringFromUnknown(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function chatListCacheKey(options: IMessageActionTransportOptions): string {
   return `${options.cliPath}\0${options.dbPath ?? ""}\0${options.remoteHost ?? ""}`;
 }
@@ -70,17 +67,6 @@ function chatListCacheSet(
   if (expiresAt !== undefined) {
     chatListCache.set(chatListCacheKey(options), { list, expiresAt });
   }
-}
-
-export function normalizeDirectChatIdentifierForTest(raw: string): string {
-  return normalizeDirectChatIdentifier(raw);
-}
-
-export function findChatGuidForTest(
-  chats: readonly Record<string, unknown>[],
-  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
-): string | null {
-  return findChatGuid(chats, target);
 }
 
 function findChatGuid(

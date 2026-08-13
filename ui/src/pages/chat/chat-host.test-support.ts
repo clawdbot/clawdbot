@@ -173,6 +173,7 @@ export function makeChatHost(
         client: host.client,
         phase: host.connected ? "connected" : "reconnecting",
         hello: host.hello,
+        sessionKey: host.sessionKey,
       },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,

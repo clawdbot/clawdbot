@@ -223,8 +223,29 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
 
 function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  if (defaults && Object.hasOwn(defaults, "promptOverlays")) {
+    const personality = getRecord(getRecord(defaults.promptOverlays)?.gpt5)?.personality;
+    if (personality !== undefined) {
+      const openaiConfig = ensureRecord(
+        ensureRecord(ensureRecord(ensureRecord(raw, "plugins"), "entries"), "openai"),
+        "config",
+      );
+      if (openaiConfig.personality === undefined) {
+        openaiConfig.personality = personality;
+        changes.push(
+          "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+        );
+      } else {
+        changes.push(
+          "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+        );
+      }
+    } else {
+      changes.push("Removed agents.defaults.promptOverlays; built-in behavior now applies.");
+    }
+    delete defaults.promptOverlays;
+  }
   for (const key of [
-    "promptOverlays",
     "envelopeTimestamp",
     "envelopeElapsed",
     "envelopeTimezone",

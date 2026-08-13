@@ -101,7 +101,8 @@ type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 type ResponsesEncryptedContentAttemptKind =
   | "initial"
   | "reasoning-stripped"
-  | "compaction-stripped";
+  | "compaction-stripped"
+  | "continuation-rejected";
 
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
@@ -148,7 +149,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
     return undefined;
   }
-  if (attempt.kind === "initial") {
+  if (attempt.kind === "initial" || attempt.kind === "continuation-rejected") {
     const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
     if (reasoningStripped !== attempt.request) {
       return { kind: "reasoning-stripped", request: reasoningStripped };
@@ -280,11 +281,16 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
+  initialAttemptKind?: "initial" | "continuation-rejected";
   onCompactionRejected?: () => void;
   buildFullHistoryRequest?: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
-}): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
+}): Promise<{
+  stream: AsyncIterable<unknown>;
+  response: Response;
+  attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
+}> {
   const sendAttempt = async (
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
@@ -294,11 +300,11 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     if (attempt.kind === "compaction-stripped") {
       params.onCompactionRejected?.();
     }
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
+    return { stream: data as unknown as AsyncIterable<unknown>, response, attempt };
   };
 
   let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {
-    kind: "initial",
+    kind: params.initialAttemptKind ?? "initial",
     request: params.request,
   };
   while (true) {
@@ -309,23 +315,38 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     try {
       return await sendAttempt(attempt);
     } catch (error) {
-      const nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
+      let nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
         buildFullHistoryRequest: params.buildFullHistoryRequest,
       });
+      if (
+        !nextAttempt &&
+        attempt.request.previous_response_id &&
+        error &&
+        typeof error === "object" &&
+        typeof (error as { status?: unknown }).status === "number" &&
+        (error as { code?: unknown }).code === "previous_response_not_found"
+      ) {
+        const request = {
+          ...(params.buildFullHistoryRequest
+            ? await params.buildFullHistoryRequest()
+            : attempt.request),
+        };
+        delete request.previous_response_id;
+        nextAttempt = { kind: "continuation-rejected", request };
+      }
       if (!nextAttempt) {
         throw error;
       }
-      if (nextAttempt.kind === "reasoning-stripped") {
-        log.warn(
-          `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-            `api=${params.model.api} model=${params.model.id}`,
-        );
-      } else {
-        log.warn(
-          `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
-            `api=${params.model.api} model=${params.model.id}`,
-        );
-      }
+      const retryDescription =
+        nextAttempt.kind === "reasoning-stripped"
+          ? "without encrypted reasoning content"
+          : nextAttempt.kind === "compaction-stripped"
+            ? "without encrypted compaction content"
+            : "full history after rejected previous_response_id";
+      log.warn(
+        `[responses] retrying ${retryDescription} provider=${params.model.provider} ` +
+          `api=${params.model.api} model=${params.model.id}`,
+      );
       attempt = nextAttempt;
     }
   }

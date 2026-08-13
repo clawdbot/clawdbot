@@ -286,7 +286,6 @@ export const zh_CN = {
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
       controlUiPreparing: "正在准备 Control UI…",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",
-      failedOptionLine: "{label}：{reason}",
       failedOptionsIntro: "刚才这些没有成功：",
       findMeLater: "以后随时可以找到我 — 在终端运行 `openclaw`，或在仪表盘中打开设置。",
       hatchingNow: "正在孵化你的智能体…",

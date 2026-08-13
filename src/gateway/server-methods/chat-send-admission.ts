@@ -15,11 +15,11 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -110,9 +110,7 @@ export async function admitChatSend(params: {
       status: "accepted" as const,
       sessionKey,
       ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
-      ...(sessionKey === "global" && selectedAgent.agentId
-        ? { agentId: selectedAgent.agentId }
-        : {}),
+      ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
       ownerConnId: normalizeOptionalChatText(client?.connId),
       ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
       expiresAtMs: pendingExpiresAtMs,

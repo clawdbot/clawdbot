@@ -242,13 +242,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}

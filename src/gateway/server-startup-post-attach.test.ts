@@ -18,6 +18,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import "./server-startup-outcomes.test-support.js";
 
 const hoisted = vi.hoisted(() => {
@@ -119,15 +120,15 @@ vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: vi.fn(async () => []),
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 
-vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
@@ -171,6 +172,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => ({
     reconcilePendingSessionIdentities: hoisted.reconcilePendingSessionIdentities,
   })),
+}));
+
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
 }));
 
 vi.mock("../acp/runtime/registry.js", () => ({
@@ -400,6 +405,14 @@ function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
 }
 
+function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>): () => void {
+  return () => {
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      unavailableGatewayMethods.delete(method);
+    }
+  };
+}
+
 function createStartupTraceRecorder() {
   const details: Array<{
     name: string;
@@ -557,7 +570,7 @@ describe("startGatewayPostAttachRuntime", () => {
       ...createPostAttachParams(),
       getConfig: () => currentConfig,
       log,
-      unavailableGatewayMethods,
+      unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
       onSidecarsReady,
     });
 
@@ -2580,7 +2593,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
-        unavailableGatewayMethods,
+        unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
         sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
@@ -2642,7 +2655,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const runtimePromise = startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
-        unavailableGatewayMethods,
+        unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
         sidecarStartup: "defer",
         startWorkerEnvironmentRuntime,
         onGatewayLifetimeSidecars,
@@ -3111,7 +3124,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       info: vi.fn(),
       error: vi.fn(),
     },
-    unavailableGatewayMethods: new Set<string>(),
+    unlockStartupMethods: vi.fn(),
+    residentRegistry: createGatewayResidentRegistry(),
     providerAuthPrewarm: { enabled: false },
     ...overrides,
   };

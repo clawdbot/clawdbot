@@ -14,7 +14,7 @@ const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
-export function resolveNodeClaudePlacement(
+export function resolveNodeClaudeTarget(
   context: PreparedCliRunContext,
 ): NodeClaudePlacement | null {
   const entry = context.params.sessionEntry;

@@ -218,14 +218,14 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
                 { agentId: "qa", match: { channel: "telegram", accountId: "skill" } },
               ];
               cfg.plugins = {
-                ...(cfg.plugins ?? {}),
+                ...cfg.plugins,
                 allow: [...new Set([...(cfg.plugins?.allow ?? []), LOCALIZED_PLUGIN_ID])],
                 entries: {
-                  ...(cfg.plugins?.entries ?? {}),
+                  ...cfg.plugins?.entries,
                   [LOCALIZED_PLUGIN_ID]: { enabled: true },
                 },
                 load: {
-                  ...(cfg.plugins?.load ?? {}),
+                  ...cfg.plugins?.load,
                   paths: [...new Set([...(cfg.plugins?.load?.paths ?? []), localizedPluginDir])],
                 },
               };

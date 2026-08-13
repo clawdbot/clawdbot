@@ -4,7 +4,7 @@ import path from "node:path";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -123,6 +123,9 @@ import {
 const agentHarnessRuntimeMocks = vi.hoisted(() => ({
   forceModelToolsUnsupported: false,
   skipRequesterScopedMcpMaterialization: false,
+  requesterScopedMcpCalls: [] as Array<{
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
+  }>,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -136,6 +139,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     materializeRequesterScopedMcpToolsForHarnessRun: async (
       ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
     ) => {
+      agentHarnessRuntimeMocks.requesterScopedMcpCalls.push(args[0]);
       if (agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization) {
         return undefined;
       }
@@ -162,6 +166,9 @@ const testing = {
     }
     if (params.sourceReplyDeliveryMode === "message_tool_only") {
       names.push("message");
+    }
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      names.push("update_plan");
     }
     return names;
   },
@@ -1066,6 +1073,7 @@ setupRunAttemptTestHooks();
 beforeEach(() => {
   agentHarnessRuntimeMocks.forceModelToolsUnsupported = false;
   agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = false;
+  agentHarnessRuntimeMocks.requesterScopedMcpCalls.length = 0;
 });
 
 describe("runCodexAppServerAttempt", () => {
@@ -2309,7 +2317,9 @@ describe("runCodexAppServerAttempt", () => {
   it("replaces the native surface with an exact conversation-policy-filtered catalog", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) =>
       createOpenClawCodingTools(options).filter((tool) =>
-        ["read", "write", "edit", "apply_patch", "exec", "process"].includes(tool.name),
+        ["read", "write", "edit", "apply_patch", "exec", "process", "update_plan"].includes(
+          tool.name,
+        ),
       ),
     );
     const params = createRunParams();
@@ -2320,6 +2330,8 @@ describe("runCodexAppServerAttempt", () => {
       deny: ["exec", "process", "write", "edit"],
     };
     params.pluginHarnessToolPolicyRestricted = true;
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
@@ -2348,7 +2360,12 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
-    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read"]);
+    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read", "update_plan"]);
+    const updatePlanSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
+      (tool) => tool.name === "update_plan",
+    );
+    expect(updatePlanSpec).not.toHaveProperty("namespace");
+    expect(updatePlanSpec).not.toHaveProperty("deferLoading");
     expect(startParams?.config).toMatchObject({
       "features.hooks": false,
       "hooks.PreToolUse": [],
@@ -2357,6 +2374,34 @@ describe("runCodexAppServerAttempt", () => {
       "hooks.Stop": [],
     });
     expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
+
+    const plan = [
+      { step: "Inspect regression", status: "completed" },
+      { step: "Restore progress", status: "in_progress" },
+    ];
+    const response = await harness.handleServerRequest({
+      id: "request-plan-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-plan-1",
+        namespace: null,
+        tool: "update_plan",
+        arguments: { explanation: "Plan restored", plan },
+      },
+    });
+    expect(response).toMatchObject({ success: true });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "Plan restored",
+        steps: plan,
+      },
+    });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -3866,59 +3911,96 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("captures the complete mirrored branch through a settled tool-result boundary", async () => {
-    const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
-    const sessionId = "session-settled-finalization-context";
-    const sessionFile = `agent:main:${sessionId}`;
-    const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    params.prompt = "Send the update to Alice.";
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify(
-      itemNotification("item/started", {
-        type: "commandExecution",
-        id: "tool-settled",
-        command: "echo sent-to-alice",
-        cwd: workspaceDir,
-        processId: null,
-        source: "agent",
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "commandExecution",
-        id: "tool-settled",
-        command: "echo sent-to-alice",
-        cwd: workspaceDir,
-        processId: 42,
-        source: "agent",
-        status: "completed",
-        commandActions: [],
-        aggregatedOutput: "sent-to-alice\n",
-        exitCode: 0,
-        durationMs: 12,
-      }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    expect(result.settledTurnFinalizationContext).toMatchObject({
-      source: "openclaw-transcript",
-      messages: [
-        expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
-      ],
-    });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
-  });
+  it.each([
+    { label: "completed turn", failure: undefined, expectedContext: true },
+    {
+      label: "provider overload after the tool result",
+      failure: {
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      },
+      expectedContext: true,
+    },
+    {
+      label: "usage limit after the tool result",
+      failure: {
+        message: "Usage limit exceeded.",
+        codexErrorInfo: "usageLimitExceeded",
+      },
+      expectedContext: false,
+    },
+    {
+      label: "unauthorized response after the tool result",
+      failure: {
+        message: "Unauthorized.",
+        codexErrorInfo: "unauthorized",
+      },
+      expectedContext: false,
+    },
+  ])(
+    "captures the complete mirrored branch through a settled tool-result boundary for a $label",
+    async ({ failure, expectedContext }) => {
+      const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
+      const sessionId = "session-settled-finalization-context";
+      const sessionFile = `agent:main:${sessionId}`;
+      const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(params, storePath, sessionId);
+      params.prompt = "Send the update to Alice.";
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.notify(
+        itemNotification("item/started", {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: 42,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "sent-to-alice\n",
+          exitCode: 0,
+          durationMs: 12,
+        }),
+      );
+      if (failure) {
+        await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: failure }));
+      } else {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      }
+      const result = await run;
+      expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
+      if (result.settledTurnFinalizationContext) {
+        expect(result.settledTurnFinalizationContext).toMatchObject({
+          source: "openclaw-transcript",
+          messages: [
+            expect.objectContaining({ role: "user" }),
+            expect.objectContaining({ role: "assistant" }),
+            expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+          ],
+        });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext.messages)).toBe(true);
+      }
+    },
+  );
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
@@ -5016,6 +5098,90 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
+  it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const turnIds = ["turn-ada", "turn-grace"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method, params) => {
+      if (method === "thread/resume") {
+        return threadStartResult((params as { threadId?: string }).threadId ?? "thread-existing");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (sender: { id: string; name: string }, prompt: string, runId: string) => {
+      const expectedTurnStarts =
+        harness.requests.filter((request) => request.method === "turn/start").length + 1;
+      const params = createParams(sessionFile, workspaceDir, { prompt, runId });
+      params.trigger = "user";
+      const message = {
+        role: "user" as const,
+        content: prompt,
+        timestamp: Date.now(),
+        __openclaw: { senderId: sender.id, senderName: sender.name },
+      };
+      params.userTurnTranscriptRecorder = {
+        message,
+        resolveMessage: async () => message,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending() {},
+        markRuntimePersisted() {},
+      } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      const run = runCodexAppServerAttempt(params);
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      await harness.completeTurn({
+        threadId: "thread-existing",
+        turnId: `turn-${sender.name.toLowerCase()}`,
+      });
+      await run;
+    };
+
+    await runTurn({ id: "profile-ada", name: "Ada" }, "first request", "run-ada");
+    await runTurn({ id: "profile-grace", name: "Grace" }, "second request", "run-grace");
+
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/resume", "turn/start", "turn/start"]);
+    expect(
+      harness.requests
+        .filter((request) => request.method === "turn/start")
+        .map(
+          (request) =>
+            (
+              request.params as {
+                additionalContext?: Record<string, { kind: string; value: string }>;
+              }
+            ).additionalContext?.openclaw_current_sender,
+        ),
+    ).toEqual([
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-ada","name":"Ada"}}',
+      },
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
+      },
+    ]);
+  });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -5563,6 +5729,36 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnParams).not.toHaveProperty("modelProvider");
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
     expect(turnParams?.serviceTier).toBe("priority");
+  });
+
+  it("forwards Codex agent exclusions to requester-scoped MCP materialization", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
+    const params = createParams(sessionFile, workspaceDir);
+    params.senderId = "sender-a";
+    params.config = {
+      ...params.config,
+      mcp: {
+        servers: {
+          calendar: {
+            url: "https://calendar.example.com/mcp",
+            auth: "oauth",
+            oauth: { identity: "per-requester" },
+            codex: { agents: ["other-agent"] },
+          },
+        },
+      },
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn);
+
+    expect(agentHarnessRuntimeMocks.requesterScopedMcpCalls).toContainEqual(
+      expect.objectContaining({
+        toolOverrides: { mcpServers: { calendar: false } },
+      }),
+    );
   });
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

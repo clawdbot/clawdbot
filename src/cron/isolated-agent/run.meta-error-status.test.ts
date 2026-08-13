@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  cleanupDirectCronSessionMock,
+  callGatewayMock,
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
@@ -129,15 +129,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated agent run aborted");
-    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
-      job: expect.objectContaining({ deleteAfterRun: true }),
-      agentSessionKey: "agent:default:cron:test",
-      sessionId: "test-session-id",
-      lifecycleRevision: "test-lifecycle-revision",
-      sessionUpdatedAt: expect.any(Number),
-      beforeSessionDelete: expect.any(Function),
-      retireReason: "cron-delete-after-run-aborted",
-    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks a completed embedded run with no final payload as a cron error", async () => {

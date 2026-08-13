@@ -241,7 +241,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         ...messageSentDeliveryHookContext,
         deferMessageSentHooks: true,
-        ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
+        eventScope: prepared.eventScope,
       });
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
@@ -315,7 +315,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       ...messageSentDeliveryHookContext,
-      ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
+      eventScope: prepared.eventScope,
     });
     state.observedReplyDelivery = true;
     if (params.kind === "final") {

@@ -12,6 +12,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
@@ -77,6 +78,14 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ...(ctx.env ? { env: ctx.env } : {}),
   });
   await maybeMigrateLegacyPluginModelCatalogs({
+    cfg: ctx.cfg,
+    ...(ctx.env ? { env: ctx.env } : {}),
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
+  });
+  const { maybeMigrateModelCatalogCredentials } =
+    await import("../commands/doctor-model-catalog-credentials.js");
+  await maybeMigrateModelCatalogCredentials({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
     prompter: ctx.prompter,
@@ -214,10 +223,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
   await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
+  const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+    legacySessionSurfaces,
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
@@ -244,6 +256,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     config: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+    legacySessionSurfaces,
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
@@ -426,17 +439,12 @@ async function runDoctorHealthContributionList(
         await contribution.run(ctx);
         continue;
       }
-      const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-        await import("../agents/agent-scope.js");
-      const workspaceDir = resolveAgentWorkspaceDir(
-        ctx.cfg,
-        resolveDefaultAgentId(ctx.cfg),
-        ctx.env ?? process.env,
-      );
+      const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
       await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
         contribution.run(ctx),
       );
     } catch (error) {
+      await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
       const { note } = await loadNoteModule();
       note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
     }

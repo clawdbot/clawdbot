@@ -664,7 +664,7 @@ Current built-in contracts include `agents_list`, `apply_patch`,
 `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
-`session_status`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+`session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
 Exact passthroughs can reuse their owning protocol schema instead of
 duplicating a model-only contract. For example, the conversation tools expose
 the same Gateway result schemas used by `conversations.list`,
@@ -796,10 +796,15 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Rules: output order matches guest calls; output is capped by
-`maxOutputBytes`; non-serializable values are converted to plain strings or
-errors; binary values are not supported. Images and files travel through
-ordinary OpenClaw tools, not through the code-mode bridge.
+Rules: output order matches guest calls. Nested tool results, cumulative guest
+output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
+When a successful result exceeds the budget, OpenClaw returns a bounded value
+with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
+rerun with narrower arguments. Treat that marker as a successful partial result:
+reduce the search scope, paginate, select fewer files, or return a smaller
+projection. Non-serializable values are converted to plain strings or errors;
+binary values are not supported. Images and files travel through ordinary
+OpenClaw tools, not through the code-mode bridge.
 
 ## Tool catalog
 
@@ -905,8 +910,10 @@ session.`.
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
 - For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
-  side-effecting catalog and namespace tool calls before execution and
-  marks suspended results as replay-safe. If a restart interrupts `wait`,
+  catalog and namespace tool surfaces that are not proven replay-safe before
+  execution and marks suspended results as replay-safe. A generic exec surface
+  is not replay-safe merely because one command appears read-only; recovery
+  runs should use the audited read, grep, or find tools. If a restart interrupts `wait`,
   [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
   transcript instead of restoring the process-local snapshot. The recovery
   turn itself remains limited to audited read-only core tools and explicitly
@@ -981,6 +988,9 @@ type CodeModeErrorCode =
 rejected module access, TypeScript transform failures, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
+`output_limit_exceeded` is reserved for a result that cannot be serialized into
+the bounded projection; ordinary oversized successful results are truncated and
+remain successful.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.

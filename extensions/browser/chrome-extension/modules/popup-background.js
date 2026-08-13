@@ -14,7 +14,7 @@ function errorResponse(sendResponse, error) {
   sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
 }
 
-/** Own pairing/settings/popup messages; authority stays in the injected access policy. */
+/** Own manual/native pairing transactions and compact popup/options messages. */
 export function createPopupMessageHandler({
   chromeApi = chrome,
   pairingConfigStore,
@@ -23,6 +23,13 @@ export function createPopupMessageHandler({
   getConfig,
   getRelayState,
   getRelayStatusHint,
+  getNativeBootstrapStatus,
+  enableNativeBootstrap,
+  onManualPairing,
+  onUnpairStart,
+  isRetiredCopilotCustodyBlocked,
+  requireAutomationAllowed,
+  discardRetiredCopilotCustody,
   resetRelayState,
   suspendRelayConnections,
   resumeRelayConnections,
@@ -35,14 +42,12 @@ export function createPopupMessageHandler({
   closeRelaySocket,
   connectRelay,
   setBadge,
-  getCopilot,
   attachingTabs,
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup,
   scheduleTabsSync,
   pauseTab,
-  pageShare,
 }) {
   let pairingGeneration = 0;
 
@@ -52,7 +57,99 @@ export function createPopupMessageHandler({
     }
   };
 
-  return (msg, reply) => {
+  async function applyPairing({ pairing, pairingString, accessMode, source = "manual" }) {
+    await requireAutomationAllowed();
+    const parsed = pairing ?? parsePairingString(pairingString);
+    if (!parsed) {
+      return { ok: false, error: "Invalid pairing string." };
+    }
+    if (source === "native" && (await getConfig()).relayUrl) {
+      return { ok: false, existing: true };
+    }
+    if (source === "manual") {
+      await onManualPairing();
+    }
+    const generation = ++pairingGeneration;
+    suspendRelayConnections();
+    clearRelayOpeningDeadline();
+    closeRelaySocket();
+    await accessReady;
+    assertPairingCurrent(generation);
+    await runAccessMutation(async () => {
+      assertPairingCurrent(generation);
+      if (source === "native" && (await getConfig()).relayUrl) {
+        return;
+      }
+      suspendRelayConnections();
+      clearRelayOpeningDeadline();
+      closeRelaySocket();
+      const normalizedMode =
+        accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL;
+      const downgrading =
+        policy.mode === ACCESS_MODE_ALL && normalizedMode === ACCESS_MODE_SELECTED;
+      if (downgrading) {
+        policy.beginTransition();
+      }
+      try {
+        await pairingConfigStore.save(parsed, nearestGroupColor(), normalizedMode);
+        assertPairingCurrent(generation);
+        await reconcileAccessMode(normalizedMode, { transitioning: downgrading });
+        assertPairingCurrent(generation);
+        policy.setEnabled(true);
+      } catch (error) {
+        if (downgrading) {
+          policy.endTransition();
+        }
+        throw error;
+      }
+      resetRelayState();
+      assertPairingCurrent(generation);
+      resumeRelayConnections();
+      await connectRelay(() => generation === pairingGeneration);
+      if (generation !== pairingGeneration) {
+        clearRelayOpeningDeadline();
+        closeRelaySocket();
+        setBadge("off");
+        assertPairingCurrent(generation);
+      }
+    });
+    return { ok: true };
+  }
+
+  async function unpair() {
+    pairingGeneration += 1;
+    const disabledPersisted = onUnpairStart();
+    policy.setEnabled(false);
+    policy.invalidateAll();
+    suspendRelayConnections();
+    resetRelayState();
+    clearRelayOpeningDeadline();
+    closeRelaySocket();
+    setBadge("off");
+    await accessReady;
+    policy.setEnabled(false);
+    policy.invalidateAll();
+    clearRelayOpeningDeadline();
+    closeRelaySocket();
+    setBadge("off");
+    await runAccessMutation(async () => {
+      policy.setEnabled(false);
+      const detaching = detachAllDebuggerSessions();
+      await syncTabsToRelay();
+      await disabledPersisted;
+      await pairingConfigStore.clear();
+      await policy.clearDenied();
+      await detaching;
+      await discardRetiredCopilotCustody();
+      resetRelayState();
+      clearRelayOpeningDeadline();
+      closeRelaySocket();
+      setBadge("off");
+    });
+    return { ok: true };
+  }
+
+  const handler = (msg, reply) => {
     let settled = false;
     const sendResponse = (response) => {
       if (!settled) {
@@ -65,6 +162,8 @@ export function createPopupMessageHandler({
         switch (msg?.type) {
           case "getStatus": {
             await accessReady;
+            const retiredCopilotCustodyBlocked = isRetiredCopilotCustodyBlocked();
+            const nativeBootstrap = await getNativeBootstrapStatus();
             const { relayUrl, accessMode } = await getConfig();
             await reconcilePairingInvalidation();
             const accessible = await policy.listAccessibleTabs();
@@ -75,124 +174,48 @@ export function createPopupMessageHandler({
               accessMode,
               accessibleTabCount: accessible.length,
               relayUrl: relayUrl ?? "",
+              nativeBootstrap,
+              retiredCopilotCustodyBlocked,
               ...(hint ? { hint } : {}),
             });
             return;
           }
-          case "pair": {
-            const parsed = parsePairingString(msg.pairingString);
-            if (!parsed) {
-              sendResponse({ ok: false, error: "Invalid pairing string." });
+          case "pair":
+            sendResponse(
+              await applyPairing({
+                pairingString: msg.pairingString,
+                accessMode: msg.accessMode,
+                source: "manual",
+              }),
+            );
+            return;
+          case "unpair":
+            sendResponse(await unpair());
+            return;
+          case "setNativeBootstrapEnabled":
+            if (typeof msg.enabled !== "boolean") {
+              sendResponse({ ok: false, error: "Invalid automatic setup setting." });
               return;
             }
-            const generation = ++pairingGeneration;
-            suspendRelayConnections();
-            clearRelayOpeningDeadline();
-            closeRelaySocket();
-            await accessReady;
-            assertPairingCurrent(generation);
-            await runAccessMutation(async () => {
-              assertPairingCurrent(generation);
-              // A newer request may have waited behind an older save. Reassert
-              // transport custody when this generation reaches the queue head.
-              suspendRelayConnections();
-              clearRelayOpeningDeadline();
-              closeRelaySocket();
-              // A replacement pairing must never inherit a later, wider policy.
-              // Retire its authenticated socket before storage or mode can yield.
-              const accessMode =
-                msg.accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL;
-              const downgrading =
-                policy.mode === ACCESS_MODE_ALL && accessMode === ACCESS_MODE_SELECTED;
-              if (downgrading) {
-                policy.beginTransition();
-              }
-              try {
-                await pairingConfigStore.save(
-                  parsed,
-                  nearestGroupColor(msg.groupColor),
-                  accessMode,
-                );
-                assertPairingCurrent(generation);
-                await reconcileAccessMode(accessMode, { transitioning: downgrading });
-                assertPairingCurrent(generation);
-                policy.setEnabled(true);
-              } catch (error) {
-                if (downgrading) {
-                  policy.endTransition();
-                }
-                throw error;
-              }
-              resetRelayState();
-              await getCopilot().refreshConfig();
-              assertPairingCurrent(generation);
-              resumeRelayConnections();
-              await connectRelay(() => generation === pairingGeneration);
-              if (generation !== pairingGeneration) {
-                clearRelayOpeningDeadline();
-                closeRelaySocket();
-                setBadge("off");
-                assertPairingCurrent(generation);
-              }
-            });
-            sendResponse({ ok: true });
+            sendResponse({ ok: true, result: await enableNativeBootstrap(msg.enabled) });
             return;
-          }
-          case "unpair": {
-            pairingGeneration += 1;
-            // Revocation is synchronous. Queued storage and debugger cleanup
-            // must not leave the old authority or relay alive in the meantime.
-            policy.setEnabled(false);
-            policy.invalidateAll();
-            suspendRelayConnections();
-            resetRelayState();
-            clearRelayOpeningDeadline();
-            closeRelaySocket();
-            setBadge("off");
-            await accessReady;
-            // Initialization can finish after the synchronous revoke above.
-            // Reassert it before waiting on any older queued bookkeeping.
-            policy.setEnabled(false);
-            policy.invalidateAll();
-            clearRelayOpeningDeadline();
-            closeRelaySocket();
-            setBadge("off");
-            await runAccessMutation(async () => {
-              // Initialization or an older mutation may have completed while
-              // this request was waiting for the queue; keep revocation sticky.
-              policy.setEnabled(false);
-              const detaching = detachAllDebuggerSessions();
-              await syncTabsToRelay();
-              await pairingConfigStore.clear();
-              await policy.clearDenied();
-              await detaching;
-              resetRelayState();
-              clearRelayOpeningDeadline();
-              closeRelaySocket();
-              setBadge("off");
-              await getCopilot().refreshConfig();
-            });
-            sendResponse({ ok: true });
-            return;
-          }
           case "setAccessMode": {
             if (msg.accessMode !== ACCESS_MODE_ALL && msg.accessMode !== ACCESS_MODE_SELECTED) {
               sendResponse({ ok: false, error: "Invalid access mode." });
               return;
             }
+            await requireAutomationAllowed();
             const restricting = msg.accessMode === ACCESS_MODE_SELECTED;
             if (restricting) {
-              // A queued widening may not have updated policy.mode yet. Every
-              // Selected request revokes before older mutations can hold the queue.
               policy.beginTransition();
             }
-            let accessMode;
+            let storedMode;
             try {
               await accessReady;
-              accessMode = await runAccessMutation(async () => {
-                const storedMode = await pairingConfigStore.setAccessMode(msg.accessMode);
-                await reconcileAccessMode(storedMode, { transitioning: restricting });
-                return storedMode;
+              storedMode = await runAccessMutation(async () => {
+                const mode = await pairingConfigStore.setAccessMode(msg.accessMode);
+                await reconcileAccessMode(mode, { transitioning: restricting });
+                return mode;
               });
             } catch (error) {
               if (restricting) {
@@ -200,16 +223,13 @@ export function createPopupMessageHandler({
               }
               throw error;
             }
-            sendResponse({ ok: true, accessMode });
+            sendResponse({ ok: true, accessMode: storedMode });
             return;
           }
           case "toggleTabAccess": {
             const tabId = msg.tabId;
-            if (!isValidTabId(tabId)) {
-              sendResponse({ ok: false, error: "No tab." });
-              return;
-            }
             if (
+              !isValidTabId(tabId) ||
               (msg.accessMode !== ACCESS_MODE_ALL && msg.accessMode !== ACCESS_MODE_SELECTED) ||
               typeof msg.grant !== "boolean"
             ) {
@@ -217,48 +237,40 @@ export function createPopupMessageHandler({
               return;
             }
             await accessReady;
+            await requireAutomationAllowed();
             if (policy.mode !== msg.accessMode) {
               sendResponse({ ok: false, error: "Browser access mode changed. Refresh and retry." });
               return;
             }
             const revocation = policy.beginRevocation(tabId);
-            let restoredAccess = false;
             try {
               await runAccessMutation(async () => {
                 if (policy.mode !== msg.accessMode) {
                   throw new Error("Browser access mode changed. Refresh and retry.");
                 }
                 if (policy.mode === ACCESS_MODE_ALL) {
-                  const denied = policy.isDenied(tabId);
-                  if (msg.grant && denied) {
+                  if (msg.grant && policy.isDenied(tabId)) {
                     await policy.allow(tabId);
-                    restoredAccess = true;
-                  } else if (!msg.grant && !denied) {
+                  } else if (!msg.grant && !policy.isDenied(tabId)) {
                     await pauseTab(tabId);
                   }
                 } else {
-                  const wasSelected = await isTabSelected(await chromeApi.tabs.get(tabId));
-                  if (!msg.grant && wasSelected) {
+                  const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
+                  if (!msg.grant && selected) {
                     policy.invalidateTab(tabId);
                     await Promise.allSettled([attachingTabs.get(tabId)]);
                     await detachDebugger(tabId);
                     await removeTabFromOpenClawGroup(tabId);
-                    scheduleTabsSync();
-                    await getCopilot().onConsentChanged(tabId, { revoked: true });
-                  } else if (msg.grant && !wasSelected) {
+                  } else if (msg.grant && !selected) {
                     policy.invalidateTab(tabId);
                     await addTabToOpenClawGroup(tabId);
-                    restoredAccess = true;
                   }
                 }
+                scheduleTabsSync();
+                await syncTabsToRelay();
               });
             } finally {
               policy.endRevocation(revocation);
-            }
-            if (restoredAccess) {
-              scheduleTabsSync();
-              await syncTabsToRelay();
-              await getCopilot().onConsentChanged(tabId, { revoked: false });
             }
             const state = await policy.inspectTab(tabId);
             sendResponse({ ok: true, accessible: state.accessible, denied: state.denied });
@@ -275,20 +287,6 @@ export function createPopupMessageHandler({
             });
             return;
           }
-          case "sendPageToOpenClaw": {
-            if (typeof msg.tabId !== "number") {
-              sendResponse({ ok: false, error: "No tab." });
-              return;
-            }
-            await pageShare.sendPage(msg.tabId, msg.note);
-            sendResponse({ ok: true });
-            return;
-          }
-          case "prepareCopilotPanel": {
-            const options = await getCopilot().preparePanel(msg.tabId);
-            sendResponse({ ok: true, ...options });
-            return;
-          }
           default:
             sendResponse({ ok: false, error: "unknown message" });
         }
@@ -298,4 +296,8 @@ export function createPopupMessageHandler({
     })();
     return true;
   };
+
+  handler.applyPairing = applyPairing;
+  handler.unpair = unpair;
+  return handler;
 }

@@ -15,6 +15,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type {
+  WorkerDesktopApp,
   WorkerDesktopEndpoint,
   WorkerProfile,
   WorkerSshEndpoint,
@@ -43,7 +44,11 @@ import {
 
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerBootstrapInstallKind = "bundle" | "local";
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
+  /** Provenance only; admission authority remains the exact stored build identity. */
+  installKind?: WorkerBootstrapInstallKind;
+};
 type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
@@ -62,7 +67,11 @@ type RecordBase = RecordIdentity & {
 };
 type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
-type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
+type LeasedRecord = {
+  state: WorkerEnvironmentLeasedState;
+  leaseId: string;
+  sshEndpoint: Ssh | null;
+};
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export class WorkerSessionAlreadyAttachedError extends Error {
   constructor(
@@ -116,6 +125,7 @@ const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orpha
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
 const MAX_SSH_FALLBACK_PORTS = 10;
+const MAX_WORKER_DESKTOP_APPS = 8;
 const ensuredWorkerEnvironmentDatabases = new WeakSet<DatabaseSync>();
 const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
@@ -172,6 +182,7 @@ function normalizeBootstrapReceipt(value: {
   bundleHash: unknown;
   openclawVersion: unknown;
   protocolFeatures: unknown;
+  installKind?: unknown;
 }): WorkerEnvironmentBootstrapReceipt {
   const bundleHash = required(value.bundleHash, "bootstrap bundle hash");
   if (!WORKER_BUNDLE_HASH_PATTERN.test(bundleHash)) {
@@ -189,10 +200,18 @@ function normalizeBootstrapReceipt(value: {
   ) {
     throw new Error("Worker environment bootstrap protocol features exceed admission limits");
   }
+  if (
+    value.installKind !== undefined &&
+    value.installKind !== "bundle" &&
+    value.installKind !== "local"
+  ) {
+    throw new Error("Worker environment bootstrap install kind is invalid");
+  }
   return {
     bundleHash,
     openclawVersion: required(value.openclawVersion, "bootstrap OpenClaw version"),
     protocolFeatures: normalizeSortedUniqueTrimmedStringList(value.protocolFeatures),
+    ...(value.installKind ? { installKind: value.installKind } : {}),
   };
 }
 function normalizeCredentialHash(value: unknown): string {
@@ -297,10 +316,56 @@ export function normalizeWorkerDesktopEndpoint(
   ) {
     throw new Error("Worker environment desktop password file path must be absolute");
   }
+  if (value.apps !== undefined && !Array.isArray(value.apps)) {
+    throw new Error("Worker environment desktop apps must be an array");
+  }
+  if ((value.apps?.length ?? 0) > MAX_WORKER_DESKTOP_APPS) {
+    throw new Error(`Worker environment desktop apps cannot exceed ${MAX_WORKER_DESKTOP_APPS}`);
+  }
+  const seenAppIds = new Set<WorkerDesktopApp["id"]>();
+  const apps = (value.apps ?? []).map((app): WorkerDesktopApp => {
+    if (!isRecord(app) || (app.id !== "browser" && app.id !== "terminal")) {
+      throw new Error('Worker environment desktop app id must be "browser" or "terminal"');
+    }
+    if (seenAppIds.has(app.id)) {
+      throw new Error(`Worker environment desktop app id ${app.id} must be unique`);
+    }
+    seenAppIds.add(app.id);
+    if (typeof app.executablePath !== "string" || !isAbsolute(app.executablePath)) {
+      throw new Error("Worker environment desktop app executable path must be absolute");
+    }
+    if (app.id === "terminal") {
+      if (Object.keys(app).some((key) => key !== "id" && key !== "executablePath")) {
+        throw new Error("Worker environment terminal desktop app contains unknown fields");
+      }
+      return { id: "terminal", executablePath: app.executablePath };
+    }
+    if (
+      Object.keys(app).some((key) => key !== "id" && key !== "executablePath" && key !== "cdpPort")
+    ) {
+      throw new Error("Worker environment browser desktop app contains unknown fields");
+    }
+    if (
+      typeof app.cdpPort !== "number" ||
+      !Number.isSafeInteger(app.cdpPort) ||
+      app.cdpPort < 1 ||
+      app.cdpPort > 65_535
+    ) {
+      throw new Error(
+        "Worker environment browser CDP port must be an integer from 1 through 65535",
+      );
+    }
+    return {
+      id: "browser",
+      executablePath: app.executablePath,
+      cdpPort: app.cdpPort,
+    };
+  });
   return {
     protocol: "rfb",
     port: value.port,
     ...(passwordFilePath === undefined ? {} : { passwordFilePath }),
+    ...(value.apps === undefined ? {} : { apps }),
   };
 }
 function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
@@ -333,6 +398,7 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
     bootstrap_bundle_hash: bundleHash,
     bootstrap_openclaw_version: openclawVersion,
     bootstrap_protocol_features_json: encodedFeatures,
+    bootstrap_install_kind: installKind,
   } = row;
   if (bundleHash === null && openclawVersion === null && encodedFeatures === null) {
     return null;
@@ -344,6 +410,7 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
     bundleHash,
     openclawVersion,
     protocolFeatures: JSON.parse(encodedFeatures) as unknown,
+    ...(installKind === null ? {} : { installKind }),
   });
 }
 function assertShape(
@@ -358,8 +425,8 @@ function assertShape(
     if (!leaseId) {
       throw new Error(`Worker environment state ${state} requires a provider lease`);
     }
-    if (!sshEndpoint) {
-      throw new Error("Worker environment provider lease requires an SSH endpoint reference");
+    if (state === "bootstrapping" && !sshEndpoint) {
+      throw new Error("Worker environment bootstrap requires an SSH endpoint reference");
     }
   } else if (leaseId || sshEndpoint || desktop) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
@@ -770,6 +837,7 @@ export function createWorkerEnvironmentStore(
               bootstrap_bundle_hash: null,
               bootstrap_openclaw_version: null,
               bootstrap_protocol_features_json: null,
+              bootstrap_install_kind: null,
               owner_epoch: 0,
               teardown_terminal_state: null,
               state: "requested",
@@ -905,7 +973,12 @@ export function createWorkerEnvironmentStore(
               : patch.desktop === null
                 ? null
                 : normalizeWorkerDesktopEndpoint(patch.desktop);
-        const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
+        const acceptsBootstrapReceipt =
+          to === "ready" &&
+          (from === "bootstrapping" || (from === "provisioning" && sshEndpoint === null));
+        if (to === "ready" && !acceptsBootstrapReceipt) {
+          throw new Error("Ready worker transition requires bootstrap proof or a node lease");
+        }
         if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
           throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
         }
@@ -994,6 +1067,7 @@ export function createWorkerEnvironmentStore(
           bootstrap_protocol_features_json: bootstrapReceipt
             ? json(bootstrapReceipt.protocolFeatures)
             : null,
+          bootstrap_install_kind: bootstrapReceipt?.installKind ?? null,
           owner_epoch: ownerEpoch,
           state: to,
           attached_session_ids_json: json(attachedSessionIds),

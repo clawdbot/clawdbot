@@ -15,7 +15,7 @@ import type {
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
-export const MAX_TIMER_DELAY_MS = 60_000;
+export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
 export const HEARTBEAT_SKIP_DISABLED = "disabled";
 

@@ -13,13 +13,13 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
     Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
   reloadControlUiIfStale: vi.fn(),
 }));
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
   peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
 }));
@@ -29,6 +29,7 @@ vi.mock("../lib/nodes/index.ts", () => ({
 
 const HANDOFF_POLL_MS = 1_000;
 const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {

@@ -1,7 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import type {
   WorkerDesktopEndpoint,
   WorkerLease,
@@ -15,7 +12,12 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
     throw new Error("Worker provider returned an invalid inspection result");
   }
   const status = value.status;
-  if (status !== "active" && status !== "destroyed" && status !== "unknown") {
+  if (
+    status !== "active" &&
+    status !== "dormant" &&
+    status !== "destroyed" &&
+    status !== "unknown"
+  ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
   if (status === "active") {
@@ -31,28 +33,35 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {
+  const hasSsh = isRecord(value) && Object.hasOwn(value, "ssh");
+  const hasNode = isRecord(value) && Object.hasOwn(value, "node");
   if (
     !isRecord(value) ||
     typeof value.leaseId !== "string" ||
     !value.leaseId.trim() ||
-    !isRecord(value.ssh) ||
+    hasSsh === hasNode ||
+    (hasSsh && !isRecord(value.ssh)) ||
+    (hasNode && !isRecord(value.node)) ||
     (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean")
   ) {
     throw new Error("Worker provider returned an invalid provision result");
   }
-  return {
+  const common = {
     leaseId: value.leaseId.trim(),
-    ssh: normalizeWorkerSshEndpoint(value.ssh as WorkerSshEndpoint),
     ...(value.sharedHost === true ? { sharedHost: true } : {}),
     ...(value.desktop === undefined
       ? {}
       : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
   };
-}
-
-export function boundedWorkerError(error: unknown): string {
-  const redacted = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/g, " ")
-    .trim();
-  return truncateUtf16Safe(redacted || "unknown error", 1_024);
+  if (hasSsh) {
+    return {
+      ...common,
+      ssh: normalizeWorkerSshEndpoint(value.ssh as WorkerSshEndpoint),
+    };
+  }
+  const deviceId = (value.node as { deviceId?: unknown }).deviceId;
+  if (typeof deviceId !== "string" || !deviceId.trim()) {
+    throw new Error("Worker provider returned an invalid node device id");
+  }
+  return { ...common, node: { deviceId: deviceId.trim() } };
 }

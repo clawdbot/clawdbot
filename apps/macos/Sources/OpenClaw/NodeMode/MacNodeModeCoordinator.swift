@@ -65,13 +65,13 @@ final class MacNodeModeCoordinator: NSObject {
     static let shared = MacNodeModeCoordinator()
     static var nodeIdentityProfile: GatewayDeviceIdentityProfile {
         self.resolveNodeIdentityProfile(
-            defaults: .standard,
+            defaults: AppDefaults.standard,
             isExistingInstallation: AppStateStore.shared.onboardingSeen)
     }
 
     static func prepareNodeIdentityProfile(isExistingInstallation: Bool) {
         _ = self.resolveNodeIdentityProfile(
-            defaults: .standard,
+            defaults: AppDefaults.standard,
             isExistingInstallation: isExistingInstallation)
     }
 
@@ -166,7 +166,7 @@ final class MacNodeModeCoordinator: NSObject {
         self.nodeHostWorkerRetryPolicy = nodeHostWorkerRetryPolicy
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
-        self.lastObservedPaused = initialPaused ?? UserDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.lastObservedPaused = initialPaused ?? AppDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.lastObservedComputerControlEnabled = initialComputerControlEnabled ??
             isComputerControlEnabled()
         super.init()
@@ -176,7 +176,7 @@ final class MacNodeModeCoordinator: NSObject {
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: UserDefaults.didChangeNotification,
-            object: UserDefaults.standard)
+            object: AppDefaults.standard)
         self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
@@ -273,7 +273,7 @@ final class MacNodeModeCoordinator: NSObject {
 
     func refresh() {
         self.refresh(
-            isPaused: UserDefaults.standard.bool(forKey: pauseDefaultsKey),
+            isPaused: AppDefaults.standard.bool(forKey: pauseDefaultsKey),
             computerControlEnabled: isComputerControlEnabled())
     }
 
@@ -389,7 +389,7 @@ final class MacNodeModeCoordinator: NSObject {
     private func run() async {
         var retryDelay: UInt64 = 1_000_000_000
         var refreshIterator = self.refreshEvents.makeAsyncIterator()
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.standard
 
         while !Task.isCancelled {
             // A stop/refresh immediately followed by start/unpause must not install
@@ -815,7 +815,7 @@ final class MacNodeModeCoordinator: NSObject {
         codexThreadCatalogEnabled: Bool,
         claudeSessionCatalogEnabled: Bool) -> [String]
     {
-        let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        let rawLocationMode = AppDefaults.standard.string(forKey: locationModeKey) ?? "off"
         let computerControlEnabled = isComputerControlEnabled()
         return Self.resolvedCaps(
             browserControlEnabled: browserControlEnabled,
@@ -848,7 +848,8 @@ final class MacNodeModeCoordinator: NSObject {
             } else {
                 switch await CLIInstaller.status() {
                 case let .ready(location, _):
-                    launch = MacNodeHostWorkerLaunch(command: [location, "node", "worker"])
+                    launch = MacNodeHostWorkerLaunch(command: CommandResolver.nodeHostWorkerCommand(
+                        prefix: [location]))
                 case let status:
                     throw MacNodeHostWorker.WorkerError.unavailable(status.message)
                 }

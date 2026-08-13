@@ -15,20 +15,21 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -135,11 +136,10 @@ async function runEmbeddedAgentInternal(
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
-      laneId: globalLane,
     });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
@@ -227,8 +227,15 @@ async function runEmbeddedAgentInternal(
           agentId: requestedWorkspaceResolution.agentId,
           sessionKey: params.sessionKey,
         });
+      const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir: requestedWorkspaceResolution.workspaceDir,
+        env: process.env,
+        allowWorkspaceScopedSnapshot: true,
+      });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
+        manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
@@ -251,7 +258,9 @@ async function runEmbeddedAgentInternal(
         config,
         agentId: requestedWorkspaceResolution.agentId,
         agentDir: requestedAgentDir,
-        inheritedAuthDir: resolveDefaultAgentDir(config),
+        // Shared credential inheritance stays anchored to its compatibility owner;
+        // the selected session agent already owns this prepared runtime.
+        inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
@@ -267,7 +276,12 @@ async function runEmbeddedAgentInternal(
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
-            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
+              }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
@@ -418,10 +432,7 @@ async function runEmbeddedAgentInternal(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeRegistryScope(
-          preparedModelRuntime.pluginRegistry,
-          runPrepared,
-        );
+        return await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
       } finally {
         preparedModelRuntimeLease.release();
       }

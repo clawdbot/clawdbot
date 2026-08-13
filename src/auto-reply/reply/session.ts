@@ -19,7 +19,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -91,6 +91,7 @@ import {
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext,
@@ -318,7 +319,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }
@@ -393,10 +394,14 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     displayName: entry.displayName,
+    // Notice debt survives rollover: erasing it here would recreate the
+    // silent ambiguous-loss outcome the debt exists to prevent.
+    pendingDeliveryNotice: entry.pendingDeliveryNotice,
     spawnedBy: entry.spawnedBy,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     spawnedCwd: entry.spawnedCwd,
     parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
     forkSource: entry.forkSource,
     createdVia: entry.createdVia,
@@ -839,14 +844,14 @@ async function initSessionStateAttemptLocked(
         accountIdRaw: ctx.AccountId,
         persistedLastAccountId: baseDeliveryContext?.accountId,
       });
-  // Only fall back to persisted threadId for thread sessions. Non-thread
-  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
+  // Internal turns share the established external route and must not erase its
+  // thread. External non-thread turns still clear stale thread routing.
+  const preservePersistedThread = isThread || isInternalMessageChannel(originatingChannelRaw);
   const lastThreadIdRaw = isSystemEvent
     ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseDeliveryContext?.threadId : undefined));
+      (preservePersistedThread ? baseDeliveryContext?.threadId : undefined));
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
@@ -1097,7 +1102,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,

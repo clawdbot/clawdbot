@@ -167,7 +167,8 @@ The QMD cross-agent search path was removed. Builtin memory does not search
 another agent's transcript corpus; each agent searches only its own configured
 memory and eligible same-agent session sources. Put intentionally shared
 Markdown in an explicit shared `memory.search.extraPaths` directory when the
-same reference material should be indexed by multiple agents.
+same reference material should be indexed by multiple agents. For the full
+upgrade path, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 ## One WhatsApp number, multiple people (DM split)
 

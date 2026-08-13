@@ -1,4 +1,5 @@
 /** Detached task-ledger integration for cron runs. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -17,12 +18,12 @@ function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefin
 }
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
-  createRunningTaskRun,
+  createRunningTaskRunCore,
   finalizeTaskRunById,
-  finalizeTaskRunByRunId,
+  finalizeTaskRunByRunIdCore,
   findTaskByRunId,
   listTaskRecordsUnsorted,
-  recordTaskRunProgressByRunId,
+  recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -42,6 +43,18 @@ import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../type
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+const activeCronTaskRunId = new AsyncLocalStorage<string>();
+
+/** Keeps the detached task id on the async execution that owns it. */
+export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
+  const normalizedRunId = taskRunId?.trim();
+  return normalizedRunId ? activeCronTaskRunId.run(normalizedRunId, run) : run();
+}
+
+export function getActiveCronTaskRunId(): string | undefined {
+  return activeCronTaskRunId.getStore();
+}
 
 /** Converts cron ids into bounded session-key path segments with a fallback for empty input. */
 export function normalizeCronLaneSegment(value: string | undefined, fallback: string): string {
@@ -92,7 +105,7 @@ export function tryUpdateCronTaskRunSession(
     return;
   }
   try {
-    const updated = recordTaskRunProgressByRunId({
+    const updated = recordTaskRunProgressByRunIdCore({
       runId: taskRunId,
       runtime: "cron",
       childSessionKey,
@@ -236,7 +249,7 @@ function tryCreateCronTaskRunRecord(params: {
     const effectiveJobAgentId = params.job
       ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
       : undefined;
-    const task = createRunningTaskRun({
+    const task = createRunningTaskRunCore({
       runtime: "cron",
       taskKind: CRON_TASK_KIND,
       sourceId: params.jobId,
@@ -297,7 +310,7 @@ export function tryFinishCronTaskRunWithoutHistory(
   }
   const error = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
   try {
-    finalizeTaskRunByRunId({
+    finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
       status:
@@ -370,7 +383,7 @@ export function tryFinishCronTaskRun(
         "succeeded" | "failed" | "timed_out" | "cancelled"
       > = cronRunStatusToTaskStatus(entry),
     ) =>
-      finalizeTaskRunByRunId({
+      finalizeTaskRunByRunIdCore({
         runId,
         runtime: "cron",
         status,

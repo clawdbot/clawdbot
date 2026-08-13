@@ -156,8 +156,8 @@
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font: 600 var(--control-ui-text-xs) / 1 var(--font-sans);
-  cursor: pointer;
+  font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
+  cursor: var(--cursor-action);
 }
 
 .settings-section__help-button > span {
@@ -243,7 +243,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .config-advanced-divider__toggle:hover {
@@ -376,7 +376,7 @@
 
 /* Label-wrapped toggle row: whole row toggles the switch. */
 .settings-row--toggle {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-row--toggle:has(wa-switch[disabled]) {
@@ -391,7 +391,7 @@
   font: inherit;
   text-align: left;
   color: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -474,7 +474,7 @@ select.settings-select:not([multiple]) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-control__sr-label {
@@ -530,7 +530,7 @@ wa-radio-group.settings-segmented::part(radios) {
   background: transparent;
   color: var(--muted);
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -560,6 +560,8 @@ wa-radio-group.settings-segmented::part(radios) {
 
 .settings-input,
 .settings-select {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
   width: 100%;
   min-width: 0;
   font: inherit;
@@ -693,7 +695,7 @@ select.settings-select:not([multiple]) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
 
@@ -745,7 +747,7 @@ wa-select.settings-select::part(combobox) {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
@@ -782,7 +784,7 @@ wa-select.settings-select wa-option {
   border-radius: calc(var(--radius-md) - 4px);
   font-size: var(--control-ui-text-md);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 /* The roving "current" option already carries the accent fill; the global
@@ -793,6 +795,59 @@ wa-select.settings-select wa-option:focus-visible {
 
 wa-select.settings-select wa-option:state(current) {
   color: var(--primary-foreground);
+}
+
+.picker-select__option {
+  color: var(--text);
+}
+
+.picker-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
+}
+
+.picker-select__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.picker-select__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.picker-select__description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.model-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-picker__provider-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.model-picker__provider-icon.provider-brand-icon--fallback {
+  font-size: 9px;
+}
+
+.model-picker__custom[hidden] {
+  display: none;
 }
 
 /* Forced colors suppresses the box-shadow ring and accent fill that stand in

@@ -11,7 +11,25 @@ type CreateStaticCatalogResolver =
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
+  pluginMetadataSnapshot: {
+    plugins: [],
+    pluginIds: [],
+    index: { plugins: [] },
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+  },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
+  preparedAuthMaterializations:
+    [] as import("./auth-profiles/runtime-materializations.js").RuntimeAuthMaterialization[],
   authStorage: {
     getAll: vi.fn<() => AuthStorageData>(() => ({
       custom: { type: "api_key", key: "test-key" },
@@ -52,6 +70,18 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   mutationListener: undefined as
     | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
     | undefined,
+  mutationListeners: new Set<
+    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+  >(),
+  materializationListeners: new Set<
+    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+  >(),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: () => true,
+  loadPluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
 vi.mock("./model-catalog.js", () => ({
@@ -95,6 +125,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     preparedModelRuntimeMocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
+  tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -108,15 +139,84 @@ vi.mock("./agent-scope.js", () => ({
   }),
 }));
 
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
+}));
+
+vi.mock("./auth-profiles/runtime-materializations.js", () => ({
+  getPreparedRuntimeAuthMaterializations: () =>
+    preparedModelRuntimeMocks.preparedAuthMaterializations,
+  registerRuntimeAuthMaterializationMutationListener: (
+    listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
+  ) => {
+    preparedModelRuntimeMocks.materializationListeners.add(listener);
+    return () => preparedModelRuntimeMocks.materializationListeners.delete(listener);
+  },
+  recordRuntimeAuthMaterialization: (params: {
+    agentDir?: string;
+    provider: string;
+    modelId: string;
+    modelApi: string;
+    modelBaseUrl: string;
+    requestTransportOverrides: "none" | "present";
+    authMode: string;
+    runtimeOwnerId: string;
+    authProfileId?: string;
+  }) => {
+    preparedModelRuntimeMocks.preparedAuthMaterializations.push({
+      provider: params.provider.trim().toLowerCase(),
+      modelId: params.modelId.trim().toLowerCase(),
+      modelApi: params.modelApi.trim().toLowerCase(),
+      modelBaseUrl: params.modelBaseUrl,
+      requestTransportOverrides: params.requestTransportOverrides,
+      authMode: params.authMode.trim().toLowerCase(),
+      runtimeOwnerId: params.runtimeOwnerId.trim().toLowerCase(),
+      ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+    });
+    const event = {
+      agentDir: params.agentDir,
+      affectsInheritedStores: params.agentDir === undefined,
+    };
+    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
+      listener(event);
+    }
+    return true;
+  },
+  revokeRuntimeAuthMaterializations: (params: {
+    agentDir?: string;
+    provider: string;
+    runtimeOwnerId: string;
+  }) => {
+    const previousLength = preparedModelRuntimeMocks.preparedAuthMaterializations.length;
+    preparedModelRuntimeMocks.preparedAuthMaterializations =
+      preparedModelRuntimeMocks.preparedAuthMaterializations.filter(
+        (fact) =>
+          fact.provider !== params.provider || fact.runtimeOwnerId !== params.runtimeOwnerId,
+      );
+    if (preparedModelRuntimeMocks.preparedAuthMaterializations.length === previousLength) {
+      return false;
+    }
+    const event = {
+      agentDir: params.agentDir,
+      affectsInheritedStores: params.agentDir === undefined,
+    };
+    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
+      listener(event);
+    }
+    return true;
+  },
+}));
+
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
-    preparedModelRuntimeMocks.mutationListener = listener;
-    return () => {};
+    preparedModelRuntimeMocks.mutationListener ??= listener;
+    preparedModelRuntimeMocks.mutationListeners.add(listener);
+    return () => preparedModelRuntimeMocks.mutationListeners.delete(listener);
   },
 }));
 
@@ -179,6 +279,7 @@ export function resetPreparedModelRuntimeHarness(): void {
   });
   preparedModelRuntimeMocks.authStorage.getOAuthProviders.mockReset().mockReturnValue([]);
   preparedModelRuntimeMocks.preparedAuthStore = undefined;
+  preparedModelRuntimeMocks.preparedAuthMaterializations = [];
   preparedModelRuntimeMocks.modelRegistry.fork
     .mockReset()
     .mockImplementation((authStorage: unknown) => ({ authStorage }));

@@ -15,7 +15,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { ApplicationOverlays } from "../app/overlays.ts";
+import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
@@ -51,6 +51,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   offline: boolean;
   outboxCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -71,7 +72,7 @@ export type SidebarLifecycleState = HTMLElement & {
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
   canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
@@ -185,6 +186,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     },
     sessions: keys.map((key, index) => ({
       key,
+      sessionId: `session:${key}`,
       kind: "direct" as const,
       updatedAt: index + 1,
     })),
@@ -225,7 +227,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const groupsPut = vi.fn(() => Promise.resolve());
+  const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));

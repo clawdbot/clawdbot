@@ -21,6 +21,7 @@ type SlackDraftStream = {
   seal: () => Promise<void>;
   stop: () => void;
   forceNewMessage: () => void;
+  dropDetachedMessages: () => Promise<void>;
   finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
   messageId: () => string | undefined;
   channelId: () => string | undefined;
@@ -63,6 +64,8 @@ export function createSlackDraftStream(params: {
   let untrackConversationBoundary: (() => void) | undefined;
   let lastVisibleUpdate: { text: string; blocks?: (Block | KnownBlock)[] } | undefined;
   let lastSentKey = "";
+  const detachedMessages: Array<{ channelId: string; messageId: string }> = [];
+  const finalizedMessageIds = new Set<string>();
   const streamState = { stopped: false, final: false };
 
   const normalizeUpdate = (update: SlackDraftStreamUpdate) =>
@@ -117,7 +120,7 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
         threadTs,
         identity: params.identity,
-        ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+        eventScope: params.eventScope,
         ...(params.metadata ? { metadata: params.metadata } : {}),
         ...(blocks ? { blocks } : {}),
       });
@@ -171,6 +174,18 @@ export function createSlackDraftStream(params: {
     loop.stop();
   };
 
+  const removeMessage = async (channelId: string, messageId: string) => {
+    try {
+      await remove(channelId, messageId, {
+        token: params.token,
+        accountId: params.accountId,
+        ...(params.eventScope ? { client: params.eventScope.client } : {}),
+      });
+    } catch (err) {
+      params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
+    }
+  };
+
   const clear = async () => {
     stopTrackingConversationBoundary();
     await discardPending();
@@ -183,24 +198,33 @@ export function createSlackDraftStream(params: {
     if (!channelId || !messageId) {
       return;
     }
-    try {
-      await remove(channelId, messageId, {
-        token: params.token,
-        accountId: params.accountId,
-        ...(params.eventScope ? { client: params.eventScope.client } : {}),
-      });
-    } catch (err) {
-      params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
-    }
+    await removeMessage(channelId, messageId);
   };
 
   const forceNewMessage = () => {
     stopTrackingConversationBoundary();
+    streamState.stopped = false;
+    streamState.final = false;
+    if (streamChannelId && streamMessageId && !finalizedMessageIds.has(streamMessageId)) {
+      // A card abandoned below a newer human message is unreachable through
+      // finalize/clear and would otherwise linger in its Working state.
+      detachedMessages.push({ channelId: streamChannelId, messageId: streamMessageId });
+    }
     streamMessageId = undefined;
     streamChannelId = undefined;
     lastVisibleUpdate = undefined;
     lastSentKey = "";
     loop.resetPending();
+  };
+
+  const dropDetachedMessages = async () => {
+    // The boundary notifier can append synchronously while removal awaits.
+    // Re-read the live queue so this drain also owns those later detachments.
+    let message: { channelId: string; messageId: string } | undefined;
+    while ((message = detachedMessages.shift()) !== undefined) {
+      const { channelId, messageId } = message;
+      await removeMessage(channelId, messageId);
+    }
   };
 
   const discardPendingAndStopTracking = async () => {
@@ -220,6 +244,7 @@ export function createSlackDraftStream(params: {
 
     await editFinal();
     if (streamChannelId === channelId && streamMessageId === messageId) {
+      finalizedMessageIds.add(messageId);
       stopTrackingConversationBoundary();
       return true;
     }
@@ -250,6 +275,7 @@ export function createSlackDraftStream(params: {
     seal,
     stop,
     forceNewMessage,
+    dropDetachedMessages,
     finalizeMessage,
     messageId: () => streamMessageId,
     channelId: () => streamChannelId,

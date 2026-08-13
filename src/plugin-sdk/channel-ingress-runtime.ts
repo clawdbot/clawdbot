@@ -128,11 +128,17 @@ export function fanInChannelIngressLifecycles(
   lifecycle: ChannelIngressLifecycle | undefined;
   settle: () => Promise<void>;
   abandon: (error?: unknown) => Promise<void>;
+  cancel: () => Promise<void>;
 } {
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
   if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+    return {
+      lifecycle: undefined,
+      settle: async () => {},
+      abandon: async () => {},
+      cancel: async () => {},
+    };
   }
 
   let handedOff = false;
@@ -147,7 +153,16 @@ export function fanInChannelIngressLifecycles(
   const failAll = async (error: unknown) => {
     await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
   };
-
+  const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  // Omit aggregate cancellation unless every durable source supports it. Callers
+  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  const cancelAll = async () => {
+    await Promise.all(
+      lifecycles.map(async (lifecycle) =>
+        lifecycle.onCancelled ? await lifecycle.onCancelled() : await lifecycle.onAbandoned(),
+      ),
+    );
+  };
   return {
     lifecycle: {
       abortSignal:
@@ -173,6 +188,14 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
+      ...(supportsCancellation
+        ? {
+            onCancelled: async () => {
+              handedOff = true;
+              await cancelAll();
+            },
+          }
+        : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
@@ -189,6 +212,14 @@ export function fanInChannelIngressLifecycles(
       if (!handedOff) {
         handedOff = true;
         await abandonAll();
+      }
+    },
+    // Source-compatible lifecycles predate onCancelled. Settle each source through
+    // its strongest release callback so mixed fan-in cannot strand a durable claim.
+    cancel: async () => {
+      if (!handedOff) {
+        handedOff = true;
+        await cancelAll();
       }
     },
   };

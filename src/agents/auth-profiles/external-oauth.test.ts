@@ -11,6 +11,12 @@ import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  registerRuntimeAuthProfileStoreMutationListener,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, getRuntimeAuthProfileStoreSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
@@ -55,6 +61,7 @@ function requireProfile(store: AuthProfileStore, profileId: string): Record<stri
 
 describe("auth external oauth helpers", () => {
   beforeEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
     resolveExternalAuthProfilesWithPluginsMock.mockReset();
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
     readCodexCliCredentialsCachedMock.mockReset();
@@ -63,6 +70,7 @@ describe("auth external oauth helpers", () => {
   });
 
   afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
     testing.resetResolveExternalAuthProfilesForTest();
   });
 
@@ -103,6 +111,99 @@ describe("auth external oauth helpers", () => {
     expect(resolveParams.config).toBe(cfg);
     expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a usable scoped CLI bootstrap into the runtime auth owner", () => {
+    const agentDir = "/tmp/openclaw-external-oauth-publication";
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const scoped = ensureAuthProfileStore(agentDir, {
+        externalCliProviderIds: ["openai"],
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+
+      expect(scoped.profiles["openai:default"]?.type).toBe("oauth");
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]?.type).toBe(
+        "oauth",
+      );
+      expect(listener).toHaveBeenCalledWith({ agentDir, affectsInheritedStores: false });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not replace an explicit unresolved API-key profile with CLI OAuth", () => {
+    const agentDir = "/tmp/openclaw-external-oauth-explicit-owner";
+    const explicit = createStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: explicit }]);
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const scoped = ensureAuthProfileStore(agentDir, {
+        externalCliProviderIds: ["openai"],
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+
+      expect(scoped.profiles["openai:default"]).toEqual(explicit.profiles["openai:default"]);
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toEqual(
+        explicit.profiles["openai:default"],
+      );
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("preserves resolved runtime refs when startup publishes scoped external auth", () => {
+    const agentDir = "/tmp/openclaw-external-oauth-prepared-owner";
+    const resolved = createStore({
+      "openai:configured": {
+        type: "api_key",
+        provider: "openai",
+        key: "resolved-runtime-key",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: resolved }]);
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const hydrated = ensureAuthProfileStore(agentDir, {
+        externalCliProviderIds: ["openai"],
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+
+      expect(hydrated.profiles["openai:configured"]).toEqual(
+        resolved.profiles["openai:configured"],
+      );
+      expect(hydrated.profiles["openai:default"]?.type).toBe("oauth");
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles).toEqual(hydrated.profiles);
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unregister();
+    }
   });
 
   it("keeps ambient Codex OAuth from outranking an env key under an api-key pin", () => {

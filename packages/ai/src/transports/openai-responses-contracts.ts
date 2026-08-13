@@ -1,4 +1,10 @@
-import type { Api, ProviderReplayState } from "@openclaw/llm-core";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type Api,
+  type ProviderReplayState,
+} from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -22,6 +28,89 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+
+export class OpenAIResponsesWebSocketResponseFailedError extends Error {
+  readonly code: string;
+
+  constructor(hasOutput: boolean) {
+    super("OpenAI Responses WebSocket returned response.failed");
+    this.name = "OpenAIResponsesWebSocketResponseFailedError";
+    this.code = hasOutput
+      ? PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE
+      : PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+  }
+}
+
+export class OpenAIResponsesWebSocketPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed before request dispatch", { cause });
+    this.name = "OpenAIResponsesWebSocketPreDispatchError";
+  }
+}
+
+export class OpenAIResponsesWebSocketPostDispatchError extends Error {
+  readonly code = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed after request dispatch; outcome is unknown", {
+      cause,
+    });
+    this.name = "OpenAIResponsesWebSocketPostDispatchError";
+  }
+}
+
+class OpenAIResponsesWebSocketServerError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number | undefined,
+    readonly param: string | null,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "OpenAIResponsesWebSocketServerError";
+  }
+}
+
+export class OpenAIResponsesWebSocketSafeRetryError extends OpenAIResponsesWebSocketServerError {}
+
+function readWebSocketServerError(value: unknown) {
+  if (!isRecord(value) || value.type !== "error") {
+    return undefined;
+  }
+  const details = isRecord(value.error) ? value.error : value;
+  if (typeof details.code !== "string" || typeof details.message !== "string") {
+    return undefined;
+  }
+  const rawStatus = value.status ?? value.status_code;
+  return {
+    code: details.code,
+    message: details.message,
+    param: typeof details.param === "string" ? details.param : null,
+    status: typeof rawStatus === "number" ? rawStatus : undefined,
+  };
+}
+
+export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
+  if (!isRecord(cause)) {
+    return undefined;
+  }
+  let details = readWebSocketServerError(cause.error) ?? readWebSocketServerError(cause);
+  if (!details && typeof cause.message === "string") {
+    try {
+      details = readWebSocketServerError(JSON.parse(cause.message));
+    } catch {}
+  }
+  if (!details) {
+    return undefined;
+  }
+  const ErrorClass =
+    details.code === "previous_response_not_found" ||
+    details.code === "websocket_connection_limit_reached"
+      ? OpenAIResponsesWebSocketSafeRetryError
+      : OpenAIResponsesWebSocketServerError;
+  return new ErrorClass(details.code, details.status, details.param, details.message, cause);
+}
 
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
@@ -55,8 +144,12 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
-  egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
+  egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
+  payloadVariant:
+    | "initial"
+    | "reasoning-stripped"
+    | "compaction-stripped"
+    | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -96,6 +189,7 @@ export type OpenAIResponsesRequestParams = {
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
+  previous_response_id?: string;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;

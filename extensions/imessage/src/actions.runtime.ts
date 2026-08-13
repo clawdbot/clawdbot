@@ -3,11 +3,7 @@ import { basename, parse, win32 } from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  findChatGuidForTest,
-  normalizeDirectChatIdentifierForTest,
-  resolveIMessageActionChatGuid,
-} from "./actions-chat-guid.js";
+import { resolveIMessageActionChatGuid } from "./actions-chat-guid.js";
 import {
   type IMessageActionTransportOptions,
   requestIMessageActionRpc,
@@ -21,7 +17,6 @@ import {
 } from "./monitor-reply-cache.js";
 import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
-export { findChatGuidForTest, normalizeDirectChatIdentifierForTest };
 
 type IMessageBridgeActionOptions = IMessageActionTransportOptions & {
   chatGuid: string;

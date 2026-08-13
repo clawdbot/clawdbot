@@ -14,11 +14,13 @@ import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -38,20 +40,59 @@ import {
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
-  autoMigrateLegacyState,
+  autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   autoMigrateLegacyPluginDoctorState,
-  detectLegacyStateMigrations,
+  detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
-  runLegacyStateMigrations,
+  runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
-import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
+import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
+
+type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWithSurfaces>[0];
+type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
+type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
+
+// This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
+// Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
+function detectLegacyStateMigrations(
+  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return detectLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function runLegacyStateMigrations(
+  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return runLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function autoMigrateLegacyState(
+  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return autoMigrateLegacyStateWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
 
 const pluginDoctorStateMigrationEntries = vi.hoisted(
   () =>
@@ -116,28 +157,6 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
 const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
   entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
 }));
-
-vi.mock("../channels/plugins/bundled.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
-    "../channels/plugins/bundled.js",
-  );
-  return {
-    ...actual,
-    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
-      {
-        isLegacyGroupSessionKey: (key: string) => /^group:mobile-/i.test(key.trim()),
-        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) => {
-          if (key === "legacy-prototype") {
-            return "__proto__";
-          }
-          return /^group:mobile-/i.test(key.trim())
-            ? `agent:${agentId}:mobileauth:${key.trim().toLowerCase()}`
-            : null;
-        },
-      },
-    ]),
-  };
-});
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
@@ -429,6 +448,44 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     HOME: path.dirname(stateDir),
     OPENCLAW_STATE_DIR: stateDir,
   };
+}
+
+type VoiceWakeRoutingTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "voicewake_routing_config" | "voicewake_routing_routes"
+>;
+
+function seedCanonicalVoiceWakeRouting(stateDir: string, trigger: string): void {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingTestDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        routingDb.insertInto("voicewake_routing_config").values({
+          config_key: "default",
+          version: 1,
+          default_target_mode: "current",
+          default_target_agent_id: null,
+          default_target_session_key: null,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+      executeSqliteQuerySync(
+        db,
+        routingDb.insertInto("voicewake_routing_routes").values({
+          config_key: "default",
+          position: 0,
+          trigger,
+          target_mode: "agent",
+          target_agent_id: "main",
+          target_session_key: null,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+    },
+    { env: createEnv(stateDir) },
+  );
 }
 
 type MixedCommitFailureFixture = {
@@ -1151,7 +1208,7 @@ describe("state migrations", () => {
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["group:mobile-room"]).toBeUndefined();
     expect(mergedStore["group:legacy-room"]).toBeUndefined();
-    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
+    expect(mergedStore["agent:worker-1:unknown:group:mobile-room"]?.sessionId).toBe(
       "group-session",
     );
     expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
@@ -1162,13 +1219,8 @@ describe("state migrations", () => {
     expect(mergedStore["voice:15550001111"]).toBeUndefined();
     expect(mergedStore["agent:worker-1:voice:15550001111"]?.sessionId).toBe("shared-voice");
     expect(mergedStore["agent:worker-1:voice:15550001111"]?.acp).toBeUndefined();
-    expect(Object.hasOwn(mergedStore, "__proto__")).toBe(true);
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
-      "prototype-row",
-    );
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value).not.toHaveProperty(
-      "sessionFile",
-    );
+    expect(mergedStore["agent:worker-1:legacy-prototype"]?.sessionId).toBe("prototype-row");
+    expect(mergedStore["agent:worker-1:legacy-prototype"]).not.toHaveProperty("sessionFile");
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
     await expect(
@@ -2314,13 +2366,7 @@ describe("state migrations", () => {
     const triggersPath = path.join(settingsDir, "voicewake.json");
     const routingPath = path.join(settingsDir, "voicewake-routing.json");
     await setVoiceWakeTriggers(["wake"], stateDir);
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "robot wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "robot wake");
     await fs.mkdir(settingsDir, { recursive: true });
     await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["wake"] }), "utf8");
     await fs.writeFile(
@@ -2433,13 +2479,7 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const cfg = createConfig();
     const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "sqlite wake");
     await fs.mkdir(path.dirname(routingPath), { recursive: true });
     await fs.writeFile(
       routingPath,
@@ -2473,13 +2513,7 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const cfg = createConfig();
     const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "sqlite wake");
     await fs.mkdir(path.dirname(routingPath), { recursive: true });
     await fs.writeFile(
       routingPath,

@@ -5,6 +5,7 @@ import type {
   SessionVisibility,
 } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 
@@ -42,6 +43,10 @@ function sharingIcon(visibility: SessionVisibility): TemplateResult {
   return visibility === "shared" ? icons.users : icons.lock;
 }
 
+function isChannelIdentity(identityId: string): boolean {
+  return identityId.startsWith("channel:") || identityId.includes(":channel:");
+}
+
 export function canManageChatSessionSharing(
   session: Pick<GatewaySessionRow, "sharingRole">,
 ): boolean {
@@ -70,9 +75,12 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   const allowed = result?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility];
   const canPublish = visibility === "draft" && allowed.includes("shared");
   const membersAvailable = props.membersAvailable !== false;
+  const visibilityOptions = allowed.filter((option) => !canPublish || option !== "shared");
+  const shouldCapMembers =
+    membersAvailable && visibilityOptions.length + identities.length + (canPublish ? 1 : 0) > 12;
   return html`
     <wa-dropdown
-      class="chat-pane__sharing-menu"
+      class="chat-pane__sharing-menu ${shouldCapMembers ? "chat-pane__sharing-menu--capped" : ""}"
       placement="bottom-end"
       @wa-show=${() => {
         if (!props.openDisabledReason) {
@@ -124,27 +132,29 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
             </wa-dropdown-item>
             <div class="session-menu__separator" role="separator"></div>`
         : nothing}
-      <div class="chat-pane__sharing-title">${t("chat.sessionSharing.visibility")}</div>
-      ${allowed
-        .filter((option) => !canPublish || option !== "shared")
-        .map(
-          (option) => html`
-            <wa-dropdown-item
-              value=${`visibility:${option}`}
-              ?disabled=${option === visibility || Boolean(props.visibilityDisabledReason)}
-              title=${props.visibilityDisabledReason ?? nothing}
-            >
-              <span>${t(VISIBILITY_LABEL_KEYS[option])}</span>
-              ${option === visibility
-                ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
-                : nothing}
-            </wa-dropdown-item>
-          `,
-        )}
+      <div class="chat-pane__sharing-title chat-pane__sharing-visibility-title">
+        ${t("chat.sessionSharing.visibility")}
+      </div>
+      ${visibilityOptions.map(
+        (option) => html`
+          <wa-dropdown-item
+            class="session-menu__item chat-pane__sharing-visibility-item"
+            value=${`visibility:${option}`}
+            ?disabled=${option === visibility || Boolean(props.visibilityDisabledReason)}
+            title=${props.visibilityDisabledReason ?? nothing}
+          >
+            <span>${t(VISIBILITY_LABEL_KEYS[option])}</span>
+            ${option === visibility
+              ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
+              : nothing}
+          </wa-dropdown-item>
+        `,
+      )}
       ${membersAvailable
         ? html`
-            <div class="session-menu__separator" role="separator"></div>
-            <div class="chat-pane__sharing-title">${t("chat.sessionSharing.members")}</div>
+            <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
+              ${t("chat.sessionSharing.members")}
+            </div>
             ${props.state?.loading
               ? html`<div class="chat-pane__sharing-status">${t("common.loading")}</div>`
               : identities.length > 0
@@ -152,13 +162,30 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
                     const disabledReason = members.has(identity.id)
                       ? props.memberRemoveDisabledReason
                       : props.memberAddDisabledReason;
+                    const channelIdentity = isChannelIdentity(identity.id);
                     return html`
                       <wa-dropdown-item
+                        class="session-menu__item chat-pane__sharing-member"
                         value=${`member:${identity.id}`}
                         ?disabled=${Boolean(disabledReason)}
                         title=${disabledReason ?? nothing}
                       >
-                        <span>${identity.label ?? identity.id}</span>
+                        <span
+                          slot="icon"
+                          class="chat-pane__sharing-member-icon ${channelIdentity
+                            ? "chat-pane__sharing-channel-icon"
+                            : ""}"
+                          aria-hidden="true"
+                        >
+                          ${channelIdentity
+                            ? icons.messageSquare
+                            : identity.type === "human"
+                              ? renderSessionOwnerChip(identity, "header")
+                              : icons.bot}
+                        </span>
+                        <span class="chat-pane__sharing-member-label"
+                          >${identity.label ?? identity.id}</span
+                        >
                         ${members.has(identity.id)
                           ? html`<span
                               slot="details"

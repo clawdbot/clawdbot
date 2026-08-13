@@ -13,9 +13,14 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
-import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import {
+  isGatewayArgv,
+  isOpenClawArgv,
+  isOpenClawCommandArgv,
+  parseProcCmdline,
+} from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   readWindowsProcessArgsSync,
@@ -210,7 +215,10 @@ async function resolveGatewayOwnerStatus(
       return "unknown";
     }
     if (role === "agent-embedded") {
-      return isOpenClawCommandArgv(args, "agent") && args.includes("--local") ? "alive" : "dead";
+      // The role covers every direct embedded surface (agent --local, agent exec,
+      // local TUI, and CLI model probes), so validate the owning OpenClaw process
+      // instead of baking one command spelling into stale-lock recovery.
+      return isOpenClawArgv(args) ? "alive" : "dead";
     }
     const command = role === "sqlite-maintenance" ? "doctor" : "skills";
     return isOpenClawCommandArgv(args, command) ? "alive" : "dead";
@@ -307,7 +315,7 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
-  const configHash = sha256HexPrefix(configPath, 8);
+  const configHash = sha256HexPrefixCore(configPath, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
@@ -557,7 +565,7 @@ async function acquireLockFile(
   const ownerPid = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
   const owner =
     lastPayload?.role === "agent-embedded"
-      ? `another openclaw agent --local run is active${ownerPid}`
+      ? `another embedded OpenClaw state writer is active${ownerPid}`
       : lastPayload?.role && lastPayload.role !== "gateway"
         ? `state directory is locked by ${lastPayload.role}${ownerPid}`
         : `gateway already running${ownerPid}`;

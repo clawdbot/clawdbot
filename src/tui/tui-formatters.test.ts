@@ -11,7 +11,7 @@ import {
   formatTuiErrorMessage,
   isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
-  isCommandMessage,
+  isCommandMarkedMessage,
   sanitizeMarkdownSource,
   sanitizeRenderableLine,
   sanitizeRenderableText,
@@ -642,11 +642,11 @@ describe("extractContentFromMessage", () => {
   });
 });
 
-describe("isCommandMessage", () => {
+describe("isCommandMarkedMessage", () => {
   it("detects command-marked messages", () => {
-    expect(isCommandMessage({ command: true })).toBe(true);
-    expect(isCommandMessage({ command: false })).toBe(false);
-    expect(isCommandMessage({})).toBe(false);
+    expect(isCommandMarkedMessage({ command: true })).toBe(true);
+    expect(isCommandMarkedMessage({ command: false })).toBe(false);
+    expect(isCommandMarkedMessage({})).toBe(false);
   });
 });
 

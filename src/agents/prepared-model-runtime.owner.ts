@@ -1,4 +1,6 @@
 import path from "node:path";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -7,24 +9,23 @@ import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveSelectedAgentHarnessRuntime,
 } from "./harness/runtime-plugin-load-plan.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
+  type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
-  toPreparedModelRuntimeError,
 } from "./prepared-model-runtime.errors.js";
 import type {
   PreparedModelRuntimeBuildStats,
@@ -43,6 +44,7 @@ export type {
   PreparedModelRuntimeRefreshOptions,
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeReplacementGateId,
+  PreparedReplyDispatchRuntime,
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
@@ -148,17 +150,6 @@ export function hasConfiguredOwnerMatching(
   return findConfiguredOwnerCandidates(owners, rawInput).length > 0;
 }
 
-/** Resolves the unique configured owner for one Gateway agent identity. */
-export function resolveConfiguredOwnerByAgentId(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  agentId: string,
-): PreparedModelRuntimeOwner | undefined {
-  const candidates = [...owners.values()].filter(
-    (owner) => owner.provenance === "configured" && owner.input.agentId === agentId,
-  );
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
 export function rebindInputToCommittedConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
@@ -224,7 +215,7 @@ export function normalizePreparedModelRuntimeInput(
     ...rest
   } = input;
   const inheritedAuthDir = normalizeOptionalDir(
-    input.inheritedAuthDir ?? resolveDefaultAgentDir(input.config, input.env),
+    input.inheritedAuthDir ?? resolveLegacyInheritedAuthDir(input.config, input.env),
   );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
@@ -327,10 +318,6 @@ export function hasSameLifecycleInput(
   );
 }
 
-export function toError(error: unknown): Error {
-  return toPreparedModelRuntimeError(error);
-}
-
 export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -349,10 +336,10 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
 ): PreparedModelRuntimeInput[] {
-  const inheritedAuthDir = resolveDefaultAgentDir(config);
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === defaultAgentId && defaultWorkspaceDir;
+    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
     const input: PreparedModelRuntimeInput = {
       agentId,
       agentDir: resolveAgentDir(config, agentId),
@@ -404,6 +391,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   isBuildCurrent?: () => boolean;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   registerEntriesAfterBuildStart?: boolean;
+  reusePluginGenerations?: boolean;
 }): Promise<void> {
   const candidates = params.entries.map(({ owner, input }) => {
     owner.input = input;
@@ -443,12 +431,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
       groups.set(candidate.catalogMode, [candidate]);
     }
   }
-  const snapshots = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeSnapshot>();
+  const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publication = (async () => {
     try {
       while (true) {
         const attempt = candidates.filter(
-          (candidate) => candidate.isEligible() && !snapshots.has(candidate.owner),
+          (candidate) => candidate.isEligible() && !results.has(candidate.owner),
         );
         if (attempt.length === 0) {
           break;
@@ -458,7 +446,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
           for (const [catalogMode, group] of groups) {
             const currentGroup = group.filter(
-              (candidate) => candidate.isEligible() && !snapshots.has(candidate.owner),
+              (candidate) => candidate.isEligible() && !results.has(candidate.owner),
             );
             if (currentGroup.length === 0) {
               continue;
@@ -476,6 +464,15 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
                   .filter((candidate) => candidate.owner.provenance === "configured")
                   .map((candidate) => candidate.input),
               ),
+              params.reusePluginGenerations
+                ? new Map(
+                    currentGroup.flatMap((candidate) =>
+                      candidate.owner.pluginGeneration
+                        ? [[candidate.input, candidate.owner.pluginGeneration] as const]
+                        : [],
+                    ),
+                  )
+                : undefined,
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {
@@ -493,12 +490,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             }
             const built = await build.pending;
             for (const [index, candidate] of currentGroup.entries()) {
-              snapshots.set(candidate.owner, built[index]!);
+              results.set(candidate.owner, built[index]!);
             }
           }
           break;
         } catch (error) {
-          const refreshError = toError(error);
+          const refreshError = toStringifiedError(error);
           const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
           if (
             !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
@@ -515,18 +512,19 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         if (!candidate.isCurrent()) {
           continue;
         }
-        const snapshot = snapshots.get(candidate.owner);
-        if (!snapshot) {
+        const result = results.get(candidate.owner);
+        if (!result) {
           throw new Error(
             `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
           );
         }
-        candidate.owner.snapshot = snapshot;
+        candidate.owner.snapshot = result.snapshot;
+        candidate.owner.pluginGeneration = result.pluginGeneration;
         candidate.owner.pending = undefined;
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
-      const refreshError = toError(error);
+      const refreshError = toStringifiedError(error);
       for (const candidate of candidates) {
         if (!candidate.isCurrent()) {
           continue;
@@ -547,7 +545,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           `prepared model runtime publication was superseded for ${candidate.input.agentDir}`,
         );
       }
-      return snapshots.get(candidate.owner)!;
+      return results.get(candidate.owner)!.snapshot;
     });
     candidate.owner.pending = pending;
     void pending.catch(() => undefined);
@@ -573,6 +571,7 @@ export async function publishModelRuntimeSnapshot(
   owner.generation += 1;
   owner.needsRefresh = true;
   owner.refreshError = undefined;
+  owner.pluginGeneration = undefined;
   const generation = owner.generation;
   const build = startSerializedSnapshotBuild(
     input,
@@ -591,18 +590,19 @@ export async function publishModelRuntimeSnapshot(
   owners.set(key, owner);
   const publication = (async () => {
     try {
-      const snapshot = await build.pending;
+      const result = await build.pending;
       if (owner.generation !== generation || owners.get(key) !== owner) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
       }
-      owner.snapshot = snapshot;
+      owner.snapshot = result.snapshot;
+      owner.pluginGeneration = result.pluginGeneration;
       owner.pending = undefined;
       owner.needsRefresh = false;
-      return snapshot;
+      return result.snapshot;
     } catch (error) {
-      const refreshError = toError(error);
+      const refreshError = toStringifiedError(error);
       if (owner.generation === generation && owners.get(key) === owner) {
         owner.pending = undefined;
         owner.needsRefresh = true;

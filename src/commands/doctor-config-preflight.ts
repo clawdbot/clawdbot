@@ -24,6 +24,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import {
@@ -205,12 +207,18 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
+  if (stateMigrationsRequested) {
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+      env: process.env,
+    });
+  }
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
   const migrationCheckpointRequired =
     gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
-  const migrationCheckpoint = migrationCheckpointRequired
+  let migrationCheckpoint = migrationCheckpointRequired
     ? await measurePreflightStep(
         "startup-checkpoint-import",
         () => import("../infra/startup-migration-checkpoint.js"),
@@ -333,6 +341,11 @@ export async function runDoctorConfigPreflight(
       );
       skipPristineStartupStateMigrations = pristineStatePlan.skipAllStateMigrations;
       skipPristineCoreStateMigrations ||= pristineStatePlan.skipCoreStateMigrations;
+    }
+    if (skipPristineStartupStateMigrations && !gatewayStartupCheckpointRequired) {
+      // A pristine non-Gateway command has nothing to checkpoint. Leave the state root absent
+      // until command execution reaches a real state consumer.
+      migrationCheckpoint = undefined;
     }
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
@@ -653,23 +666,21 @@ export async function runDoctorConfigPreflight(
       });
     }
     if (gatewayStartupCheckpointRequired) {
-      if (shouldRecordStartupCheckpoint) {
-        if (startupMigrationWarnings.length > 0) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: startupMigrationWarnings,
-              blockers: [],
-            }),
-          );
-        }
-        if (!snapshot.valid) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: [],
-              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-            }),
-          );
-        }
+      if (startupMigrationWarnings.length > 0) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: startupMigrationWarnings,
+            blockers: [],
+          }),
+        );
+      }
+      if (shouldRecordStartupCheckpoint && !snapshot.valid) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: [],
+            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+          }),
+        );
       }
       // This state is established before the first Gateway plugin load and remains
       // fixed for the boot. Refresh it on every process start because migration

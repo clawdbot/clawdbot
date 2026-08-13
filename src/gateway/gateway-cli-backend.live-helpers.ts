@@ -317,7 +317,7 @@ export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: stri
   return next;
 }
 
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getCliBackendPortBlock(): Promise<number> {
   return await getFreePortBlockWithPermissionFallback({
     offsets: [0, 1, 2, 4],
     fallbackBase: 40_000,

@@ -433,6 +433,35 @@ describe("retired runtime config migrations", () => {
     );
   });
 
+  it("strips retired channel progress render keys and prunes emptied parents", () => {
+    const result = applyAll({
+      channels: {
+        slack: {
+          streaming: { progress: { render: "rich", maxLines: 4 } },
+        },
+        discord: {
+          accounts: {
+            main: { streaming: { progress: { render: "text" } } },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toEqual({
+      channels: {
+        slack: {
+          streaming: { progress: { maxLines: 4 } },
+        },
+        discord: {
+          accounts: { main: {} },
+        },
+      },
+    });
+    expect(result.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
+  });
+
   it("preserves wildcard entries while pruning emptied named descendants", () => {
     const result = applyAll({
       cloudWorkers: {

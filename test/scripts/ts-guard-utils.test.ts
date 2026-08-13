@@ -32,7 +32,7 @@ describe("resolveRepoRoot", () => {
 
   it("resolves correctly from a deeply nested extension path", () => {
     const fakeUrl = pathToFileURL(
-      path.resolve("extensions", "qqbot", "src", "utils", "hypothetical.mjs"),
+      path.resolve("extensions", "telegram", "src", "utils", "hypothetical.mjs"),
     ).href;
     const root = resolveRepoRoot(fakeUrl);
 
@@ -44,7 +44,7 @@ describe("resolveRepoRoot", () => {
     const fromLib = resolveRepoRoot(pathToFileURL(path.resolve("scripts", "lib", "a.mjs")).href);
     const fromScripts = resolveRepoRoot(pathToFileURL(path.resolve("scripts", "b.mjs")).href);
     const fromExtension = resolveRepoRoot(
-      pathToFileURL(path.resolve("extensions", "qqbot", "c.mjs")).href,
+      pathToFileURL(path.resolve("extensions", "telegram", "c.mjs")).href,
     );
 
     expect(fromLib).toBe(fromScripts);

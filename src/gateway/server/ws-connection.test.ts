@@ -44,11 +44,13 @@ vi.mock("../talk-session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
+import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
 } from "./ws-types.js";
 
 async function waitForLazyMessageHandler() {
@@ -105,7 +107,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useRealTimers();
   });
 
-  it("keeps worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
+  it("keeps loopback worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
       socket: { terminate: vi.fn() },
@@ -153,13 +155,44 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(gatewayBudget.release).not.toHaveBeenCalled();
   });
 
+  it("uses the main budget and public admission context for public worker sockets", async () => {
+    const socket = createGatewayWsTestSocket();
+    const gatewayBudget = { release: vi.fn() };
+    const rateLimiter = { check: vi.fn() };
+    Object.assign(socket, {
+      [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
+      [GATEWAY_WS_WORKER_INGRESS_PROPERTY]: "public",
+      __openclawPreauthBudgetKey: "203.0.113.10",
+    });
+    markPublicWorkerIngress(socket as never, {
+      clientIp: "203.0.113.10",
+      rateLimiter: rateLimiter as never,
+    });
+
+    await connectTestWs({
+      socket,
+      options: {
+        preauthConnectionBudget: gatewayBudget as never,
+      },
+    });
+
+    const handler = firstAttachedWorkerHandlerParams() as {
+      publicAdmission: { clientIp: string; rateLimiter: unknown };
+      setClient(client: never): boolean;
+    };
+    expect(handler).toMatchObject({
+      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
+    });
+    expect(handler.setClient({ socket } as never)).toBe(true);
+    expect(gatewayBudget.release).toHaveBeenCalledWith("203.0.113.10");
+  });
+
   it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {
     const initialAuth = createResolvedGatewayTokenAuth("token-before");
     let currentAuth = initialAuth;
 
     const { passed } = await connectTestWs({
       options: {
-        resolvedAuth: initialAuth,
         getResolvedAuth: () => currentAuth,
       },
     });

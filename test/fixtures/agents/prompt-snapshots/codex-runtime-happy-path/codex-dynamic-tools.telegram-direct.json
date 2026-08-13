@@ -261,7 +261,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; needs cron.triggers.enabled.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call(\"exec\",{command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:\"none\". webhook posts finished-run event to URL in `to`.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). webhook posts finished-run event to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -307,362 +307,7 @@
             },
             "job": {
               "additionalProperties": true,
-              "properties": {
-                "agentId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Agent id, or null to keep it unset"
-                },
-                "declarationKey": {
-                  "description": "Idempotent declaration key.",
-                  "maxLength": 200,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "deleteAfterRun": {
-                  "description": "Delete after first run",
-                  "type": "boolean"
-                },
-                "delivery": {
-                  "additionalProperties": true,
-                  "properties": {
-                    "accountId": {
-                      "description": "Delivery account",
-                      "type": "string"
-                    },
-                    "bestEffort": {
-                      "type": "boolean"
-                    },
-                    "channel": {
-                      "description": "Delivery channel",
-                      "type": "string"
-                    },
-                    "failureDestination": {
-                      "additionalProperties": true,
-                      "properties": {
-                        "accountId": {
-                          "description": "Failure delivery account",
-                          "type": "string"
-                        },
-                        "channel": {
-                          "description": "Failure delivery channel",
-                          "type": "string"
-                        },
-                        "mode": {
-                          "anyOf": [
-                            {
-                              "const": "announce",
-                              "type": "string"
-                            },
-                            {
-                              "const": "webhook",
-                              "type": "string"
-                            }
-                          ]
-                        },
-                        "to": {
-                          "description": "Failure delivery target",
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    },
-                    "mode": {
-                      "description": "Delivery mode",
-                      "enum": ["none", "announce", "webhook"],
-                      "type": "string"
-                    },
-                    "threadId": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "number"
-                        }
-                      ],
-                      "description": "Thread/topic id"
-                    },
-                    "to": {
-                      "description": "Delivery target",
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "description": {
-                  "description": "Human description",
-                  "type": "string"
-                },
-                "displayName": {
-                  "description": "Human-readable declarative job label",
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                "enabled": {
-                  "type": "boolean"
-                },
-                "failureAlert": {
-                  "additionalProperties": true,
-                  "description": "Failure alert; false disables.",
-                  "properties": {
-                    "accountId": {
-                      "type": "string"
-                    },
-                    "after": {
-                      "description": "Failures before alert",
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "channel": {
-                      "description": "Alert channel",
-                      "type": "string"
-                    },
-                    "cooldownMs": {
-                      "description": "Alert cooldown ms",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "includeSkipped": {
-                      "description": "Count skipped runs.",
-                      "type": "boolean"
-                    },
-                    "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
-                    },
-                    "to": {
-                      "description": "Alert target",
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "name": {
-                  "description": "Job name",
-                  "type": "string"
-                },
-                "owner": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "agentId": {
-                      "type": "string"
-                    },
-                    "sessionKey": {
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "pacing": {
-                  "additionalProperties": false,
-                  "description": "Dynamic-cadence bounds; at least one of min or max is required",
-                  "properties": {
-                    "max": {
-                      "description": "Maximum dynamic delay",
-                      "type": "string"
-                    },
-                    "min": {
-                      "description": "Minimum dynamic delay",
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "payload": {
-                  "additionalProperties": true,
-                  "properties": {
-                    "allowUnsafeExternalContent": {
-                      "description": "Allow untrusted external content in prompt",
-                      "type": "boolean"
-                    },
-                    "fallbacks": {
-                      "description": "Fallback models",
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "kind": {
-                      "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn", "script"],
-                      "type": "string"
-                    },
-                    "lightContext": {
-                      "description": "Lightweight bootstrap context (skip full workspace context)",
-                      "type": "boolean"
-                    },
-                    "message": {
-                      "description": "agentTurn prompt",
-                      "type": "string"
-                    },
-                    "model": {
-                      "description": "Model override",
-                      "type": "string"
-                    },
-                    "script": {
-                      "description": "Headless code-mode script",
-                      "type": "string"
-                    },
-                    "text": {
-                      "description": "systemEvent text",
-                      "type": "string"
-                    },
-                    "thinking": {
-                      "description": "Thinking override",
-                      "type": "string"
-                    },
-                    "timeoutSeconds": {
-                      "minimum": 0,
-                      "type": "number"
-                    },
-                    "toolBudget": {
-                      "description": "Maximum script tool calls",
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "toolsAllow": {
-                      "description": "Allowed tools",
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "type": "object"
-                },
-                "schedule": {
-                  "additionalProperties": true,
-                  "properties": {
-                    "anchorMs": {
-                      "description": "Start anchor ms (kind=every)",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "at": {
-                      "description": "ISO-8601 time (kind=at)",
-                      "type": "string"
-                    },
-                    "batchMs": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "command": {
-                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
-                      "items": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "minItems": 1,
-                      "type": "array"
-                    },
-                    "cwd": {
-                      "description": "Working directory (kind=stream)",
-                      "type": "string"
-                    },
-                    "everyMs": {
-                      "description": "Interval ms (kind=every)",
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "expr": {
-                      "description": "Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example \"0 18 * * *\", \"Asia/Shanghai\".",
-                      "type": "string"
-                    },
-                    "kind": {
-                      "description": "Schedule kind",
-                      "enum": ["at", "every", "cron", "stream"],
-                      "type": "string"
-                    },
-                    "match": {
-                      "description": "Regex source (stream match mode)",
-                      "type": "string"
-                    },
-                    "maxBatchBytes": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "mode": {
-                      "enum": ["line", "match"],
-                      "type": "string"
-                    },
-                    "staggerMs": {
-                      "description": "Jitter ms (kind=cron)",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "tz": {
-                      "description": "IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example \"Asia/Shanghai\".",
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "sessionKey": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Explicit session key, or null to clear it"
-                },
-                "sessionTarget": {
-                  "description": "main | isolated | current (agentTurn default) | session:<id>",
-                  "type": "string"
-                },
-                "trigger": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "once": {
-                      "type": "boolean"
-                    },
-                    "script": {
-                      "maxLength": 65536,
-                      "minLength": 1,
-                      "type": "string"
-                    }
-                  },
-                  "required": ["script"],
-                  "type": "object"
-                },
-                "wakeMode": {
-                  "description": "Wake timing",
-                  "enum": ["now", "next-heartbeat"],
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "jobId": {
-              "type": "string"
-            },
-            "limit": {
-              "description": "Maximum jobs returned by action=\"list\"",
-              "maximum": 200,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "mode": {
-              "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
-              "enum": ["now", "next-heartbeat"],
-              "type": "string"
-            },
-            "offset": {
-              "description": "Job offset for action=\"list\"; use nextOffset to load the next page",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "patch": {
-              "additionalProperties": true,
+              "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
                 "agentId": {
                   "anyOf": [
@@ -675,7 +320,14 @@
                   ],
                   "description": "Agent id, or null to clear it"
                 },
+                "declarationKey": {
+                  "description": "Idempotent declaration key (add only).",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "deleteAfterRun": {
+                  "description": "Delete after first run",
                   "type": "boolean"
                 },
                 "delivery": {
@@ -705,6 +357,30 @@
                         }
                       ],
                       "description": "Delivery channel, or null to clear"
+                    },
+                    "completionDestination": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "const": "webhook",
+                              "type": "string"
+                            },
+                            "to": {
+                              "description": "Completion webhook target; only valid with delivery.mode=announce",
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": ["mode", "to"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Completion webhook; requires delivery.mode=announce; null clears."
                     },
                     "failureDestination": {
                       "anyOf": [
@@ -802,6 +478,7 @@
                   "type": "object"
                 },
                 "description": {
+                  "description": "Human description",
                   "type": "string"
                 },
                 "displayName": {
@@ -859,6 +536,18 @@
                   "description": "Job name",
                   "type": "string"
                 },
+                "owner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "sessionKey": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "pacing": {
                   "anyOf": [
                     {
@@ -904,7 +593,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn", "script"],
+                      "enum": ["systemEvent", "agentTurn"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -926,10 +615,6 @@
                       ],
                       "description": "Model override, or null to clear"
                     },
-                    "script": {
-                      "description": "Headless code-mode script",
-                      "type": "string"
-                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -941,11 +626,6 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
-                    },
-                    "toolBudget": {
-                      "description": "Maximum script tool calls",
-                      "minimum": 1,
-                      "type": "integer"
                     },
                     "toolsAllow": {
                       "anyOf": [
@@ -969,6 +649,7 @@
                   "properties": {
                     "anchorMs": {
                       "description": "Start anchor ms (kind=every)",
+                      "maximum": 8640000000000000,
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -976,25 +657,9 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
-                    "batchMs": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "command": {
-                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
-                      "items": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "minItems": 1,
-                      "type": "array"
-                    },
-                    "cwd": {
-                      "description": "Working directory (kind=stream)",
-                      "type": "string"
-                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
+                      "maximum": 8640000000000000,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -1004,23 +669,12 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron", "stream"],
-                      "type": "string"
-                    },
-                    "match": {
-                      "description": "Regex source (stream match mode)",
-                      "type": "string"
-                    },
-                    "maxBatchBytes": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "mode": {
-                      "enum": ["line", "match"],
+                      "enum": ["at", "every", "cron"],
                       "type": "string"
                     },
                     "staggerMs": {
                       "description": "Jitter ms (kind=cron)",
+                      "maximum": 8640000000000000,
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -1046,34 +700,32 @@
                   "description": "main | isolated | current (agentTurn default) | session:<id>",
                   "type": "string"
                 },
-                "trigger": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "once": {
-                          "type": "boolean"
-                        },
-                        "script": {
-                          "maxLength": 65536,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": ["script"],
-                      "type": "object"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "wakeMode": {
+                  "description": "Wake timing",
                   "enum": ["now", "next-heartbeat"],
                   "type": "string"
                 }
               },
               "type": "object"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum jobs returned by action=\"list\"",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mode": {
+              "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
+              "enum": ["now", "next-heartbeat"],
+              "type": "string"
+            },
+            "offset": {
+              "description": "Job offset for action=\"list\"; use nextOffset to load the next page",
+              "minimum": 0,
+              "type": "integer"
             },
             "runMode": {
               "description": "Run mode for action=\"run\": omitted defaults to \"due\"; use \"force\" to trigger now.",

@@ -538,6 +538,8 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -604,6 +606,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,
@@ -648,6 +651,7 @@ async function authorizeSlackInboundMessage(params: {
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
+    eventScope: params.eventScope,
   });
 
   if (isDirectMessage) {
@@ -660,6 +664,7 @@ async function authorizeSlackInboundMessage(params: {
       ctx,
       accountId: account.accountId,
       senderId: directUserId,
+      eventScope: params.eventScope,
       allowFromLower,
       resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
       sendPairingReply: async (text) => {
@@ -668,6 +673,7 @@ async function authorizeSlackInboundMessage(params: {
           token: ctx.botToken,
           client: params.eventScope?.client ?? ctx.app.client,
           accountId: account.accountId,
+          eventScope: params.eventScope,
         });
       },
       onDisabled: () => {
@@ -907,7 +913,11 @@ export async function prepareSlackMessage(params: {
   const buildPolicyMentionRegexes = (agentId: string | undefined) =>
     resolveCachedMentionRegexes(ctx, agentId, {
       provider: "slack",
-      conversationId: message.channel,
+      conversationId: formatSlackTarget({
+        teamId: opts.eventScope?.teamId,
+        kind: "channel",
+        id: message.channel,
+      }),
       providerPolicy: account.config.mentionPatterns,
     });
   let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
@@ -1129,6 +1139,7 @@ export async function prepareSlackMessage(params: {
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",
@@ -1183,22 +1194,18 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: account.accountId,
   });
-  const preflightChannelTarget = opts.eventScope
-    ? formatSlackTarget({
-        teamId: opts.eventScope.teamId,
-        kind: "channel",
-        id: message.channel,
-      })
-    : `channel:${message.channel}`;
-  const replyRouteTarget = opts.eventScope
-    ? formatSlackTarget({
-        teamId: opts.eventScope.teamId,
-        kind: isDirectMessage ? "user" : "channel",
-        id: isDirectMessage ? senderId : message.channel,
-      })
-    : isDirectMessage
-      ? `user:${message.user}`
-      : `channel:${message.channel}`;
+  const preflightChannelTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: "channel",
+    id: message.channel,
+    explicitKind: true,
+  });
+  const replyRouteTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: isDirectMessage ? "user" : "channel",
+    id: isDirectMessage ? senderId : message.channel,
+    explicitKind: true,
+  });
   const commandAuthorized = messageIngress.commandAccess.authorized;
 
   if (isRoomish && messageIngress.commandAccess.shouldBlockControlCommand) {
@@ -1663,7 +1670,8 @@ export async function prepareSlackMessage(params: {
       agentId: route.agentId,
       dmScope: route.dmScope,
       accountId: route.accountId,
-      routeSessionKey: sessionKey,
+      routeSessionKey: route.sessionKey,
+      dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
@@ -1768,7 +1776,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
@@ -1805,7 +1813,7 @@ export async function prepareSlackMessage(params: {
     account,
     message,
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
-    ...(opts.eventScope ? { eventScope: opts.eventScope } : {}),
+    eventScope: opts.eventScope,
     route,
     channelConfig,
     replyTarget,

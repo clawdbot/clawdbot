@@ -222,6 +222,10 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
+- `maxEntries` caps only eviction-eligible rows. Protected rows are reported as
+  `keep` and stay outside the allowance, so the total row count can exceed the
+  configured cap. `--enforce` does not remove that protection; unarchive,
+  unpin, or explicitly delete sessions you no longer want to retain.
 
 Flags:
 

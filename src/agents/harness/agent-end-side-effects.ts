@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
  * either fire-and-forget or awaited during tests/shutdown.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -36,12 +37,14 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
 };
 
 async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
+  const usedSkills = consumeRunSkillUsage(params.ctx.runId);
   try {
     const { scheduleSkillExperienceReview } =
       await import("../../skills/workshop/experience-review-default.js");
     scheduleSkillExperienceReview({
       event: params.event,
       ctx: params.ctx,
+      usedSkills,
       ...(params.ctx.config ? { config: params.ctx.config } : {}),
     });
   } catch (error) {

@@ -12,6 +12,7 @@ const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="no
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const DOCK_MAIN_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" /></svg>`;
+const OPEN_FULLSCREEN_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5h4.5V7M13.5 2.5 8 8" /><path d="M7 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V9" /></svg>`;
 const UPLOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 8.1 9.8 3.5a2.5 2.5 0 0 1 3.5 3.5l-6 6a3.5 3.5 0 0 1-5-5l5.8-5.8" /><path d="m4.4 9 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.3 5.3a2.3 2.3 0 0 1-3.2-3.2l4.6-4.6" /></svg>`;
 
 type TerminalUploadTab = {
@@ -320,6 +321,7 @@ export function renderTerminalPanelActions(params: {
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
   onDock: (dock: "bottom" | "right" | "main") => void;
+  onOpenFullscreen: () => void;
   onHide: () => void;
 }) {
   return html`<div class="tp-actions">
@@ -374,6 +376,15 @@ export function renderTerminalPanelActions(params: {
               ${DOCK_MAIN_GLYPH}
             </button>
           </span>
+          <button
+            class="tp-icon tp-open-fullscreen"
+            type="button"
+            title=${t("terminal.openFullscreen")}
+            aria-label=${t("terminal.openFullscreen")}
+            @click=${params.onOpenFullscreen}
+          >
+            ${OPEN_FULLSCREEN_GLYPH}
+          </button>
           <button
             class="tp-icon"
             type="button"

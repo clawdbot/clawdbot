@@ -114,12 +114,17 @@ function readPluginSdkEntrypointBudgetEnv(
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  core: 2,
+  // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
+  // compatibility barrels while external harnesses migrate to AgentHarnessV2.
+  core: 3,
+  "plugin-entry": 1,
   routing: 1,
-  health: 0,
+  // +1 each: the shipped default-agent resolver remains available through
+  // compatibility barrels while callers migrate to explicit/sole selection.
+  health: 1,
+  "agent-scope-runtime": 1,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
-  "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
   "approval-reply-runtime": 0,
@@ -138,18 +143,17 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  // +1: flushLogger projected through the deprecated text-runtime barrel.
-  "text-runtime": 192,
-  "agent-runtime": 2,
-  "channel-secret-runtime": 23,
-  "agent-harness-runtime": 4,
-  "agent-config-primitives": 2,
+  "agent-runtime": 3,
+  "memory-host-core": 1,
+  // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
+  // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
+  // deprecated while external harnesses migrate to required-capability V2 contracts.
+  "agent-harness": 2,
+  "agent-harness-runtime": 12,
   "command-auth": 78,
   discord: 47,
-  matrix: 1,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 18,
-  "channel-logging": 4,
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
@@ -162,12 +166,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
-  "group-access": 13,
   "reply-history": 6,
   "messaging-targets": 12,
   "provider-auth": 19,
   "telegram-account": 3,
-  zod: 282,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
@@ -186,7 +188,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light agent scope helpers for doctor migration enumeration.
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
-      151,
+      // +1: registry-bound plugin command planning and exact selected execution.
+      144,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -250,7 +253,26 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
-      4848,
+      // +1: closed worker desktop app metadata for provider-advertised launchers.
+      // +1: native command spec merger through the native-command-registry facade.
+      // +8: focused plugin command runtime factory, dispatch symbol, and six readonly contracts.
+      // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
+      // -7: retire unused and duplicate inbound-dispatch compatibility exports.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      // +1: channel-account-bound native approval request selection.
+      // +6: required-capability V2 harness contracts through the focused and runtime barrels,
+      // including the side-question compatibility split.
+      // +1: add the account-aware native approval request selector.
+      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
+      // +2: add high-use coercion primitives while retaining shipped object-record exports.
+      // +2: channel-neutral location and provider-update hook contracts.
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      // +2: narrow channel agent-run terminal reader and outcome contract.
+      // +5: narrow string, record, and error coercion helpers.
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      // -2: retire the dead progress-draft render reader; it counted twice via
+      // channel-outbound and channel-message's wildcard re-export of it.
+      4306,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -303,7 +325,23 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: simple channel secret contract factory replacing repeated collectors.
       // +4: focused agent scope functions for doctor migration enumeration.
       // +3: channel streaming config reader functions and session-agent scope resolver.
-      2920,
+      // +1: native command spec merger through the native-command-registry facade.
+      // +1: focused registry-bound plugin command runtime factory.
+      // -1: remove the unused WhatsApp-specific ack policy helper.
+      // -10: collapse inbound-dispatch callable aliases and wrappers.
+      // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
+      // -3: keep the generic plugin-command reply carrier opaque and non-callable.
+      // +1: channel-account-bound native approval request selection.
+      // +1: add the account-aware native approval request selector.
+      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
+      // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      // +1: narrow channel agent-run terminal reader.
+      // +5: narrow string, record, and error coercion helpers.
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      // -2: retire the dead progress-draft render reader; it counted twice via
+      // channel-outbound and channel-message's wildcard re-export of it.
+      2570,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -312,18 +350,22 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
-      // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
-      1704,
+      // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      // +6: source-compatible harness contracts retained during the V2 migration window.
+      // +4: shipped default-agent resolver projections retained during explicit-owner migration.
+      1146,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
-      80,
+      // -1: infra-runtime excludes the internal system-event receipt API.
+      // -1: infra-runtime re-exports number coercion directly from its canonical owner.
+      50,
       env,
     ),
   };

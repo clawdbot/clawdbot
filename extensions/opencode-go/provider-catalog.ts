@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
+  fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -15,21 +16,6 @@ const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENAI_COMPLETIONS_MODEL = {
-  api: "openai-completions",
-  provider: PROVIDER_ID,
-  baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-} as const;
-const ANTHROPIC_MESSAGES_MODEL = {
-  api: "anthropic-messages",
-  provider: PROVIDER_ID,
-  baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-} as const;
-const OPENAI_RESPONSES_MODEL = {
-  api: "openai-responses",
-  provider: PROVIDER_ID,
-  baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-} as const;
 const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
   "kimi-k2.5",
   "kimi-k2.6",
@@ -45,433 +31,63 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
-const OPENCODE_GO_RESOLVABLE_MODELS = (
+const T = ["text"] as const;
+const TI = ["text", "image"] as const;
+const E_HM = ["high", "max"] as const;
+const E_LHM = ["low", "high", "max"] as const;
+const E_LMH = ["low", "medium", "high"] as const;
+const E_NONE_LH = ["none", "low", "high"] as const;
+const E_NONE_LMHXM = ["none", "low", "medium", "high", "xhigh", "max"] as const;
+const E_MAX = ["max"] as const;
+
+type OpencodeGoCostRow =
+  | readonly [number, number, number, number]
+  | readonly [number, number, number, number, number, number, number, number, number];
+type OpencodeGoModelRow = readonly [
+  id: string,
+  contextWindow: number,
+  maxTokens: number,
+  input: ReadonlyArray<"text" | "image">,
+  cost: OpencodeGoCostRow,
+  reasoningEfforts?: readonly string[],
+  contextTokens?: number,
+];
+
+const OPENCODE_GO_MODEL_ROWS = [
+  ["deepseek-v4-pro", 1_000_000, 384_000, T, [0.435, 0.87, 0.003625, 0], E_HM],
+  ["deepseek-v4-flash", 1_000_000, 384_000, T, [0.14, 0.28, 0.0028, 0], E_LHM],
+  ["glm-5", 202_752, 32_768, T, [1, 3.2, 0.2, 0]],
+  ["glm-5.1", 202_752, 32_768, T, [1.4, 4.4, 0.26, 0]],
+  ["glm-5.2", 1_000_000, 131_072, T, [1.4, 4.4, 0.26, 0], E_HM],
   [
-    {
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.435,
-        output: 0.87,
-        cacheRead: 0.003625,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["high", "max"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.14,
-        output: 0.28,
-        cacheRead: 0.0028,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "high", "max"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "glm-5",
-      name: "GLM-5",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1,
-        output: 3.2,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-      },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
-    },
-    {
-      id: "glm-5.1",
-      name: "GLM-5.1",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1.4,
-        output: 4.4,
-        cacheRead: 0.26,
-        cacheWrite: 0,
-      },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
-    },
-    {
-      id: "glm-5.2",
-      name: "GLM-5.2",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1.4,
-        output: 4.4,
-        cacheRead: 0.26,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["high", "max"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "gpt-5.6-luna",
-      name: "GPT-5.6 Luna",
-      ...OPENAI_RESPONSES_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.2,
-        output: 1.2,
-        cacheRead: 0.02,
-        cacheWrite: 0.25,
-        tieredPricing: [
-          { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25, range: [0, 272_000] },
-          { input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5, range: [272_000] },
-        ],
-      },
-      contextWindow: 1_050_000,
-      contextTokens: 922_000,
-      maxTokens: 128_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "grok-4.5",
-      name: "Grok 4.5",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
-      contextWindow: 500_000,
-      maxTokens: 500_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "hy3",
-      name: "Hy3",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0.14, output: 0.58, cacheRead: 0.035, cacheWrite: 0 },
-      contextWindow: 256_000,
-      maxTokens: 64_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "low", "high"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "hy3-preview",
-      name: "HY3 Preview",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 32_768,
-    },
-    {
-      id: "kimi-k2.5",
-      name: "Kimi K2.5",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.6,
-        output: 3,
-        cacheRead: 0.1,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "kimi-k2.6",
-      name: "Kimi K2.6",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.16,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "kimi-k2.7-code",
-      name: "Kimi K2.7 Code",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.19,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 262_144,
-    },
-    {
-      id: "kimi-k3",
-      name: "Kimi K3",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 131_072,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["max"],
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "mimo-v2-omni",
-      name: "MiMo V2 Omni",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 0.4, output: 2, cacheRead: 0.08, cacheWrite: 0 },
-      contextWindow: 262_144,
-      maxTokens: 128_000,
-    },
-    {
-      id: "mimo-v2-pro",
-      name: "MiMo V2 Pro",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1,
-        output: 3,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-        tieredPricing: [
-          { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0, range: [0, 256_000] },
-          { input: 2, output: 6, cacheRead: 0.4, cacheWrite: 0, range: [256_000] },
-        ],
-      },
-      contextWindow: 1_048_576,
-      maxTokens: 128_000,
-    },
-    {
-      id: "mimo-v2.5",
-      name: "MiMo V2.5",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.14,
-        output: 0.28,
-        cacheRead: 0.0028,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-    {
-      id: "mimo-v2.5-pro",
-      name: "MiMo V2.5 Pro",
-      ...OPENAI_COMPLETIONS_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.435,
-        output: 0.87,
-        cacheRead: 0.003625,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_048_576,
-      maxTokens: 128_000,
-    },
-    {
-      id: "minimax-m2.5",
-      name: "MiniMax M2.5",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.06,
-        cacheWrite: 0.375,
-      },
-      contextWindow: 204_800,
-      maxTokens: 65_536,
-    },
-    {
-      id: "minimax-m2.7",
-      name: "MiniMax M2.7",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.06,
-        cacheWrite: 0.375,
-      },
-      contextWindow: 204_800,
-      maxTokens: 131_072,
-    },
-    {
-      id: "minimax-m3",
-      name: "MiniMax M3",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.06,
-        cacheWrite: 0,
-        tieredPricing: [
-          { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0, range: [0, 512_000] },
-          { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0, range: [512_000] },
-        ],
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-    },
-    {
-      id: "qwen3.5-plus",
-      name: "Qwen3.5 Plus",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.2,
-        output: 1.2,
-        cacheRead: 0.02,
-        cacheWrite: 0.25,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.7-max",
-      name: "Qwen3.7 Max",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 2.5,
-        output: 7.5,
-        cacheRead: 0.5,
-        cacheWrite: 3.125,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.7-plus",
-      name: "Qwen3.7 Plus",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.4,
-        output: 1.6,
-        cacheRead: 0.04,
-        cacheWrite: 0.5,
-        tieredPricing: [
-          { input: 0.4, output: 1.6, cacheRead: 0.04, cacheWrite: 0.5, range: [0, 256_000] },
-          { input: 1.2, output: 4.8, cacheRead: 0.12, cacheWrite: 1.5, range: [256_000] },
-        ],
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.8-max",
-      name: "Qwen3.8 Max",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 2,
-        output: 6,
-        cacheRead: 0.25,
-        cacheWrite: 2.5,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-    },
-    {
-      id: "qwen3.6-plus",
-      name: "Qwen3.6 Plus",
-      ...ANTHROPIC_MESSAGES_MODEL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.5,
-        output: 3,
-        cacheRead: 0.05,
-        cacheWrite: 0.625,
-        tieredPricing: [
-          { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625, range: [0, 256_000] },
-          { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 2.5, range: [256_000] },
-        ],
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-  ] satisfies OpencodeGoModelDefinition[]
-).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+    "gpt-5.6-luna",
+    1_050_000,
+    128_000,
+    TI,
+    [0.2, 1.2, 0.02, 0.25, 272_000, 0.4, 1.8, 0.04, 0.5],
+    E_NONE_LMHXM,
+    922_000,
+  ],
+  ["grok-4.5", 500_000, 500_000, TI, [2, 6, 0.3, 0], E_LMH],
+  ["hy3", 256_000, 64_000, T, [0.14, 0.58, 0.035, 0], E_NONE_LH],
+  ["hy3-preview", 262_144, 32_768, T, [0, 0, 0, 0]],
+  ["kimi-k2.5", 262_144, 65_536, TI, [0.6, 3, 0.1, 0]],
+  ["kimi-k2.6", 262_144, 65_536, TI, [0.95, 4, 0.16, 0]],
+  ["kimi-k2.7-code", 262_144, 262_144, TI, [0.95, 4, 0.19, 0]],
+  ["kimi-k3", 1_048_576, 131_072, TI, [3, 15, 0.3, 0], E_MAX],
+  ["mimo-v2-omni", 262_144, 128_000, TI, [0.4, 2, 0.08, 0]],
+  ["mimo-v2-pro", 1_048_576, 128_000, T, [1, 3, 0.2, 0, 256_000, 2, 6, 0.4, 0]],
+  ["mimo-v2.5", 1_000_000, 128_000, TI, [0.14, 0.28, 0.0028, 0]],
+  ["mimo-v2.5-pro", 1_048_576, 128_000, T, [0.435, 0.87, 0.003625, 0]],
+  ["minimax-m2.5", 204_800, 65_536, T, [0.3, 1.2, 0.06, 0.375]],
+  ["minimax-m2.7", 204_800, 131_072, T, [0.3, 1.2, 0.06, 0.375]],
+  ["minimax-m3", 1_000_000, 131_072, TI, [0.3, 1.2, 0.06, 0, 512_000, 0.6, 2.4, 0.12, 0]],
+  ["qwen3.5-plus", 262_144, 65_536, TI, [0.2, 1.2, 0.02, 0.25]],
+  ["qwen3.7-max", 1_000_000, 65_536, T, [2.5, 7.5, 0.5, 3.125]],
+  ["qwen3.7-plus", 1_000_000, 65_536, TI, [0.4, 1.6, 0.04, 0.5, 256_000, 1.2, 4.8, 0.12, 1.5]],
+  ["qwen3.8-max", 1_000_000, 131_072, TI, [2, 6, 0.25, 2.5]],
+  ["qwen3.6-plus", 1_000_000, 65_536, TI, [0.5, 3, 0.05, 0.625, 256_000, 2, 6, 0.2, 2.5]],
+] as const satisfies readonly OpencodeGoModelRow[];
 
 const OPENCODE_GO_MODEL_STATUS = new Map<string, "deprecated" | "preview">([
   ["glm-5", "deprecated"],
@@ -482,6 +98,96 @@ const OPENCODE_GO_MODEL_STATUS = new Map<string, "deprecated" | "preview">([
   ["minimax-m2.5", "deprecated"],
   ["hy3-preview", "preview"],
 ]);
+
+function titleCaseModelPart(value: string): string {
+  return value ? `${value[0]?.toUpperCase()}${value.slice(1)}` : value;
+}
+
+function formatOpencodeGoModelName(id: string): string {
+  if (id === "hy3" || id === "hy3-preview") {
+    return id === "hy3" ? "Hy3" : "HY3 Preview";
+  }
+  if (id.startsWith("qwen")) {
+    const [version, ...parts] = id.slice(4).split("-");
+    return `Qwen${version}${parts.length ? ` ${parts.map(titleCaseModelPart).join(" ")}` : ""}`;
+  }
+  const [family = "", ...parts] = id.split("-");
+  const prefix: Record<string, string> = {
+    deepseek: "DeepSeek",
+    glm: "GLM",
+    gpt: "GPT",
+    grok: "Grok",
+    kimi: "Kimi",
+    mimo: "MiMo",
+    minimax: "MiniMax",
+  };
+  const separator = family === "glm" || family === "gpt" ? "-" : " ";
+  return `${prefix[family] ?? titleCaseModelPart(family)}${separator}${parts.map(titleCaseModelPart).join(" ")}`;
+}
+
+function buildOpencodeGoCost(row: OpencodeGoCostRow): ModelDefinitionConfig["cost"] {
+  const [input, output, cacheRead, cacheWrite] = row;
+  const cost = { input, output, cacheRead, cacheWrite };
+  if (row.length === 4) {
+    return cost;
+  }
+  const threshold = row[4];
+  const tierInput = row[5];
+  const tierOutput = row[6];
+  const tierCacheRead = row[7];
+  const tierCacheWrite = row[8];
+  return {
+    ...cost,
+    tieredPricing: [
+      { ...cost, range: [0, threshold] },
+      {
+        input: tierInput,
+        output: tierOutput,
+        cacheRead: tierCacheRead,
+        cacheWrite: tierCacheWrite,
+        range: [threshold],
+      },
+    ],
+  };
+}
+
+function buildOpencodeGoModel(row: OpencodeGoModelRow): OpencodeGoModelDefinition {
+  const [id, contextWindow, maxTokens, input, cost, reasoningEfforts, contextTokens] = row;
+  const anthropic = id.startsWith("minimax-") || id.startsWith("qwen");
+  const api = id.startsWith("gpt-")
+    ? "openai-responses"
+    : anthropic
+      ? "anthropic-messages"
+      : "openai-completions";
+  const model: OpencodeGoModelDefinition = {
+    id,
+    name: formatOpencodeGoModelName(id),
+    api,
+    provider: PROVIDER_ID,
+    baseUrl: anthropic ? OPENCODE_GO_ANTHROPIC_BASE_URL : OPENCODE_GO_OPENAI_BASE_URL,
+    reasoning: true,
+    input: [...input],
+    cost: buildOpencodeGoCost(cost),
+    contextWindow,
+    ...(contextTokens ? { contextTokens } : {}),
+    maxTokens,
+    ...(reasoningEfforts
+      ? {
+          compat: {
+            supportsUsageInStreaming: true,
+            supportsReasoningEffort: true,
+            supportedReasoningEfforts: [...reasoningEfforts],
+            maxTokensField: "max_tokens",
+          },
+        }
+      : id.startsWith("qwen")
+        ? { compat: { thinkingFormat: "qwen" as const } }
+        : {}),
+  };
+  return normalizeModelCompat(model) as OpencodeGoModelDefinition;
+}
+
+const OPENCODE_GO_RESOLVABLE_MODELS = OPENCODE_GO_MODEL_ROWS.map(buildOpencodeGoModel);
 
 const OPENCODE_GO_MODEL_BY_ID = new Map(
   OPENCODE_GO_RESOLVABLE_MODELS.map((model) => [model.id, model]),
@@ -504,6 +210,25 @@ export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProvi
     ...(apiKey ? { apiKey } : {}),
     models: OPENCODE_GO_MODELS,
   };
+}
+
+export async function resolveOpencodeGoStarterModel(params: {
+  apiKey: string;
+  preferredModelRef: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const liveModelIds = await fetchLiveProviderModelIds({
+    providerId: PROVIDER_ID,
+    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
+    discoveryApiKey: params.apiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    auditContext: "opencode-go-onboarding-model-discovery",
+  });
+  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
+  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
 export async function buildOpencodeGoLiveProviderConfig(

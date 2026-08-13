@@ -42,6 +42,9 @@ suite.define(() => {
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
       {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -116,14 +119,38 @@ suite.define(() => {
         await expect
           .poll(async () => page.locator(".model-setup-success").textContent())
           .toContain("Verified in 73 ms");
+        await gateway.setMethodResponse("openclaw.setup.detect", {
+          candidates: [],
+          manualProviders: [{ id: "openai", label: "OpenAI" }],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: true,
+          configuredModel: "openai/gpt-5",
+        });
+        await page.getByRole("button", { name: "Stay in settings" }).click();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        await page.reload();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-durable-continuation.png"),
+          });
+        }
         await page.getByRole("button", { name: "Continue setup" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-        await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+        // Onboarding chrome keeps only the header actions; no identity heading.
+        await page.locator(".custodian__header--minimal").waitFor();
+        await page.getByRole("button", { name: "Exit setup" }).waitFor();
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--onboarding");
         expect(await page.locator(".shell-nav").isVisible()).toBe(false);
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "custodian-onboarding-handoff.png"),
+          });
+        }
 
         const chatRequest = await gateway.waitForRequest("openclaw.chat");
         expect(chatRequest.params).toMatchObject({
@@ -131,7 +158,7 @@ suite.define(() => {
           welcomeVariant: "onboarding",
         });
         await page.getByRole("button", { name: "Skip for now" }).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .not.toContain("shell--onboarding");
@@ -147,11 +174,21 @@ suite.define(() => {
   it("completes device-code sign-in and re-detects the configured model", async () => {
     await suite.withPage(
       {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const signInUrl = `https://example.com/device?${new URLSearchParams({
+          client_id: "device-code-client",
+          redirect_uri: "http://localhost:1455/auth/callback",
+          response_type: "code",
+          scope: "openid profile email offline_access",
+          state: "state-1".repeat(16),
+        })}`;
         const initialDetection = {
           candidates: [],
           manualProviders: [],
@@ -175,6 +212,14 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
+            "config.get": {
+              config: {},
+              sourceConfig: {},
+              raw: "{}",
+              hash: "config-hash-1",
+              valid: true,
+              issues: [],
+            },
             "openclaw.setup.detect": initialDetection,
             "openclaw.setup.auth.start": {
               sessionId: "device-code-session",
@@ -190,7 +235,8 @@ suite.define(() => {
                     id: "device-code",
                     type: "note",
                     title: "Authorize device",
-                    externalUrl: "https://example.com/device",
+                    message: `Open this URL in your local browser:\n\n${signInUrl}`,
+                    externalUrl: signInUrl,
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
@@ -202,14 +248,51 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
         expect(response?.status()).toBe(200);
+        const configReadsBeforeStart = (await gateway.getRequests("config.get")).length;
+        await gateway.deferNext("config.get");
         await page.getByRole("button", { name: "Pair" }).click();
 
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(configReadsBeforeStart + 1);
         await page.getByText("ABCD-1234").waitFor();
+        await page.getByText("Working…").waitFor();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-refresh-pending.png"),
+          });
+        }
+        await gateway.rejectDeferred("config.get", {
+          code: "UNAVAILABLE",
+          message: "authoritative snapshot unavailable",
+        });
+        await expect.poll(() => page.getByText("Working…").count()).toBe(0);
         await page.getByText("Expires in 14 minutes").waitFor();
+        await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("alert")
+          .filter({ hasText: "authoritative snapshot unavailable" })
+          .waitFor();
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-refresh-warning.png"),
+          });
+        }
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
-        await expect.poll(() => signInLink.getAttribute("href")).toBe("https://example.com/device");
+        await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
+        const wizardBody = page.locator(".model-setup-wizard__body");
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.getByRole("button", { name: "Continue" }).waitFor();
+        await page.getByRole("button", { name: "Cancel" }).waitFor();
 
         await gateway.setMethodResponse("openclaw.setup.detect", {
           ...initialDetection,
@@ -551,23 +634,36 @@ suite.define(() => {
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
-        const manualProviderIsActive = (providerId: string) =>
+        const manualProviderHasFocus = (providerId: string) =>
           page
             .locator(`[data-manual-provider="${providerId}"]`)
-            .evaluate((element) => Reflect.get(element, "active") === true);
+            .evaluate((element) => element === document.activeElement);
         const manualProviderMenuReady = () =>
           page
             .locator("[data-manual-provider]")
-            .evaluateAll((options) =>
-              options.some((option) => Reflect.get(option, "active") === true),
-            );
-        const waitForProviderHide = () =>
-          providerPicker.evaluate(
-            (element) =>
-              new Promise<void>((resolve) => {
-                element.addEventListener("wa-after-hide", () => resolve(), { once: true });
-              }),
+            .evaluateAll((options) => options.some((option) => option === document.activeElement));
+        const providerHideMarker = "data-openclaw-test-after-hide";
+        const armProviderHide = () =>
+          providerPicker.evaluate((element, marker) => {
+            element.removeAttribute(marker);
+            element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+              once: true,
+            });
+          }, providerHideMarker);
+        const waitForProviderHide = async () => {
+          await expect
+            .poll(() =>
+              providerPicker.evaluate(
+                (element, marker) => element.hasAttribute(marker),
+                providerHideMarker,
+              ),
+            )
+            .toBe(true);
+          await providerPicker.evaluate(
+            (element, marker) => element.removeAttribute(marker),
+            providerHideMarker,
           );
+        };
         const providerIds = await page
           .locator("[data-manual-provider]")
           .evaluateAll((options) =>
@@ -610,9 +706,9 @@ suite.define(() => {
           });
           await page.setViewportSize({ height: 1000, width: 1440 });
         }
-        const providerHidden = waitForProviderHide();
+        await armProviderHide();
         await page.keyboard.press("Escape");
-        await providerHidden;
+        await waitForProviderHide();
         await expect
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
@@ -627,16 +723,17 @@ suite.define(() => {
           .toBe(true);
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderIsActive(firstProviderId)).toBe(true);
+        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
         await page.keyboard.press("End");
-        await expect.poll(() => manualProviderIsActive(lastProviderId)).toBe(true);
+        await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
         await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderIsActive(firstProviderId)).toBe(true);
-        await page.keyboard.press("z");
-        await expect.poll(() => manualProviderIsActive("zai-cn")).toBe(true);
-        const zaiProviderHidden = waitForProviderHide();
+        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
+        await armProviderHide();
         await page.keyboard.press("Enter");
-        await zaiProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Z.AI");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
@@ -645,9 +742,9 @@ suite.define(() => {
         await accessValue.fill("same-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const sameProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="zai-cn"]').click();
-        await sameProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => accessValue.inputValue()).toBe("same-provider-secret");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
@@ -655,9 +752,9 @@ suite.define(() => {
 
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const providerHiddenBackward = waitForProviderHide();
+        await armProviderHide();
         await page.keyboard.press("Shift+Tab");
-        await providerHiddenBackward;
+        await waitForProviderHide();
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -675,9 +772,9 @@ suite.define(() => {
         await accessValue.fill("sk-old-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const googleProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
-        await googleProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
         await expect.poll(() => accessValue.inputValue()).toBe("");
@@ -686,9 +783,9 @@ suite.define(() => {
           .toBe(true);
 
         await providerTrigger.click();
-        const qwenProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="qwen-cn"]').click();
-        await qwenProviderHidden;
+        await waitForProviderHide();
         await expect
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
@@ -747,9 +844,9 @@ suite.define(() => {
           .toBe(detectCountBeforeDismiss + 1);
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const googleProviderHiddenAfterDismiss = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
-        await googleProviderHiddenAfterDismiss;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
       },

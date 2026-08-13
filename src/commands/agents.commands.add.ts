@@ -14,9 +14,14 @@ import {
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
+  type AuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -33,10 +38,10 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
-import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -60,36 +65,25 @@ function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): A
   return { config, added: [], updated: [], skipped: [], conflicts: [] };
 }
 
-async function copyPortableAuthProfiles(params: {
-  destAgentDir: string;
-  sourceAgentDir: string;
-}): Promise<{ copied: number; skipped: number }> {
-  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
-  if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
-    return { copied: 0, skipped: 0 };
+function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
+  const store = loadPersistedAuthProfileStore(agentDir);
+  if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
+    throw new AuthProfileStoreUnreadableError(agentDir);
   }
-  const portable = buildPortableAuthProfileStoreForAgentCopy(sourceStore);
-  if (portable.copiedProfileIds.length === 0) {
-    return { copied: 0, skipped: portable.skippedProfileIds.length };
-  }
-  await fs.mkdir(params.destAgentDir, { recursive: true });
-  saveAuthProfileStore(portable.store, params.destAgentDir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
-  return {
-    copied: portable.copiedProfileIds.length,
-    skipped: portable.skippedProfileIds.length,
-  };
+  return store;
 }
 
-function formatSkippedOAuthProfilesMessage(params: {
-  sourceAgentId: string;
-  sourceIsInheritedMain: boolean;
-}): string {
-  return params.sourceIsInheritedMain
-    ? `OAuth profiles stay shared from "${params.sourceAgentId}" unless this agent signs in separately.`
-    : `OAuth profiles were not copied from "${params.sourceAgentId}"; sign in separately for this agent.`;
+function hasOAuthProfiles(store: AuthProfileStore, profileIds: readonly string[]): boolean {
+  return profileIds.some((profileId) => store.profiles[profileId]?.type === "oauth");
+}
+
+function formatSkippedOAuthProfilesMessage(
+  sourceAgentId: string,
+  sourceIsInheritedMain: boolean,
+): string {
+  return sourceIsInheritedMain
+    ? `OAuth profiles stay shared from "${sourceAgentId}" unless this agent signs in separately.`
+    : `OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
 }
 
 /** Create or update an agent through the non-interactive path or guided wizard. */
@@ -270,12 +264,13 @@ export async function agentsAddCommand(
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
       if (!sameAuthPath) {
-        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
-        const destStore = loadPersistedAuthProfileStore(agentDir);
+        const sourceStore = loadReadablePersistedAuthProfileStore(sourceAgentDir);
+        const destStore = loadReadablePersistedAuthProfileStore(agentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
         if (
+          sourceStore &&
           portable &&
           portable.copiedProfileIds.length > 0 &&
           Object.keys(destStore?.profiles ?? {}).length === 0
@@ -290,24 +285,33 @@ export async function agentsAddCommand(
               filterExternalAuthProfiles: false,
               syncExternalCli: false,
             });
-            const skippedText =
-              portable.skippedProfileIds.length > 0
-                ? ` ${formatSkippedOAuthProfilesMessage({
-                    sourceAgentId: defaultAgentId,
-                    sourceIsInheritedMain,
-                  })}`
+            const persistedDestStore = loadPersistedAuthProfileStore(agentDir);
+            const copiedCount = portable.copiedProfileIds.filter(
+              (profileId) => persistedDestStore?.profiles[profileId] !== undefined,
+            ).length;
+            const skippedOAuthProfiles =
+              hasOAuthProfiles(sourceStore, portable.skippedProfileIds) ||
+              portable.copiedProfileIds.some(
+                (profileId) =>
+                  sourceStore.profiles[profileId]?.type === "oauth" &&
+                  persistedDestStore?.profiles[profileId] === undefined,
+              );
+            const copiedText =
+              copiedCount > 0
+                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${defaultAgentId}".`
                 : "";
-            await prompter.note(
-              `Copied ${portable.copiedProfileIds.length} portable auth profile${portable.copiedProfileIds.length === 1 ? "" : "s"} from "${defaultAgentId}".${skippedText}`,
-              "Auth profiles",
-            );
+            const skippedText = skippedOAuthProfiles
+              ? ` ${formatSkippedOAuthProfilesMessage(defaultAgentId, sourceIsInheritedMain)}`
+              : "";
+            await prompter.note(`${copiedText}${skippedText}`.trim(), "Auth profiles");
           }
-        } else if ((portable?.skippedProfileIds.length ?? 0) > 0) {
+        } else if (
+          sourceStore &&
+          portable &&
+          hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
+        ) {
           await prompter.note(
-            formatSkippedOAuthProfilesMessage({
-              sourceAgentId: defaultAgentId,
-              sourceIsInheritedMain,
-            }),
+            formatSkippedOAuthProfilesMessage(defaultAgentId, sourceIsInheritedMain),
             "Auth profiles",
           );
         }
@@ -440,8 +444,3 @@ export async function agentsAddCommand(
     throw err;
   }
 }
-
-export const testing = {
-  copyPortableAuthProfiles,
-  formatSkippedOAuthProfilesMessage,
-};

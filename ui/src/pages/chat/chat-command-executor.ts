@@ -3,6 +3,10 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -41,10 +45,6 @@ import {
   DEFAULT_MAIN_KEY,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 

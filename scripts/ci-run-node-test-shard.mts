@@ -254,10 +254,27 @@ function relayChildStream(stream: Readable, label: string) {
   };
 }
 
-export function resolveShardChildCommand(args: string[], nodeExecPath = process.execPath) {
+const TEST_PROJECTS_ENTRYPOINTS = ["scripts/test-projects.mts", "scripts/test-projects.mjs"];
+
+export function resolveTestProjectsEntrypoint(
+  fileExists: (path: string) => boolean = existsSync,
+): string {
+  const entrypoint = TEST_PROJECTS_ENTRYPOINTS.find((candidate) => fileExists(candidate));
+  if (!entrypoint) {
+    throw new Error("CI target does not provide scripts/test-projects.mts or .mjs");
+  }
+  return entrypoint;
+}
+
+export function resolveShardChildCommand(
+  args: string[],
+  nodeExecPath = process.execPath,
+  testProjectsEntrypoint = resolveTestProjectsEntrypoint(),
+) {
+  const loaderArgs = testProjectsEntrypoint.endsWith(".mts") ? ["--import", "tsx"] : [];
   return {
     command: nodeExecPath,
-    args: ["--import", "tsx", "scripts/test-projects.mts", ...args],
+    args: [...loaderArgs, testProjectsEntrypoint, ...args],
   };
 }
 

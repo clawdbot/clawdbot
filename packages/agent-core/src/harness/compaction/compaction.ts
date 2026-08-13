@@ -128,13 +128,17 @@ function isUnavailableContextBarrier(message: AgentMessage): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  if (message.api === "cli" && message.usage.contextUsage === undefined) {
-    return true;
-  }
-  if (message.usage.contextUsage?.state !== "unavailable") {
+  const usage = "usage" in message ? message.usage : undefined;
+  if (!usage) {
     return false;
   }
-  return calculateContextTokens(message.usage) === 0;
+  if (message.api === "cli" && usage.contextUsage === undefined) {
+    return true;
+  }
+  if (usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return calculateContextTokens(usage) === 0;
 }
 
 /** Return usage from the last valid assistant message in session entries. */
@@ -287,6 +291,9 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
+      if (harnessMessage.excludeFromContext === true) {
+        return 0;
+      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -437,7 +444,8 @@ export function findCutPoint(
     if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
       break;
     }
-    if (getMessageFromEntryForCompaction(prevEntry)) {
+    // Metadata can follow the cut, but private persisted messages cannot become its boundary.
+    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
       break;
     }
     cutIndex--;

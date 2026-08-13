@@ -66,6 +66,10 @@ The dashboard update card names what the app will update:
   managed local Gateway, or another install the app does not own. The button
   runs that Gateway's normal update flow instead of changing the Mac app.
 
+Either button asks for confirmation first. The card hands the update to the app
+only after you choose **Update Mac app and restart**, so a misclick never starts
+Sparkle.
+
 A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
@@ -133,7 +137,7 @@ own docs.
 | Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
 | Keep state out of cloud-synced folders   | [Gateway on macOS](/platforms/mac/bundled-gateway#state-directory-on-macos)                 |
 | Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
-| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
+| Understand launchd behavior              | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
 | Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
 | Detect the Mac you most recently used    | [Active computer presence](/nodes/presence)                                                 |
 | Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |

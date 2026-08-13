@@ -54,12 +54,13 @@ const testPresenceUsers = [
 ];
 
 suite.define(() => {
-  async function openProfilePage(page: Page) {
+  async function openProfilePage(page: Page, methodResponses: Record<string, unknown> = {}) {
     const gateway = await installMockGateway(page, {
       basePath,
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
+        ...methodResponses,
       },
     });
     const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
@@ -87,6 +88,81 @@ suite.define(() => {
         0,
       );
     });
+  });
+
+  it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
+    await suite.withPage(
+      {
+        ...(captureUiProof
+          ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+          : {}),
+        viewport: { width: 1280, height: 800 },
+      },
+      async ({ page }) => {
+        const avatarRequests: Array<{ authorization?: string; resourceType: string; url: string }> =
+          [];
+        const avatarUrl = new URL(`${basePath}/avatar/main`, suite.server.baseUrl).href;
+        await page.route(`**${basePath}/avatar/main`, async (route) => {
+          const authorization = route.request().headers().authorization;
+          avatarRequests.push({
+            authorization,
+            resourceType: route.request().resourceType(),
+            url: route.request().url(),
+          });
+          if (authorization !== "Bearer e2e-device-token") {
+            await route.fulfill({ status: 401 });
+            return;
+          }
+          await route.fulfill({
+            body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#ef4e2f"/><circle cx="23" cy="27" r="4" fill="white"/><circle cx="41" cy="27" r="4" fill="white"/><path d="M20 42c8 6 16 6 24 0" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>`,
+            contentType: "image/svg+xml",
+            status: 200,
+          });
+        });
+        const gateway = await openProfilePage(page, {
+          "agent.identity.get": {
+            agentId: "main",
+            name: "Main agent",
+            avatar: `${basePath}/avatar/main`,
+            avatarStatus: "local",
+          },
+          "agents.list": {
+            defaultId: "main",
+            agents: [
+              {
+                id: "main",
+                identity: { name: "Main agent", avatarUrl: `${basePath}/avatar/main` },
+              },
+            ],
+          },
+        });
+
+        await gateway.waitForRequest("agent.identity.get");
+        const image = page.locator(".profile-hero__avatar-image");
+        await image.waitFor({ timeout: 10_000 });
+        await expect.poll(() => image.getAttribute("src")).toMatch(/^blob:/u);
+        await expect
+          .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+          .toBe(64);
+        expect(avatarRequests.length).toBeGreaterThan(0);
+        expect(new Set(avatarRequests.map((request) => JSON.stringify(request)))).toEqual(
+          new Set([
+            JSON.stringify({
+              authorization: "Bearer e2e-device-token",
+              resourceType: "fetch",
+              url: avatarUrl,
+            }),
+          ]),
+        );
+        if (captureUiProof) {
+          await mkdir(proofDir, { recursive: true });
+          await page.locator(".profile-hero").screenshot({
+            animations: "disabled",
+            path: path.join(proofDir, "06-authenticated-assistant-avatar.png"),
+          });
+        }
+      },
+    );
   });
 
   it("shares one authenticated avatar between the sidebar and profile preview", async () => {

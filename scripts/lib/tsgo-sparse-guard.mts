@@ -41,7 +41,7 @@ const CORE_PROD_REQUIRED_PATHS = [
   },
   {
     path: "scripts/lib/plugin-sdk-entrypoints.json",
-    whenPresent: "src/plugin-sdk/entrypoints.ts",
+    whenPresent: "scripts/lib/plugin-sdk-entries.mts",
   },
 ];
 

@@ -1,4 +1,5 @@
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "./view-types.ts";
+import type { BoardWidget } from "./types.ts";
+import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
   BoardWidgetBridgeController,
   type BoardWidgetBridgeGatewayClient,
@@ -9,7 +10,7 @@ const SANDBOX_READY_TIMEOUT_MS = 10_000;
 
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
@@ -17,8 +18,8 @@ type BoardWidgetSandboxHostOptions = {
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
   onFrameUrl: (url: string) => void;
-  onLoadFailed: (widget: BoardViewWidget) => void;
-  onUnauthorized: (widget: BoardViewWidget) => void;
+  onLoadFailed: (widget: BoardWidget) => void;
+  onUnauthorized: (widget: BoardWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
   onError: (error: unknown) => void;

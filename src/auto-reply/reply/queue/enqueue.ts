@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
-import { createDeferred } from "../../../shared/deferred.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -159,7 +159,7 @@ export function enqueueFollowupRun(
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    const { promise: acceptance, resolve: settle } = createDeferred<boolean>();
+    const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
     run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     appendQueueItem({

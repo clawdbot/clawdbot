@@ -1,4 +1,5 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
+import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -54,6 +55,7 @@ export type SessionListOptions = {
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -168,6 +170,7 @@ export type SessionCapability = {
     options?: { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
+  recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;

@@ -99,9 +99,9 @@ openclaw onboard
 
 Sets up model and auth for common providers without hand-editing config, including OpenAI Codex subscription OAuth and Anthropic (API key or Claude CLI reuse).
 
-With no primary model configured, fresh OpenAI API-key setup selects
-`openai/gpt-5.6`; the bare direct-API id resolves to the Sol tier. Fresh
-ChatGPT/Codex OAuth setup selects the exact `openai/gpt-5.6-sol` catalog ref.
+With no primary model configured, fresh OpenAI API-key and ChatGPT/Codex OAuth
+setup select the exact `openai/gpt-5.6-sol` catalog ref. The bare direct-API
+`openai/gpt-5.6` alias remains supported and resolves to the Sol tier.
 Reauthentication preserves an existing explicit primary model, including
 `openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select
 `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
@@ -252,7 +252,7 @@ Custom providers configured under `models.providers` are written into `models.js
 
     - A non-empty `baseUrl` already present in the agent `models.json` wins.
     - A non-empty `apiKey` in `models.json` wins only when that provider is not SecretRef-managed in the current config/auth-profile context.
-    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec refs.
+    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
     - Other provider fields refresh from config and normalized catalog data.

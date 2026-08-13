@@ -843,13 +843,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 });
               }),
           } satisfies PluginRuntime["agent"]["session"];
-          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) =>
-            await runWithPluginScope(async () => {
-              const ownerPluginId = resolveRunSessionExecutionOwner(params);
-              return ownerPluginId
-                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params)
-                : await agent.runEmbeddedAgent(params);
+          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
+            const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
+            return await runWithPluginScope(async () => {
+              const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
+              if (ownerPluginId) {
+                return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
+              }
+              // The public runtime adapter owns admission preparation. Passing
+              // host authority through this plugin wrapper is rejected by design.
+              return await agent.runEmbeddedAgent(runParams);
             });
+          };
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),

@@ -17,6 +17,7 @@ import {
   expandTelegramAllowFromWithAccessGroups,
   resolveTelegramDmAllow,
 } from "./access-groups.js";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -127,6 +128,7 @@ export const buildTelegramMessageContext = async ({
   bot,
   cfg,
   account,
+  ownerAgentId,
   historyLimit,
   dmHistoryLimit,
   groupHistories,
@@ -178,7 +180,9 @@ export const buildTelegramMessageContext = async ({
     const topicNameCacheScope = resolveTopicNameCacheScope(
       await resolveTelegramMessageContextStorePath({
         cfg,
-        agentId: account.accountId,
+        agentId:
+          ownerAgentId?.trim() ||
+          resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
         sessionRuntime,
       }),
     );
@@ -410,7 +414,9 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
-    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
+    botHasTopicsEnabled:
+      (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
+      resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
   const threadKeys =
     useDmThreadSession && dmThreadId != null

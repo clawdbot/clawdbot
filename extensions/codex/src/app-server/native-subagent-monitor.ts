@@ -2,7 +2,11 @@
  * Mirrors Codex native subagent lifecycle and completion into OpenClaw task
  * runtime records, with app-server history as the recovery source.
  */
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  emitAgentEvent,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
@@ -12,7 +16,11 @@ import {
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  normalizeOptionalString,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   claimCodexAppServerLiveThread,
   releaseCodexAppServerLiveThread,
@@ -20,6 +28,8 @@ import {
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { projectNormalizedToolItem } from "./event-projector-events.js";
+import { readItem } from "./event-projector-values.js";
 import {
   codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
@@ -136,6 +146,7 @@ const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   "turn/started",
   "turn/completed",
   "item/agentMessage/delta",
+  "item/reasoning/summaryTextDelta",
   "item/started",
   "item/completed",
   // App-server exposes no typed terminal subagent result. Keep this one raw
@@ -466,6 +477,9 @@ class Monitor {
     if (notification.method === "turn/started" && childState) {
       this.resumeChild(childState);
     }
+    if (childState && !childState.terminal) {
+      this.emitChildTaskActivity(notification, childState.childThreadId);
+    }
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
     if (notification.method === "thread/status/changed" && threadId && threadStatus) {
@@ -495,6 +509,45 @@ class Monitor {
       }
     }
     await this.handleCompletionNotification(notification);
+  }
+
+  private emitChildTaskActivity(
+    notification: CodexServerNotification,
+    childThreadId: string,
+  ): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (!params) {
+      return;
+    }
+    const runId = codexNativeSubagentRunId(childThreadId);
+    if (notification.method === "item/agentMessage/delta") {
+      const delta = readString(params, "delta");
+      if (delta) {
+        emitAgentEvent({ runId, stream: "assistant", data: { delta } });
+      }
+      return;
+    }
+    if (notification.method === "item/reasoning/summaryTextDelta") {
+      const delta = readString(params, "delta");
+      if (delta) {
+        emitAgentEvent({ runId, stream: "thinking", data: { delta } });
+      }
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const item = readItem(params.item);
+    if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
+      emitAgentEvent({ runId, stream: "assistant", data: { text: item.text } });
+    }
+    const projection = projectNormalizedToolItem({
+      phase: notification.method === "item/started" ? "start" : "result",
+      item,
+    });
+    if (projection?.event) {
+      emitAgentEvent({ runId, ...projection.event });
+    }
   }
 
   private resumeChild(childState: ChildState, options: { scheduleRecovery?: boolean } = {}): void {
@@ -1833,11 +1886,6 @@ function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | und
   const source = isJsonObject(thread?.source) ? thread.source : undefined;
   const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
   return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
-}
-
-function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function readStringArray(value: unknown): string[] {

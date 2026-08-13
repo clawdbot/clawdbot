@@ -26,12 +26,10 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import {
-  createFixedWindowRateLimiter,
-  resolveFixedWindowRateLimitInteger,
-} from "../infra/fixed-window-rate-limit.js";
+import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
 import type { AcpPendingApprovalRelay } from "./translator.prompt-state.js";
@@ -89,13 +87,13 @@ export class AcpGatewayAgent implements Agent {
       this.approvalRelays,
       this.log,
     );
-    const sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: resolveFixedWindowRateLimitInteger(
+    const sessionCreateRateLimiter = createFixedWindowBudget({
+      maxRequests: resolveIntegerOption(
         opts.sessionCreateRateLimit?.maxRequests,
         SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
         { min: 1 },
       ),
-      windowMs: resolveFixedWindowRateLimitInteger(
+      windowMs: resolveIntegerOption(
         opts.sessionCreateRateLimit?.windowMs,
         SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
         { min: 1_000 },

@@ -4,6 +4,7 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   type CronActiveJobMarker,
   isCronJobActive,
@@ -12,24 +13,24 @@ import {
   noteActiveCronJobTriggerMutation,
   onCronJobInactive,
 } from "../active-jobs.js";
+import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
+import { cronJobUsesToolRuntime } from "../tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
-import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
-  applyJobPatch,
-  applyDeclarativeJobSpec,
   computeJobNextRunAtMs,
-  createJob,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
+import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
+import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
 import {
   getPendingCronSessionCleanup,
   locked,
@@ -219,9 +220,63 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,
+    runtimeAuthority: job.runtimeAuthority,
+    runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
+  };
+}
+
+function reconcileRuntimeAuthority(params: {
+  job: CronStoredJob;
+  captured: boolean;
+  runtimeAuthority?: CronRuntimeAuthority;
+  explicitlyMutatesToolsAllow: boolean;
+}): void {
+  if (!cronJobUsesToolRuntime(params.job)) {
+    // Runtime authority cannot survive a payload transition into a path that
+    // does not execute the captured tool surface and later reappear on reuse.
+    delete params.job.runtimeAuthority;
+    delete params.job.runtimeAuthorityRecoveryRequired;
+    return;
+  }
+  if (params.captured) {
+    delete params.job.runtimeAuthorityRecoveryRequired;
+    const runtimeAuthority = params.runtimeAuthority
+      ? cloneCronRuntimeAuthority(params.runtimeAuthority)
+      : undefined;
+    if (params.runtimeAuthority && !runtimeAuthority) {
+      throw new TypeError("captured cron runtime authority is invalid");
+    }
+    if (runtimeAuthority) {
+      params.job.runtimeAuthority = runtimeAuthority;
+    } else {
+      // A fresh exact-surface capture with no runtime authority intentionally
+      // replaces any older runtime-specific grant instead of retaining it.
+      delete params.job.runtimeAuthority;
+    }
+    return;
+  }
+  if (params.explicitlyMutatesToolsAllow) {
+    // Explicit tool caps are a complete replacement. Runtime-owned authority
+    // may be restored only by another authenticated exact-surface capture.
+    if (params.job.runtimeAuthority) {
+      params.job.runtimeAuthorityRecoveryRequired = true;
+      delete params.job.runtimeAuthority;
+    }
+  }
+}
+
+function consumeRuntimeAuthorityMutationOptions(
+  opts: CronAddOptions | CronUpdateOptions | undefined,
+): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+  // Validation-only guards must not look like an empty fresh capture: that
+  // would erase an existing runtime ceiling during an otherwise routine edit.
+  opts?.commitGuard?.();
+  return {
+    captured: opts?.captureRuntimeAuthority !== undefined,
+    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
   };
 }
 
@@ -288,6 +343,12 @@ export async function add(
         toolsAllowProvenance: opts?.toolsAllowProvenance,
         configuredChannels,
       });
+      const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
+      reconcileRuntimeAuthority({
+        job: nextJob,
+        ...runtimeAuthorityMutation,
+        explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
+      });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
         isDeepStrictEqual(
@@ -295,7 +356,6 @@ export async function add(
           declarativeFields(nextJob, includeEnabled),
         )
       ) {
-        opts?.commitGuard?.();
         return { ...existing, created: false, updated: false, job: existing };
       }
       const snapshot = snapshotStoreForRollback(state);
@@ -306,7 +366,6 @@ export async function add(
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
-      opts?.commitGuard?.();
       await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
     }
@@ -314,13 +373,26 @@ export async function add(
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
+    const explicitOwnerAgentId =
+      normalizeOptionalAgentId(normalizedInput.agentId) ??
+      parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
+    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
+    const creationInput =
+      !explicitOwnerAgentId && retainedLegacyAgentId === agentId
+        ? { ...normalizedInput, agentId }
+        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, normalizedInput, {
+    const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
-    opts?.commitGuard?.();
+    const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
+    reconcileRuntimeAuthority({
+      job,
+      ...runtimeAuthorityMutation,
+      explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
+    });
     state.store?.jobs.push(job);
 
     // Mutation notifications describe durable state, so publish them only
@@ -431,7 +503,13 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
-  opts?.commitGuard?.();
+  const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
+  reconcileRuntimeAuthority({
+    job: nextJob,
+    ...runtimeAuthorityMutation,
+    explicitlyMutatesToolsAllow:
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+  });
   const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
@@ -465,7 +543,7 @@ export async function updateWithPrecondition(
 export async function remove(
   state: CronServiceState,
   id: string,
-  opts?: { systemOwned?: boolean },
+  opts?: { systemOwned?: boolean; commitGuard?: () => void },
 ) {
   let sessionCleanup:
     | {
@@ -499,6 +577,7 @@ export async function remove(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+    opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
 

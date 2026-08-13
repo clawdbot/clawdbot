@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { assertSqliteSchemaContains, collectSqliteSchemaIssues } from "./sqlite-schema-contract.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE parents (
@@ -248,6 +248,39 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it("returns a stable missing-table issue", () => {
+    const database = createDatabase("CREATE TABLE unrelated (id INTEGER PRIMARY KEY);");
+    try {
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toContainEqual({
+        code: "missing-table",
+        objectName: "parents",
+        message: "missing table parents",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns a stable virtual-definition issue", () => {
+    const database = createDatabase(
+      "CREATE VIRTUAL TABLE search_records USING fts5(body, tokenize='porter');",
+    );
+    try {
+      expect(
+        collectSqliteSchemaIssues(
+          database,
+          "CREATE VIRTUAL TABLE search_records USING fts5(body);",
+        ),
+      ).toContainEqual({
+        code: "virtual-table-definition-drift",
+        objectName: "search_records",
+        message: "virtual table definition differs for search_records",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it.each([
     {
       name: "table",
@@ -326,6 +359,79 @@ describe("assertSqliteSchemaContains", () => {
     try {
       expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
         expected,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    {
+      name: "type",
+      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value BLOB NOT NULL"),
+      issue: { code: "column-definition-drift", objectName: "parents.value" },
+    },
+    {
+      name: "default",
+      schema: CANONICAL_SCHEMA.replace(" DEFAULT 'pending'", " DEFAULT 'other'"),
+      issue: { code: "column-definition-drift", objectName: "events.payload" },
+    },
+    {
+      name: "nullability",
+      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value TEXT"),
+      issue: { code: "column-definition-drift", objectName: "parents.value" },
+    },
+    {
+      name: "inline primary key",
+      schema: CANONICAL_SCHEMA.replace("id INTEGER PRIMARY KEY,", "id INTEGER,"),
+      issue: { code: "column-definition-drift", objectName: "features.id" },
+    },
+    {
+      name: "table constraint",
+      schema: CANONICAL_SCHEMA.replace(
+        /,\s*FOREIGN KEY \(parent_id\) REFERENCES parents\(id\) ON DELETE CASCADE/u,
+        "",
+      ),
+      issue: { code: "table-constraint-drift", objectName: "children" },
+    },
+    {
+      name: "index",
+      schema: CANONICAL_SCHEMA.replace(
+        "CREATE INDEX idx_children_parent ON children(parent_id, id)",
+        "CREATE INDEX idx_children_parent ON children(id, parent_id)",
+      ),
+      issue: { code: "missing-or-drifted-index", objectName: "idx_children_parent" },
+    },
+    {
+      name: "trigger",
+      schema: CANONICAL_SCHEMA.replace(
+        "UPDATE parents SET value = NEW.value WHERE id = NEW.parent_id",
+        "UPDATE parents SET value = NULL WHERE id = NEW.parent_id",
+      ),
+      issue: {
+        code: "missing-or-drifted-trigger",
+        objectName: "children_value_after_update",
+      },
+    },
+    {
+      name: "table options",
+      schema: CANONICAL_SCHEMA.replace(
+        `  CREATE TABLE parents (
+    id TEXT PRIMARY KEY,
+    value TEXT NOT NULL CHECK (length(value) > 0)
+  );`,
+        `  CREATE TABLE parents (
+    id TEXT PRIMARY KEY,
+    value TEXT NOT NULL CHECK (length(value) > 0)
+  ) STRICT;`,
+      ),
+      issue: { code: "table-options-drift", objectName: "parents" },
+    },
+  ])("returns a stable issue for drifted $name", ({ schema, issue }) => {
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toContainEqual(
+        expect.objectContaining(issue),
       );
     } finally {
       database.close();

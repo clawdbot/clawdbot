@@ -56,8 +56,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn"
+          class="chat-send-btn new-session-page__start-submit"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -72,8 +73,9 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-primary"
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
           ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${options.onSubmit}
         >
@@ -221,7 +223,6 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
-          ${renderChatAttachmentMenu(attachmentProps)}
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref(options.textareaController.ref)}
@@ -247,13 +248,14 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
+            ${renderChatAttachmentMenu(attachmentProps)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
             ${options.draftAvailable
               ? renderVisibilityPill({
                   mode: "draft",
-                  icon: "👻",
+                  icon: icons.pencil,
                   label: t("newSession.draft"),
                   description: t("newSession.draftDescription"),
                   options,
@@ -261,7 +263,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               : nothing}
             ${renderVisibilityPill({
               mode: "incognito",
-              icon: icons.lock,
+              icon: icons.eyeOff,
               label: t("newSession.incognito"),
               description: t("newSession.incognitoDescription"),
               disabledReason: options.incognitoDisabledReason,
@@ -270,9 +272,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           </div>
         </div>
         ${options.pendingAttachmentReads > 0
-          ? html`<span class="agent-chat__sr-only" role="status"
-              >${t("newSession.readingAttachment")}</span
-            >`
+          ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
     </div>

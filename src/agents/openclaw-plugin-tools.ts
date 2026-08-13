@@ -11,7 +11,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
-  resolveApiKeyForProvider as resolveProviderAuth,
+  resolveApiKeyForProviderCore as resolveProviderAuth,
 } from "./model-auth.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import {

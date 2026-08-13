@@ -547,6 +547,25 @@ describe("delivery-queue storage", () => {
       expect(entry.recoveryState).toBe("send_attempt_started");
     });
 
+    it("keeps ambiguous post-send evidence across a later unclaimed batch dispatch", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+      await markDeliveryPlatformSendDispatched(id, tmpDir());
+
+      // Downgrading to send_attempt_started would let recovery replay the whole
+      // batch as not_sent and duplicate the payload that already reached the platform.
+      expect(readQueuedEntry(tmpDir(), id).recoveryState).toBe("unknown_after_send");
+    });
+
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {

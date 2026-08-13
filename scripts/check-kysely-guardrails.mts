@@ -64,6 +64,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db.ts",
+    "src/state/openclaw-state-ownership-operations.ts",
     "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
@@ -71,6 +72,7 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
+    "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
@@ -85,6 +87,7 @@ const rawSqliteAllowPathGroups = {
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
+    "src/state/openclaw-state-ownership.ts",
   ],
   "quarantine store must work when other databases are damaged": [
     "src/state/openclaw-quarantine-store.ts",

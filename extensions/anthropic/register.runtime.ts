@@ -384,6 +384,33 @@ function resolveAnthropic46ForwardCompatModel(params: {
   });
 }
 
+function resolveAnthropicSnapshotModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const modelId = ctx.modelId.trim();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const match = /^(claude-[a-z0-9]+(?:-[a-z0-9]+)*)-\d{8}$/.exec(normalizedModelId);
+  if (
+    modelId !== normalizedModelId ||
+    normalizeLowercaseStringOrEmpty(ctx.provider) !== PROVIDER_ID ||
+    !match
+  ) {
+    return undefined;
+  }
+  const templateId = match[1]!;
+  const captured = cloneFirstTemplateModel({
+    providerId: PROVIDER_ID,
+    modelId,
+    templateIds: [templateId],
+    ctx,
+  });
+  if (captured) {
+    return captured;
+  }
+  const template = resolveAnthropicManifestModel(templateId);
+  return template ? { ...template, id: modelId, name: modelId } : undefined;
+}
+
 /** Newest Claude generation whose request contract this plugin encodes. */
 const ANTHROPIC_NEWEST_KNOWN_GENERATION = { major: 5, minor: 0 } as const;
 
@@ -436,28 +463,40 @@ function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
   return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
 }
 
-// Lazily indexed manifest compat per provider so hand-built dynamic rows keep
-// catalog capability metadata even when the run's model registry is empty
-// (for example env-key-only runs without a generated models.json).
-let anthropicManifestCompatIndex: Map<string, ModelCompatConfig> | undefined;
+// Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
+// has no template yet. Keeping one normalized index avoids reparsing catalog metadata per run.
+let anthropicManifestModelIndex: Map<string, ProviderRuntimeModel> | undefined;
+
+function resolveAnthropicManifestModel(modelId: string): ProviderRuntimeModel | undefined {
+  if (!anthropicManifestModelIndex) {
+    anthropicManifestModelIndex = new Map();
+    const catalog = buildAnthropicCatalogProvider();
+    for (const model of catalog.models ?? []) {
+      const api = model.api ?? catalog.api;
+      const baseUrl = model.baseUrl ?? catalog.baseUrl;
+      if (api && baseUrl) {
+        anthropicManifestModelIndex.set(model.id, {
+          ...model,
+          input: model.input.filter(
+            (item): item is "text" | "image" => item === "text" || item === "image",
+          ),
+          provider: PROVIDER_ID,
+          api,
+          baseUrl,
+        });
+      }
+    }
+  }
+  return anthropicManifestModelIndex.get(modelId);
+}
 
 function resolveAnthropicManifestCompat(
   provider: string,
   modelId: string,
 ): ModelCompatConfig | undefined {
-  if (!anthropicManifestCompatIndex) {
-    anthropicManifestCompatIndex = new Map();
-    const providers = manifest.modelCatalog?.providers ?? {};
-    for (const [providerId, catalog] of Object.entries(providers)) {
-      for (const model of catalog.models ?? []) {
-        const compat = (model as { compat?: ModelCompatConfig }).compat;
-        if (compat) {
-          anthropicManifestCompatIndex.set(`${providerId}/${model.id}`, compat);
-        }
-      }
-    }
-  }
-  return anthropicManifestCompatIndex.get(`${provider}/${modelId}`);
+  return normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
+    ? resolveAnthropicManifestModel(modelId)?.compat
+    : undefined;
 }
 
 function buildAnthropicForwardCompatModel(
@@ -528,6 +567,7 @@ function resolveAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   return (
+    resolveAnthropicSnapshotModel(ctx) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
       dashModelId: ANTHROPIC_OPUS_48_MODEL_ID,

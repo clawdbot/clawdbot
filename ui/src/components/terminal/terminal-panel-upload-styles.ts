@@ -85,7 +85,7 @@ export const terminalPanelUploadStyles = css`
     background: transparent;
     color: var(--muted, #8a919e);
     font: inherit;
-    cursor: pointer;
+    cursor: var(--cursor-action);
   }
   .tp-upload-card__action:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);

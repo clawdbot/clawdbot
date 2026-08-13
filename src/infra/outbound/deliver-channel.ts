@@ -374,6 +374,14 @@ function createPluginHandler(
             results,
           })
       : undefined,
+    adoptTargetFromDelivery: outbound?.adoptTargetFromDelivery
+      ? ({ target, result }) =>
+          outbound.adoptTargetFromDelivery!({
+            cfg: params.cfg,
+            target,
+            result,
+          })
+      : undefined,
     shouldSkipPlainTextSanitization: outbound?.shouldSkipPlainTextSanitization
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
       : undefined,

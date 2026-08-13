@@ -62,11 +62,9 @@ export type ChannelStreamingProgressConfig = {
   maxLines?: number;
   /** Maximum characters per compact progress line before truncation. Default: 120. */
   maxLineChars?: number;
-  /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
-  render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the draft. "raw" opts into command text; "status" shows only the tool label. Default: "status". */
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
@@ -87,7 +85,7 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the preview. "raw" opts into command text; "status" shows only the tool label. Default: "status". */
   commandText?: ChannelStreamingCommandTextMode;
 };
 
@@ -98,7 +96,9 @@ export type ChannelStreamingBlockConfig = {
   coalesce?: BlockStreamingCoalesceConfig;
 };
 
-export type ChannelStreamingConfig = {
+export type ChannelStreamingConfig<
+  TProgress extends ChannelStreamingProgressConfig = ChannelStreamingProgressConfig,
+> = {
   /**
    * Preview streaming mode:
    * - "off": disable preview updates
@@ -109,13 +109,10 @@ export type ChannelStreamingConfig = {
   mode?: StreamingMode;
   /** Chunking mode for outbound text delivery. */
   chunkMode?: TextChunkMode;
-  /**
-   * Channel-specific native transport streaming toggle.
-   * Used today by Slack's native stream API.
-   */
+  /** Prefer a channel's native streaming transport over its portable draft path. */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
-  progress?: ChannelStreamingProgressConfig;
+  progress?: TProgress;
   block?: ChannelStreamingBlockConfig;
 };
 
@@ -268,7 +265,8 @@ export type SessionMaintenanceConfig = {
   maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
-   * Default: 80% of maxDiskBytes.
+   * Default: 80% of maxDiskBytes. A value that resolves to zero falls back to
+   * the default instead of clearing history; negative values are invalid.
    */
   highWaterBytes?: number | string;
 };

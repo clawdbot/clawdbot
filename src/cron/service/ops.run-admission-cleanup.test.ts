@@ -7,11 +7,18 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
-import { run } from "./ops-run.js";
+import { enqueueRun, run } from "./ops-run.js";
 import { runWithCronAdmission } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
@@ -22,6 +29,55 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
+  it("rejects queued manual reservation after caller authority closes", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const job = createDueIsolatedJob({
+      id: "revoked-queued-run",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+      blockerStarted.resolve();
+      return await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+    let authorityActive = true;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const ack = await enqueueRun(state, job.id, "force", {
+      commitGuard: () => {
+        if (!authorityActive) {
+          throw new TypeError("authority closed");
+        }
+      },
+    });
+    expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
+    authorityActive = false;
+    releaseBlocker.resolve();
+    await blocker;
+    await waitForActiveTasks(5_000);
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+    clearCommandLane(CommandLane.Cron);
+  });
+
   it.each([
     { mode: "force" as const, evaluation: "completed" as const },
     { mode: "due" as const, evaluation: "completed" as const },

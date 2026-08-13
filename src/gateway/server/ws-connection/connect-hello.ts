@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -37,6 +38,7 @@ export async function sendGatewayHello(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
   pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
 ): Promise<void> {
   const {
     connId,
@@ -66,14 +68,31 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
+    sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+  // Prefer the authenticated human; principal scopes never inherit device-token rows.
+  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
+  const recoveryScope =
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
+      : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -83,10 +102,10 @@ export async function sendGatewayHello(
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+  const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
-  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -101,7 +120,9 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       ],
     },
     snapshot,
@@ -113,7 +134,9 @@ export async function sendGatewayHello(
       : {}),
     auth: {
       role,
-      scopes: helloOkAuthScopes,
+      scopes,
+      ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
@@ -199,7 +222,7 @@ export async function sendGatewayHello(
     authMethod,
     authProvided,
     role,
-    scopes: helloOkAuthScopes,
+    scopes,
     clientMode: connectParams.client.mode,
     deviceId: device?.id,
   });

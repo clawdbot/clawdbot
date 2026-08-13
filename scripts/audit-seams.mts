@@ -552,11 +552,12 @@ function splitNameTokens(name: string) {
     .filter(Boolean);
 }
 
-function hasImportSource(source: string, specifier: string) {
+function hasImportSource(source: string, specifier: string, matchSuffix = false) {
   const escaped = escapeRegExp(specifier);
-  return new RegExp(`from\\s+["']${escaped}["']|import\\s*\\(\\s*["']${escaped}["']\\s*\\)`).test(
-    source,
-  );
+  const importSource = matchSuffix ? `(?:[^"']*/)?${escaped}` : escaped;
+  return new RegExp(
+    `from\\s+["']${importSource}["']|import\\s*\\(\\s*["']${importSource}["']\\s*\\)`,
+  ).test(source);
 }
 
 function hasAnyImportSource(source: string, specifiers: string[]) {
@@ -685,45 +686,63 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
 
   const seamKinds = [];
   const isAnnounceDispatchPath =
-    relativePath === "src/agents/subagent-announce.ts" ||
-    relativePath === "src/agents/subagent-announce-dispatch.ts";
+    relativePath === "src/agents/subagents/announce/subagent-announce.ts" ||
+    relativePath === "src/agents/subagents/announce/subagent-announce-dispatch.ts";
   const importsSpawnRuntime = hasAnyImportSource(source, [
     "./subagent-spawn.js",
-    "../subagent-spawn.js",
     "./acp-spawn.js",
-    "../acp-spawn.js",
+    "./subagents/spawn/subagent-spawn.js",
+    "../subagents/spawn/subagent-spawn.js",
+    "./subagents/spawn/acp-spawn.js",
+    "../subagents/spawn/acp-spawn.js",
     "./subagent-registry.js",
     "../subagent-registry.js",
+    "../../subagent-registry.js",
     "../acp/control-plane/manager.js",
+    "../../../acp/control-plane/manager.js",
   ]);
-  const importsLifecycleRegistry = hasAnyImportSource(source, [
-    "./subagent-registry-completion.js",
-    "./subagent-registry-cleanup.js",
-    "./subagent-registry-state.js",
-    "./subagent-registry.js",
-    "./subagent-lifecycle-events.js",
-    "../context-engine/init.js",
-    "../context-engine/registry.js",
-    "../sessions/session-lifecycle-events.js",
-  ]);
+  const importsLifecycleRegistry =
+    hasImportSource(source, "subagent-registry.js", true) ||
+    hasAnyImportSource(source, [
+      "./subagent-registry-completion.js",
+      "./subagent-registry-cleanup.js",
+      "./subagent-registry-state.js",
+      "./subagent-lifecycle-events.js",
+      "../context-engine/init.js",
+      "../context-engine/registry.js",
+      "../sessions/session-lifecycle-events.js",
+      "../../../context-engine/init.js",
+      "../../../context-engine/registry.js",
+      "../../../sessions/session-lifecycle-events.js",
+    ]);
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
     "./subagent-announce-dispatch.js",
+    "../announce/subagent-announce.js",
+    "../announce/subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
     "../utils/delivery-context.shared.js",
     "../gateway/call.js",
+    "../../../infra/outbound/bound-delivery-router.js",
+    "../../../utils/delivery-context.shared.js",
+    "../../../gateway/call.js",
   ]);
   const importsCleanup = hasAnyImportSource(source, [
     "../gateway/call.js",
     "./subagent-registry-cleanup.js",
     "../acp/control-plane/spawn.js",
+    "../../../gateway/call.js",
+    "../../../acp/control-plane/spawn.js",
   ]);
   const importsParentStream = hasAnyImportSource(source, [
     "./acp-spawn-parent-stream.js",
     "../infra/heartbeat-wake.js",
     "../infra/system-events.js",
     "../infra/agent-events.js",
+    "../../../infra/heartbeat-wake.js",
+    "../../../infra/system-events.js",
+    "../../../infra/agent-events.js",
   ]);
 
   if (

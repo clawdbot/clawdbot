@@ -1,7 +1,61 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+type ThreadLifecycleTestHostCapability = {
+  capabilities: EmbeddedRunAttemptParams["hostCapabilities"];
+  close: () => void;
+};
+
+const activeHostCapabilities = new Set<ThreadLifecycleTestHostCapability>();
+
+function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCapability {
+  let active = true;
+  const assertActive = () => {
+    if (!active) {
+      throw new Error("thread lifecycle test host capability is no longer active");
+    }
+  };
+  const capabilities: EmbeddedRunAttemptParams["hostCapabilities"] = Object.freeze({
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive,
+    bindToolSurface: (tools) => {
+      assertActive();
+      return tools.map((tool) => {
+        const execute = tool.execute;
+        return {
+          ...tool,
+          execute: async (...args) => {
+            assertActive();
+            return await execute(...args);
+          },
+        };
+      });
+    },
+    runBeforeToolCall: async (request) => {
+      assertActive();
+      return { blocked: false, params: request.params };
+    },
+    requestApproval: async () => {
+      assertActive();
+      return undefined;
+    },
+    waitForApproval: async () => {
+      assertActive();
+      return undefined;
+    },
+  });
+  return {
+    capabilities,
+    close: () => {
+      active = false;
+    },
+  };
+}
 
 export function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -71,7 +125,11 @@ export function createParams(
   workspaceDir: string,
   configOverrides?: EmbeddedRunAttemptParams["config"],
 ): EmbeddedRunAttemptParams {
+  const host = createTrackedThreadLifecycleHostCapability();
+  activeHostCapabilities.add(host);
+  const authStorage = AuthStorage.inMemory();
   return {
+    hostCapabilities: host.capabilities,
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -80,12 +138,20 @@ export function createParams(
     runId: "run-1",
     provider: "codex",
     modelId: "gpt-5.4-codex",
+    model: createCodexTestModel("codex"),
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,
-    authStorage: {} as never,
+    authStorage,
     authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
+    modelRegistry: ModelRegistry.inMemory(authStorage),
     config: configOverrides,
-  } as unknown as EmbeddedRunAttemptParams;
+  };
+}
+
+export function resetThreadLifecycleTestFixtures(): void {
+  for (const host of activeHostCapabilities) {
+    host.close();
+  }
+  activeHostCapabilities.clear();
 }

@@ -3,13 +3,15 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
 import { pruneMapToMaxSize } from "./map-size.js";
-import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;

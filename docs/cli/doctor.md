@@ -32,17 +32,18 @@ Doctor has five postures:
 | ------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------- |
 | Inspect                   | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
 | Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
-| Lint                      | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
+| Lint                      | `openclaw doctor --json`                  | Read-only JSON findings for deployment preflight and CI gates.                  |
 | Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.   |
 | Session SQLite migration  | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, compacts, recovers, or restores session state.    |
 
-Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a human operator wants doctor to edit config or state.
+Use `openclaw doctor --json` as the machine-readable deployment preflight. It runs the same read-only checks, JSON output, and exit codes as `openclaw doctor --lint --json`. Prefer `--fix` when a human operator wants doctor to edit config or state.
 
 ## Examples
 
 ```bash
 openclaw doctor
 openclaw doctor --lint
+openclaw doctor --json
 openclaw doctor --lint --json
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --all
@@ -93,19 +94,20 @@ openclaw channels status --probe
 | `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                   |
 | `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                 |
 | `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                             |
-| `--json`                        | With `--lint`: JSON findings. With `--post-upgrade`: `{ probesRun, findings }`. With `--state-sqlite` or `--session-sqlite`: the maintenance report as JSON.                            |
+| `--json`                        | Run lint checks in read-only mode and emit JSON. With another machine mode, emit that mode's existing JSON report.                                                                      |
 | `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                       |
 | `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                        |
 | `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                             |
 | `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                              |
 
-`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`; `--json` is accepted with `--lint`, `--post-upgrade`, `--state-sqlite`, and `--session-sqlite`.
+`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` implies lint mode. It cannot be combined with `--repair`, `--fix`, or `--force` unless another machine mode owns the command.
 
 ## Lint mode
 
-`openclaw doctor --lint` is read-only: no prompts, no repair, no config/state rewrites.
+`openclaw doctor --json` is the deployment-preflight form of lint mode. It is read-only and non-interactive: no prompts, repairs, or config/state rewrites. `openclaw doctor --lint --json` remains an equivalent explicit spelling.
 
 ```bash
+openclaw doctor --json
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
@@ -190,7 +192,6 @@ Modernized core doctor checks stay attached to the ordered doctor contribution t
 ```bash
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
-openclaw doctor --lint --all --skip core/doctor/session-locks
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only` id is not registered, no check runs for that id; use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.
@@ -209,6 +210,9 @@ the container normally.
 ## Legacy state migration
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+
+For the retired QMD memory backend, including config rewrites and derived
+workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing canonical SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars fail closed: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 

@@ -38,7 +38,7 @@ vi.mock("./subcli-descriptors.js", () => ({
       hasSubcommands: true,
     },
   ],
-  getSubCliEntries: () => [
+  getSubCliEntriesCore: () => [
     {
       name: "config",
       description: "Manage config",

@@ -132,6 +132,12 @@
 
 ```json
 {
+  "additionalContext": {
+    "openclaw_current_sender": {
+      "kind": "untrusted",
+      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    }
+  },
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "collaborationMode": {
@@ -221,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62568,
-    "roughTokens": 15642
+    "chars": 48865,
+    "roughTokens": 12217
   },
   "openClawDeveloperInstructions": {
-    "chars": 3410,
-    "roughTokens": 853
+    "chars": 3370,
+    "roughTokens": 843
   },
   "totalTextOnly": {
-    "chars": 27422,
-    "roughTokens": 6856
+    "chars": 27382,
+    "roughTokens": 6846
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89992,
-    "roughTokens": 22498
+    "chars": 76249,
+    "roughTokens": 19063
   },
   "userInputText": {
     "chars": 929,
@@ -421,13 +427,15 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
+
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
 
 Credentials and secrets include authentication and pairing codes; never ask or request users to report, share, or provide them in chat, conversation messages, replies, or transcripts.
 Never echo or repeat credentials or secrets in chat, conversation messages, replies, or any other transcript.

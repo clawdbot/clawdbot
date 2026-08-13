@@ -56,6 +56,8 @@ Options:
 
 Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
+Direct `models status --probe` runs create temporary internal sessions in the selected agent's canonical database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before probing; the command removes its internal sessions and releases the state lock when it finishes or is interrupted.
+
 Probe detail/reason codes to expect when a probe never reaches a model call:
 
 - `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so probe reports the exclusion instead of trying it.

@@ -927,6 +927,7 @@ describe("agent exec run config layering", () => {
 
     expect(config.agents?.defaults?.workspace).toBe("/run/here");
     expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(config.skills?.load?.watch).toBe(false);
   });
 
   it("never downgrades a configured sandbox or shell env to the exec defaults", () => {
@@ -999,6 +1000,21 @@ describe("agent exec run config layering", () => {
     expect(config.agents?.entries?.ops?.agentDir).toBeUndefined();
     // Only the directory is dropped; the rest of the entry is still inherited.
     expect(config.agents?.entries?.ops?.model).toBe("openai/gpt-5.6-sol");
+  });
+
+  it("drops an inherited session store so the invocation state dir owns the agent database", () => {
+    const config = buildExecRunConfig({
+      base: {
+        session: {
+          store: "/persistent/agents/{agentId}/sessions/sessions.json",
+          mainKey: "primary",
+        },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.session?.store).toBeUndefined();
+    expect(config.session?.mainKey).toBe("primary");
   });
 
   it("drops an inherited harness cwd so --cwd wins", () => {

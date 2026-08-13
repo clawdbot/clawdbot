@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -82,12 +83,6 @@ export function resolveMemoryLanceDbPluginRoot(moduleUrl: string): string {
 
 const DEFAULT_PLUGIN_ROOT = resolveMemoryLanceDbPluginRoot(import.meta.url);
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function resolveHome(env: NodeJS.ProcessEnv): string {
   return env.HOME?.trim() || os.homedir();
 }
@@ -97,7 +92,7 @@ function resolveConfiguredDbPath(
   env: NodeJS.ProcessEnv,
   pluginRoot: string,
 ): string {
-  const pluginConfig = asRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
+  const pluginConfig = asOptionalRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
   const configured = typeof pluginConfig?.dbPath === "string" ? pluginConfig.dbPath.trim() : "";
   if (!configured) {
     return path.join(resolveHome(env), ".openclaw", "memory", "lancedb");
@@ -116,8 +111,8 @@ function resolveStorageOptions(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Record<string, string> | undefined {
-  const pluginConfig = asRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
-  const rawOptions = asRecord(pluginConfig?.storageOptions);
+  const pluginConfig = asOptionalRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
+  const rawOptions = asOptionalRecord(pluginConfig?.storageOptions);
   if (!rawOptions) {
     return undefined;
   }

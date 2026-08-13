@@ -3,6 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
 import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
@@ -14,7 +15,6 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { rawDataToString } from "../infra/ws.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import {
@@ -29,7 +29,7 @@ import { startGatewayServer } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getGatewayE2ePortBlock(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -278,7 +278,7 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const startedServer = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token: params.token },

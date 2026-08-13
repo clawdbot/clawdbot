@@ -12,6 +12,7 @@ import {
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildVoiceCallLegacyJsonlEventKey,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
@@ -88,12 +89,6 @@ type PluginDoctorStateMigrationParams = Parameters<
   PluginDoctorStateMigration["detectLegacyState"]
 >[0];
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Return Voice Call agents whose templated core session stores need migration. */
 export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): string[] {
   const agentIds = new Set<string>();
@@ -102,14 +97,14 @@ export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): st
     if (!entry) {
       continue;
     }
-    const config = entry.config === undefined ? {} : asRecord(entry.config);
+    const config = entry.config === undefined ? {} : asOptionalRecord(entry.config);
     if (!config) {
       continue;
     }
     agentIds.add(normalizeAgentId(typeof config.agentId === "string" ? config.agentId : undefined));
-    const numbers = asRecord(config.numbers);
+    const numbers = asOptionalRecord(config.numbers);
     for (const route of Object.values(numbers ?? {})) {
-      const agentId = asRecord(route)?.agentId;
+      const agentId = asOptionalRecord(route)?.agentId;
       if (typeof agentId === "string") {
         agentIds.add(normalizeAgentId(agentId));
       }
@@ -145,6 +140,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "agent database registry primary key -> agent_id,path";
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
+    case "commitments-retirement-v7":
+      return "retired commitments storage -> removed table and indexes";
     case "operator-approvals-system-agent":
       return "operator approvals -> OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

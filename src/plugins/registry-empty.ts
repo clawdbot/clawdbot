@@ -42,7 +42,6 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     memoryPromptSupplements: [],
     sessionDiscussionProviders: new Map(),
     contextEngines: new Map(),
-    commandRegistryLocked: false,
     gatewayHandlers: {},
     gatewayMethodDescriptors: [],
     dashboardDataBindings: new Map(),

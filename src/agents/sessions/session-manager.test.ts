@@ -13,7 +13,8 @@ import {
   loadTranscriptEvents,
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
-  upsertSessionEntry,
+  updateSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   buildSessionContext,
@@ -43,7 +44,7 @@ describe("SessionManager.open", () => {
       sessionId,
       storePath,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,
@@ -154,7 +155,7 @@ describe("SessionManager.open", () => {
     const sessionId = "legacy-persisted-session";
     const sessionKey = "agent:main:legacy-persisted-session";
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
     replaceTranscriptEventsSync(scope, [
       {
         type: "session",
@@ -184,7 +185,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:current-persisted-session",
       storePath,
     };
-    await upsertSessionEntry(currentScope, { sessionId: currentScope.sessionId, updatedAt: 2 });
+    await upsertSessionEntryCore(currentScope, { sessionId: currentScope.sessionId, updatedAt: 2 });
     const currentManager = SessionManager.open(currentScope, dir);
     expect(() => currentManager.setSessionTarget(scope)).toThrow(
       "require doctor/import migration before runtime use",
@@ -232,7 +233,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:dashboard:sqlite-leaf-control",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
@@ -270,7 +271,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:dashboard:sqlite-model-change-first",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
@@ -335,7 +336,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:sqlite-empty-existing-row",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "sqlite-existing-row",
       updatedAt: 123,
       label: "preserved",
@@ -355,7 +356,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:sqlite-rebound-before-header",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "sqlite-current-owner",
       updatedAt: 456,
       label: "preserved",
@@ -417,8 +418,8 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:second-target",
       storePath,
     };
-    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
-    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
     await appendTranscriptMessage(firstTarget, {
       cwd: path.join(dir, "first-workspace"),
       message: { role: "user", content: "first" },
@@ -445,7 +446,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:prompt-reload",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(target, dir);
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     const external = await appendTranscriptMessage(target, {
@@ -475,8 +476,8 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:header-target",
       storePath,
     };
-    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
-    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(firstTarget, dir);
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     manager.appendLeafControl({ targetId: firstId, appendParentId: firstId, appendMode: "side" });
@@ -559,7 +560,7 @@ describe("SessionManager.open", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     const marker = formatSqliteSessionFileMarker(scope);
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: marker,
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -626,7 +627,7 @@ describe("SessionManager.open", () => {
       idempotencyKey: "runtime-user-parent:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
     await appendTranscriptMessage(scope, {
       cwd: dir,
       eventId: "pre-persisted-user",
@@ -732,7 +733,7 @@ describe("SessionManager.open", () => {
     const sessionId = "sqlite-opaque-header";
     const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionFile: marker, sessionId, updatedAt: 10 },
     );
@@ -758,7 +759,7 @@ describe("SessionManager.open", () => {
     const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
     const user = await appendTranscriptMessage(scope, {
       cwd: dir,
       eventId: "rebound-user",
@@ -771,7 +772,7 @@ describe("SessionManager.open", () => {
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
     );
@@ -818,7 +819,7 @@ describe("SessionManager.open", () => {
       storePath,
     });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,
@@ -869,7 +870,7 @@ describe("SessionManager.open", () => {
       storePath,
     });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         delivery: { kind: "internal" },
@@ -891,7 +892,7 @@ describe("SessionManager.open", () => {
     });
 
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedMarker = await sessionManager.createBranchedSession(assistant.messageId);
     const branchedSessionId = sessionManager.getSessionId();
 
     expect(branchedMarker).toBe(branchedSessionId);
@@ -923,6 +924,73 @@ describe("SessionManager.open", () => {
     ]);
   });
 
+  it("rejects a queued branch when lifecycle ownership changes before persistence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-race-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(scope, {
+      lifecycleRevision: "branch-original-revision",
+      sessionFile: marker,
+      sessionId,
+      updatedAt: 10,
+    });
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-user",
+      message: { role: "user", content: "question before raced branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-assistant",
+      message: buildAssistantMessage("answer before raced branch"),
+      parentId: user.messageId,
+    });
+    const sessionManager = openMarker(marker, sessionKey, dir);
+
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionEntry(scope, async () => {
+      markOwnerChangeStarted();
+      await ownerChangeGate;
+      return { lifecycleRevision: "branch-replacement-revision" };
+    });
+    await ownerChangeStarted;
+
+    const branch = sessionManager.createBranchedSession(assistant.messageId);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(branch).rejects.toMatchObject({
+      cause: {
+        code: "session-rebound",
+        expectedSessionId: sessionId,
+        sessionKey,
+      },
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      lifecycleRevision: "branch-replacement-revision",
+      sessionId,
+    });
+    expect(sessionManager.getSessionId()).toBe(sessionId);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+  });
+
   it("persists user turns when a SQLite marker has no external recorder", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
@@ -933,7 +1001,7 @@ describe("SessionManager.open", () => {
       sessionId,
       storePath,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,

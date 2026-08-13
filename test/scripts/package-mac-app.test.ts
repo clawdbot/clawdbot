@@ -62,6 +62,7 @@ function runSwiftToolchainHarness(options: {
   swiftVersion: string;
   selectedDeveloperDir: "command-line-tools" | "custom-xcode" | "invalid" | "xcode";
   developerDirOverride?: "custom-xcode" | "invalid" | "xcode";
+  xcodebuildFailure?: string;
 }) {
   const root = tempDirs.make("openclaw-package-swift-root-");
   const toolsDir = path.join(root, "tools");
@@ -84,9 +85,14 @@ function runSwiftToolchainHarness(options: {
     mkdirSync(path.dirname(xcodebuild), { recursive: true });
     writeFileSync(
       xcodebuild,
-      ["#!/usr/bin/env bash", '[[ "$*" == "-version" ]] || exit 2', "echo 'Xcode 26.0'", ""].join(
-        "\n",
-      ),
+      [
+        "#!/usr/bin/env bash",
+        '[[ "$*" == "-version" ]] || exit 2',
+        ...(options.xcodebuildFailure
+          ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
+          : ["echo 'Xcode 26.0'"]),
+        "",
+      ].join("\n"),
       "utf8",
     );
     chmodSync(xcodebuild, 0o755);
@@ -875,6 +881,23 @@ describe("package-mac-app plist stamping", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires a full Xcode developer directory");
+  });
+
+  it("preserves the native Xcode failure before generic selection guidance", () => {
+    const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.2.1",
+      selectedDeveloperDir: "xcode",
+      xcodebuildFailure: diagnostic,
+    });
+
+    expect(result.status).toBe(1);
+    const diagnosticIndex = result.stderr.indexOf(diagnostic);
+    const guidanceIndex = result.stderr.indexOf(
+      "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
+    );
+    expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+    expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
   });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {

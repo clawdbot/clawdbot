@@ -146,7 +146,34 @@ enum ExecApprovalsStore {
     }
 
     static func socketPath() -> String {
-        self.stateDirURL().appendingPathComponent("exec-approvals.sock").path
+        self.socketPath(
+            stateDirectoryURL: self.stateDirURL(),
+            profileActive: AppProfile.current.isActive)
+    }
+
+    static func socketPath(stateDirectoryURL: URL, profileActive: Bool) -> String {
+        let canonical = stateDirectoryURL.appendingPathComponent("exec-approvals.sock").path
+        let maximumLength = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+        guard canonical.utf8.count >= maximumLength, profileActive else {
+            return canonical
+        }
+        let digest = SHA256.hash(data: Data(canonical.utf8))
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "/tmp/openclaw-\(geteuid())/exec-approvals-\(digest).sock"
+    }
+
+    static func resolvedPersistedSocketPath(
+        existing: String?,
+        stateDirectoryURL: URL,
+        computed: String) -> String
+    {
+        let existing = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let oldCanonical = stateDirectoryURL.appendingPathComponent("exec-approvals.sock").path
+        return existing.isEmpty || (existing == oldCanonical && computed != oldCanonical)
+            ? computed
+            : existing
     }
 
     private static func homeURL() -> URL {
@@ -163,7 +190,7 @@ enum ExecApprovalsStore {
             return scopedStateDirectoryURL
         }
         guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
-            return self.homeURL().appendingPathComponent(".openclaw", isDirectory: true)
+            return AppProfile.current.stateDirectoryURL(homeDirectory: self.homeURL())
         }
         let home = self.homeURL().path
         let expanded: String = if configured == "~" {
@@ -293,10 +320,12 @@ enum ExecApprovalsStore {
         if file.socket == nil {
             file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
         }
-        let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if path.isEmpty {
-            file.socket?.path = self.socketPath()
-        }
+        let existingSocketPath = file.socket?.path
+        let resolvedSocketPath = self.resolvedPersistedSocketPath(
+            existing: existingSocketPath,
+            stateDirectoryURL: self.stateDirURL(),
+            computed: self.socketPath())
+        file.socket?.path = resolvedSocketPath
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if token.isEmpty {
             file.socket?.token = self.generateToken()

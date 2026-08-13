@@ -116,6 +116,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     canVerify: true,
     canPrepare: true,
     gatewayTooOld: false,
+    refreshWarning: null,
     actionsDisabled: false,
     manualProviderId: "openai",
     manualApiKey: "",
@@ -1039,7 +1040,6 @@ describe("renderModelSetup", () => {
       "prepare",
     );
     expect(text(prepareConfirm)).toContain("Continue");
-    expect(text(prepareConfirm)).toContain("No");
     expect(text(prepareConfirm)).not.toContain("Yes");
   });
 

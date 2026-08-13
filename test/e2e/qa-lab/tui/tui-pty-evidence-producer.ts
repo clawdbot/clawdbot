@@ -11,6 +11,7 @@ import {
   type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
@@ -88,10 +89,6 @@ type ProducerDependencies = {
 type ProofMatrixCase = TuiPtyCase & {
   matchedAssertions: string[];
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function readOptionValue(argv: readonly string[], index: number, option: string) {
   const value = argv[index + 1];
@@ -267,6 +264,10 @@ export function buildTuiPtyVitestCommand(params: {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BEHAVIOR_EVIDENCE: "1",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+      path.dirname(params.reportPath),
+      "vitest-fs-module-cache",
+    ),
   };
   if (usesLocalPty) {
     env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL = "1";

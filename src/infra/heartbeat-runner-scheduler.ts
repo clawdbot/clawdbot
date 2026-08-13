@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listDueCommitmentSessionKeys } from "../commitments/store.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -9,7 +8,6 @@ import { createActiveHoursPredicate } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   activeHoursConfigMatch,
-  canHeartbeatDeliverCommitments,
   heartbeatLog,
   resolveActiveHoursSchedule,
   resolveAmbientHeartbeatAgentId,
@@ -393,7 +391,6 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-          runScope: "global",
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
         });
@@ -421,55 +418,13 @@ export function startHeartbeatRunner(opts: {
         res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
       ) {
         // Poll already acknowledged the exec completion. This wake owns no
-        // cadence or commitment work, so it must remain a true no-op.
+        // cadence work, so it must remain a true no-op.
         return { ran: false, result: res };
       }
       // Non-retryable outcome — record bookkeeping for cooldown gates.
       recordRunBookkeeping(agent, now);
       advanceAgentSchedule(agent, now, reason);
-      let agentRan = res.status === "ran";
-
-      // Re-read pending commitments after the global turn so a task-preempted
-      // default session gets an isolated follow-up without duplicating sends.
-      const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
-        ? await listDueCommitmentSessionKeys({
-            cfg: wakeConfig,
-            agentId: agent.agentId,
-            nowMs: now,
-            limit: 10,
-          })
-        : [];
-      for (const dueSessionKey of dueSessionKeys) {
-        let commitmentRes: HeartbeatRunResult;
-        try {
-          commitmentRes = await runOnce({
-            cfg: wakeConfig,
-            agentId: agent.agentId,
-            heartbeat: agent.heartbeat,
-            runScope: "commitment-only",
-            sessionKey: dueSessionKey,
-            deps: { runtime: state.runtime },
-          });
-        } catch (err) {
-          const errMsg = formatErrorMessage(err);
-          log.error(`heartbeat runner: commitment runOnce threw unexpectedly: ${errMsg}`, {
-            error: errMsg,
-            agentId: agent.agentId,
-          });
-          continue;
-        }
-        if (
-          commitmentRes.status === "skipped" &&
-          isRetryableHeartbeatBusySkipReason(commitmentRes.reason)
-        ) {
-          return { ran: agentRan, retryableBusySkip: commitmentRes, result: res };
-        }
-        if (commitmentRes.status === "ran") {
-          agentRan = true;
-        }
-      }
-
-      return { ran: agentRan, result: res };
+      return { ran: res.status === "ran", result: res };
     };
 
     if (requestedSessionKey || requestedAgentId) {
@@ -492,8 +447,8 @@ export function startHeartbeatRunner(opts: {
         !requestedHeartbeat
       ) {
         // Cron monitor tick for one enrolled agent: use the full per-agent
-        // path — including due-commitment sessions — that the broadcast
-        // interval owned before cadence moved to cron. Wakes carrying
+        // path that the broadcast interval owned before cadence moved to cron.
+        // Wakes carrying
         // heartbeat overrides fall through to the targeted merge path.
         // Intentional: interval ticks run on the enrollment snapshot
         // (agent.heartbeat, refreshed by updateConfig), exactly like the
@@ -541,7 +496,6 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-          runScope: "global",
           sessionKey: requestedSessionKey,
           tasks: requestedTasks,
           deps: { runtime: state.runtime },

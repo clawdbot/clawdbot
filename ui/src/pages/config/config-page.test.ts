@@ -11,6 +11,11 @@ import type {
 } from "../../app/context.ts";
 import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
@@ -567,7 +572,7 @@ describe("ConfigPage Updates integration", () => {
     expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
   });
 
-  it("stages policy changes through patchForm and delegates Update now to overlays", () => {
+  it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
     const patchForm = vi.fn();
     const runUpdate = vi.fn();
     const page = new ConfigPage();
@@ -598,6 +603,8 @@ describe("ConfigPage Updates integration", () => {
             features: { methods: ["update.run"] },
           },
         },
+        // The update dialog watches both stores for the life of the install.
+        subscribe: () => () => undefined,
       },
       overlays: {
         snapshot: {
@@ -607,10 +614,13 @@ describe("ConfigPage Updates integration", () => {
           updateReconciliationPending: false,
           updateStatusBanner: null,
         },
+        subscribe: () => () => undefined,
         runUpdate,
       },
     } as unknown as ApplicationContext;
     const container = document.createElement("div");
+    document.body.append(container);
+    const restoreDialogPolyfill = installDialogPolyfill();
 
     render(page.render(), container);
 
@@ -629,10 +639,22 @@ describe("ConfigPage Updates integration", () => {
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("Update now"))
       ?.click();
+    await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
+    // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
+    expect(runUpdate).not.toHaveBeenCalled();
+
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+
     expect(runUpdate).toHaveBeenCalledOnce();
+    restoreDialogPolyfill();
+    container.remove();
   });
 });
 

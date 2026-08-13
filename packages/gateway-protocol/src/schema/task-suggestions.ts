@@ -10,6 +10,15 @@ const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024, pattern: "\
 const TaskCwdSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const TaskSessionKeySchema = Type.String({ minLength: 1, maxLength: 512 });
 const TaskAgentIdSchema = Type.String({ minLength: 1, maxLength: 128 });
+const TaskSuggestionAcceptanceModeSchema = Type.Enum(
+  {
+    WORKTREE: "worktree",
+    LOCAL: "local",
+    CLOUD: "cloud",
+    SESSION: "session",
+  } as const,
+  { type: "string" },
+);
 
 /** One model-proposed follow-up task waiting for operator action. */
 export const TaskSuggestionSchema = closedObject({
@@ -54,8 +63,12 @@ export const TaskSuggestionResolutionSchema = Type.Union([
   Type.Literal("expired"),
 ]);
 
-/** Atomically claims a pending suggestion and starts its server-owned worktree session. */
-export const TaskSuggestionsAcceptParamsSchema = closedObject({ taskId: TaskIdSchema });
+/** Atomically claims a pending suggestion and starts it in the requested execution mode. */
+export const TaskSuggestionsAcceptParamsSchema = closedObject({
+  taskId: TaskIdSchema,
+  mode: Type.Optional(TaskSuggestionAcceptanceModeSchema),
+  cloudProfileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
 
 export const TaskSuggestionsAcceptResultSchema = closedObject({
   taskId: TaskIdSchema,

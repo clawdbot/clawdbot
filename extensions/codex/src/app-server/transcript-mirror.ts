@@ -5,7 +5,7 @@ import {
   projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
@@ -112,6 +112,9 @@ async function mirrorBestEffort(params: {
   terminalAnchor?: TranscriptEntryAnchor;
   mirroredMessages: MirroredAgentMessage[];
 }> {
+  if (!params.params.sessionTarget) {
+    return { assistantTranscriptOwned: false, mirroredMessages: [] };
+  }
   try {
     const messages = await resolveFinalCodexMirrorMessages({
       params: params.params,
@@ -182,7 +185,11 @@ async function mirrorBestEffort(params: {
       mirroredMessages,
     };
   } catch (error) {
-    embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
+    embeddedAgentLog.warn("failed to mirror codex app-server transcript", {
+      error: formatErrorMessage(error),
+      runId: params.params.runId,
+      sessionId: params.params.sessionId,
+    });
     return { assistantTranscriptOwned: false, mirroredMessages: [] };
   }
 }
@@ -249,7 +256,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   turnId: string;
   upstreamUserText: string;
 }): Promise<void> {
-  if (params.params.suppressNextUserMessagePersistence) {
+  if (params.params.suppressNextUserMessagePersistence || !params.params.sessionTarget) {
     return;
   }
   try {
@@ -281,7 +288,11 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
     params.params.userTurnTranscriptRecorder?.markRuntimePersistencePending(mirrorPromise);
     await mirrorPromise;
   } catch (error) {
-    embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", { error });
+    embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", {
+      error: formatErrorMessage(error),
+      runId: params.params.runId,
+      sessionId: params.params.sessionId,
+    });
   }
 }
 

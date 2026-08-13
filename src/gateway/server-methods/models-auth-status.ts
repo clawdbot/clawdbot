@@ -4,6 +4,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   type AuthHealthSummary,
@@ -49,13 +50,9 @@ import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  resolveModelAuthAgentScope,
-  unknownModelAuthAgentIdError,
-} from "./model-auth-agent-scope.js";
+import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import {
   clearModelAuthStatusUsageCache,
   fingerprintProviderUsageCredentials,
@@ -476,7 +473,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       const { agentDir } = scope;
@@ -569,7 +566,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       let cfg = context.getRuntimeConfig();
       let scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       if (refreshRequested) {
@@ -577,7 +574,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg = context.getRuntimeConfig();
         scope = resolveModelAuthAgentScope(cfg, params.agentId);
         if (!scope.ok) {
-          respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+          respond(false, undefined, modelAuthAgentScopeError(scope));
           return;
         }
       }

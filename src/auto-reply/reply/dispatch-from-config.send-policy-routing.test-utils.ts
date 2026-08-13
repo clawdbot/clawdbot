@@ -828,6 +828,49 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
 
+  it("records a rejected source delivery after a runtime-derived fallback", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const deliveryError = new Error("source transport rejected final");
+    const deliver = vi.fn(async () => {
+      throw deliveryError;
+    });
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onError });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const internalOpts = opts as
+        | (GetReplyOptions & {
+            onSourceReplyDeliveryModeResolved?: (mode: "automatic") => void;
+          })
+        | undefined;
+      internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
+      return { text: "Rejected fallback final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({ queuedFinal: true });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Rejected fallback final" }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(onError).toHaveBeenCalledWith(deliveryError, expect.objectContaining({ kind: "final" }));
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+  });
+
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {
     setNoAbort();
     registerAgentHarness({

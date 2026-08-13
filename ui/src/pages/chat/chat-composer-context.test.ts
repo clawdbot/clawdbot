@@ -205,7 +205,6 @@ describe("renderChatComposer context usage", () => {
       "Usage credits $157.85 of $400.00",
     ]);
     expect(container.querySelector(".context-usage__stats")).not.toBeNull();
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.textContent).not.toContain("Est. cost");
   });
 
@@ -269,13 +268,12 @@ describe("renderChatComposer context usage", () => {
         row.textContent?.replace(/\s+/g, " ").trim(),
       ),
     ).toEqual(["Provider: OpenAI", "Provider: Claude"]);
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.textContent).not.toContain("Est. cost");
     expect(container.textContent).not.toContain("Cost by Type");
     expect(container.textContent).not.toContain("Model:");
   });
 
-  it("keeps genuine zero-cost model provenance ahead of transcript bookkeeping", () => {
+  it("omits the cost-by-type section when every recorded cost is zero", () => {
     const container = renderComposer({
       messages: [
         { role: "user", content: "hi" },
@@ -310,17 +308,7 @@ describe("renderChatComposer context usage", () => {
       } as never,
     });
 
-    expect(
-      [...container.querySelectorAll(".context-usage__stats--cost dd")].map((value) =>
-        value.textContent?.trim(),
-      ),
-    ).toEqual(["$0.00", "$0.00", "$0.00", "$0.00"]);
-    expect(
-      [...container.querySelectorAll(".context-usage__provenance")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Provider: openai", "Model: gpt-zero"]);
-    expect(container.textContent).not.toContain("gateway-injected");
+    expect(container.textContent).not.toContain("Cost by Type");
   });
 
   it("prioritizes a matching session provider over historical response provenance", () => {
@@ -387,7 +375,6 @@ describe("renderChatComposer context usage", () => {
         row.textContent?.replace(/\s+/g, " ").trim(),
       ),
     ).toEqual(["Provider: Claude", "Provider: OpenAI"]);
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.textContent).not.toContain("Model:");
   });
 

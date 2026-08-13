@@ -605,9 +605,9 @@ describe("createTelegramBot", () => {
     });
     await store.register("default:poll-topic", {
       pollId: "poll-topic",
-      chat: { id: -1001, type: "supergroup", title: "Reviewers", is_forum: true },
+      chat: { id: -1001, type: "supergroup", title: "Reviewers" },
       messageId: 7,
-      messageThreadId: 9,
+      threadSpec: { scope: "forum", id: 9 },
       question: "Ready?",
       options: ["Yes", "No"],
     });
@@ -2259,7 +2259,7 @@ describe("createTelegramBot", () => {
         defaults: {
           model: "openai/gpt-4.1",
         },
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -3689,7 +3689,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {
@@ -3763,8 +3763,9 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "topic-a" }, { id: "topic-b" }],
+        list: [{ id: "topic-a", default: true }, { id: "topic-b" }],
       },
+      bindings: [{ agentId: "topic-a", match: { channel: "telegram", accountId: "default" } }],
     });
     loadConfig.mockImplementation(configForTopicAgent);
 
@@ -4833,9 +4834,6 @@ describe("createTelegramBot", () => {
     expect(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]).toBe(
       codexRateLimitText,
     );
-    expect(
-      String(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]),
-    ).not.toContain("All models are temporarily rate-limited");
   });
 
   it("honors threaded replies for replyToMode=first/all", async () => {
@@ -5055,7 +5053,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {

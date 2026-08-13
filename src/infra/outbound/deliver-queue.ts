@@ -14,7 +14,9 @@ import {
   stageAndEnqueueOutboundDelivery,
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
+import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   StableDeliveryPreparationLostError,
@@ -271,6 +273,20 @@ async function runOutboundDeliveryWithQueue(
   const queueId = queued?.id ?? null;
   if (queued?.created && stablePreparationOwner) {
     stablePreparationOwner.markPublished();
+  }
+  if (queueId && params.deliveryCompletion) {
+    const completion = await markDurableDeliveryQueued(
+      params.deliveryCompletion,
+      queueId,
+      queued?.created ? "prepared" : undefined,
+    );
+    if (completion.state !== "queued") {
+      await createQueuedDeliveryOwner({
+        queueId,
+        expectedPlatformSendAttemptId: queued?.producerClaimId,
+      }).ack({ suppressCompletionReceipt: true });
+      return [];
+    }
   }
   if (queueId) {
     params.onDeliveryIntent?.({

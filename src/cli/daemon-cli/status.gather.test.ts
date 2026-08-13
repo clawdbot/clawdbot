@@ -1093,6 +1093,44 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("skips remote password exec SecretRef auth despite an ambient password", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: { source: "exec", provider: "vault", id: "gateway/remote-password" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      token?: string;
+      password?: string;
+      allowRpcConfigCredentials?: boolean;
+    };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
+    expect(probeInput.allowRpcConfigCredentials).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+    );
+  });
+
   it("ignores remote exec SecretRefs for local probes when exec refs are disabled", async () => {
     daemonLoadedConfig = {
       gateway: {
@@ -1229,7 +1267,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
-  it("keeps remote probe auth strict when remote token is missing", async () => {
+  it("keeps configured remote password authoritative for remote probes", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1251,7 +1289,7 @@ describe("gatherDaemonStatus", () => {
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("env-password"); // pragma: allowlist secret
+    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {

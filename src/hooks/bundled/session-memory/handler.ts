@@ -15,7 +15,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
   readSessionTranscriptBoundedMessageTailPage,
@@ -284,7 +284,8 @@ async function saveSessionMemoryNow(
           agentId,
           sessionId: currentSessionId,
           sessionKey: event.sessionKey,
-          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
+          storePath:
+            contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
         },
         messageCount,
         capturedEvents,
@@ -402,7 +403,7 @@ const saveSessionToMemory: HookHandler = (event) => {
       const storePath =
         typeof context.storePath === "string" && context.storePath.trim()
           ? context.storePath.trim()
-          : resolveStorePath(cfg?.session?.store, { agentId });
+          : resolveSessionStorePathCore(cfg?.session?.store, { agentId });
       const hookConfig = resolveHookConfig(cfg, "session-memory");
       const messageCount =
         typeof hookConfig?.messages === "number" && hookConfig.messages > 0

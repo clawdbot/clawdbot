@@ -1,6 +1,8 @@
 // Canvas tests cover config plugin behavior.
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canvasConfigSchema,
   isCanvasHostEnabled,
   isCanvasPluginEnabled,
   parseCanvasPluginConfig,
@@ -16,6 +18,38 @@ describe("Canvas plugin config", () => {
     } else {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = originalSkipCanvasHost;
     }
+  });
+
+  it("keeps host config presentation metadata manifest-owned", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { uiHints?: Record<string, Record<string, unknown>> };
+
+    expect(canvasConfigSchema).not.toHaveProperty("uiHints");
+    expect(manifest.uiHints).toEqual({
+      host: {
+        label: "Canvas Host",
+        help: "Serves local Canvas and A2UI files for paired nodes.",
+        advanced: true,
+      },
+      "host.enabled": {
+        label: "Canvas Host Enabled",
+        advanced: true,
+      },
+      "host.root": {
+        label: "Canvas Host Root Directory",
+        help: "Directory to serve. Defaults to the OpenClaw state canvas directory.",
+        advanced: true,
+      },
+      "host.port": {
+        label: "Canvas Host Port",
+        advanced: true,
+      },
+      "host.liveReload": {
+        label: "Canvas Host Live Reload",
+        advanced: true,
+      },
+    });
   });
 
   it("parses host config from the plugin entry", () => {

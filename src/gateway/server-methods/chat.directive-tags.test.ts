@@ -17,7 +17,8 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
-  runWithCronCreatorAuthorityResolver,
+  runWithCronCreatorAuthorityCapabilityResolver,
+  type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -36,7 +37,7 @@ import {
   replaceSessionEntry,
   type SessionAccessScope,
   type SessionTranscriptReadScope,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -116,6 +117,7 @@ const mockState = vi.hoisted(() => ({
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  sessionIdsByKey: new Map<string, string>(),
   sessionMissing: false,
   loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
   lastDispatchCtx: undefined as MsgContext | undefined,
@@ -136,7 +138,7 @@ const mockState = vi.hoisted(() => ({
     message?: unknown;
     messageId?: string;
   }>,
-  savedMediaResults: [] as Array<{ path: string; contentType?: string }>,
+  savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
   saveMediaError: null as Error | null,
   savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
   saveMediaWait: null as Promise<void> | null,
@@ -164,7 +166,10 @@ const mockState = vi.hoisted(() => ({
   runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
   runtimeAssistantTextsBeforeDelivery: [] as string[],
   cronAuthorityProbe: undefined as
-    | ((runId: string | undefined) => Promise<void> | void)
+    | ((
+        runId: string | undefined,
+        capability: CronCreatorAuthorityCapability | undefined,
+      ) => Promise<void> | void)
     | undefined,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
@@ -226,11 +231,13 @@ vi.mock("../session-utils.js", async () => {
     const canonicalKey =
       typeof mockState.sessionEntry.canonicalKey === "string"
         ? mockState.sessionEntry.canonicalKey
-        : rawKey || "main";
+        : rawKey === "main"
+          ? `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`
+          : rawKey || `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`;
     const entry = mockState.sessionMissing
       ? undefined
       : {
-          sessionId: mockState.sessionId,
+          sessionId: mockState.sessionIdsByKey.get(rawKey) ?? mockState.sessionId,
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
@@ -252,7 +259,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...original,
     loadSessionEntry,
-    loadSessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -334,6 +341,7 @@ dispatchInboundMessageMock.mockImplementation(
       ) => void;
       replyOptions?: {
         runId?: string;
+        cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
@@ -359,7 +367,10 @@ dispatchInboundMessageMock.mockImplementation(
         params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
       mockState.lastMessageInjectionAttempted = params.replyOptions?.messageInjectionAttempted;
-      await mockState.cronAuthorityProbe?.(params.replyOptions?.runId);
+      await mockState.cronAuthorityProbe?.(
+        params.replyOptions?.runId,
+        params.replyOptions?.cronCreatorAuthorityCapability,
+      );
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -439,8 +450,7 @@ dispatchInboundMessageMock.mockImplementation(
               sessionKey,
               storePath,
             },
-            assertOwned: () => undefined,
-            withSessionWriteLock: async () => {
+            withTranscriptWrite: async () => {
               mockState.disposedTranscriptWriteAttempts += 1;
               throw new Error("attempt disposed before transcript write");
             },
@@ -614,7 +624,7 @@ vi.mock("../../media/store.js", async () => {
       const next = mockState.savedMediaResults.shift();
       try {
         return {
-          id: "saved-media",
+          id: next?.id ?? "saved-media",
           path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
@@ -633,6 +643,28 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
+function expectClaimOnlyTranscriptMedia(
+  message: unknown,
+  expectedMedia: unknown[],
+  forbiddenValues: string[],
+) {
+  const media = (
+    message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined
+  )?.["__openclaw"]?.media;
+  expect(media).toEqual(expectedMedia);
+  for (const fact of media ?? []) {
+    expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
+    expect(fact).not.toHaveProperty("path");
+    expect(fact).not.toHaveProperty("workspaceDir");
+    expect(fact).not.toHaveProperty("data");
+  }
+  const serialized = JSON.stringify(message);
+  expect(serialized).not.toContain("base64");
+  for (const value of forbiddenValues) {
+    expect(serialized).not.toContain(value);
+  }
+}
+
 function createFixturePaths(prefix: string): { dir: string; transcriptPath: string } {
   const dir = fs.mkdtempSync(path.join(suiteFixtureRoot, `${suiteFixtureSeq++}-${prefix}`));
   const transcriptPath = path.join(dir, "sess.jsonl");
@@ -641,7 +673,13 @@ function createFixturePaths(prefix: string): { dir: string; transcriptPath: stri
   return { dir, transcriptPath };
 }
 
-async function createTranscriptFixture(prefix: string) {
+async function createTranscriptFixture(
+  prefix: string,
+  owner: Pick<SessionAccessScope, "agentId" | "sessionKey"> = {
+    agentId: "main",
+    sessionKey: "main",
+  },
+) {
   const { dir, transcriptPath } = createFixturePaths(prefix);
   fs.writeFileSync(
     transcriptPath,
@@ -656,11 +694,14 @@ async function createTranscriptFixture(prefix: string) {
   );
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
-  await replaceSessionEntry(sessionEntryScope(), {
-    sessionId: mockState.sessionId,
-    sessionFile: transcriptPath,
-    updatedAt: Date.now(),
-  });
+  await replaceSessionEntry(
+    { ...owner, storePath: mockState.storePath },
+    {
+      sessionId: mockState.sessionId,
+      sessionFile: transcriptPath,
+      updatedAt: Date.now(),
+    },
+  );
   return dir;
 }
 
@@ -711,7 +752,7 @@ function sessionEntryScope(): SessionAccessScope {
 }
 
 async function seedSqliteSessionEntry(entry: Record<string, unknown> = {}): Promise<void> {
-  await upsertSessionEntry(sessionEntryScope(), {
+  await upsertSessionEntryCore(sessionEntryScope(), {
     sessionId: mockState.sessionId,
     ...entry,
   });
@@ -884,10 +925,10 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
   expect(update?.target).toEqual({
     agentId: "main",
     sessionId: mockState.sessionId,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     storePath: mockState.storePath,
   });
-  expect(update?.sessionKey).toBe("main");
+  expect(update?.sessionKey).toBe("agent:main:main");
   expect(update?.agentId).toBe("main");
 }
 
@@ -1271,6 +1312,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.sessionIdsByKey.clear();
     mockState.sessionMissing = false;
     mockState.loadSessionEntryCalls = [];
     mockState.lastDispatchCtx = undefined;
@@ -1421,7 +1463,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
     });
@@ -1463,7 +1505,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
@@ -1507,7 +1549,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "different-owner-leaf",
@@ -1551,7 +1593,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
     const original = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
@@ -1593,7 +1635,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         async () => {
           original.complete();
           successor = replyRunRegistry.begin({
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             sessionId: mockState.sessionId,
             resetTriggered: false,
             originatingLeafEntryId: "current-leaf",
@@ -1633,7 +1675,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     const { context, respond, send } = createChatRequestFixture();
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-active-run-output",
@@ -1684,7 +1726,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const delivery = createDeferred();
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -1740,7 +1782,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -1827,7 +1869,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       return delivery.promise;
     });
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
@@ -1884,6 +1926,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.messageReceivedCalls).toHaveLength(1);
     expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      replyToId: "prior-message",
+      replyToPreview: {
+        text: "quoted deployment status",
+        senderLabel: "Alice",
+      },
+    });
     expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
       1,
     );
@@ -1907,7 +1956,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
     const original = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "current-leaf",
@@ -1936,7 +1985,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(originalQueue).not.toHaveBeenCalled();
       original.complete();
       successor = replyRunRegistry.begin({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         sessionId: mockState.sessionId,
         resetTriggered: false,
         originatingLeafEntryId: "current-leaf",
@@ -2032,7 +2081,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const delivery = createDeferred();
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -2082,7 +2131,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       errorMessage: string;
     }>();
     const first = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -2107,7 +2156,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     first.complete();
     const successorCancel = vi.fn();
     const successor = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -2141,7 +2190,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: null,
@@ -2182,7 +2231,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-active-run-output",
@@ -2246,7 +2295,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     vi.useFakeTimers({ toFake: ["Date"] });
     const operation = replyRunRegistry.begin({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
       originatingLeafEntryId: "leaf-before-stale-run-output",
@@ -2334,7 +2383,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const payload = call?.[1] as { ts?: unknown } | undefined;
     expect(call?.[0]).toBe("sessions.changed");
     expect(call?.[2]).toEqual(new Set(["conn-1"]));
-    expect(call?.[3]).toEqual({ dropIfSlow: true });
+    expect(call?.[3]).toEqual({ agentId: "main", dropIfSlow: true });
     expect(payload).toMatchObject({
       sessionKey: "agent:main:main",
       reason: "command-metadata",
@@ -2414,13 +2463,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("persists non-agent plugin-bound replies in the binding-owned session", async () => {
     await createTranscriptFixture("openclaw-chat-send-plugin-binding-history-");
     const targetSessionKey = "plugin-binding:codex:history123";
+    const targetSessionId = "plugin-binding-history-session";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: `agent:main:${targetSessionKey}`,
+        storePath: mockState.storePath,
+      },
+      { sessionId: targetSessionId, updatedAt: Date.now() },
+    );
+    mockState.sessionIdsByKey.set(targetSessionKey, targetSessionId);
     mockState.finalPayload = setReplyPayloadMetadata(
       { text: "bound history reply" },
       {
         sourceReplyTranscriptMirror: {
           sessionKey: targetSessionKey,
           agentId: "main",
-          expectedSessionId: mockState.sessionId,
+          expectedSessionId: targetSessionId,
         },
       },
     );
@@ -2574,7 +2633,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     context.chatAbortControllers.set("run-same-session", {
       controller: new AbortController(),
       sessionId: "sess-prev",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       startedAtMs: Date.now(),
       expiresAtMs: Date.now() + 10_000,
     });
@@ -3250,12 +3309,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-source-reply",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
     const nodeSend = lastNodeSendCall(context);
-    expect(nodeSend?.[0]).toBe("main");
+    expect(nodeSend?.[0]).toBe("agent:main:main");
     expect(nodeSend?.[1]).toBe("chat");
     expect(extractFirstTextBlock(nodeSend?.[2])).toBe("Codex source reply");
     const assistantUpdates = findAssistantTranscriptUpdates();
@@ -3287,7 +3346,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-status-notice",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
@@ -3322,7 +3381,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-block-status-notice",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Model set to openai/gpt-5.5 for this session.");
@@ -3414,7 +3473,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
           expect(broadcast).toMatchObject({
             runId: "idem-agent-source-reply-media",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             state: "final",
           });
           expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply with media");
@@ -4046,7 +4105,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-source-reply-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
@@ -4142,7 +4201,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-status-notice-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "error",
       errorMessage,
     });
@@ -4175,7 +4234,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-returned-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "error",
       errorMessage,
     });
@@ -4990,7 +5049,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("chat.inject scopes selected-agent global sessions before appending", async () => {
-    await createTranscriptFixture("openclaw-chat-inject-selected-global-");
+    await createTranscriptFixture("openclaw-chat-inject-selected-global-", {
+      agentId: "work",
+      sessionKey: "agent:work:global",
+    });
     mockState.config = {
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       session: { scope: "global" },
@@ -5643,12 +5705,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("prepares persisted media paths for Pi user-turn persistence", async () => {
+  it("prepares managed image claims for Pi user-turn persistence", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-images-");
     mockState.triggerAgentRunStart = true;
     mockState.savedMediaResults = [
-      { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
-      { path: "/tmp/chat-send-image-b.jpg", contentType: "image/jpeg" },
+      {
+        id: "chat-send-image-a.png",
+        path: "/tmp/chat-send-image-a.png",
+        contentType: "image/png",
+      },
+      {
+        id: "chat-send-image-b.jpg",
+        path: "/tmp/chat-send-image-b.jpg",
+        contentType: "image/jpeg",
+      },
     ];
     const { send } = createChatRequestFixture();
 
@@ -5689,30 +5759,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
       expect(typeof mockState.savedMediaCalls[1]?.size).toBe("number");
       const userTurnInput = mockState.lastDispatchUserTurnInput as
-        | {
-            __openclaw?: { media?: Array<{ contentType?: string; path?: string }> };
-            content?: unknown;
-          }
+        | { content?: unknown }
         | undefined;
       if (!userTurnInput) {
         throw new Error("expected user turn input with media metadata");
       }
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput.content).toBe("edit these");
-      expect(userTurnInput["__openclaw"]?.media?.map((fact) => fact.path)).toEqual([
-        "/tmp/chat-send-image-a.png",
-        "/tmp/chat-send-image-b.jpg",
-      ]);
-      expect(userTurnInput["__openclaw"]?.media?.map((fact) => fact.contentType)).toEqual([
-        "image/png",
-        "image/jpeg",
-      ]);
+      expectClaimOnlyTranscriptMedia(
+        userTurnInput,
+        [
+          expect.objectContaining({
+            url: "media://inbound/chat-send-image-a.png",
+            contentType: "image/png",
+            kind: "image",
+          }),
+          expect.objectContaining({
+            url: "media://inbound/chat-send-image-b.jpg",
+            contentType: "image/jpeg",
+            kind: "image",
+          }),
+        ],
+        ["/tmp/chat-send-image-a.png", "/tmp/chat-send-image-b.jpg"],
+      );
       expect(mockState.lastDispatchCtx?.media).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
   });
 
-  it("prepares non-image chat.send attachments as media refs without dispatch images", async () => {
+  it("prepares non-image chat.send attachments as claim-only media refs without dispatch images", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-file-");
     mockState.triggerAgentRunStart = true;
     mockState.savedMediaResults = [
@@ -5739,10 +5814,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
-        | {
-            __openclaw?: { media?: Array<{ contentType?: string; path?: string }> };
-            content?: unknown;
-          }
+        | { content?: unknown }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
       expect(mockState.lastDispatchImageOrder).toBeUndefined();
@@ -5754,16 +5826,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput?.content).toBe("summarize this");
-      expect(userTurnInput?.["__openclaw"]?.media).toEqual([
-        expect.objectContaining({
-          path: "/tmp/chat-send-brief.pdf",
-          contentType: "application/pdf",
-        }),
-      ]);
+      expectClaimOnlyTranscriptMedia(
+        userTurnInput,
+        [
+          {
+            url: "media://inbound/saved-media",
+            contentType: "application/pdf",
+            kind: "document",
+            fileName: "brief.pdf",
+            sizeBytes: 9,
+            hydrationSuppressed: true,
+          },
+        ],
+        ["/tmp/chat-send-brief.pdf", "%PDF-1.4"],
+      );
     });
   });
 
-  it("preserves offloaded attachment media paths in transcript order", async () => {
+  it("preserves managed attachment claims in transcript order", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-offloaded-");
     mockState.triggerAgentRunStart = true;
     mockState.sessionEntry = {
@@ -5781,8 +5861,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [
-      { path: "/tmp/offloaded-big.png", contentType: "image/png" },
-      { path: "/tmp/chat-send-inline.png", contentType: "image/png" },
+      {
+        id: "offloaded-big.png",
+        path: "/tmp/offloaded-big.png",
+        contentType: "image/png",
+      },
+      {
+        id: "chat-send-inline.png",
+        path: "/tmp/chat-send-inline.png",
+        contentType: "image/png",
+      },
     ];
     const { send } = createChatRequestFixture();
     const bigPng = Buffer.alloc(2_100_000);
@@ -5810,17 +5898,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
-        | {
-            __openclaw?: { media?: Array<{ path?: string }> };
-            content?: unknown;
-          }
+        | { content?: unknown }
         | undefined;
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput?.content).toBe("edit both");
-      expect(userTurnInput?.["__openclaw"]?.media?.map((fact) => fact.path)).toEqual([
-        "/tmp/chat-send-inline.png",
-        "/tmp/offloaded-big.png",
-      ]);
+      expectClaimOnlyTranscriptMedia(
+        userTurnInput,
+        [
+          expect.objectContaining({
+            url: "media://inbound/chat-send-inline.png",
+            contentType: "image/png",
+            kind: "image",
+          }),
+          expect.objectContaining({
+            url: "media://inbound/offloaded-big.png",
+            contentType: "image/png",
+            kind: "image",
+          }),
+        ],
+        ["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"],
+      );
       expect(userTurnInput?.content).not.toContain("media://");
     });
   });
@@ -6994,6 +7091,58 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(getTotalPendingReplies()).toBe(0);
   });
 
+  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
+    createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
+    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
+    const staleSessionKey = "agent:main:stale-transcript-owner";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: canonicalSessionKey,
+        storePath: mockState.storePath,
+      },
+      { sessionId: mockState.sessionId, updatedAt: 1 },
+    );
+    mockState.finalText = "ok";
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-transcript-owner",
+      message: "keep this Gateway turn",
+      sessionKey: staleSessionKey,
+      expectBroadcast: false,
+    });
+
+    const persistedEvents = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: canonicalSessionKey,
+      storePath: mockState.storePath,
+    });
+    expect(persistedEvents).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "keep this Gateway turn",
+        }),
+      }),
+    );
+    expect(
+      loadSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: staleSessionKey,
+        storePath: mockState.storePath,
+      }),
+    ).toBeUndefined();
+    expect(findUserUpdate()?.target).toEqual({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: staleSessionKey,
+      storePath: mockState.storePath,
+    });
+  });
+
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-user-transcript-error-no-run-");
     mockState.dispatchError = new Error("upstream unavailable");
@@ -7266,10 +7415,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 });
 
-describe("chat.send operator UI client sender context", () => {
+describe("chat.send local operator client sender context", () => {
   it.each([
     [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web"],
     [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, "darwin"],
+    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin"],
   ] as const)(
     "binds lazy configured-MCP cron authority to an admitted local %s turn",
     async (clientId, mode, platform) => {
@@ -7277,13 +7427,27 @@ describe("chat.send operator UI client sender context", () => {
       const { send } = createChatRequestFixture();
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
-      mockState.cronAuthorityProbe = async (runId) => {
-        await runWithCronCreatorAuthorityResolver({
-          runId: runId ?? "",
-          resolve: async () => ({
+      mockState.cronAuthorityProbe = async (runId, capability) => {
+        await new Promise<void>((resolveTick) => {
+          setTimeout(resolveTick, 0);
+        });
+        const resolve = async () =>
+          ({
             tools: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
             provenance: { version: 1, source: "final-executable-surface" },
-          }),
+          }) as const;
+        runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId: "other-run",
+          resolve,
+          run: () => {
+            expect(bindActiveCronCreatorAuthorityResolver(runId)).toBeUndefined();
+          },
+        });
+        await runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId,
+          resolve,
           run: async () => {
             retainedResolver = bindActiveCronCreatorAuthorityResolver(runId);
             const snapshot = await retainedResolver!();
@@ -7321,9 +7485,10 @@ describe("chat.send operator UI client sender context", () => {
   it("denies otherwise-eligible internal chat.send re-entry, including Talk consults", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-internal-reentry-");
     let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId) => {
-      runWithCronCreatorAuthorityResolver({
-        runId: runId ?? "",
+    mockState.cronAuthorityProbe = async (runId, capability) => {
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId,
         resolve: async () => ({
           tools: ["read", "configured__lookup"],
           provenance: { version: 1, source: "final-executable-surface" },
@@ -7384,6 +7549,11 @@ describe("chat.send operator UI client sender context", () => {
       requestParams: { systemInputProvenance: { kind: "external_user" } },
     },
     {
+      name: "explicit origin",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      requestParams: { originatingChannel: "slack", originatingTo: "D123" },
+    },
+    {
       name: "delegated handoff",
       client: {
         internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
@@ -7413,9 +7583,10 @@ describe("chat.send operator UI client sender context", () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-negative-");
     mockState.sessionEntry = testCase.sessionEntry ?? {};
     let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId) => {
-      runWithCronCreatorAuthorityResolver({
-        runId: runId ?? "",
+    mockState.cronAuthorityProbe = async (runId, capability) => {
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId,
         resolve: async () => ({
           tools: ["read"],
           provenance: { version: 1, source: "final-executable-surface" },

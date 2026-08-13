@@ -30,6 +30,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -40,6 +41,8 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import {
@@ -78,6 +81,10 @@ export async function prepareGatewayServerBootstrap(input: {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   normalizeStateDirEnv(process.env);
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+    env: process.env,
+  });
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -146,6 +153,9 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
   const startupTrace = createGatewayStartupTrace(log);
+  if (!minimalTestGateway) {
+    await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
+  }
   const startupConfigModulePromise = import("./server-startup-config.js");
   const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
     cacheRejections: true,
@@ -492,6 +502,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
     pluginMetadataSnapshot,
@@ -517,7 +528,7 @@ export async function prepareGatewayServerBootstrap(input: {
     config: startupActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
-    workspaceDir: defaultWorkspaceDir,
+    workspaceDir: pluginWorkspaceDir,
   });
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
@@ -564,6 +575,7 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
     pluginMetadataSnapshot,

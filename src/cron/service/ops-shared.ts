@@ -3,7 +3,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";

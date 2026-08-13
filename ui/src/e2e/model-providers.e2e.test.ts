@@ -1,7 +1,7 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -40,6 +40,19 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
+function modelPickerValue(locator: Locator) {
+  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
+}
+
+async function selectModelPicker(locator: Locator, value: string) {
+  await locator.evaluate(async (element, next) => {
+    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+    select.value = next;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -58,7 +71,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("surfaces credential-only model setup as the primary action", async () => {
+  it("surfaces rejected provider credentials as the primary setup action", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -84,15 +97,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             {
               match: { view: "all", includeProviderCapabilities: true },
               response: {
-                models: [
-                  {
-                    id: "gpt-5.6",
-                    name: "GPT-5.6",
-                    provider: "openai",
-                    available: false,
-                    apiKeySupported: true,
-                  },
-                ],
+                models: [],
+                providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
               },
             },
           ],
@@ -128,8 +134,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(async () => readiness.textContent())
         .toContain("Connect a verified AI model");
-      await expect.poll(async () => readiness.textContent()).toContain("No models available");
-      await expect.poll(async () => openaiCard.textContent()).toContain("Signed in");
+      await expect.poll(async () => readiness.textContent()).toContain("Model required");
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      await expect.poll(async () => openaiCard.textContent()).not.toContain("Signed in");
       expect(await page.locator(".model-providers__defaults").count()).toBe(0);
 
       if (recordVisuals) {
@@ -159,7 +166,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await page.setViewportSize({ height: 1000, width: 1440 });
       }
 
-      await readiness.getByRole("button", { name: "Choose another provider" }).click();
+      await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();
@@ -490,7 +497,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await openaiCard.waitFor();
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");
       await expect
-        .poll(async () => page.locator(".model-providers__defaults select").first().inputValue())
+        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
         .toBe("openai/gpt-5.5");
       if (recordVisuals) {
         await page.screenshot({
@@ -517,9 +524,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
-      const primary = page.locator(".model-providers__defaults select").first();
+      const primary = page.locator(".model-providers__defaults wa-select").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;
-      await primary.selectOption("anthropic/claude-sonnet-4-5");
+      await selectModelPicker(primary, "anthropic/claude-sonnet-4-5");
       expect((await gateway.getRequests("config.patch")).length).toBe(defaultPatchCount);
       const updatedDefaultsConfig = {
         ...config,

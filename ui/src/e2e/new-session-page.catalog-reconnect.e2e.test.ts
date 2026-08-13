@@ -12,6 +12,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
@@ -296,12 +297,15 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => page.locator(".new-session-page__start-split").count()).toBe(1);
 
-      await page.locator("#new-session-place-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__place-popover");
-      await placePopover.getByRole("button", { name: "Worktree" }).click();
-      await placePopover.getByLabel("Base branch").fill("main");
+      await page.locator("#new-session-detail-trigger").click();
+      const placePopover = page.locator("wa-popover.new-session-page__detail-popover");
+      const worktreeButton = placePopover.getByRole("button", { name: "Worktree" });
+      await worktreeButton.waitFor({ state: "visible" });
+      const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
+      await worktreeButton.click();
+      await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
       await placePopover.getByLabel("Worktree name").fill("terminal-task");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-detail-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
 
       if (captureCliAgentsProof) {
@@ -328,6 +332,9 @@ suite.define(() => {
         cwd: worktreePath,
         initialMessage: "inspect the checkout",
       });
+      expect(await gateway.getRequests("worktrees.branches")).toHaveLength(
+        initialBranchRequestCount,
+      );
       const requests = await gateway.getRequests();
       const methods = requests.map((request) => request.method);
       expect(methods.indexOf("worktrees.create")).toBeLessThan(
@@ -761,6 +768,7 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
+      await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(false);
@@ -798,6 +806,54 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("model");
       expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("clears the draft after a genuine new-session route navigation settles", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: REFRESHED_RESEARCH_WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=research`);
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+      const message = page.locator(".new-session-page__message");
+      await message.fill("discard on real navigation");
+
+      await navigateInApp(page, "new-session", "?agent=main");
+
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await expect.poll(() => message.inputValue()).toBe("");
     } finally {
       await context.close();
     }
@@ -891,7 +947,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
       await pollLocatorText(
-        page.locator("#new-session-place-trigger .new-session-page__trigger-label"),
+        page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -901,8 +957,8 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__detail-popover");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
       await placeTrigger.click();
       const worktreeItem = placeSelect.getByRole("button", { name: "Worktree" });
       await worktreeItem.click();

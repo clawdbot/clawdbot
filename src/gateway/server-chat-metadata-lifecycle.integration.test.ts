@@ -1,6 +1,10 @@
 import "../agents/prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
+import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
+import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import {
   getPreparedModelRuntimeMocks,
@@ -82,6 +86,22 @@ function configureAuthFixture(kind: "secret-ref" | "external-oauth" | "unresolve
   };
 }
 
+function configureHarnessOwnedUnresolvedAuth() {
+  mocks.authStorage.getAll.mockReturnValue({
+    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
+  });
+  mocks.preparedAuthStore = {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    },
+  };
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const sidecar of sidecars) {
@@ -125,6 +145,7 @@ async function expectAvailable(
     metadataSnapshot: owner.metadataSnapshot,
     preparedAuthStore: mocks.preparedAuthStore ?? { version: 1, profiles: {} },
     preparedRuntimeAuthModes: owner.authModes,
+    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
   });
   const [metadata, modelsList] = await Promise.all([
     lifecycle.read({ agentId: "main" }),
@@ -180,6 +201,61 @@ describe("gateway chat metadata lifecycle composition", () => {
     await lifecycle.attachContext(context, sidecars);
 
     await expectAvailable(lifecycle);
+  });
+
+  it("publishes a successful harness auth binding before the next metadata read", async () => {
+    configureHarnessOwnedUnresolvedAuth();
+    await publishOwner();
+    const lifecycle = await createLifecycle();
+    await lifecycle.attachContext(context, sidecars);
+    await expectAvailable(lifecycle, false);
+    const profileStore = mocks.preparedAuthStore;
+    if (!profileStore) {
+      throw new Error("expected unresolved prepared auth store");
+    }
+
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileStore,
+      apiKeyInfo: null,
+      attempt: {
+        runtimeArtifact: {
+          id: "codex-app-server:test",
+          fingerprint: "codex-runtime-fingerprint",
+        },
+      } as EmbeddedRunAttemptResult,
+      provider: "openai",
+      agentDir: "/tmp/configured-main",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+      requestTransportOverrides: "none",
+      config,
+      agentHarnessId: "codex",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+    });
+
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.preparedAuthMaterializations).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+      }),
+    ]);
+
+    await vi.waitFor(async () => await expectAvailable(lifecycle));
+
+    revokeRuntimeAuthMaterializations({
+      agentDir: "/tmp/configured-main",
+      provider: "openai",
+      runtimeOwnerId: "codex",
+    });
+    await vi.waitFor(async () => await expectAvailable(lifecycle, false));
   });
 
   it("recovers a failed catch-up when the prepared owner publishes after attachment", async () => {

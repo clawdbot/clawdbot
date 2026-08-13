@@ -104,6 +104,9 @@ export interface SidebarMenusControllerHost
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
   hideSessionCatalog(catalogId: string): void;
   sessionSortMode: SidebarSessionSortMode;
+  effectiveSessionSortMode(): SidebarSessionSortMode;
+  sessionPeopleSortAvailable(): boolean;
+  setSessionSortMode(mode: SidebarSessionSortMode): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
   readonly workboardBoards: readonly SidebarWorkboardBoard[];
