@@ -278,6 +278,7 @@ export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<vo
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
+  primeConfiguredContextWindowsFromConfig(cfg);
   // Explicit config refresh preserves dynamic provider context metadata. The full catalog still
   // runs in the generation worker; ordinary cache reads remain prepared-only.
   const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
