@@ -1284,13 +1284,7 @@ async function prepareDockerCandidate(
       delete candidateEnv[key];
     }
     candidateEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA = sourceSha;
-    await prepareOpenClawPackage(candidateEnv, logDir);
-    const packagePath = candidateEnv.OPENCLAW_CURRENT_PACKAGE_TGZ!;
-    const packed = inspectNpmPackageTarball(packagePath);
     const version = rootPackageVersion(ROOT_DIR);
-    if (packed.packageJson.name !== "openclaw" || packed.packageJson.version !== version) {
-      throw new Error("packed Docker candidate name or version differs from the root package");
-    }
     const registry = preparePrepublishPluginRegistry({
       allowCreate: true,
       baseEnv: candidateEnv,
@@ -1299,6 +1293,12 @@ async function prepareDockerCandidate(
       plan,
       sourceSha,
     });
+    await prepareOpenClawPackage(candidateEnv, logDir);
+    const packagePath = candidateEnv.OPENCLAW_CURRENT_PACKAGE_TGZ!;
+    const packed = inspectNpmPackageTarball(packagePath);
+    if (packed.packageJson.name !== "openclaw" || packed.packageJson.version !== version) {
+      throw new Error("packed Docker candidate name or version differs from the root package");
+    }
     candidate = {
       package: { path: packagePath, name: packed.packageJson.name, version, sha256: packed.sha256 },
       registry,
@@ -1962,6 +1962,18 @@ async function main() {
     );
   }
 
+  const needsCurrentTreePackage =
+    lanesNeedOpenClawPackage(scheduledLanes) && !baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ;
+  preparePrepublishPluginRegistry({
+    allowCreate: needsCurrentTreePackage,
+    baseEnv,
+    candidateVersion: rootPackageVersion(ROOT_DIR),
+    logDir,
+    plan,
+    sourceSha: gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
+  });
+  validateDockerCandidateEnvironment(baseEnv, plan);
+
   await runPhase(
     phases,
     "docker-preflight",
@@ -1974,23 +1986,13 @@ async function main() {
       });
     },
   );
-  let preparedCurrentTreePackage = false;
   if (lanesNeedOpenClawPackage(scheduledLanes)) {
     await runPhase(phases, "prepare-openclaw-package", {}, async () => {
-      preparedCurrentTreePackage = await prepareOpenClawPackage(baseEnv, logDir);
+      await prepareOpenClawPackage(baseEnv, logDir);
     });
   } else {
     console.log("==> OpenClaw package: not needed for selected lanes");
   }
-  preparePrepublishPluginRegistry({
-    allowCreate: preparedCurrentTreePackage,
-    baseEnv,
-    candidateVersion: rootPackageVersion(ROOT_DIR),
-    logDir,
-    plan,
-    sourceSha: gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
-  });
-  validateDockerCandidateEnvironment(baseEnv, plan);
 
   if (buildEnabled) {
     const buildEntries: ForegroundEntry[] = [];
