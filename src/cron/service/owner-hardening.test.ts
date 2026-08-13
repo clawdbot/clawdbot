@@ -4,7 +4,8 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
 import { CronService } from "../service.js";
@@ -18,9 +19,10 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-beforeAll(async () => {
-  scriptRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "cron-owner-hardening-script-"));
+beforeEach(async () => {
+  scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
   runnerScript = path.join(scriptRoot, "runner.mts");
   const serviceUrl = pathToFileURL(path.resolve("src/cron/service.ts")).href;
   await fsPromises.writeFile(
