@@ -174,7 +174,11 @@ function isGraphSharedLinkUrl(url: string): boolean {
   if (!host) {
     return false;
   }
-  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
+  // Match on a dot boundary so look-alike hosts such as "evil1drv.ms" or
+  // "notonedrive.com" are not treated as shared-link hosts.
+  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some(
+    (suffix) => host === suffix || host.endsWith(suffix.startsWith(".") ? suffix : `.${suffix}`),
+  );
 }
 
 /**
