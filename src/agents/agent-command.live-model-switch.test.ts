@@ -2445,6 +2445,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         entry: expect.objectContaining({ thinkingLevel: "max" }),
       }),
     );
+    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
+      preserveRuntimeModel: true,
+    });
   });
 
   it("recomputes a model-derived thinking default for each fallback candidate", async () => {

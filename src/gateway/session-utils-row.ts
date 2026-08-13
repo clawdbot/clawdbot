@@ -310,15 +310,15 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
-  const selectedOrRuntimeModel = selectedModel?.model ?? model;
+  const selectedModelProvider = selectedModel.provider;
+  const selectedModelId = selectedModel.model;
   const rowModelIdentity = lightweight
-    ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
+    ? { provider: selectedModelProvider, model: selectedModelId }
     : resolveSessionDisplayModelIdentityRefCached({
         cfg,
         agentId: sessionAgentId,
-        provider: selectedOrRuntimeModelProvider,
-        model: selectedOrRuntimeModel,
+        provider: selectedModelProvider,
+        model: selectedModelId,
         rowContext: params.rowContext,
       });
   const rowModelProvider = rowModelIdentity.provider;
@@ -390,8 +390,8 @@ export function buildGatewaySessionRow(params: {
   });
   const fastModeState = resolveFastModeState({
     cfg,
-    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
-    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
+    provider: selectedModelProvider,
+    model: selectedModelId,
     agentId: sessionAgentId,
     sessionEntry:
       entry?.fastMode !== undefined

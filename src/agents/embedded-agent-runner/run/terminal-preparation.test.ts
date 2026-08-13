@@ -251,7 +251,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta).not.toHaveProperty("costUsd");
   });
 
-  it("builds exact terminal model and successful-tool evidence", async () => {
+  it("keeps response identity in the terminal receipt without replacing the run model", async () => {
     const prepared = await prepareStats({
       responseModel: "cost-model-rerouted",
       attempt: {
@@ -276,7 +276,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       requested: { provider: "cost-test-provider", model: "cost-model" },
       effective: {
         provider: "cost-test-provider",
-        model: "cost-model-rerouted",
+        model: "cost-model",
         responseModel: "cost-model-rerouted",
       },
       successfulToolNames: ["exec", "read", "Zeta", "alpha", "zeta"],
@@ -285,5 +285,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(
       (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
     ).not.toHaveProperty("terminalDisposition");
+    expect(prepared.agentMeta.model).toBe("cost-model");
+    expect(prepared.reportedModelRef.model).toBe("cost-model");
   });
 });
