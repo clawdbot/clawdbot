@@ -292,9 +292,15 @@ function composerControlsHtml(crowded = false) {
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <div class="chat-controls__model-control">
-          <div class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
-          </div>
+            <div class="chat-controls__model-control-row">
+              <div class="model-picker">
+                <wa-select class="settings-select picker-select model-picker__select chat-controls__model-picker" style="display:block;width:100%;min-width:138px">
+                  <div class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+                    <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
+                  </div>
+                </wa-select>
+              </div>
+            </div>
           </div>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
@@ -2515,6 +2521,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           footer: rectFor(".agent-chat__composer-footer"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-controls__model-trigger"),
+          modelPicker: rectFor(".chat-controls__model-picker"),
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
           status: rectFor(".agent-chat__composer-run-status"),
@@ -2522,7 +2529,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
+      expect(layout.controls.scrollWidth, JSON.stringify(layout)).toBeLessThanOrEqual(
+        layout.controls.clientWidth + 1,
+      );
       for (const control of [
         layout.status,
         layout.overrides,
@@ -2539,6 +2548,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
+      expect(layout.modelPicker.width).toBeGreaterThanOrEqual(138);
       expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
       for (const [left, right] of [
         [layout.status, layout.overrides],

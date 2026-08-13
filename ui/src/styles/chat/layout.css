@@ -3758,7 +3758,7 @@ button.chat-reply-preview--message:disabled {
   .agent-chat__composer-controls .chat-controls__model,
   .chat-composer-model-control {
     width: fit-content;
-    min-width: 0;
+    min-width: min-content;
     max-width: min(70vw, 100%);
     margin-left: 0;
   }
@@ -4290,7 +4290,7 @@ button.chat-reply-preview--message:disabled {
 
 .chat-controls__model {
   grid-area: model;
-  min-width: 0;
+  min-width: min-content;
   max-width: none;
 }
 
@@ -4302,18 +4302,18 @@ button.chat-reply-preview--message:disabled {
 
 .chat-controls__model-control {
   display: grid;
-  min-width: 0;
+  min-width: min-content;
   flex: 1 1 auto;
 }
 
 .chat-controls__model-control-row {
   display: flex;
   align-items: center;
-  min-width: 0;
+  min-width: min-content;
 }
 
 .chat-controls__model-control-row .model-picker {
-  min-width: 0;
+  min-width: min-content;
   flex: 1 1 auto;
 }
 
