@@ -4,6 +4,7 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
 import {
+  parseNodeWorkerCancelInput,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerLookupInput,
   projectNodeWorkerSupervisorReceipt,
@@ -43,7 +44,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ? await params.supervisor.launch(parseNodeWorkerLaunchInput(params.paramsJSON))
         : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
           ? await params.supervisor.status(parseNodeWorkerLookupInput(params.paramsJSON).launchId)
-          : await params.supervisor.cancel(parseNodeWorkerLookupInput(params.paramsJSON).launchId);
+          : await params.supervisor.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
     return {
       handled: true,
       ok: true,

@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-worker-supervisor-dialect.js";
+import { updateNodeWorkerSupervisorProtocolFeatures } from "./node-registry-private.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -23,7 +26,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -222,6 +225,17 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
+    expect(
+      updateNodeWorkerSupervisorProtocolFeatures({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-node-a",
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      }),
+    ).toBe(true);
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ pairingGeneration: "generation-a" }),
+    ]);
 
     currentPairingGeneration = "generation-b";
     expect(
@@ -236,6 +250,18 @@ describe("gateway node session runtime", () => {
         },
       ),
     ).not.toBeNull();
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    expect(
+      updateNodeWorkerSupervisorProtocolFeatures({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-node-a",
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      }),
+    ).toBe(true);
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ pairingGeneration: "generation-b" }),
+    ]);
     runtime.nodeSendToSession("main", "chat", { ok: true });
     await vi.waitFor(() => expect(frames).toHaveLength(1));
   });

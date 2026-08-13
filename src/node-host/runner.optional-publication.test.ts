@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
+import {
+  NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-worker-supervisor-dialect.js";
 import type { configureNodeHost } from "./config.js";
 import { runNodeHost } from "./runner.js";
 
@@ -185,7 +189,11 @@ describe("runNodeHost optional publications", () => {
     ];
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation(async (method: string) => {
-        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD || method === NODE_SKILLS_UPDATE_METHOD) {
+        if (
+          method === NODE_PLUGIN_TOOLS_UPDATE_METHOD ||
+          method === NODE_SKILLS_UPDATE_METHOD ||
+          method === NODE_PROTOCOL_FEATURES_UPDATE_METHOD
+        ) {
           throw new GatewayClientRequestError({
             code: "INVALID_REQUEST",
             message: `unknown method: ${method}`,
@@ -211,6 +219,16 @@ describe("runNodeHost optional publications", () => {
         expect(
           client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
         ).toHaveLength(1);
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+          ),
+        ).toEqual([
+          [
+            NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+            { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+          ],
+        ]);
       });
     });
   });
@@ -225,7 +243,11 @@ describe("runNodeHost optional publications", () => {
     ];
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation(async (method: string) => {
-        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD || method === NODE_SKILLS_UPDATE_METHOD) {
+        if (
+          method === NODE_PLUGIN_TOOLS_UPDATE_METHOD ||
+          method === NODE_SKILLS_UPDATE_METHOD ||
+          method === NODE_PROTOCOL_FEATURES_UPDATE_METHOD
+        ) {
           throw new GatewayClientRequestError({
             code: "INVALID_REQUEST",
             message: "unauthorized role: node",
@@ -255,6 +277,11 @@ describe("runNodeHost optional publications", () => {
       expect(
         client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
       ).toHaveLength(1);
+      expect(
+        client.request.mock.calls.filter(
+          ([method]) => method === NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+        ),
+      ).toHaveLength(1);
 
       client.request.mockResolvedValue({});
       options?.onClose?.(1000, "legacy gateway closed");
@@ -271,6 +298,11 @@ describe("runNodeHost optional publications", () => {
         ).toHaveLength(2);
         expect(
           client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
+        ).toHaveLength(2);
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_PROTOCOL_FEATURES_UPDATE_METHOD,
+          ),
         ).toHaveLength(2);
       });
     });

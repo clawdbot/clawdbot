@@ -35,6 +35,7 @@ import {
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorIdentity,
 } from "./node-worker-supervisor-contract.js";
 
 const STDOUT_MAX_BYTES = 64 * 1024;
@@ -188,9 +189,53 @@ async function signalOwnedWorkerTree(
   if (root === "reused" || root === "unknown") {
     return;
   }
+  if (process.platform !== "win32") {
+    if (inspectPosixProcessGroup(worker.pid) !== "live") {
+      return;
+    }
+    // The detached worker PID is also its process-group id. Never fall back to
+    // direct PID signaling after restart; a reused PID belongs to another tree.
+    const revalidatedRoot = inspectNodeWorkerProcessIdentity(worker);
+    if (revalidatedRoot === "reused" || revalidatedRoot === "unknown") {
+      return;
+    }
+    try {
+      process.kill(-worker.pid, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
+      }
+    }
+    return;
+  }
+  if (root !== "live" || inspectNodeWorkerProcessIdentity(worker) !== "live") {
+    return;
+  }
   await new Promise<void>((resolve) => {
     signalProcessTree(worker.pid, signal, { detached: true, onComplete: resolve });
   });
+}
+
+function sameProcessIdentity(
+  left: NodeWorkerProcessIdentity | null,
+  right: NodeWorkerProcessIdentity | null,
+): boolean {
+  return (
+    left?.pid === right?.pid &&
+    left?.startTime === right?.startTime &&
+    (left !== null) === (right !== null)
+  );
+}
+
+function receiptMatchesOwner(
+  receipt: NodeWorkerLaunchReceipt,
+  supervisor: NodeWorkerProcessIdentity,
+  worker: NodeWorkerProcessIdentity | null,
+): boolean {
+  return (
+    sameProcessIdentity(receipt.supervisor, supervisor) &&
+    sameProcessIdentity(receipt.worker, worker)
+  );
 }
 
 async function waitForOwnedWorkerTreeDeath(
@@ -310,39 +355,88 @@ class NodeWorkerSupervisor {
     return this.store.get(launchId);
   }
 
-  async cancel(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined> {
-    const active = this.active.get(launchId);
-    if (active) {
-      if (active.state === "running") {
-        await this.stopChild(active, "cancelled");
-      }
-      const observed = this.active.get(launchId);
-      if (observed?.state === "observed") {
-        return this.reconcileActiveTerminal(observed);
-      }
-      return this.store.get(launchId);
-    }
-    const startup = this.starting.get(launchId);
-    const receipt = this.store.get(launchId);
+  async cancel(
+    expected: NodeWorkerSupervisorIdentity,
+  ): Promise<NodeWorkerLaunchReceipt | undefined> {
+    const receipt = this.store.getMatching(expected);
     if (!receipt || receipt.state === "completed" || receipt.state === "failed") {
       return receipt;
     }
     if (receipt.state === "interrupted" || receipt.state === "cancelled") {
       return receipt;
     }
-    if (!startup || receipt.state !== "pending" || receipt.supervisor.pid !== process.pid) {
+    const active = this.active.get(expected.launchId);
+    if (active) {
+      if (
+        active.planHash !== expected.planHash ||
+        !receiptMatchesOwner(receipt, active.supervisor, active.worker)
+      ) {
+        return receipt;
+      }
+      if (active.state === "running") {
+        await this.stopChild(active, "cancelled");
+      }
+      const observed = this.active.get(expected.launchId);
+      if (observed?.state === "observed") {
+        return this.reconcileActiveTerminal(observed);
+      }
+      return this.store.getMatching(expected);
+    }
+    const startup = this.starting.get(expected.launchId);
+    if (startup && receipt.state === "pending" && receipt.supervisor.pid === process.pid) {
+      const cancelled = this.store.finishCancelled({
+        expected,
+        supervisor: receipt.supervisor,
+        worker: null,
+      });
+      await startup;
+      return this.store.getMatching(expected) ?? cancelled;
+    }
+    const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
+    if (supervisorState === "live" || supervisorState === "unknown") {
       return receipt;
     }
-    const cancelled = this.store.finish({
-      launchId,
-      planHash: receipt.planHash,
-      supervisor: this.requireSupervisorIdentity(),
-      worker: null,
-      state: "cancelled",
-      errorText: "node worker launch cancelled",
+    if (!receipt.worker) {
+      return this.store.finishCancelled({
+        expected,
+        supervisor: receipt.supervisor,
+        worker: null,
+      });
+    }
+    let workerState = inspectOwnedWorkerTree(receipt.worker);
+    if (workerState === "unknown") {
+      return receipt;
+    }
+    if (workerState === "live") {
+      const beforeSignal = this.store.getMatching(expected);
+      if (
+        beforeSignal?.state !== "running" ||
+        !receiptMatchesOwner(beforeSignal, receipt.supervisor, receipt.worker)
+      ) {
+        return beforeSignal;
+      }
+      await signalOwnedWorkerTree(receipt.worker, "SIGTERM");
+      workerState = await waitForOwnedWorkerTreeDeath(receipt.worker, STOP_GRACE_MS);
+    }
+    if (workerState === "live") {
+      const beforeSignal = this.store.getMatching(expected);
+      if (
+        beforeSignal?.state !== "running" ||
+        !receiptMatchesOwner(beforeSignal, receipt.supervisor, receipt.worker)
+      ) {
+        return beforeSignal;
+      }
+      await signalOwnedWorkerTree(receipt.worker, "SIGKILL");
+      workerState = await waitForOwnedWorkerTreeDeath(receipt.worker, FORCE_STOP_WAIT_MS);
+    }
+    if (workerState !== "dead") {
+      return this.store.getMatching(expected);
+    }
+    return this.store.finishCancelled({
+      expected,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
     });
-    await startup;
-    return this.store.get(launchId) ?? cancelled;
   }
 
   close(): Promise<void> {

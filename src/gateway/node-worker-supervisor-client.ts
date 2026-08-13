@@ -1,8 +1,4 @@
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import {
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -15,23 +11,25 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../node-host/node-worker-supervisor-contract.js";
-import type { NodeRegistry, NodeInvokeResult } from "./node-registry.js";
-
-/** Symbol-keyed request context slot keeps this client outside the public Gateway handler shape. */
-export const NODE_WORKER_SUPERVISOR_CLIENT_CONTEXT = Symbol("openclaw.nodeWorkerSupervisorClient");
+import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import type { NodeInvokeResult } from "./node-registry.js";
 
 type NodeWorkerSupervisorClientError = {
   code: string;
   message: string;
-  ambiguous: boolean;
 };
 
 type NodeWorkerSupervisorClientResult =
-  | { ok: true; dispatch: "sent"; receipt: NodeWorkerSupervisorReceipt | null }
+  | { effect: "not-sent"; error: NodeWorkerSupervisorClientError }
+  | { effect: "verified-receipt"; receipt: NodeWorkerSupervisorReceipt | null }
+  | { effect: "sent-outcome-unknown"; error: NodeWorkerSupervisorClientError };
+
+type NodeWorkerSupervisorCancelResult =
+  | Exclude<NodeWorkerSupervisorClientResult, { effect: "verified-receipt" }>
   | {
-      ok: false;
-      dispatch: "not-sent" | "sent";
-      error: NodeWorkerSupervisorClientError;
+      effect: "verified-receipt";
+      receipt: NodeWorkerSupervisorReceipt | null;
+      cancellation: "cancelled" | "not-cancelled";
     };
 
 type NodeWorkerSupervisorCallBase = {
@@ -41,27 +39,14 @@ type NodeWorkerSupervisorCallBase = {
   timeoutMs?: number;
 };
 
-const AMBIGUOUS_TRANSPORT_CODES = new Set([
-  "ABORTED",
-  "DISCONNECTED",
-  "IDLE_TIMEOUT",
-  "TIMEOUT",
-  "UNAVAILABLE",
-]);
-
 function failure(params: {
   code: string;
   dispatched: boolean;
   message: string;
 }): NodeWorkerSupervisorClientResult {
   return {
-    ok: false,
-    dispatch: params.dispatched ? "sent" : "not-sent",
-    error: {
-      code: params.code,
-      message: params.message,
-      ambiguous: params.dispatched && AMBIGUOUS_TRANSPORT_CODES.has(params.code),
-    },
+    effect: params.dispatched ? "sent-outcome-unknown" : "not-sent",
+    error: { code: params.code, message: params.message },
   };
 }
 
@@ -89,13 +74,13 @@ function transportFailure(result: NodeInvokeResult, dispatched: boolean) {
     code,
     dispatched,
     message: dispatched
-      ? "node worker supervisor command failed after dispatch"
+      ? "node worker supervisor outcome is unknown after dispatch"
       : "node worker supervisor command was not dispatched",
   });
 }
 
 class NodeWorkerSupervisorClient {
-  constructor(private readonly registry: NodeRegistry) {}
+  constructor(private readonly transport: NodeWorkerSupervisorTransport) {}
 
   async launch(
     params: NodeWorkerSupervisorCallBase & { input: NodeWorkerLaunchInput },
@@ -135,25 +120,28 @@ class NodeWorkerSupervisorClient {
 
   async cancel(
     params: NodeWorkerSupervisorCallBase & { expected: NodeWorkerSupervisorIdentity },
-  ): Promise<NodeWorkerSupervisorClientResult> {
-    const status = await this.status(params);
-    if (!status.ok || status.receipt === null) {
-      return status;
-    }
-    // The durable store binds launchId to one immutable launch identity. Fence the
-    // destructive lookup-only cancel with an exact status match; both sends recheck authority.
-    return await this.invoke({
+  ): Promise<NodeWorkerSupervisorCancelResult> {
+    const result = await this.invoke({
       ...params,
       command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
-      request: { launchId: params.expected.launchId },
+      request: params.expected,
       expected: params.expected,
       allowMissing: true,
     });
+    return result.effect === "verified-receipt"
+      ? {
+          ...result,
+          cancellation: result.receipt?.state === "cancelled" ? "cancelled" : "not-cancelled",
+        }
+      : result;
   }
 
   private async invoke(
     params: NodeWorkerSupervisorCallBase & {
-      command: string;
+      command:
+        | typeof NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
+        | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
+        | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
       request: unknown;
       expected: NodeWorkerSupervisorIdentity;
       allowMissing: boolean;
@@ -166,31 +154,36 @@ class NodeWorkerSupervisorClient {
         message: "node worker supervisor authority is closed",
       });
     }
-    const session = this.registry.get(params.nodeId);
-    if (
-      !session ||
-      session.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
-      session.clientMode !== GATEWAY_CLIENT_MODES.NODE ||
-      !session.connId ||
-      !session.pairingGeneration
-    ) {
+    let node;
+    try {
+      node = (await this.transport.listCurrentNodes()).find(
+        (candidate) => candidate.nodeId === params.nodeId,
+      );
+    } catch {
       return failure({
-        code: "INVALID_NODE_HOST",
+        code: "UNAVAILABLE",
         dispatched: false,
-        message: "current node session is not an authenticated node host",
+        message: "node worker supervisor transport is unavailable",
+      });
+    }
+    if (!node || !params.isDispatchAuthorized()) {
+      return failure({
+        code: node ? "AUTHORITY_CLOSED" : "INVALID_NODE_HOST",
+        dispatched: false,
+        message: node
+          ? "node worker supervisor authority is closed"
+          : "current node session has no worker supervisor dialect",
       });
     }
     let dispatched = false;
     let result: NodeInvokeResult;
     try {
-      result = await this.registry.invoke({
-        nodeId: params.nodeId,
-        expectedConnId: session.connId,
-        expectedPairingGeneration: session.pairingGeneration,
+      result = await this.transport.invoke({
+        node,
         command: params.command,
         params: params.request,
-        timeoutMs: params.timeoutMs,
-        signal: params.signal,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
         idempotencyKey: params.expected.launchId,
         isDispatchAuthorized: params.isDispatchAuthorized,
         onDispatchReady: () => {
@@ -201,7 +194,9 @@ class NodeWorkerSupervisorClient {
       return failure({
         code: "UNAVAILABLE",
         dispatched,
-        message: "node worker supervisor transport failed",
+        message: dispatched
+          ? "node worker supervisor outcome is unknown after transport failure"
+          : "node worker supervisor transport failed before dispatch",
       });
     }
     if (!result.ok) {
@@ -217,7 +212,7 @@ class NodeWorkerSupervisorClient {
     if (typeof result.payloadJSON !== "string" || result.payload !== undefined) {
       return failure({
         code: "INVALID_REPLY",
-        dispatched,
+        dispatched: true,
         message: "node worker supervisor returned an invalid reply",
       });
     }
@@ -227,31 +222,31 @@ class NodeWorkerSupervisorClient {
     } catch {
       return failure({
         code: "INVALID_REPLY",
-        dispatched,
+        dispatched: true,
         message: "node worker supervisor returned an invalid reply",
       });
     }
     if (receipt === null) {
       return params.allowMissing
-        ? { ok: true, dispatch: "sent", receipt: null }
+        ? { effect: "verified-receipt", receipt: null }
         : failure({
             code: "INVALID_REPLY",
-            dispatched,
+            dispatched: true,
             message: "node worker supervisor launch receipt was missing",
           });
     }
     if (!identitiesMatch(receipt, params.expected)) {
       return failure({
         code: "IDENTITY_MISMATCH",
-        dispatched,
+        dispatched: true,
         message: "node worker supervisor reply identity did not match the request",
       });
     }
-    return { ok: true, dispatch: "sent", receipt };
+    return { effect: "verified-receipt", receipt };
   }
 }
 
-/** Creates the Gateway-internal client for non-advertised node worker controls. */
-export function createNodeWorkerSupervisorClient(registry: NodeRegistry) {
-  return new NodeWorkerSupervisorClient(registry);
+/** Creates the device-runtime-owned client for the closed private supervisor transport. */
+export function createNodeWorkerSupervisorClient(transport: NodeWorkerSupervisorTransport) {
+  return new NodeWorkerSupervisorClient(transport);
 }

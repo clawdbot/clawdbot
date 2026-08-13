@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   captureNodePairingGeneration,
   captureNodePairingState,
 } from "../../infra/device-pairing-node-state.js";
@@ -18,6 +22,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-worker-supervisor-dialect.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -26,6 +31,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
+import { createNodeRegistryRuntime } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
 import {
   captureNodeWakeLifecycle,
   runNodeWakeAttempt,
@@ -35,6 +42,7 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -193,6 +201,172 @@ describe("nodeHandlers node.skills.update", () => {
       { nodeId: "node-1", skills: [skill] },
       undefined,
     );
+  });
+});
+
+function protocolFeatureNodeClient(connId = "conn-1"): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      readyState: 1,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "test",
+        platform: "linux",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+      device: { id: "node-1" },
+      caps: [],
+      commands: ["system.run"],
+    } as unknown as GatewayWsClient["connect"],
+  };
+}
+
+describe("nodeHandlers node.protocolFeatures.update", () => {
+  it("publishes the closed worker dialect for the exact authenticated node session", async () => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const client = protocolFeatureNodeClient();
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const { context, opts } = createOptions(
+      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      { client: client as never },
+    );
+    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
+
+    await expectDefined(
+      nodeHandlers["node.protocolFeatures.update"],
+      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+    )(opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({
+        nodeId: "node-1",
+        connId: "conn-1",
+        pairingGeneration: "generation-1",
+      }),
+    ]);
+    runtime.nodeRegistry.unregister("conn-1");
+  });
+
+  it("stays retryable until same-connection pairing promotion can bind the proof", async () => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const client = protocolFeatureNodeClient();
+    runtime.nodeRegistry.register(client, { pairingIdentity: "identity-1" });
+    const { context, opts } = createOptions(
+      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      { client: client as never },
+    );
+    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
+    const handler = expectDefined(
+      nodeHandlers["node.protocolFeatures.update"],
+      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+    );
+
+    await handler(opts);
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+
+    expect(
+      runtime.nodeRegistry.updateSurface(
+        "node-1",
+        { commands: ["system.run"] },
+        {
+          expectedConnId: "conn-1",
+          expectedPairingIdentity: "identity-1",
+          nextPairingGeneration: "generation-1",
+        },
+      ),
+    ).not.toBeNull();
+    vi.mocked(opts.respond).mockClear();
+    await handler(opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ pairingGeneration: "generation-1" }),
+    ]);
+    runtime.nodeRegistry.unregister("conn-1");
+  });
+
+  it.each([
+    { name: "missing list", params: {} },
+    { name: "extra key", params: { protocolFeatures: [], extra: true } },
+    { name: "non-array", params: { protocolFeatures: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } },
+    {
+      name: "too many",
+      params: {
+        protocolFeatures: [
+          NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+          NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        ],
+      },
+    },
+    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v2"] } },
+  ])("rejects $name without changing private eligibility", async ({ params }) => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const client = protocolFeatureNodeClient();
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const { context, opts } = createOptions(params, { client: client as never });
+    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
+
+    await expectDefined(
+      nodeHandlers["node.protocolFeatures.update"],
+      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+    )(opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    runtime.nodeRegistry.unregister("conn-1");
+  });
+
+  it("rejects a stale connection without replacing the current session proof", async () => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const current = protocolFeatureNodeClient("conn-current");
+    runtime.nodeRegistry.register(current, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const stale = protocolFeatureNodeClient("conn-stale");
+    const { context, opts } = createOptions(
+      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      { client: stale as never },
+    );
+    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
+
+    await expectDefined(
+      nodeHandlers["node.protocolFeatures.update"],
+      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+    )(opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    runtime.nodeRegistry.unregister("conn-current");
   });
 });
 

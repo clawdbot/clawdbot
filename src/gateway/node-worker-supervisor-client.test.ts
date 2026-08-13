@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -9,8 +8,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-worker-supervisor-dialect.js";
 import {
   nodeWorkerLaunchIdentity,
   type NodeWorkerSupervisorReceipt,
@@ -19,32 +18,58 @@ import {
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "../node-host/node-worker-supervisor.test-support.js";
+import {
+  createNodeRegistryRuntime,
+  type NodeWorkerSupervisorNodeProof,
+  type NodeWorkerSupervisorTransport,
+  updateNodeWorkerSupervisorProtocolFeatures,
+} from "./node-registry-private.js";
+import { type NodeInvokeResult } from "./node-registry.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createNodeWorkerSupervisorClient } from "./node-worker-supervisor-client.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeGatewayClient(
-  params: {
-    connId?: string;
-    nodeId?: string;
-    clientId?: string;
-    clientMode?: string;
-    onSend?: (frame: string) => void;
-  } = {},
-): GatewayWsClient {
-  const connId = params.connId ?? "conn-1";
-  const nodeId = params.nodeId ?? "node-1";
+function makeLaunchInput() {
+  const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-client-"));
+  return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
+}
+
+function runningReceipt(input = makeLaunchInput()): NodeWorkerSupervisorReceipt {
+  return { ...nodeWorkerLaunchIdentity(input), state: "running" };
+}
+
+function workerProof(): NodeWorkerSupervisorNodeProof {
   return {
-    connId,
+    nodeId: "node-1",
+    connId: "conn-1",
+    pairingIdentity: "identity-1",
+    pairingGeneration: "generation-1",
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    commands: ["system.run"],
+  };
+}
+
+function fakeTransport(
+  invoke: NodeWorkerSupervisorTransport["invoke"],
+  nodes: readonly NodeWorkerSupervisorNodeProof[] = [workerProof()],
+): NodeWorkerSupervisorTransport {
+  return { listCurrentNodes: async () => nodes, invoke };
+}
+
+function makeGatewayClient(onSend: (frame: string) => void): GatewayWsClient {
+  return {
+    connId: "conn-1",
     usesSharedGatewayAuth: false,
     socket: {
       readyState: WebSocket.OPEN,
       bufferedAmount: 0,
       send: vi.fn((frame: unknown) => {
         if (typeof frame === "string") {
-          params.onSend?.(frame);
+          onSend(frame);
         }
       }),
       close: vi.fn(),
@@ -53,293 +78,272 @@ function makeGatewayClient(
       minProtocol: 1,
       maxProtocol: 1,
       client: {
-        id: params.clientId ?? GATEWAY_CLIENT_IDS.NODE_HOST,
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "test",
         platform: "linux",
-        mode: params.clientMode ?? GATEWAY_CLIENT_MODES.NODE,
+        mode: GATEWAY_CLIENT_MODES.NODE,
       },
-      device: {
-        id: nodeId,
-        publicKey: "public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      },
+      device: { id: "node-1" },
       caps: [],
-      commands: [],
+      commands: ["system.run"],
     } as unknown as GatewayWsClient["connect"],
   };
 }
 
-function registerNodeHost(
-  registry: NodeRegistry,
-  params: Parameters<typeof makeGatewayClient>[0] = {},
-) {
-  const client = makeGatewayClient(params);
-  registry.register(client, {
+function createDialectBoundRuntime(onSend: (frame: string) => void) {
+  const runtime = createNodeRegistryRuntime(
+    () =>
+      new NodeRegistry({
+        resolveCurrentPairingState: async () => ({
+          identity: "identity-1",
+          generation: "generation-1",
+        }),
+      }),
+  );
+  runtime.nodeRegistry.register(makeGatewayClient(onSend), {
     pairingIdentity: "identity-1",
     pairingGeneration: "generation-1",
   });
-  return client;
-}
-
-function makeLaunchInput() {
-  const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-client-"));
-  return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
-}
-
-function runningReceipt(input = makeLaunchInput()): NodeWorkerSupervisorReceipt {
-  return {
-    ...nodeWorkerLaunchIdentity(input),
-    state: "running",
-  };
+  expect(
+    updateNodeWorkerSupervisorProtocolFeatures({
+      registry: runtime.nodeRegistry,
+      nodeId: "node-1",
+      connId: "conn-1",
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+    }),
+  ).toBe(true);
+  return runtime;
 }
 
 describe("gateway node worker supervisor client", () => {
-  it("invokes an unadvertised private launch command on the exact node-host session", async () => {
-    const registry = new NodeRegistry();
+  it("invokes the private launch command through an exact dialect-bound session", async () => {
     const input = makeLaunchInput();
-    const expected = runningReceipt(input);
-    registerNodeHost(registry, {
-      onSend: (raw) => {
-        const request = JSON.parse(raw) as {
-          event?: string;
-          payload?: { id?: string; command?: string };
-        };
-        expect(request.event).toBe("node.invoke.request");
-        expect(request.payload?.command).toBe(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
-        queueMicrotask(() => {
-          registry.handleInvokeResult({
-            id: request.payload?.id ?? "",
-            nodeId: "node-1",
-            connId: "conn-1",
-            ok: true,
-            payloadJSON: JSON.stringify(expected),
-          });
+    const receipt = runningReceipt(input);
+    let runtime!: ReturnType<typeof createDialectBoundRuntime>;
+    runtime = createDialectBoundRuntime((raw) => {
+      const request = JSON.parse(raw) as {
+        event?: string;
+        payload?: { id?: string; command?: string };
+      };
+      expect(request).toMatchObject({
+        event: "node.invoke.request",
+        payload: { command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND },
+      });
+      queueMicrotask(() => {
+        runtime.nodeRegistry.handleInvokeResult({
+          id: request.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: "conn-1",
+          ok: true,
+          payloadJSON: JSON.stringify(receipt),
         });
-      },
+      });
     });
 
-    const result = await createNodeWorkerSupervisorClient(registry).launch({
-      nodeId: "node-1",
-      input,
-      isDispatchAuthorized: () => true,
-    });
-
-    expect(result).toEqual({ ok: true, dispatch: "sent", receipt: expected });
+    await expect(
+      createNodeWorkerSupervisorClient(runtime.nodeWorkerSupervisorTransport).launch({
+        nodeId: "node-1",
+        input,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toEqual({ effect: "verified-receipt", receipt });
+    runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it.each([
-    { name: "wrong client id", clientId: GATEWAY_CLIENT_IDS.MACOS_APP, clientMode: "node" },
-    { name: "wrong client mode", clientId: GATEWAY_CLIENT_IDS.NODE_HOST, clientMode: "backend" },
-  ])("rejects $name without dispatch", async ({ clientId, clientMode }) => {
-    const registry = new NodeRegistry();
-    const client = registerNodeHost(registry, { clientId, clientMode });
-
-    const result = await createNodeWorkerSupervisorClient(registry).launch({
+  it("marks a generation-rotated private launch unknown and cancels its transient response path", async () => {
+    const frames: Array<{
+      event?: string;
+      payload?: { id?: string; invokeId?: string; nodeId?: string };
+    }> = [];
+    const runtime = createDialectBoundRuntime((raw) => {
+      frames.push(JSON.parse(raw) as (typeof frames)[number]);
+    });
+    const launch = createNodeWorkerSupervisorClient(runtime.nodeWorkerSupervisorTransport).launch({
       nodeId: "node-1",
       input: makeLaunchInput(),
       isDispatchAuthorized: () => true,
     });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    const invokeId = frames[0]?.payload?.id;
 
-    expect(result).toMatchObject({
-      ok: false,
-      dispatch: "not-sent",
-      error: { code: "INVALID_NODE_HOST" },
+    runtime.nodeRegistry.updateSurface(
+      "node-1",
+      { commands: ["system.run"] },
+      {
+        expectedConnId: "conn-1",
+        expectedPairingIdentity: "identity-1",
+        expectedPairingGeneration: "generation-1",
+        nextPairingGeneration: "generation-2",
+      },
+    );
+
+    await expect(launch).resolves.toMatchObject({
+      effect: "sent-outcome-unknown",
+      error: { code: "PAIRING_CHANGED" },
     });
-    const socket = client.socket as unknown as { send: ReturnType<typeof vi.fn> };
-    expect(socket.send.mock.calls).toHaveLength(0);
+    expect(frames).toEqual([
+      expect.objectContaining({ event: "node.invoke.request" }),
+      expect.objectContaining({
+        event: "node.invoke.cancel",
+        payload: { invokeId, nodeId: "node-1" },
+      }),
+    ]);
+    runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it.each(["connection", "pairing", "authority"] as const)(
-    "rejects stale %s authority before transport send",
-    async (stale) => {
-      const registry = new NodeRegistry();
-      const original = registerNodeHost(registry);
-      const invoke = registry.invoke.bind(registry);
-      let authorized = true;
-      if (stale === "connection") {
-        vi.spyOn(registry, "invoke").mockImplementationOnce(async (params) => {
-          registerNodeHost(registry, { connId: "conn-2" });
-          return await invoke(params);
-        });
-      } else if (stale === "pairing") {
-        vi.spyOn(registry, "invoke").mockImplementationOnce(async (params) => {
-          registry.updateSurface(
-            "node-1",
-            { commands: [] },
-            {
-              expectedConnId: "conn-1",
-              expectedPairingIdentity: "identity-1",
-              expectedPairingGeneration: "generation-1",
-              nextPairingGeneration: "generation-2",
-            },
-          );
-          return await invoke(params);
-        });
-      } else {
-        vi.spyOn(registry, "invoke").mockImplementationOnce(async (params) => {
-          authorized = false;
-          return await invoke(params);
-        });
-      }
+  it.each([
+    {
+      name: "closed authority",
+      nodes: [workerProof()],
+      authorized: false,
+      invoke: vi.fn(),
+      code: "AUTHORITY_CLOSED",
+    },
+    {
+      name: "missing dialect-bound node",
+      nodes: [],
+      authorized: true,
+      invoke: vi.fn(),
+      code: "INVALID_NODE_HOST",
+    },
+    {
+      name: "pre-send transport rejection",
+      nodes: [workerProof()],
+      authorized: true,
+      invoke: vi.fn(async () => ({
+        ok: false,
+        error: { code: "PRIVATE_DIALECT_UNAVAILABLE", message: "unavailable" },
+      })),
+      code: "PRIVATE_DIALECT_UNAVAILABLE",
+    },
+  ])("classifies $name as not-sent", async ({ nodes, authorized, invoke, code }) => {
+    const result = await createNodeWorkerSupervisorClient(fakeTransport(invoke, nodes)).launch({
+      nodeId: "node-1",
+      input: makeLaunchInput(),
+      isDispatchAuthorized: () => authorized,
+    });
 
-      const result = await createNodeWorkerSupervisorClient(registry).launch({
-        nodeId: "node-1",
-        input: makeLaunchInput(),
-        isDispatchAuthorized: () => authorized,
+    expect(result).toMatchObject({ effect: "not-sent", error: { code } });
+  });
+
+  it.each([
+    {
+      name: "remote error",
+      result: { ok: false, error: { code: "INVALID_REQUEST", message: "rejected" } },
+    },
+    { name: "timeout", result: { ok: false, error: { code: "TIMEOUT", message: "timeout" } } },
+    {
+      name: "disconnect",
+      result: { ok: false, error: { code: "DISCONNECTED", message: "disconnected" } },
+    },
+    { name: "abort", result: { ok: false, error: { code: "ABORTED", message: "aborted" } } },
+    {
+      name: "pairing rotation",
+      result: { ok: false, error: { code: "PAIRING_CHANGED", message: "rotated" } },
+    },
+    { name: "malformed reply", result: { ok: true, payloadJSON: "{" } },
+    { name: "oversized reply", result: { ok: true, payloadJSON: " ".repeat(9 * 1024) } },
+    { name: "missing launch receipt", result: { ok: true, payloadJSON: "null" } },
+    {
+      name: "extra receipt field",
+      result: { ok: true, payloadJSON: JSON.stringify({ ...runningReceipt(), pid: 42 }) },
+    },
+    {
+      name: "mismatched receipt",
+      result: {
+        ok: true,
+        payloadJSON: JSON.stringify({ ...runningReceipt(), environmentId: "other" }),
+      },
+    },
+  ] as Array<{ name: string; result: NodeInvokeResult }>)(
+    "classifies post-send $name as sent-outcome-unknown",
+    async ({ result }) => {
+      const transport = fakeTransport(async (params) => {
+        params.onDispatchReady?.("invoke-1");
+        return result;
       });
 
-      expect(result).toMatchObject({ ok: false, dispatch: "not-sent" });
-      const socket = original.socket as unknown as { send: ReturnType<typeof vi.fn> };
-      expect(socket.send.mock.calls).toHaveLength(0);
+      await expect(
+        createNodeWorkerSupervisorClient(transport).launch({
+          nodeId: "node-1",
+          input: makeLaunchInput(),
+          isDispatchAuthorized: () => true,
+        }),
+      ).resolves.toMatchObject({ effect: "sent-outcome-unknown" });
     },
   );
 
-  it("marks disconnect after a successful send as an ambiguous dispatched failure", async () => {
-    const registry = new NodeRegistry();
-    registerNodeHost(registry, {
-      onSend: () => {
-        registry.unregister("conn-1");
-      },
+  it("classifies a thrown post-send transport failure as sent-outcome-unknown", async () => {
+    const transport = fakeTransport(async (params) => {
+      params.onDispatchReady?.("invoke-1");
+      throw new Error("transport failed");
     });
 
-    const result = await createNodeWorkerSupervisorClient(registry).launch({
-      nodeId: "node-1",
-      input: makeLaunchInput(),
-      isDispatchAuthorized: () => true,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      dispatch: "sent",
-      error: { code: "DISCONNECTED", ambiguous: true },
-    });
+    await expect(
+      createNodeWorkerSupervisorClient(transport).launch({
+        nodeId: "node-1",
+        input: makeLaunchInput(),
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({ effect: "sent-outcome-unknown" });
   });
 
-  it("rejects success without dispatch provenance as not sent", async () => {
-    const registry = new NodeRegistry();
-    registerNodeHost(registry);
+  it("requires dispatch provenance even for a strictly valid receipt", async () => {
     const input = makeLaunchInput();
-    vi.spyOn(registry, "invoke").mockResolvedValueOnce({
+    const transport = fakeTransport(async () => ({
       ok: true,
       payloadJSON: JSON.stringify(runningReceipt(input)),
+    }));
+
+    await expect(
+      createNodeWorkerSupervisorClient(transport).launch({
+        nodeId: "node-1",
+        input,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({ effect: "not-sent", error: { code: "INVALID_REPLY" } });
+  });
+
+  it("accepts a verified missing status receipt", async () => {
+    const input = makeLaunchInput();
+    const transport = fakeTransport(async (params) => {
+      params.onDispatchReady?.("invoke-1");
+      return { ok: true, payloadJSON: "null" };
     });
 
-    const result = await createNodeWorkerSupervisorClient(registry).launch({
-      nodeId: "node-1",
-      input,
-      isDispatchAuthorized: () => true,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      dispatch: "not-sent",
-      error: {
-        code: "INVALID_REPLY",
-        message: "node worker supervisor returned success without dispatch provenance",
-        ambiguous: false,
-      },
-    });
+    await expect(
+      createNodeWorkerSupervisorClient(transport).status({
+        nodeId: "node-1",
+        expected: nodeWorkerLaunchIdentity(input),
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toEqual({ effect: "verified-receipt", receipt: null });
   });
 
   it.each([
-    { name: "malformed JSON", payload: "{" },
-    { name: "oversized JSON", payload: " ".repeat(1024 * 1024) },
-    {
-      name: "extra fields",
-      payload: JSON.stringify({ ...runningReceipt(), leakedPid: 123 }),
-    },
-  ])("rejects $name replies", async ({ payload }) => {
-    const registry = new NodeRegistry();
-    registerNodeHost(registry);
-    vi.spyOn(registry, "invoke").mockImplementationOnce(async (params) => {
-      params.onDispatchReady?.("invoke-1");
-      return { ok: true, payloadJSON: payload };
-    });
-
-    const result = await createNodeWorkerSupervisorClient(registry).launch({
-      nodeId: "node-1",
-      input: makeLaunchInput(),
-      isDispatchAuthorized: () => true,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      dispatch: "sent",
-      error: { code: "INVALID_REPLY" },
-    });
-  });
-
-  it.each([
-    ["launchId", "launch-other"],
-    ["planHash", "b".repeat(64)],
-    ["environmentId", "environment-other"],
-    ["sessionId", "session-other"],
-    ["ownerEpoch", 9],
-    ["placementGeneration", 10],
-    ["runId", "run-other"],
-  ] as const)("rejects a reply with mismatched %s", async (field, value) => {
-    const registry = new NodeRegistry();
-    registerNodeHost(registry);
+    { state: "cancelled" as const, cancellation: "cancelled" as const },
+    { state: "running" as const, cancellation: "not-cancelled" as const },
+  ])("reports a verified $state cancel receipt honestly", async ({ state, cancellation }) => {
     const input = makeLaunchInput();
     const expected = nodeWorkerLaunchIdentity(input);
-    vi.spyOn(registry, "invoke").mockImplementationOnce(async (params) => {
-      expect(params.command).toBe(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
-      params.onDispatchReady?.("invoke-1");
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify({ ...runningReceipt(input), [field]: value }),
-      };
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (params) => {
+      expect(params.command).toBe(NODE_WORKER_SUPERVISOR_CANCEL_COMMAND);
+      expect(params.params).toEqual(expected);
+      params.onDispatchReady?.("invoke-cancel");
+      return { ok: true, payloadJSON: JSON.stringify({ ...expected, state }) };
     });
 
-    const result = await createNodeWorkerSupervisorClient(registry).status({
-      nodeId: "node-1",
-      expected,
-      isDispatchAuthorized: () => true,
+    await expect(
+      createNodeWorkerSupervisorClient(fakeTransport(invoke)).cancel({
+        nodeId: "node-1",
+        expected,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toEqual({
+      effect: "verified-receipt",
+      receipt: { ...expected, state },
+      cancellation,
     });
-
-    expect(result).toMatchObject({
-      ok: false,
-      dispatch: "sent",
-      error: { code: "IDENTITY_MISMATCH" },
-    });
-  });
-
-  it("does not dispatch cancel when the status identity mismatches", async () => {
-    const registry = new NodeRegistry();
-    registerNodeHost(registry);
-    const input = makeLaunchInput();
-    const expected = nodeWorkerLaunchIdentity(input);
-    const commands: string[] = [];
-    vi.spyOn(registry, "invoke").mockImplementation(async (params) => {
-      commands.push(params.command);
-      expect(params.command).toBe(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
-      expect(params.params).toEqual({ launchId: expected.launchId });
-      params.onDispatchReady?.("invoke-status");
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify({
-          ...runningReceipt(input),
-          environmentId: "environment-other",
-          sessionId: "session-other",
-          runId: "run-other",
-        }),
-      };
-    });
-
-    const result = await createNodeWorkerSupervisorClient(registry).cancel({
-      nodeId: "node-1",
-      expected,
-      isDispatchAuthorized: () => true,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      dispatch: "sent",
-      error: { code: "IDENTITY_MISMATCH", ambiguous: false },
-    });
-    expect(commands).toEqual([NODE_WORKER_SUPERVISOR_STATUS_COMMAND]);
-    expect(commands).not.toContain(NODE_WORKER_SUPERVISOR_CANCEL_COMMAND);
+    expect(invoke).toHaveBeenCalledOnce();
   });
 });

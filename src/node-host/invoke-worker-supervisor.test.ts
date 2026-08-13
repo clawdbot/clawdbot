@@ -48,6 +48,18 @@ function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
   };
 }
 
+function cancelInput(receipt: NodeWorkerLaunchReceipt) {
+  return {
+    launchId: receipt.launchId,
+    planHash: receipt.planHash,
+    environmentId: receipt.environmentId,
+    sessionId: receipt.sessionId,
+    ownerEpoch: receipt.ownerEpoch,
+    placementGeneration: receipt.placementGeneration,
+    runId: receipt.runId,
+  };
+}
+
 function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorControl {
   return {
     launch: vi.fn(async () => receipt),
@@ -115,11 +127,20 @@ describe("node-host worker supervisor commands", () => {
 
     const { result } = await invokePrivate({
       command,
-      paramsJSON: JSON.stringify(method === "launch" ? input : { launchId: input.launchId }),
+      paramsJSON: JSON.stringify(
+        method === "launch"
+          ? input
+          : method === "cancel"
+            ? cancelInput(receipt)
+            : { launchId: input.launchId },
+      ),
       supervisor,
     });
 
     expect(supervisor[method]).toHaveBeenCalledOnce();
+    if (method === "cancel") {
+      expect(supervisor.cancel).toHaveBeenCalledWith(cancelInput(receipt));
+    }
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(result?.ok).toBe(true);
     const payload = JSON.parse(result?.payloadJSON ?? "{}") as Record<string, unknown>;
@@ -178,9 +199,14 @@ describe("node-host worker supervisor commands", () => {
       raw: JSON.stringify({ launchId: "launch-1", extra: true }),
     },
     {
-      name: "oversized launch id",
+      name: "incomplete cancel identity",
       command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
       raw: JSON.stringify({ launchId: "x".repeat(257) }),
+    },
+    {
+      name: "extra cancel identity field",
+      command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+      raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
     },
     {
       name: "extra launch field",

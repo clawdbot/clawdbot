@@ -12,6 +12,7 @@ const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 // Four 256-character identifiers can each expand to six-byte JSON escapes;
 // 8 KiB leaves headroom for the fixed keys, hash, state, and safe integers.
 const NODE_WORKER_SUPERVISOR_REPLY_MAX_BYTES = 8 * 1024;
+const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
 
 export type NodeWorkerLaunchInput = {
   launchId: string;
@@ -38,7 +39,7 @@ export type NodeWorkerSupervisorReceipt = NodeWorkerSupervisorIdentity & {
 export type NodeWorkerSupervisorControl = {
   launch(input: NodeWorkerLaunchInput): Promise<NodeWorkerLaunchReceipt>;
   status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
-  cancel(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
+  cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;
 };
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -127,6 +128,42 @@ export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: str
     throw new Error("INVALID_REQUEST: invalid node worker lookup request");
   }
   return { launchId: requireIdentifier(value.launchId, "launchId") };
+}
+
+export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSupervisorIdentity {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid node worker cancel request");
+  }
+  const value = decodeRequest(raw);
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "launchId",
+      "planHash",
+      "environmentId",
+      "sessionId",
+      "ownerEpoch",
+      "placementGeneration",
+      "runId",
+    ])
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker cancel request");
+  }
+  if (typeof value.planHash !== "string" || !/^[a-f0-9]{64}$/u.test(value.planHash)) {
+    throw new Error("INVALID_REQUEST: planHash must be 64 lowercase hexadecimal characters");
+  }
+  return {
+    launchId: requireIdentifier(value.launchId, "launchId"),
+    planHash: value.planHash,
+    environmentId: requireIdentifier(value.environmentId, "environmentId"),
+    sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ownerEpoch: requireNonNegativeInteger(value.ownerEpoch, "ownerEpoch"),
+    placementGeneration: requireNonNegativeInteger(
+      value.placementGeneration,
+      "placementGeneration",
+    ),
+    runId: requireIdentifier(value.runId, "runId"),
+  };
 }
 
 export function nodeWorkerLaunchIdentity(
