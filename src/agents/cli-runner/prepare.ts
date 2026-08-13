@@ -444,7 +444,7 @@ export async function prepareCliRunContext(
       preparedRunAdmission: candidate.preparedRunAdmission,
     });
     const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
-    return { ...rest, agentId: workspaceResolution.agentId, admittedRunContext };
+    return { ...rest, admittedRunContext };
   };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -453,6 +453,9 @@ export async function prepareCliRunContext(
     agentId: params.agentId,
     config: workspaceConfig,
   });
+  // Preparation and execution must share one resolved owner. Backend policy,
+  // live-session lookup, and media hydration all key from this snapshot.
+  params = { ...params, agentId: workspaceResolution.agentId };
   const resolvedWorkspace = workspaceResolution.workspaceDir;
   const redactedSessionId = redactRunIdentifier(params.sessionId);
   const redactedSessionKey = redactRunIdentifier(params.sessionKey);
