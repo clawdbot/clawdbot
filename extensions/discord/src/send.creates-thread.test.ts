@@ -2,6 +2,7 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 // Discord tests cover send.creates thread plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSendAssetsAndRetriesTests } from "./send.assets-and-retries.test-support.js";
 import {
   makeDiscordRest,
   requestBody,
@@ -19,10 +20,16 @@ let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
 let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 let DiscordThreadInitialMessageError: typeof import("./send.js").DiscordThreadInitialMessageError;
+let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
 let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
+let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
 let removeRoleDiscord: typeof import("./send.js").removeRoleDiscord;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
+let sendPollDiscord: typeof import("./send.js").sendPollDiscord;
+let sendStickerDiscord: typeof import("./send.js").sendStickerDiscord;
 let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
+let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
+let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
 const DISCORD_TEST_CFG = {
   channels: {
@@ -104,10 +111,16 @@ beforeAll(async () => {
     banMemberDiscord,
     createThreadDiscord,
     DiscordThreadInitialMessageError,
+    listGuildEmojisDiscord,
     listThreadsDiscord,
+    reactMessageDiscord,
     removeRoleDiscord,
     sendMessageDiscord,
+    sendPollDiscord,
+    sendStickerDiscord,
     timeoutMemberDiscord,
+    uploadEmojiDiscord,
+    uploadStickerDiscord,
   } = await import("./send.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
 });
@@ -123,6 +136,16 @@ afterEach(() => {
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/web-media");
+});
+
+registerSendAssetsAndRetriesTests({
+  listGuildEmojisDiscord: (...args) => listGuildEmojisDiscord(...args),
+  reactMessageDiscord: (...args) => reactMessageDiscord(...args),
+  sendMessageDiscord: (...args) => sendMessageDiscord(...args),
+  sendPollDiscord: (...args) => sendPollDiscord(...args),
+  sendStickerDiscord: (...args) => sendStickerDiscord(...args),
+  uploadEmojiDiscord: (...args) => uploadEmojiDiscord(...args),
+  uploadStickerDiscord: (...args) => uploadStickerDiscord(...args),
 });
 
 describe("sendMessageDiscord", () => {
