@@ -8,7 +8,6 @@ export const mediaExtensionTestRoots = [
   "extensions/pixverse",
   "extensions/runway",
   "extensions/talk-voice",
-  "extensions/video-generation-core",
   "extensions/vydra",
   "extensions/xiaomi",
 ];
