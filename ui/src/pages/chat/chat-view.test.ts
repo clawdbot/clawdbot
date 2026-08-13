@@ -1108,7 +1108,7 @@ describe("cloud worker disk-space notice", () => {
       title: "Cloud session disk space is critically low",
       copy: "New writes may fail and stop the agent.",
     },
-  ])("renders persistent $status action guidance above the workbench", (sample) => {
+  ])("renders persistent $status action guidance above the conversation", (sample) => {
     const container = renderChatView({
       diskSpace: {
         status: sample.status,
@@ -1124,7 +1124,8 @@ describe("cloud worker disk-space notice", () => {
     expect(notice.textContent).toContain(sample.copy);
     expect(notice.querySelector("svg")).not.toBeNull();
     expect(notice.querySelector("button")).toBeNull();
-    expect(notice.nextElementSibling?.classList.contains("chat-workbench")).toBe(true);
+    expect(notice.parentElement?.classList.contains("chat-main__conversation-column")).toBe(true);
+    expect(notice.nextElementSibling?.classList.contains("chat-main__conversation")).toBe(true);
   });
 
   it.each(["ok" as const, undefined])("clears for %s disk-space projection", (status) => {
