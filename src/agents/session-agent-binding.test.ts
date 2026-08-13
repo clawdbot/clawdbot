@@ -15,4 +15,12 @@ describe("resolveBoundAgentIdForSession", () => {
 
     expect(resolveBoundAgentIdForSession({ config, sessionKey: "global" })).toBe("ops");
   });
+
+  it("does not grant default-agent authority to an arbitrary unscoped key", () => {
+    const config = {
+      agents: { entries: { main: {}, research: {} } },
+    } satisfies OpenClawConfig;
+
+    expect(resolveBoundAgentIdForSession({ config, sessionKey: "legacy-session" })).toBeUndefined();
+  });
 });

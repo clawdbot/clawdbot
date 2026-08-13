@@ -198,8 +198,12 @@ async function buildPolicyCheckReport(
       exitCode: visibleFindings.length === 0 ? 0 : 1,
     };
   }
-  const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
-  const cwd = options.cwd ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolvePolicyCommandAgentId(
+    snapshot.config,
+    snapshot.sourceConfigBeforeMigrations,
+  );
+  const cfg = policyCommandConfig(snapshot.config);
+  const cwd = options.cwd ?? resolveAgentWorkspaceDir(cfg, agentId);
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime: {
@@ -244,27 +248,34 @@ async function buildPolicyCheckReport(
   };
 }
 
+function resolvePolicyCommandAgentId(
+  cfg: HealthCheckContext["cfg"],
+  sourceConfigBeforeMigrations?: HealthCheckContext["cfg"],
+): string {
+  return resolveDefaultAgentId(sourceConfigBeforeMigrations ?? cfg);
+}
+
 function policyCommandConfig(cfg: HealthCheckContext["cfg"]): HealthCheckContext["cfg"] {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        policy: {
-          ...cfg.plugins?.entries?.["policy"],
+  // Legacy agent ownership is retained by config-object identity during migration.
+  // Preserve the root while enabling the policy plugin for this command snapshot.
+  cfg.plugins = {
+    ...cfg.plugins,
+    entries: {
+      ...cfg.plugins?.entries,
+      policy: {
+        ...cfg.plugins?.entries?.["policy"],
+        enabled: true,
+        config: {
           enabled: true,
-          config: {
-            enabled: true,
-            ...(typeof cfg.plugins?.entries?.["policy"]?.config === "object" &&
-            cfg.plugins.entries["policy"].config !== null
-              ? cfg.plugins.entries["policy"].config
-              : {}),
-          },
+          ...(typeof cfg.plugins?.entries?.["policy"]?.config === "object" &&
+          cfg.plugins.entries["policy"].config !== null
+            ? cfg.plugins.entries["policy"].config
+            : {}),
         },
       },
     },
   };
+  return cfg;
 }
 
 async function policyCompareCandidatePath(options: PolicyCompareOptions): Promise<string> {
@@ -287,7 +298,10 @@ async function policyCompareCandidatePath(options: PolicyCompareOptions): Promis
   }
   const cwd =
     options.cwd ??
-    resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config));
+    resolveAgentWorkspaceDir(
+      snapshot.config,
+      resolvePolicyCommandAgentId(snapshot.config, snapshot.sourceConfigBeforeMigrations),
+    );
   return resolve(cwd, policyPath);
 }
 
