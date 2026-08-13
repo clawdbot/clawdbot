@@ -828,16 +828,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
 
-  it.each([
-    {
-      label: "failed-before-deliver",
-      error: Object.assign(new Error("source transport unavailable"), {
-        code: "ECONNREFUSED",
-        syscall: "connect",
-      }),
-    },
-    { label: "failed-deliver", error: new Error("source transport rejected final") },
-  ])("delivers one fallback after $label", async ({ error }) => {
+  it("delivers one fallback after failed-before-deliver", async () => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
@@ -847,6 +838,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       runAttempt: vi.fn(async () => ({}) as never),
     });
     sessionStoreMocks.currentEntry = { ...codexEntry };
+    const error = Object.assign(new Error("source transport unavailable"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
     const deliver = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onError });
@@ -883,6 +878,27 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 2 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("does not duplicate a source delivery that fails after transport delivery starts", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const error = new Error("source transport rejected final");
+    const deliver = vi.fn().mockRejectedValueOnce(error);
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onError });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Partially delivered source final" }),
+    });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error, expect.objectContaining({ kind: "final" }));
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
   it("does not duplicate a confirmed source delivery with a fallback", async () => {

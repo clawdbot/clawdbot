@@ -76,9 +76,10 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
       pendingOutcomes.push(
         capture.promise.then((outcome) => {
-          // Only transport-confirmed delivery is authoritative visibility.
-          // A rejected send must leave the no-visible fallback eligible.
-          if (contentful && outcome === "delivered") {
+          // A send that fails after transport delivery starts may already have
+          // shown partial content, so keep the fallback quiet unless the send
+          // was cancelled or failed before reaching the transport.
+          if (contentful && outcome !== "cancelled" && outcome !== "failed-before-deliver") {
             visibleDeliveries += 1;
           }
         }),
