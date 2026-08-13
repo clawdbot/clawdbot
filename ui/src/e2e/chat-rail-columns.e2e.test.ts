@@ -264,6 +264,7 @@ async function expectFullHeightRail(page: Page, rail: Locator): Promise<void> {
 }
 
 async function expectSharedRailHeaders(page: Page, headers: Locator[]): Promise<void> {
+  await Promise.all(headers.map((header) => header.waitFor({ state: "visible" })));
   const metrics = await Promise.all(
     headers.map((header) =>
       header.evaluate((element) => {

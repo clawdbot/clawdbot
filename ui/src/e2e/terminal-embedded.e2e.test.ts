@@ -97,7 +97,7 @@ suite.define(() => {
             width: closeBounds.width,
           };
         });
-      expect(closeControlMetrics.width).toBe(24);
+      expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(36);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);
       const closeControl = page.locator("openclaw-terminal-panel").locator(".tabstrip-tab__close");
