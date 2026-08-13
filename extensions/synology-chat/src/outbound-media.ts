@@ -45,15 +45,6 @@ const ACTIVE_CONTENT_TYPES = new Set([
   "application/xml",
   "text/xml",
 ]);
-const HTML_ACTIVE_PREFIX_TAGS = [
-  "html",
-  "head",
-  "script",
-  "iframe",
-  "body",
-  "style",
-  "title",
-] as const;
 const OUTBOUND_MEDIA_NAMESPACE = "hosted-outbound-media";
 const OUTBOUND_MEDIA_CHUNKS_NAMESPACE = "hosted-outbound-media-chunks";
 
@@ -248,14 +239,6 @@ function normalizeMediaAccess(params: {
   };
 }
 
-function startsWithHtmlTag(value: string, tag: string): boolean {
-  if (!value.startsWith(`<${tag}`)) {
-    return false;
-  }
-  const boundary = value.at(tag.length + 1);
-  return boundary === ">" || boundary === "/" || /\s/u.test(boundary ?? "");
-}
-
 function skipAsciiWhitespace(buffer: Buffer, start: number): number {
   let cursor = start;
   while (cursor < buffer.length) {
@@ -268,49 +251,235 @@ function skipAsciiWhitespace(buffer: Buffer, start: number): number {
   return cursor;
 }
 
-function sniffActiveTextContent(buffer: Buffer): string | undefined {
+function isAsciiMarkupStart(byte: number | undefined): boolean {
+  return (
+    byte === 0x21 ||
+    byte === 0x3f ||
+    (byte !== undefined && ((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)))
+  );
+}
+
+type UnicodeMarkupEncoding = "utf-16le" | "utf-16be" | "utf-32le" | "utf-32be";
+
+function readUnicodeCodePoint(
+  buffer: Buffer,
+  offset: number,
+  width: 2 | 4,
+  littleEndian: boolean,
+): number {
+  if (width === 2) {
+    return littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+  }
+  return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+}
+
+function containsEncodedMarkupStart(
+  buffer: Buffer,
+  width: 2 | 4,
+  littleEndian: boolean,
+  offset = 0,
+): boolean {
+  for (let cursor = offset; cursor + width * 2 <= buffer.length; cursor += width) {
+    if (
+      readUnicodeCodePoint(buffer, cursor, width, littleEndian) === 0x3c &&
+      isAsciiMarkupStart(readUnicodeCodePoint(buffer, cursor + width, width, littleEndian))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function detectBomlessUnicodeMarkupEncoding(buffer: Buffer): UnicodeMarkupEncoding | undefined {
+  // Only consider code-unit-aligned openers. Decoding then applies the same
+  // root-document policy as ordinary UTF-8, so embedded markup in source text
+  // remains a passive attachment.
+  if (containsEncodedMarkupStart(buffer, 4, true)) {
+    return "utf-32le";
+  }
+  if (containsEncodedMarkupStart(buffer, 4, false)) {
+    return "utf-32be";
+  }
+  if (containsEncodedMarkupStart(buffer, 2, true)) {
+    return "utf-16le";
+  }
+  if (containsEncodedMarkupStart(buffer, 2, false)) {
+    return "utf-16be";
+  }
+  return undefined;
+}
+
+function decodeUtf32(buffer: Buffer, littleEndian: boolean, offset: number): Buffer {
+  const chunks: string[] = [];
+  let codePoints: number[] = [];
+  for (let cursor = offset; cursor + 4 <= buffer.length; cursor += 4) {
+    const decoded = readUnicodeCodePoint(buffer, cursor, 4, littleEndian);
+    codePoints.push(
+      decoded <= 0x10ffff && (decoded < 0xd800 || decoded > 0xdfff) ? decoded : 0xfffd,
+    );
+    if (codePoints.length === 1_024) {
+      chunks.push(String.fromCodePoint(...codePoints));
+      codePoints = [];
+    }
+  }
+  if (codePoints.length > 0) {
+    chunks.push(String.fromCodePoint(...codePoints));
+  }
+  return Buffer.from(chunks.join(""));
+}
+
+function decodeTextForActiveContentSniffing(buffer: Buffer): Buffer {
+  if (buffer[0] === 0xff && buffer[1] === 0xfe && buffer[2] === 0x00 && buffer[3] === 0x00) {
+    return decodeUtf32(buffer, true, 4);
+  }
+  if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0xfe && buffer[3] === 0xff) {
+    return decodeUtf32(buffer, false, 4);
+  }
   if (buffer[0] === 0xff && buffer[1] === 0xfe) {
-    return sniffActiveTextContent(Buffer.from(buffer.subarray(2).toString("utf16le")));
+    return Buffer.from(buffer.subarray(2).toString("utf16le"));
   }
   if (buffer[0] === 0xfe && buffer[1] === 0xff) {
-    return sniffActiveTextContent(
-      Buffer.from(new TextDecoder("utf-16be").decode(buffer.subarray(2))),
-    );
+    return Buffer.from(new TextDecoder("utf-16be").decode(buffer.subarray(2)));
   }
-  let cursor =
-    buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf ? 3 : 0;
-  // Walk the complete, already size-bounded payload. Active roots can legally
-  // follow arbitrarily long whitespace or multiple XML/comment wrappers.
-  while (cursor < buffer.length) {
-    cursor = skipAsciiWhitespace(buffer, cursor);
-    const prefix = buffer
-      .subarray(cursor, Math.min(cursor + 64, buffer.length))
-      .toString("ascii")
-      .toLowerCase();
-    if (prefix.startsWith("<?")) {
-      return "application/xml";
+
+  const bomlessEncoding = detectBomlessUnicodeMarkupEncoding(buffer);
+  if (bomlessEncoding === "utf-32le") {
+    return decodeUtf32(buffer, true, 0);
+  }
+  if (bomlessEncoding === "utf-32be") {
+    return decodeUtf32(buffer, false, 0);
+  }
+  if (bomlessEncoding === "utf-16le") {
+    return Buffer.from(buffer.toString("utf16le"));
+  }
+  if (bomlessEncoding === "utf-16be") {
+    return Buffer.from(new TextDecoder("utf-16be").decode(buffer));
+  }
+  return buffer;
+}
+
+function startsWithAsciiIgnoreCase(buffer: Buffer, start: number, expected: string): boolean {
+  if (start + expected.length > buffer.length) {
+    return false;
+  }
+  for (let index = 0; index < expected.length; index += 1) {
+    const byte = buffer[start + index];
+    const lower = byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
+    if (lower !== expected.charCodeAt(index)) {
+      return false;
     }
-    if (prefix.startsWith("<!--")) {
-      const end = buffer.indexOf("-->", cursor + 4, "ascii");
-      if (end === -1) {
-        break;
-      }
-      cursor = end + 3;
+  }
+  return true;
+}
+
+function readAsciiRootTag(buffer: Buffer, start: number): string | undefined {
+  if (buffer[start] !== 0x3c) {
+    return undefined;
+  }
+  let cursor = start + 1;
+  const first = buffer[cursor];
+  if (
+    first === undefined ||
+    !(
+      (first >= 0x41 && first <= 0x5a) ||
+      (first >= 0x61 && first <= 0x7a) ||
+      first === 0x3a ||
+      first === 0x5f ||
+      first >= 0x80
+    )
+  ) {
+    return undefined;
+  }
+  cursor += 1;
+  while (cursor < buffer.length) {
+    const byte = buffer[cursor];
+    if (
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      (byte >= 0x30 && byte <= 0x39) ||
+      byte === 0x2d ||
+      byte === 0x2e ||
+      byte === 0x3a ||
+      byte === 0x5f ||
+      byte >= 0x80
+    ) {
+      cursor += 1;
       continue;
     }
-    if (/^<!doctype\s+svg(?:\s|>)/u.test(prefix)) {
-      return "image/svg+xml";
+    if (byte === 0x2f || byte === 0x3e || skipAsciiWhitespace(buffer, cursor) > cursor) {
+      return buffer
+        .subarray(start + 1, cursor)
+        .toString("utf8")
+        .toLowerCase();
     }
-    if (prefix.startsWith("<!doctype")) {
-      return /^<!doctype\s+html(?:\s|>)/u.test(prefix) ? "text/html" : "application/xml";
+    return undefined;
+  }
+  return undefined;
+}
+
+function skipRootHtmlComment(buffer: Buffer, start: number): number | undefined {
+  let cursor = start + 4;
+  // HTML closes an empty `<!-->` comment abruptly at the first `>`.
+  if (buffer[cursor] === 0x3e) {
+    return cursor + 1;
+  }
+  // The comment-start-dash state likewise closes `<!--->` at `>`.
+  if (buffer[cursor] === 0x2d && buffer[cursor + 1] === 0x3e) {
+    return cursor + 2;
+  }
+  while (cursor < buffer.length) {
+    if (buffer[cursor] !== 0x2d || buffer[cursor + 1] !== 0x2d) {
+      cursor += 1;
+      continue;
     }
-    if (startsWithHtmlTag(prefix, "svg")) {
-      return "image/svg+xml";
+    if (buffer[cursor + 2] === 0x3e) {
+      return cursor + 3;
     }
-    if (HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(prefix, tag))) {
+    // HTML also recovers `--!>` as an incorrectly closed comment.
+    if (buffer[cursor + 2] === 0x21 && buffer[cursor + 3] === 0x3e) {
+      return cursor + 4;
+    }
+    cursor += 2;
+  }
+  return undefined;
+}
+
+function sniffActiveTextContent(buffer: Buffer): string | undefined {
+  const decoded = decodeTextForActiveContentSniffing(buffer);
+  let cursor =
+    decoded.length >= 3 && decoded[0] === 0xef && decoded[1] === 0xbb && decoded[2] === 0xbf
+      ? 3
+      : 0;
+  // A payload is treated as an active document only when markup is its root,
+  // after optional whitespace/comments. This avoids rejecting passive source
+  // and prose files merely because they contain a literal tag later on.
+  while (cursor < decoded.length) {
+    cursor = skipAsciiWhitespace(decoded, cursor);
+    if (decoded[cursor] === 0x3c && decoded[cursor + 1] === 0x3f) {
+      return "application/xml";
+    }
+    if (startsWithAsciiIgnoreCase(decoded, cursor, "<!--")) {
+      const end = skipRootHtmlComment(decoded, cursor);
+      if (end === undefined) {
+        return undefined;
+      }
+      cursor = end;
+      continue;
+    }
+    if (startsWithAsciiIgnoreCase(decoded, cursor, "<!doctype")) {
+      return "application/xml";
+    }
+    const rootTag = readAsciiRootTag(decoded, cursor);
+    if (rootTag) {
+      return rootTag === "svg" ? "image/svg+xml" : "text/html";
+    }
+    // A declaration or closing tag is still a markup-document root even when
+    // it is malformed or precedes a later executable element. Reject every
+    // remaining root-level opener instead of trying to parse HTML recovery.
+    if (decoded[cursor] === 0x3c) {
       return "text/html";
     }
-    break;
+    return undefined;
   }
   return undefined;
 }

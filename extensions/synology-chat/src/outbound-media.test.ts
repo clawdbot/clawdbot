@@ -95,9 +95,25 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
-function utf16Buffer(value: string, endian: "le" | "be"): Buffer {
-  const buffer = Buffer.from(`\ufeff${value}`, "utf16le");
+function utf16Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
+  const buffer = Buffer.from(`${includeBom ? "\ufeff" : ""}${value}`, "utf16le");
   return endian === "le" ? buffer : buffer.swap16();
+}
+
+function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
+  const codePoints = [...value].map((character) => character.codePointAt(0) ?? 0xfffd);
+  const bomBytes = includeBom ? 4 : 0;
+  const buffer = Buffer.alloc(bomBytes + codePoints.length * 4);
+  if (includeBom) {
+    endian === "le" ? buffer.writeUInt32LE(0xfeff, 0) : buffer.writeUInt32BE(0xfeff, 0);
+  }
+  codePoints.forEach((codePoint, index) => {
+    const offset = bomBytes + index * 4;
+    endian === "le"
+      ? buffer.writeUInt32LE(codePoint, offset)
+      : buffer.writeUInt32BE(codePoint, offset);
+  });
+  return buffer;
 }
 
 describe("Synology Chat hosted outbound media", () => {
@@ -650,6 +666,72 @@ describe("Synology Chat hosted outbound media", () => {
       fileName: "document.bin",
     },
     {
+      name: "BOM-less UTF-16LE HTML bytes with generic metadata",
+      buffer: utf16Buffer('<img src="x" onerror="alert(1)">', "le", false),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "BOM-less UTF-16BE HTML bytes with generic metadata",
+      buffer: utf16Buffer("  <div><script>alert('active')</script></div>", "be", false),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "BOM-less UTF-32LE HTML bytes with generic metadata",
+      buffer: utf32Buffer('<embed src="data:text/html,active">', "le", false),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "UTF-32BE SVG bytes with passive metadata",
+      buffer: utf32Buffer('<svg onload="alert(1)"/>', "be"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    },
+    {
+      name: "an unlisted active HTML root with generic metadata",
+      buffer: Buffer.from('<object data="data:text/html,active"></object>'),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "an active root whose tag name exceeds the old sniff prefix",
+      buffer: Buffer.from(`<${"custom-element-".repeat(8)}>active</custom-element>`),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "a bogus declaration before an active element",
+      buffer: Buffer.from("<!fixture><script>alert('active')</script>"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "an unmatched closing tag before an active element",
+      buffer: Buffer.from("</fixture><script>alert('active')</script>"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "an abruptly closed comment before an active element",
+      buffer: Buffer.from("<!--><script>alert('active')</script>"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "an abruptly closed comment-start-dash before an active element",
+      buffer: Buffer.from("<!---><script>alert('active')</script>"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "an incorrectly closed comment before an active element",
+      buffer: Buffer.from("<!--fixture--!><script>alert('active')</script>"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
       name: "an active filename with generic content",
       buffer: Buffer.from("not markup"),
       contentType: "application/octet-stream",
@@ -670,18 +752,59 @@ describe("Synology Chat hosted outbound media", () => {
     ).rejects.toThrow("do not support active content type");
   });
 
-  it.each(["le", "be"] as const)("keeps passive UTF-16%s attachments available", async (endian) => {
-    const buffer = utf16Buffer("Passive attachment text", endian);
+  it.each([
+    { endian: "le" as const, includeBom: true },
+    { endian: "be" as const, includeBom: true },
+    { endian: "le" as const, includeBom: false },
+    { endian: "be" as const, includeBom: false },
+  ])(
+    "keeps passive UTF-16$endian attachments available (BOM: $includeBom)",
+    async ({ endian, includeBom }) => {
+      const buffer = utf16Buffer("Passive attachment text", endian, includeBom);
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer,
+        kind: undefined,
+        contentType: "text/plain",
+        fileName: `notes-${endian}.txt`,
+      });
+      const account = createAccount();
+      const prepared = await prepareSynologyHostedMedia({
+        account,
+        mediaUrl: `https://files.example.com/notes-${endian}.txt`,
+      });
+      const response = makeRes();
+
+      await tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+        response,
+        account,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(Buffer.from(response.body)).toEqual(buffer);
+    },
+  );
+
+  it.each([
+    {
+      name: "UTF-8 source text",
+      buffer: Buffer.from("Example source: <div> is a literal tag."),
+    },
+    {
+      name: "BOM-less UTF-32 source text",
+      buffer: utf32Buffer("Example source: <div> is a literal tag.", "le", false),
+    },
+  ])("keeps passive $name containing embedded markup available", async ({ buffer }) => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer,
       kind: undefined,
       contentType: "text/plain",
-      fileName: `notes-${endian}.txt`,
+      fileName: "example.txt",
     });
     const account = createAccount();
     const prepared = await prepareSynologyHostedMedia({
       account,
-      mediaUrl: `https://files.example.com/notes-${endian}.txt`,
+      mediaUrl: "https://files.example.com/example.txt",
     });
     const response = makeRes();
 
