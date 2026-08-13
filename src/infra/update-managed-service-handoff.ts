@@ -53,7 +53,7 @@ while (!fs.existsSync(params.runnerGatePath)) {
   }
   Atomics.wait(waitBuffer, 0, 0, 25);
 }
-if (typeof process.execve === "function") {
+if (process.platform !== "win32" && typeof process.execve === "function") {
   process.execve(params.commandArgv[0], params.commandArgv, process.env);
 }
 const child = spawn(params.commandArgv[0], params.commandArgv.slice(1), {
