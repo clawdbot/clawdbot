@@ -28,6 +28,7 @@ import {
   renderRemoteSetup,
   renderSelectDesktopChat,
   renderTailscaleSshProxy,
+  restartSessionGateway,
   runCommand,
   runSutContainerAction,
   selectCrabboxSshPort,
@@ -767,6 +768,57 @@ describe("telegram user Crabbox proof log polling", () => {
         timeoutMs: 100,
       }),
     ).resolves.toContain("gateway ready");
+  });
+
+  posixIt("requests held Gateway restart through its pinned canonical CLI", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const gatewayLog = path.join(root, "gateway.log");
+    const argvPath = path.join(root, "restart-argv.json");
+    const fakePnpm = path.join(root, "pnpm.cjs");
+    const sessionPath = path.join(root, "session.json");
+    fs.writeFileSync(gatewayLog, "gateway ready\n");
+    writeExecutable(
+      fakePnpm,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
+fs.appendFileSync(${JSON.stringify(gatewayLog)}, "received SIGUSR1; restarting\\ngateway ready\\n");
+process.stdout.write(JSON.stringify({ ok: true, status: "scheduled" }));
+`,
+    );
+    fs.writeFileSync(
+      sessionPath,
+      JSON.stringify({
+        command: "telegram-user-crabbox-session",
+        localSut: {
+          configPath: path.join(root, "openclaw.json"),
+          gatewayLog,
+          gatewayPid: 123,
+          gatewayPort: 19042,
+          stateDir: path.join(root, "state"),
+          tempRoot: root,
+        },
+      }),
+    );
+    vi.stubEnv("MANTIS_PNPM_BIN", fakePnpm);
+    const opts = parseArgs(["restart", "--session", sessionPath, "--timeout-ms", "1000"]);
+
+    await expect(restartSessionGateway(root, opts, root)).resolves.toMatchObject({
+      gatewayPort: 19042,
+      status: "pass",
+    });
+
+    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toEqual([
+      "openclaw",
+      "gateway",
+      "call",
+      "gateway.restart.request",
+      "--port",
+      "19042",
+      "--params",
+      '{"reason":"telegram-user-crabbox-proof"}',
+      "--json",
+    ]);
   });
 
   posixIt("signals a detached Gateway through its launcher process group", async () => {

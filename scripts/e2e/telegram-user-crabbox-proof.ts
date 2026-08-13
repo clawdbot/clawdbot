@@ -162,6 +162,7 @@ type SessionFile = {
     configPath?: string;
     containerName?: string;
     sutAttestation?: { lane: "baseline" | "candidate"; sha: string };
+    gatewayPort?: number;
     gatewayLog: string;
     gatewayPid: number;
     mockLog: string;
@@ -3076,7 +3077,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
         testerUsername: credential.testerUsername,
       },
       localRoot,
-      localSut,
+      localSut: { ...localSut, gatewayPort: opts.gatewayPort },
       outputDir,
       recorder,
       remoteRoot: REMOTE_ROOT,
@@ -3445,19 +3446,31 @@ async function inspectSessionIdentity(root: string, opts: Options, outputDir: st
   };
 }
 
-async function restartSessionGateway(root: string, opts: Options, outputDir: string) {
+export async function restartSessionGateway(root: string, opts: Options, outputDir: string) {
   const { session } = readSession(root, opts, outputDir);
   if (session.localSut.containerName) {
     throw new Error(
       "Held-session restart requires the lifecycle-owned host Gateway; container sessions are unsupported.",
     );
   }
-  const pid = session.localSut.gatewayPid;
-  process.kill(pid, 0);
+  const gatewayPort = session.localSut.gatewayPort ?? opts.gatewayPort;
   const offset = fs.statSync(session.localSut.gatewayLog).size;
-  // The saved PID owns a detached pnpm process group; the Gateway signal handler
-  // may run in its child, so target the group and retain direct-PID fallback.
-  signalPidTree(pid, "SIGUSR1");
+  const restart = parseCommandJson(
+    await runSessionAuditCli(root, opts, session, [
+      "gateway",
+      "call",
+      "gateway.restart.request",
+      "--port",
+      String(gatewayPort),
+      "--params",
+      JSON.stringify({ reason: "telegram-user-crabbox-proof" }),
+      "--json",
+    ]),
+    "Gateway restart request",
+  );
+  if (restart.ok !== true || restart.status !== "scheduled") {
+    throw new Error(`Gateway restart request was not scheduled: ${JSON.stringify(restart)}`);
+  }
   await waitForLogAfterOffset({
     label: "Gateway restart boundary",
     logPath: session.localSut.gatewayLog,
@@ -3472,8 +3485,7 @@ async function restartSessionGateway(root: string, opts: Options, outputDir: str
     pattern: /gateway ready|restart trace: restart\.ready/u,
     timeoutMs: opts.timeoutMs,
   });
-  process.kill(pid, 0);
-  return { gatewayPid: pid, logOffset: offset, status: "pass" };
+  return { gatewayPort, logOffset: offset, status: "pass" };
 }
 
 function telegramPrivatePostLink(groupId: string, messageId: string) {
