@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -113,6 +113,12 @@ function renderInto(template: unknown): HTMLDivElement {
   render(template as never, container);
   return container;
 }
+
+// These render into the shared document, so a missing teardown leaks pairing
+// dialogs into whichever suite the worker runs next.
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 describe("channel DM access request views", () => {
   it("renders pending senders without exposing the pairing code", () => {
