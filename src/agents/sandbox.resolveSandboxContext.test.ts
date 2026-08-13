@@ -17,13 +17,18 @@ const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<{ skillUsagePaths: SkillUsagePath[]; skillsSnapshot: SkillSnapshot }> => ({
+    async (): Promise<{
+      skillUsagePaths: SkillUsagePath[];
+      skillsSnapshot: SkillSnapshot;
+      generation: number;
+    }> => ({
       skillUsagePaths: [],
       skillsSnapshot: {
         prompt: "",
         skills: [],
         resolvedSkills: [],
       },
+      generation: 0,
     }),
   ),
 );
@@ -768,7 +773,11 @@ describe("resolveSandboxContext", () => {
       skills: [{ name: "demo" }],
       resolvedSkills: [],
     } satisfies SkillSnapshot;
-    syncSkillsToWorkspaceMock.mockResolvedValueOnce({ skillUsagePaths, skillsSnapshot });
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({
+      skillUsagePaths,
+      skillsSnapshot,
+      generation: 1,
+    });
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -826,7 +835,11 @@ describe("resolveSandboxContext", () => {
       skills: [{ name: "demo" }],
       resolvedSkills: [],
     } satisfies SkillSnapshot;
-    syncSkillsToWorkspaceMock.mockResolvedValueOnce({ skillUsagePaths: [], skillsSnapshot });
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({
+      skillUsagePaths: [],
+      skillsSnapshot,
+      generation: 0,
+    });
 
     const cfg: OpenClawConfig = {
       agents: {

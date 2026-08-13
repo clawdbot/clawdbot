@@ -60,6 +60,8 @@ export type SyncedWorkspaceSkills = {
   skillUsagePaths: SkillUsagePath[];
   /** Complete materialized catalog for this sync generation (host destination paths). */
   skillsSnapshot: SkillSnapshot;
+  /** Published generation that `skillsSnapshot` advertises; 0 means nothing to lease. */
+  generation: number;
 };
 
 function createEmptySyncedSkillsSnapshot(skillsVersion: number): SkillSnapshot {
@@ -371,6 +373,7 @@ export async function syncWorkspaceSkills(params: {
     return {
       skillUsagePaths: [],
       skillsSnapshot: createEmptySyncedSkillsSnapshot(getSkillsSnapshotVersion(sourceDir)),
+      generation: 0,
     };
   }
 
@@ -415,6 +418,7 @@ export async function syncWorkspaceSkills(params: {
       return {
         skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
         skillsSnapshot: cachedUsage.skillsSnapshot,
+        generation: cachedUsage.generation ?? 0,
       };
     }
 
@@ -519,9 +523,10 @@ export async function syncWorkspaceSkills(params: {
         return {
           skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
           skillsSnapshot: cachedUsage.skillsSnapshot,
+          generation: cachedUsage.generation ?? 0,
         };
       }
-      return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
+      return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot, generation: 0 };
     }
     const nextManifest: SyncedSkillsManifest = {
       entryKeys: plans.map((plan) => plan.identity).toSorted(),
@@ -545,6 +550,10 @@ export async function syncWorkspaceSkills(params: {
       }),
       retainRootBasenames,
     });
-    return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
+    return {
+      skillUsagePaths,
+      skillsSnapshot: nextSkillsSnapshot,
+      generation: nextGeneration,
+    };
   });
 }

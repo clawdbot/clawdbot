@@ -42,13 +42,15 @@ export function pruneSyncedSkillsUsageCache(maxSize: number): void {
   pruneMapToMaxSize(syncedSkillsUsageCache, maxSize);
 }
 
-export function leasePublishedSyncedSkillsGeneration(targetWorkspaceDir: string): () => void {
-  // Attempts capture published <location> paths at start. Prune retains only
-  // current, previous, and still-leased generations; dropping this lease early
-  // lets a later catalog delete files an in-flight skillsRead still points at.
+export function leasePublishedSyncedSkillsGeneration(
+  targetWorkspaceDir: string,
+  generation: number,
+): () => void {
+  // Lease the advertised generation from the sync result, not the latest cache
+  // entry. A queued publish can advance the cache after this result was
+  // selected; pruning that older generation would delete advertised paths.
   const targetSkillsDir = resolveSyncedSkillsCacheKey(targetWorkspaceDir);
-  const generation = readSyncedSkillsUsageCache(targetSkillsDir)?.generation ?? 0;
-  if (generation <= 0) {
+  if (!Number.isInteger(generation) || generation <= 0) {
     return () => {};
   }
   let counts = leasedGenerationCounts.get(targetSkillsDir);

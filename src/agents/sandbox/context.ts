@@ -81,9 +81,12 @@ async function syncSandboxSkillsToWorkspace(params: {
       eligibility,
       skillsSnapshot: params.skillsSnapshot,
     });
-    // Lease before returning to any await-heavy sandbox setup so a later
-    // serialized publish cannot prune this run's advertised generation.
-    const releaseGeneration = leasePublishedSyncedSkillsGeneration(params.targetWorkspaceDir);
+    // Lease the returned generation before any later await-heavy sandbox setup
+    // so a queued publish cannot prune the catalog this run already advertised.
+    const releaseGeneration = leasePublishedSyncedSkillsGeneration(
+      params.targetWorkspaceDir,
+      synced.generation,
+    );
     return {
       eligibility,
       skillUsagePaths: synced.skillUsagePaths,

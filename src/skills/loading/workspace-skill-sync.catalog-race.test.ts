@@ -354,10 +354,16 @@ describe("syncWorkspaceSkills catalog generations", () => {
     const first = await publish("generation-one");
     const firstFilePath = first.skillsSnapshot.resolvedSkills?.[0]?.filePath;
     expect(firstFilePath).toBeTruthy();
+    expect(first.generation).toBeGreaterThan(0);
+
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const second = await publish("generation-two");
+    expect(second.generation).toBeGreaterThan(first.generation);
+
     const owner = {};
     attachPublishedSandboxSkills(owner, {
       skillsSnapshot: first.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, first.generation),
     });
     const published = resolveSandboxSkillRuntimeInputs({
       sandbox: {
@@ -395,8 +401,6 @@ describe("syncWorkspaceSkills catalog generations", () => {
     };
 
     try {
-      bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-      await publish("generation-two");
       bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
       await publish("generation-three");
 
@@ -441,7 +445,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
     const ownerA = {};
     attachPublishedSandboxSkills(ownerA, {
       skillsSnapshot: first.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, first.generation),
     });
 
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
@@ -449,7 +453,7 @@ describe("syncWorkspaceSkills catalog generations", () => {
     const ownerB = {};
     attachPublishedSandboxSkills(ownerB, {
       skillsSnapshot: second.skillsSnapshot,
-      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace),
+      releaseGeneration: leasePublishedSyncedSkillsGeneration(targetWorkspace, second.generation),
     });
 
     try {
