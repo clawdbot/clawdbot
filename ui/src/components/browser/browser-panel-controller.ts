@@ -97,6 +97,10 @@ export class BrowserPanelController implements ReactiveController {
   private invalidateViewOperations(): void {
     this.operations.invalidate();
     this.pendingInput.clear();
+    // The resize guard is per-document: after a tab or document change the
+    // remote viewport may have been changed by an agent, so a previously
+    // requested size must not suppress the next sync for the same target.
+    this.lastRequestedViewport = null;
   }
 
   resetBrowserState(): void {
@@ -114,7 +118,6 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
     this.setState("pendingNewTab", false);
-    this.lastRequestedViewport = null;
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);
   }
@@ -291,7 +294,12 @@ export class BrowserPanelController implements ReactiveController {
   private syncViewport(): void {
     const targetId = this.activeTargetId;
     const observed = this.observedViewportSize;
-    if (!this.operations.captureClient() || !targetId || !observed) {
+    // A debounced sync can outlive an ordinary dock close; a hidden panel must
+    // never resize the agent-controlled browser.
+    if (!this.host.browserPanelIsOpen() || !this.operations.captureClient()) {
+      return;
+    }
+    if (!targetId || !observed) {
       return;
     }
     const width = Math.min(
