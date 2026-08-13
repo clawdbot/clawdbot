@@ -3297,7 +3297,7 @@ if (starts === 1) {
       "update_status=$?",
       'if [ "$update_status" -ne 0 ]; then',
       'echo "openclaw update failed" >&2',
-      'openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json',
+      "openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json",
       'echo "post-update config validation probe status=$validate_status" >&2',
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err >&2 || true",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json >&2 || true",
@@ -3306,7 +3306,7 @@ if (starts === 1) {
       'exit "$update_status"',
     ]);
     expectTextToIncludeInOrder(publishedRunner, [
-      'local update_status=0',
+      "local update_status=0",
       'openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?',
       'if [ "$update_status" -ne 0 ]; then',
       'echo "openclaw update failed" >&2',
