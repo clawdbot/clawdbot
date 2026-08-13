@@ -326,8 +326,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       sharedToken: "shared-rosita",
     });
     expect(requireConnectAuth(seed.connect).token).toBe("shared-rosita");
-    const storeKey =
-      `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(ROSITA_GATEWAY_URL);
+    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(ROSITA_GATEWAY_URL);
     await expect
       .poll(() =>
         seed.page.evaluate((key) => {
@@ -408,8 +407,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     });
     const seededConnect = await gateway.waitForRequest("connect");
     expect(requireConnectAuth(seededConnect).token).toBe("shared-wilfred");
-    const storeKey =
-      `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(WILFRED_GATEWAY_URL);
+    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(WILFRED_GATEWAY_URL);
     await expect
       .poll(() =>
         page.evaluate((key) => {
