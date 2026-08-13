@@ -24,6 +24,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  detectSharedAuthStoreMigration,
+  migrateSharedAuthStore,
+} from "../infra/state-migrations.shared-auth-store.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -95,9 +99,9 @@ async function expectSelectedCodexAccountStatus(params: {
       fetchUsageSnapshot: async (context) => {
         usageProfileIds.push(context.authProfileId);
         const selectedProfile = context.authProfileId ?? "openai:peter";
-        const credential = loadPersistedAuthProfileStore(params.state.agentDir())?.profiles[
-          selectedProfile
-        ];
+        const credential =
+          loadPersistedAuthProfileStore(params.state.agentDir())?.profiles[selectedProfile] ??
+          loadPersistedSharedAuthProfileStore(params.state.env)?.profiles[selectedProfile];
         return {
           provider: "openai",
           displayName: "OpenAI",
@@ -2221,6 +2225,12 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai-codex:default",
     });
 
+    const detected = detectSharedAuthStoreMigration({
+      stateDir: state.stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+    await migrateSharedAuthStore({ detected, stateDir: state.stateDir, env: state.env });
+
     const recoveredMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
     expect(recoveredMap.get("openai-codex:default")).toBe("openai:chatgpt-default");
     const repair = await maybeRepairCodexSessionRoutes({
@@ -2235,7 +2245,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai:chatgpt-default",
       authProfileOverrideSource: "user",
     });
-    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toMatchObject({
+    expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toMatchObject({
       "openai:default": { type: "api_key" },
       "openai:chatgpt-default": { accountId: "kate-account" },
       "openai:peter": { accountId: "peter-account" },
