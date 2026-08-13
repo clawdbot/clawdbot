@@ -322,6 +322,10 @@ export function tryFinishCronTaskRunWithoutHistory(
     return;
   }
   const error = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
+  const quietTriggerEval =
+    result.triggerEval?.fired === false
+      ? { ...result.triggerEval, fired: false as const }
+      : undefined;
   try {
     finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
@@ -337,11 +341,11 @@ export function tryFinishCronTaskRunWithoutHistory(
       error,
       terminalSummary: result.summary,
       childSessionKey: result.childSessionKey ?? result.sessionKey ?? null,
-      ...(result.triggerEval?.fired === false
+      ...(quietTriggerEval
         ? {
             detail: cronQuietTriggerTaskDetail(
               cronStoreKey(state.deps.storePath),
-              result.triggerEval,
+              quietTriggerEval,
             ),
           }
         : {}),

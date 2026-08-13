@@ -127,7 +127,7 @@ describe("cron outcome receipt finalization", () => {
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated", fire: false })),
+      evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated" as const, fire: false })),
       runIsolatedAgentJob,
     });
 

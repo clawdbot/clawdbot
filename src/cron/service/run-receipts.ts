@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import {
   activateCronRunReceiptInDatabase,
-  assertNoActiveCronRunReceiptInDatabase,
+  adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
   assertCronRunReceiptOwnedInDatabase,
@@ -11,6 +11,7 @@ import {
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   isCronRunReceiptSettlementPending,
+  prepareCronRunReceiptAdjudication,
   prepareCronRunReceiptClaim,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
@@ -78,14 +79,19 @@ export function cronRunReceiptOwnerMutationHooks(params: {
   state: CronServiceState;
   jobId: string;
 }): CronStoreTransactionHooks {
+  const prepared = prepareCronRunReceiptAdjudication({
+    storePath: params.state.deps.storePath,
+    jobId: params.jobId,
+  });
   return {
     beforeWrite: (database) => {
       // Admission and owner mutation share SQLite's write order: whichever
       // commits first fences the other, closing the pre-dispatch side-effect gap.
-      assertNoActiveCronRunReceiptInDatabase({
+      adjudicateActiveCronRunReceiptInDatabase({
         database,
-        storePath: params.state.deps.storePath,
         jobId: params.jobId,
+        prepared,
+        finishedAtMs: params.state.deps.nowMs(),
       });
     },
   };

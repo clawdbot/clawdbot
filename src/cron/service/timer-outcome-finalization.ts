@@ -14,7 +14,7 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
-import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
   applyOutcomeToAuthoritativeJob,
   applyOutcomeToStoredJob,
@@ -30,7 +30,7 @@ type CronTaskRunFinalizationOutcome = {
   endedAt: number;
   summary?: string;
   childSessionKey?: string;
-  triggerEval?: { fired: boolean };
+  triggerEval?: CronTriggerEvalOutcome;
   activeJobMarker?: CronActiveJobMarker;
   runReceipt?: CronRunReceiptHandle;
 };

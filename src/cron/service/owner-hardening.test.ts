@@ -6,7 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
 import { CronService } from "../service.js";
@@ -15,8 +18,11 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
 import {
+  claimCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerDefinitelyStale,
+  prepareCronRunReceiptClaim,
+  releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
@@ -219,6 +225,22 @@ function databaseUpdateReceiptToRunning(receiptId: string): void {
         WHERE receipt_id = ?`,
     )
     .run(receiptId);
+}
+
+function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: number) {
+  const prepared = prepareCronRunReceiptClaim({
+    storePath,
+    job,
+    agentId: job.agentId!,
+    startedAtMs,
+  });
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    claimCronRunReceiptInDatabase({
+      database: db,
+      prepared,
+      resolveAgentId: (current) => current.agentId!,
+    }),
+  );
 }
 
 describe("cron durable run ownership", () => {
@@ -611,6 +633,51 @@ describe("cron durable run ownership", () => {
       });
     } finally {
       editor.stop();
+    }
+  });
+
+  it("permits an owner change after a markerless receipt owner dies", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("owner-change-dead", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const abandoned = claimMarkerlessReceipt(storePath, job, now);
+    releaseLocalCronRunReceiptOwnership(abandoned);
+
+    const editor = makeParentService(storePath);
+    try {
+      await expect(editor.update(job.id, { agentId: "beta" })).resolves.toMatchObject({
+        agentId: "beta",
+      });
+      expect(receipts(storePath, job.id)).toMatchObject([
+        { receiptId: abandoned.receiptId, status: "interrupted", agentId: "alpha" },
+      ]);
+    } finally {
+      editor.stop();
+    }
+  });
+
+  it("force-runs through a dead markerless receipt without lifecycle startup", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("force-after-dead-owner", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const abandoned = claimMarkerlessReceipt(storePath, job, now);
+    releaseLocalCronRunReceiptOwnership(abandoned);
+    const runner = vi.fn(async () => ({ status: "ok" as const }));
+    const cron = makeParentService(storePath, runner);
+    try {
+      await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(runner).toHaveBeenCalledOnce();
+      expect(
+        receipts(storePath, job.id)
+          .map(({ status }) => status)
+          .toSorted(),
+      ).toEqual(["interrupted", "ok"]);
+    } finally {
+      cron.stop();
     }
   });
 });

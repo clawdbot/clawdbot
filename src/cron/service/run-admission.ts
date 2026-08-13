@@ -3,7 +3,7 @@ import { markCronJobActive } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
-  assertNoActiveCronRunReceiptInDatabase,
+  adjudicateActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   finishCronRunReceiptInDatabase,
@@ -284,10 +284,11 @@ export async function persistQueuedCronRunReservations(params: {
           const jobIds = [...pendingJobs.keys()].toSorted();
           for (const jobId of jobIds) {
             if (!params.state.queuedRunReservationsByJobId.has(jobId)) {
-              assertNoActiveCronRunReceiptInDatabase({
+              adjudicateActiveCronRunReceiptInDatabase({
                 database,
-                storePath: params.state.deps.storePath,
                 jobId,
+                prepared: preparedClaims.get(jobId)!,
+                finishedAtMs: params.reservedAtMs,
               });
             }
           }
