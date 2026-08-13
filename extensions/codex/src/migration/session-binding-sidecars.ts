@@ -433,9 +433,7 @@ function resolveLegacyBindingOwnerAgentId(params: {
   return resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
-    ...(storeAgentId
-      ? { agentId: storeAgentId }
-      : { fallbackAgentId: resolveLegacyMigrationFallbackAgentId(params.config) }),
+    ...(storeAgentId ? { agentId: storeAgentId } : {}),
   }).sessionAgentId;
 }
 
