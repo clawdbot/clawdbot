@@ -178,9 +178,12 @@ export async function rankShortTermPromotionCandidates(
     // eligibility. Only assign zero recency when neither source is valid.
     const recallDays = entry.recallDays ?? [];
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
-    const effectiveRecalledAtMs = Number.isFinite(lastRecalledAtMs)
-      ? lastRecalledAtMs
-      : resolveNewestRecallDayMs(recallDays);
+    const newestRecallDayMs = resolveNewestRecallDayMs(recallDays);
+    // Resolve the newest valid source across lastRecalledAt and recallDays,
+    // matching the dreaming freshness owner's "resolve sources together" rule.
+    // A stale-but-valid lastRecalledAt must not shadow a newer recallDays value.
+    const validSources = [lastRecalledAtMs, newestRecallDayMs].filter(Number.isFinite);
+    const effectiveRecalledAtMs = validSources.length > 0 ? Math.max(...validSources) : Number.NaN;
     const hasEffectiveRecall = Number.isFinite(effectiveRecalledAtMs);
     const ageDays = hasEffectiveRecall ? Math.max(0, (nowMs - effectiveRecalledAtMs) / DAY_MS) : 0;
     if (maxAgeDays >= 0 && ageDays > maxAgeDays) {

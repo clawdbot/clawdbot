@@ -3873,6 +3873,77 @@ describe("short-term promotion", () => {
         expect(serialized.ageDays).toBe(0);
       });
     });
+
+    it("prefers newer recallDays over stale valid lastRecalledAt", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Stale timestamp note."]);
+        await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Fresh recall day note."]);
+        const recentIso = "2026-04-04T00:00:00.000Z";
+        await testing.writeRawRecallStore(workspaceDir, {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            "stale-ts-fresh-day": {
+              key: "stale-ts-fresh-day",
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Stale timestamp note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              // Stale but valid timestamp: 3 days old.
+              lastRecalledAt: "2026-04-01T00:00:00.000Z",
+              queryHashes: ["a", "b"],
+              // Fresh recall day: 1 day old. Must win over stale lastRecalledAt.
+              recallDays: ["2026-04-03"],
+              conceptTags: [],
+            },
+            "stale-only": {
+              key: "stale-only",
+              path: "memory/2026-04-02.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Fresh recall day note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-01T00:00:00.000Z",
+              queryHashes: ["a", "b"],
+              recallDays: [],
+              conceptTags: [],
+            },
+          },
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse(recentIso),
+        });
+
+        const freshDay = ranked.find((entry) => entry.key === "stale-ts-fresh-day");
+        const staleOnly = ranked.find((entry) => entry.key === "stale-only");
+        expect(freshDay).toBeDefined();
+        expect(staleOnly).toBeDefined();
+        // The stale-ts-fresh-day entry should use the newer recallDays
+        // timestamp (2026-04-03, ageDays=1) rather than the stale
+        // lastRecalledAt (2026-04-01, ageDays=3).
+        expect(freshDay?.ageDays).toBeCloseTo(1, 5);
+        expect(staleOnly?.ageDays).toBeCloseTo(3, 5);
+        expect(freshDay?.components.recency).toBeGreaterThan(staleOnly?.components.recency ?? 0);
+      });
+    });
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
