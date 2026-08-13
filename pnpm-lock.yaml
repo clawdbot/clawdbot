@@ -2395,11 +2395,11 @@ importers:
         specifier: workspace:*
         version: link:../packages/workboard-contract
       '@tanstack/lit-virtual':
-        specifier: 3.13.35
-        version: 3.13.35(lit@3.3.3)
+        specifier: 3.13.36
+        version: 3.13.36(lit@3.3.3)
       '@tanstack/virtual-core':
-        specifier: 3.17.6
-        version: 3.17.6
+        specifier: 3.17.7
+        version: 3.17.7
       dompurify:
         specifier: 3.4.12
         version: 3.4.12
@@ -5179,13 +5179,13 @@ packages:
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
 
-  '@tanstack/lit-virtual@3.13.35':
-    resolution: {integrity: sha512-ZFUpMwYHsWelrBleD6JekvTwtHYBWzM79/5f3MrrdyDlMUBi0XfuqKB9wNJM0zVwyuu5uOUWQA+Gt3BLwzRHlQ==}
+  '@tanstack/lit-virtual@3.13.36':
+    resolution: {integrity: sha512-dju+ZvpztbcSZjWLllJIgHioXWypAm8hq9ALqFfAt/9hmRtU3gZKNEWgy+pgxtbHMouq2hQFrXWKfF3LRXKwJQ==}
     peerDependencies:
       lit: ^3.1.0
 
-  '@tanstack/virtual-core@3.17.6':
-    resolution: {integrity: sha512-h0/Ebo18CkOrChlQIhNtQkM5ySUnh/GumQ/D1st3hG2HWUPEF+ILUc2k29UtivCi/9G7w7G3/f7Xyd5cCFbKBw==}
+  '@tanstack/virtual-core@3.17.7':
+    resolution: {integrity: sha512-bp+v10y65sp2H7WpWfIMyxTNfl8ZVfxFTLRjPIFRryi6FV/J33z4IS53WO4pTk36KlvJ4iLiQz+oaydDC1xbcA==}
 
   '@thi.ng/bitstream@2.4.54':
     resolution: {integrity: sha512-uInkAJge5O0bWWEaYKrQpMccPbFg0z6eIA5NDCJXPm7l3rjlDje6RBHBXll3LiQz9Y051EdzlAEQRaB5hEifdg==}
@@ -12332,12 +12332,12 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@tanstack/lit-virtual@3.13.35(lit@3.3.3)':
+  '@tanstack/lit-virtual@3.13.36(lit@3.3.3)':
     dependencies:
-      '@tanstack/virtual-core': 3.17.6
+      '@tanstack/virtual-core': 3.17.7
       lit: 3.3.3
 
-  '@tanstack/virtual-core@3.17.6': {}
+  '@tanstack/virtual-core@3.17.7': {}
 
   '@thi.ng/bitstream@2.4.54':
     dependencies:
