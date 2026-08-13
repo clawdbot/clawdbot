@@ -846,6 +846,28 @@ describe("xAI lazy capability providers", () => {
     expect(onClose).toHaveBeenCalledWith("error");
   });
 
+  it("reports voice connect failure as a terminal error", async () => {
+    const failure = new Error("voice connect rejected");
+    runtimeMocks.voiceConnect.mockRejectedValueOnce(failure);
+    const lazy = await loadLazyProviders();
+    const onClose = vi.fn();
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider()
+      .createBridge(createVoiceRequest({ onClose }));
+
+    await expect(bridge.connect()).rejects.toThrow(failure);
+    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
+      | RealtimeVoiceBridgeCreateRequest
+      | undefined;
+    loadedRequest?.onClose?.("completed");
+    bridge.sendAudio(Buffer.from([0x01]));
+
+    expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
+    expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+  });
+
   it("reopens voice only after an explicit connect following provider termination", async () => {
     const lazy = await loadLazyProviders();
     const onClose = vi.fn();

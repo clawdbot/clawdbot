@@ -438,11 +438,11 @@ function createLazyXaiRealtimeVoiceBridge(
         try {
           await loadedBridge.connect();
         } catch (error) {
-          if (connectGeneration === generation) {
-            acceptsInput = false;
-            terminalGeneration = connectGeneration;
-            clearPendingInput();
-          }
+          // A failed connect is terminal for this generation: report it like the
+          // queued-flush failure path and close the loaded bridge so its
+          // resources are not leaked.
+          emitTerminal(connectGeneration, "error");
+          closeBridge(loadedBridge);
           throw error;
         }
         if (connectGeneration !== generation || !acceptsCurrentInput()) {
