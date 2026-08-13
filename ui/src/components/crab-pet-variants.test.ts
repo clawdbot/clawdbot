@@ -93,7 +93,7 @@ describe("crab pet variants", () => {
       expect(["round", "squat", "slender"]).toContain(look.build);
       expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
       expect([null, "left", "right"]).toContain(look.crusherSide);
-      expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
+      expect([null, "#3fff7d", "#4ecfa6", "#b79bff"]).toContain(look.glint);
       const zone = SPOT_ZONES[look.side];
       expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
       expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
@@ -211,7 +211,7 @@ describe("crab pet variants", () => {
     expect(canonicalCrabLook(palette).chimeraParts).toEqual({
       body: "#35a55b",
       clawLeft: "#4a7dfc",
-      clawRight: "#f4b840",
+      clawRight: "#2FBF71",
       antennae: "#3f9d63",
     });
   });

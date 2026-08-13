@@ -558,7 +558,7 @@ openclaw-session-owner-chip {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--danger);
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
@@ -743,7 +743,7 @@ openclaw-session-owner-chip {
 }
 
 .btn.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(74, 222, 128, 0.15);
 }
 
 .btn--sm {
@@ -1664,8 +1664,8 @@ openclaw-session-owner-chip {
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
-  color: #ffa198;
-  background: rgba(248, 81, 73, 0.12);
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
@@ -2010,7 +2010,7 @@ openclaw-session-owner-chip {
 
 .chip-danger {
   color: var(--danger);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: rgba(74, 222, 128, 0.3);
   background: var(--danger-subtle);
 }
 
@@ -2772,7 +2772,7 @@ td.data-table-key-col {
 .exec-approval-command-span {
   border-radius: 3px;
   padding: 0 2px;
-  background: color-mix(in srgb, #f97316 34%, transparent);
+  background: color-mix(in srgb, #f59e0b 34%, transparent);
   color: var(--text);
 }
 
@@ -3593,7 +3593,7 @@ td.data-table-key-col {
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
-    radial-gradient(circle at top right, rgba(255, 92, 92, 0.055), transparent 32%),
+    radial-gradient(circle at top right, rgba(74, 222, 128, 0.055), transparent 32%),
     radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
     linear-gradient(
       180deg,

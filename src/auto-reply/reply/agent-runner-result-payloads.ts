@@ -38,9 +38,11 @@ import {
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { resolveEmptyReplyRecovery } from "./empty-reply-recovery.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
+import { enqueueFollowupRun } from "./queue.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
@@ -59,6 +61,8 @@ export async function prepareReplyAgentPayloads(state: {
     followupRun,
     isHeartbeat,
     opts,
+    queueKey,
+    resolvedQueue,
     replyMediaContext,
     replyOperation,
     replyRouteThreadId,
@@ -66,6 +70,7 @@ export async function prepareReplyAgentPayloads(state: {
     replyToChannel,
     replyToMode,
     returnWithQueuedFollowupDrain,
+    runFollowupTurn,
     runStartedAt,
     runtimePolicySessionKey,
     sessionCtx,
@@ -390,6 +395,44 @@ export async function prepareReplyAgentPayloads(state: {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
   } else if (emptyInteractiveReplyPayload && !hasTerminalReplyPayload) {
+    // One-shot auto-recovery: an interactive run that finished without a
+    // visible reply is re-run once with a nudge instead of showing the
+    // no-visible-reply banner. If the retry also comes back empty (or the
+    // followup cannot be queued), fall through to the banner below.
+    const emptyReplyRecovery = resolveEmptyReplyRecovery({
+      base: followupRun,
+      isInteractive:
+        followupRun.currentInboundEventKind !== "room_event" &&
+        (followupRun.run.inputProvenance?.kind === undefined ||
+          followupRun.run.inputProvenance.kind === "external_user"),
+      isHeartbeat,
+      silentExpected: followupRun.run.silentExpected,
+      allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+      isMessageToolOnly:
+        (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
+        "message_tool_only",
+      hasPendingContinuation:
+        runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+      hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+      hasCommittedDelivery: successfulTerminalDelivery,
+    });
+    if (emptyReplyRecovery.kind === "retry" && runFollowupTurn) {
+      const retryQueueKey = queueKey ?? followupRun.run.sessionKey ?? sessionKey;
+      if (retryQueueKey) {
+        const enqueued = enqueueFollowupRun(
+          retryQueueKey,
+          emptyReplyRecovery.run,
+          resolvedQueue,
+          "none",
+          runFollowupTurn,
+          true,
+          { position: "front" },
+        );
+        if (enqueued) {
+          return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
+        }
+      }
+    }
     const emptyPayloadResult = await buildFinalPayloads([emptyInteractiveReplyPayload]);
     replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
     didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;

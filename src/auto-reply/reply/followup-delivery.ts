@@ -23,6 +23,7 @@ import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { resolveEmptyReplyRecovery } from "./empty-reply-recovery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -245,6 +246,28 @@ export function resolveFollowupDeliveryDecision(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && fallbackPayload) {
+    if (!accounting.terminalFailurePayload) {
+      const emptyReplyRecovery = resolveEmptyReplyRecovery({
+        base: turn.queued,
+        isInteractive,
+        isHeartbeat: opts?.isHeartbeat,
+        silentExpected: turn.queued.run.silentExpected,
+        allowEmptyAssistantReplyAsSilent: turn.queued.run.allowEmptyAssistantReplyAsSilent,
+        isMessageToolOnly: sourcePolicy.sourceReplyDeliveryMode === "message_tool_only",
+        hasPendingContinuation:
+          result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
+        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
+        hasCommittedDelivery,
+      });
+      if (emptyReplyRecovery.kind === "retry") {
+        return {
+          kind: "retry-source-delivery",
+          run: emptyReplyRecovery.run,
+          finalTextLength: 0,
+          resolved: runtimeResolved,
+        };
+      }
+    }
     payloads = [
       ...payloads,
       ...resolveFollowupDeliveryPayloads({

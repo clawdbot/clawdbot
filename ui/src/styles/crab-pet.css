@@ -73,9 +73,9 @@ openclaw-crab-pet[data-dex-complete]::after {
   background: linear-gradient(
     90deg,
     transparent,
-    #f4b840 30%,
-    #f9d47a 50%,
-    #f4b840 70%,
+    #2FBF71 30%,
+    #7ef5dd 50%,
+    #2FBF71 70%,
     transparent
   );
   opacity: 0.5;
@@ -100,7 +100,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-magma {
-  --crab-glint: #ff8a5c;
+  --crab-glint: #7ef5dd;
 }
 
 .crab-pet--palette-oilslick {
@@ -112,7 +112,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-nebula {
-  --crab-glint: #ff9de2;
+  --crab-glint: #7ef5dd;
 }
 
 .crab-pet--palette-glass {
@@ -137,7 +137,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-clawtron {
-  --crab-glint: #ffb020;
+  --crab-glint: #2FBF71;
 }
 
 .crab-pet--palette-selene {
@@ -145,11 +145,11 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-eclipse {
-  --crab-glint: #ffd166;
+  --crab-glint: #3fff7d;
 }
 
 .crab-pet--palette-sourdough {
-  --crab-glint: #e6bc82;
+  --crab-glint: #b8d49a;
 }
 
 .crab-pet--palette-zombie {
@@ -157,7 +157,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-plush {
-  --crab-glint: #ffb59e;
+  --crab-glint: #b8d49a;
 }
 
 .crab-pet--palette-disco {
@@ -165,7 +165,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-eclipse .crab-pet__svg {
-  filter: drop-shadow(0 0 3px rgba(255, 209, 102, 0.72));
+  filter: drop-shadow(0 0 3px rgba(63, 255, 125, 0.72));
 }
 
 /* The cryptid is always photographed slightly out of focus. Its inner frame
@@ -222,8 +222,8 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-portal-ring--orange {
-  color: #ff9a2e;
-  filter: drop-shadow(0 0 4px #ff9a2e);
+  color: #2FBF71;
+  filter: drop-shadow(0 0 4px #2FBF71);
 }
 
 @keyframes crab-pet-portal-pulse {
@@ -256,7 +256,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 
 /* Magma seams glow like cooling cracks. Offline pets lose both heat and pulse. */
 .crab-magma {
-  filter: drop-shadow(0 0 3px rgba(255, 106, 61, 0.9));
+  filter: drop-shadow(0 0 3px rgba(47, 191, 113, 0.9));
   animation: crab-pet-magma 3.8s ease-in-out infinite;
 }
 
@@ -467,7 +467,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 /* Cotton candy: pastel two-tone with a slow iridescent drift. The breathe
    animation must ride along - a lone animation list would replace it. */
 .crab-pet--palette-cottoncandy {
-  --crab-glint: #ff9fd6;
+  --crab-glint: #7ef5dd;
 }
 
 .crab-pet--palette-cottoncandy .crab-pet__svg {
@@ -498,7 +498,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 
 .crab-pet__sparkle {
   position: absolute;
-  color: #ffe27a;
+  color: #b8d49a;
   font-size: calc(4px * var(--crab-scale, 2));
   line-height: 1;
   opacity: 0;
@@ -538,7 +538,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-goldenretro .crab-retro-claw-line {
-  stroke: #b8860b;
+  stroke: #1F9D57;
 }
 
 @keyframes crab-pet-goldenretro-shimmer {
@@ -569,7 +569,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-notexture .crab-claw--l path {
-  fill: #ff00dc;
+  fill: #00e5cc;
 }
 
 .crab-pet--palette-notexture .crab-claw--r path {
@@ -577,7 +577,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-notexture .crab-antennae path:first-of-type {
-  stroke: #ff00dc;
+  stroke: #00e5cc;
 }
 
 .crab-pet--palette-notexture .crab-antennae path:last-of-type {
@@ -871,7 +871,7 @@ openclaw-crab-pet[data-dex-complete]::after {
   position: absolute;
   left: 46%;
   bottom: 78%;
-  color: #ff5c8a;
+  color: #3ec9a0;
   font-size: calc(5px * var(--crab-scale, 2));
   line-height: 1;
   opacity: 0;
@@ -975,7 +975,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 
 /* Party days: confetti-colored z's. */
 .crab-pet--party .crab-pet__z:nth-of-type(1) {
-  color: #ffd166;
+  color: #3fff7d;
 }
 
 .crab-pet--party .crab-pet__z:nth-of-type(2) {
@@ -983,7 +983,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--party .crab-pet__z:nth-of-type(3) {
-  color: #ff5c8a;
+  color: #3ec9a0;
 }
 
 /* ---- Bubbles ---- */
@@ -1526,7 +1526,7 @@ openclaw-crab-pet[data-dex-complete]::after {
   right: -4px;
   font-size: 9px;
   line-height: 1;
-  color: #f4b840;
+  color: #2FBF71;
   pointer-events: none;
 }
 
@@ -1594,9 +1594,9 @@ openclaw-crab-pet[data-dex-complete]::after {
   background: linear-gradient(
     90deg,
     transparent,
-    #f4b840 30%,
-    #f9d47a 50%,
-    #f4b840 70%,
+    #2FBF71 30%,
+    #7ef5dd 50%,
+    #2FBF71 70%,
     transparent
   );
   opacity: 0.7;
@@ -1631,8 +1631,8 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crabdex-page__header--complete .crabdex-page__count {
-  border-color: color-mix(in srgb, #f4b840 55%, var(--border));
-  color: color-mix(in srgb, #f4b840 75%, var(--text));
+  border-color: color-mix(in srgb, #2FBF71 55%, var(--border));
+  color: color-mix(in srgb, #2FBF71 75%, var(--text));
 }
 
 .crabdex-page__grid {
@@ -1764,7 +1764,7 @@ openclaw-crab-pet[data-dex-complete]::after {
   top: -1px;
   right: 1px;
   font-size: 14px;
-  filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
+  filter: drop-shadow(0 0 4px rgba(47, 191, 113, 0.4));
 }
 
 @media (max-width: 540px) {

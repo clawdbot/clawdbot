@@ -37,23 +37,23 @@ export const ACCESSORY_SPRITES: Record<Exclude<CrabPetAccessory, "none">, Templa
   `,
   santa: svg`
     <g>
-      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
+      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#2FBF71" />
       <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
       <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
     </g>
   `,
   pumpkin: svg`
     <g>
-      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
-      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
+      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#57C785" />
+      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#1F9D57" stroke-width="1.5" fill="none" />
       <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
     </g>
   `,
   party: svg`
     <g>
       <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
-      <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
-      <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
+      <path d="M55.5 6.5 L64.5 6.5" stroke="#3fff7d" stroke-width="2" />
+      <circle cx="60" cy="1" r="2.4" fill="#3ec9a0" />
     </g>
   `,
   // Elder wear: a patient little colony riding the shell's shoulder.
@@ -68,7 +68,7 @@ export const ACCESSORY_SPRITES: Record<Exclude<CrabPetAccessory, "none">, Templa
   `,
   // National Crab Day formal wear: gold rim, chain, no further questions.
   monocle: svg`
-    <g class="crab-monocle" fill="none" stroke="#f4b840">
+    <g class="crab-monocle" fill="none" stroke="#2FBF71">
       <circle cx="75" cy="32" r="8.5" stroke-width="2.5" />
       <path d="M81 39 Q85 48 80 56" stroke-width="1.5" />
     </g>
@@ -102,7 +102,7 @@ const LUMEN_SPOTS = svg`
 `;
 
 const MAGMA_SEAMS = svg`
-  <g class="crab-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
+  <g class="crab-magma" fill="none" stroke="#2FBF71" stroke-width="2" stroke-linecap="round">
     <path d="M40 44 L48 54 L42 66 L50 78" />
     <path d="M74 40 L68 52 L78 64" />
     <path d="M56 82 L62 90" />
@@ -130,7 +130,7 @@ const NEBULA_STARS = svg`
     <circle cx="84" cy="48" r="1.4" fill="#fff" />
     <circle cx="66" cy="86" r="1" fill="#fff" />
     <circle cx="72" cy="60" r="1.6" fill="#8be9fd" />
-    <circle cx="46" cy="40" r="1.4" fill="#ff9de2" />
+    <circle cx="46" cy="40" r="1.4" fill="#7ef5dd" />
     <path class="crab-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff" />
   </g>
 `;
@@ -160,7 +160,7 @@ const PHOSPHOR_SCANLINES = svg`
 
 export const GLITCH_GHOSTS = svg`
   <g class="crab-glitch-ghosts">
-    <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4" />
+    <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#00e5cc" opacity="0.4" />
     <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4" />
   </g>
 `;
@@ -184,7 +184,7 @@ const MECHA_PLATES = svg`
       <circle cx="60" cy="64" r="1.4" />
       <circle cx="84" cy="61" r="1.4" />
     </g>
-    <circle class="crab-led" cx="89" cy="7" r="3" fill="#ff4444" />
+    <circle class="crab-led" cx="89" cy="7" r="3" fill="#4ade80" />
   </g>
 `;
 
@@ -304,8 +304,8 @@ const BEE_PARTS = svg`
 const DUCK_BILL = svg`
   <g>
     <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5" />
-    <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e" />
-    <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#e98322" />
+    <rect x="47" y="41" width="26" height="8" rx="4" fill="#2FBF71" />
+    <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#2FBF71" />
   </g>
 `;
 
@@ -333,14 +333,14 @@ const ZOMBIE_STITCHES = svg`
 `;
 
 const PLUSH_SEAMS = svg`
-  <g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
+  <g fill="none" stroke="#7fc8b8" stroke-width="1.5" stroke-dasharray="3 3">
     <path d="M30 32 Q60 4 90 32" />
     <path d="M60 50 Q58 72 60 96" />
   </g>
   <g class="crab-plush-button">
-    <circle cx="78" cy="44" r="3.5" fill="#7a4a3a" />
-    <circle cx="76.8" cy="44" r="0.7" fill="#e8967a" />
-    <circle cx="79.2" cy="44" r="0.7" fill="#e8967a" />
+    <circle cx="78" cy="44" r="3.5" fill="#2e7d46" />
+    <circle cx="76.8" cy="44" r="0.7" fill="#7fc8b8" />
+    <circle cx="79.2" cy="44" r="0.7" fill="#7fc8b8" />
   </g>
 `;
 
@@ -436,11 +436,11 @@ export const TAIL_FAN = svg`
 // carried for the whole first load after a gateway upgrade.
 export const BINDLE = svg`
   <g class="crab-bindle">
-    <path d="M70 62 L99 30" stroke="#8a5a2b" stroke-width="3.5" stroke-linecap="round" />
+    <path d="M70 62 L99 30" stroke="#5a6b52" stroke-width="3.5" stroke-linecap="round" />
     <circle cx="101" cy="27" r="9.5" fill="#e8b04b" />
-    <circle cx="98" cy="24" r="1.6" fill="#b6791f" />
-    <circle cx="104" cy="29" r="1.6" fill="#b6791f" />
-    <circle cx="100" cy="32" r="1.3" fill="#b6791f" />
+    <circle cx="98" cy="24" r="1.6" fill="#4fb072" />
+    <circle cx="104" cy="29" r="1.6" fill="#4fb072" />
+    <circle cx="100" cy="32" r="1.3" fill="#4fb072" />
   </g>
 `;
 
@@ -509,8 +509,8 @@ function renderCrabSvg() {
       </g>
       <circle cx="40" cy="22" r="4.5" fill="#0a1014" />
       <circle cx="80" cy="22" r="4.5" fill="#0a1014" />
-      <circle cx="41.5" cy="20.5" r="1.8" fill="#ffd166" />
-      <circle cx="81.5" cy="20.5" r="1.8" fill="#ffd166" />
+      <circle cx="41.5" cy="20.5" r="1.8" fill="#3fff7d" />
+      <circle cx="81.5" cy="20.5" r="1.8" fill="#3fff7d" />
       <ellipse cx="60" cy="70" rx="46" ry="30" fill="#2fbf71" />
       <ellipse cx="48" cy="60" rx="16" ry="9" fill="#ffffff" opacity="0.1" />
       <path
@@ -546,9 +546,9 @@ function renderSnailSvg() {
       </g>
       <circle cx="90" cy="65" r="3.6" fill="#0a1014" />
       <circle cx="103" cy="63" r="3.6" fill="#0a1014" />
-      <circle cx="91" cy="64" r="1.3" fill="#ffd166" />
-      <circle cx="104" cy="62" r="1.3" fill="#ffd166" />
-      <circle cx="50" cy="62" r="27" fill="#8a5a2b" />
+      <circle cx="91" cy="64" r="1.3" fill="#3fff7d" />
+      <circle cx="104" cy="62" r="1.3" fill="#3fff7d" />
+      <circle cx="50" cy="62" r="27" fill="#5a6b52" />
       <path
         d="M50 41 a21 21 0 1 1 -15 36 a14 14 0 1 0 11 -25 a8 8 0 1 0 4 14"
         stroke="#5f3d1c"
@@ -573,7 +573,7 @@ function renderDuckSvg() {
       <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
       <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
       <circle cx="82" cy="50" r="18" fill="#ffd23e" />
-      <path d="M98 49 Q112 52 99 59 Q95 56 95 51 Z" fill="#ff8c2e" />
+      <path d="M98 49 Q112 52 99 59 Q95 56 95 51 Z" fill="#3fff7d" />
       <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
       <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
       <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
@@ -628,9 +628,9 @@ export function renderBottleSvg(opened: boolean) {
           opened
             ? svg`
               <rect x="36" y="20" width="11" height="7" rx="1.5" fill="#f2e5c9" transform="rotate(-24 41 23)" />
-              <rect x="43" y="30" width="4.5" height="8" rx="1.6" fill="#8a5a2b" transform="rotate(38 45 34)" />
+              <rect x="43" y="30" width="4.5" height="8" rx="1.6" fill="#5a6b52" transform="rotate(38 45 34)" />
             `
-            : svg`<rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />`
+            : svg`<rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#5a6b52" />`
         }
         <rect x="11" y="22" width="12" height="8" rx="1.5" fill="#f2e5c9" />
         <path d="M13 24.5 L21 24.5 M13 27 L19 27" stroke="#b6a071" stroke-width="1" />
@@ -645,8 +645,8 @@ export function renderBottleSvg(opened: boolean) {
 export const BALLOON = svg`
   <svg class="crab-pet__balloon" viewBox="0 0 40 62" aria-hidden="true">
     <path d="M20 34 Q23 46 18 60" stroke="#8a949d" stroke-width="1.5" fill="none" />
-    <ellipse cx="20" cy="16" rx="13" ry="15" fill="#ff5c8a" />
-    <path d="M17 30 L20 34.5 L23 30 Z" fill="#e0446f" />
+    <ellipse cx="20" cy="16" rx="13" ry="15" fill="#3ec9a0" />
+    <path d="M17 30 L20 34.5 L23 30 Z" fill="#4ecfa6" />
     <ellipse cx="15" cy="10" rx="4" ry="6" fill="#ffffff" opacity="0.3" />
   </svg>
 `;

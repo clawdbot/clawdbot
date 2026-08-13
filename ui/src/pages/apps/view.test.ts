@@ -39,7 +39,7 @@ describe("renderApps", () => {
   it("renders the hero and one heading per section", () => {
     const container = renderIntoContainer();
     expect(container.querySelector(".apps-hero__title")?.textContent).toBe(
-      "Take OpenClaw everywhere",
+      "Take OpenCrustacean everywhere",
     );
     expect(container.querySelector(".apps-hero__tagline")?.textContent).toContain(
       "Companion apps for your phone",
