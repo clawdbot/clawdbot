@@ -51,6 +51,7 @@ type NodeTestPlanOptions = {
   compactMode?: CompactNodeTestPlanMode;
   compactGroupCount?: number;
   compactWholeGroupCount?: number;
+  runnerBackend?: string;
 };
 
 type CompactNodeTestPlanMode = "pull-request" | "push";
@@ -164,11 +165,14 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
 // The group hints below are loaded-fleet CI walls. Three-way striping plus a
-// 200s large-runner admission cap keeps push compacts below the workflow's
-// 28-worker ceiling. Small-runner groups retain their proven 276s admission;
-// lowering both classes creates extra jobs without shortening the ~202s bins.
+// Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
+// Standard 4-core GitHub runners need smaller bins: observed hosted medians were
+// 366s for 200-hint large bins and 344s for 276-hint small bins. Roughly 60%
+// caps target four-minute walls while staying below the hosted 48-worker cap.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 120;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 166;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -1914,9 +1918,13 @@ function createCompactNodeTestShardBundles(
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : group.runner.includes("-8vcpu-")
-          ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
-          : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
+        : options.runnerBackend === "github"
+          ? group.runner.includes("-8vcpu-")
+            ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
+            : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
+          : group.runner.includes("-8vcpu-")
+            ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
+            : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
       const bin = bins.find(
         (candidate) =>
           candidate.exclusive === exclusive &&

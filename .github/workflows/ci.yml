@@ -451,6 +451,7 @@ jobs:
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
         run: |
           node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -732,6 +733,7 @@ jobs:
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,
                     compactMode: compactPlanMode,
+                    runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND,
                   }),
                   ...changedExtensionFallbackShards,
                 ]
@@ -2168,7 +2170,7 @@ jobs:
       fail-fast: false
       # Canonical main admits only one complete run at a time, so widen this
       # matrix within the current runner-registration budget.
-      max-parallel: 28
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2370,6 +2372,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
+          RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -2439,7 +2442,12 @@ jobs:
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
-              if [ "$(nproc)" -lt 8 ]; then
+              if [ "$RUNNER_BACKEND" = "github" ]; then
+                # Three dedicated hosted jobs own the split core stripes. Keep
+                # extension preparation, optional UI checks, and formatting in
+                # this fourth lane so each 4-core runner stays below ~6m.
+                lint_args=(--only=extensions --only=scripts --threads=1)
+              elif [ "$(nproc)" -lt 8 ]; then
                 # Fork PRs run on 4-core hosted runners with 16GB. Bound both
                 # the core process size and its threads so type-aware oxlint
                 # does not intermittently lose the runner under memory pressure.
@@ -2546,6 +2554,38 @@ jobs:
               exit 1
               ;;
           esac
+
+  # In degraded GitHub-hosted mode, split the serial 12-minute core oxlint path
+  # across three runners. This job is absent from normal Blacksmith runs, which
+  # retain the existing single check-lint registration and runner policy.
+  check-lint-hosted-core-shard:
+    permissions:
+      contents: read
+    name: check-lint-core-${{ matrix.stripe }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_check == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        stripe: [1, 2, 3]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Run hosted core lint stripe
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: >-
+          node --import tsx scripts/run-oxlint-shards.mts
+          --only=core --split-core --core-stripe=${{ matrix.stripe }}/3 --threads=1
 
   check-additional-shard:
     permissions:
@@ -3833,6 +3873,7 @@ jobs:
       - checks-node-compat
       - checks-node-core-test-nondist-shard
       - check-shard
+      - check-lint-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python
@@ -3867,6 +3908,7 @@ jobs:
             checks-node-compat=${{ needs.checks-node-compat.result }}
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
             check-shard=${{ needs.check-shard.result }}
+            check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}
             check-additional-shard=${{ needs.check-additional-shard.result }}
             check-docs=${{ needs.check-docs.result }}
             skills-python=${{ needs.skills-python.result }}
@@ -3926,6 +3968,7 @@ jobs:
       - checks-node-compat
       - checks-node-core-test-nondist-shard
       - check-shard
+      - check-lint-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python
