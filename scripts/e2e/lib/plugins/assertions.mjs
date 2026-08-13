@@ -147,6 +147,29 @@ function readRequiredOpenClawConfig() {
   }
 }
 
+function assertPluginAllowlist(params) {
+  const allow = readRequiredOpenClawConfig().plugins?.allow;
+  if (!Array.isArray(allow)) {
+    throw new Error(`expected plugins.allow array, got ${JSON.stringify(allow)}`);
+  }
+  const unique = new Set(allow);
+  if (unique.size !== allow.length) {
+    throw new Error(`expected plugins.allow without duplicates, got ${JSON.stringify(allow)}`);
+  }
+  for (const pluginId of params.required ?? []) {
+    if (!unique.has(pluginId)) {
+      throw new Error(
+        `expected plugins.allow to contain ${pluginId}, got ${JSON.stringify(allow)}`,
+      );
+    }
+  }
+  for (const pluginId of params.forbidden ?? []) {
+    if (unique.has(pluginId)) {
+      throw new Error(`expected plugins.allow to omit ${pluginId}, got ${JSON.stringify(allow)}`);
+    }
+  }
+}
+
 function assertPluginRemoved(params) {
   const list = readJson(params.listFile);
   if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
@@ -647,6 +670,7 @@ function assertLocalPathUpdateSkipped() {
 }
 
 function assertNpmPlugin() {
+  assertPluginAllowlist({ required: ["demo-plugin", "demo-plugin-npm"] });
   assertSimplePlugin(
     scratchFile("plugins-npm.json"),
     scratchFile("plugins-npm-inspect.json"),
@@ -731,6 +755,7 @@ function assertPluginFileRemoved() {
 }
 
 function assertNpmPluginRemoved() {
+  assertPluginAllowlist({ required: ["demo-plugin"], forbidden: ["demo-plugin-npm"] });
   const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
   const dependencyPackagePath = fs
     .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
@@ -750,6 +775,7 @@ function assertNpmPluginRemoved() {
 }
 
 function assertNpmPluginRetained() {
+  assertPluginAllowlist({ required: ["demo-plugin"], forbidden: ["demo-plugin-npm"] });
   const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
   const dependencyPackagePath = fs
     .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")

@@ -11,6 +11,8 @@ import {
 } from "./candidate-install-owner.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import * as pluginHardlinkPolicy from "./hardlink-policy.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PackageManifest } from "./manifest.js";
 import { resolvePackageSetupSource } from "./package-entry-resolution.js";
@@ -918,6 +920,135 @@ describe("discoverOpenClawPlugins", () => {
     });
     expect(countMatching(candidates, (candidate) => candidate.idHint === "synology-chat")).toBe(1);
     expect(diagnostics).toStrictEqual([]);
+  });
+
+  it("hydrates bundled pack ownership from finalized linked path claims", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginDir = path.join(bundledRoot, "managed-pack");
+    const mismatchedSourceDir = path.join(stateDir, "mismatched-source");
+    mkdirSafe(pluginDir);
+    mkdirSafe(mismatchedSourceDir);
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/managed-pack",
+      extensions: ["./one.js", "./two.js"],
+    });
+    writePluginManifest({ pluginDir, id: "managed-pack" });
+    writePluginEntry(path.join(pluginDir, "one.js"));
+    writePluginEntry(path.join(pluginDir, "two.js"));
+    const env = buildDiscoveryEnvWithOverrides(stateDir, {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    });
+    const discover = (installRecords: Record<string, PluginInstallRecord>) =>
+      withOpenClawPackageArgv(packageRoot, () => discoverOpenClawPlugins({ env, installRecords }));
+    const matchingCandidates = (result: Awaited<ReturnType<typeof discoverOpenClawPlugins>>) =>
+      result.candidates.filter((candidate) => candidate.idHint.startsWith("managed-pack/"));
+    const linkedRecord = {
+      source: "path",
+      sourcePath: pluginDir,
+      installPath: pluginDir,
+    } satisfies PluginInstallRecord;
+
+    const linked = discover({ "package-owner": linkedRecord });
+    const linkedMatches = matchingCandidates(linked);
+    expect(linkedMatches).toHaveLength(2);
+    for (const candidate of linkedMatches) {
+      expectCandidateFields(candidate, {
+        origin: "bundled",
+        rootDir: fs.realpathSync(pluginDir),
+        installOwner: "package-owner",
+      });
+    }
+    expect(linked.diagnostics).toStrictEqual([]);
+    const index = loadInstalledPluginIndex({
+      candidates: linked.candidates,
+      installRecords: { "package-owner": linkedRecord },
+      env,
+    });
+    expect(resolveInstalledPluginPackageOwnership(index, "managed-pack/one", env)).toEqual({
+      ok: true,
+      value: {
+        installOwner: "package-owner",
+        installRecord: linkedRecord,
+        pluginIds: ["managed-pack/one", "managed-pack/two"],
+      },
+    });
+
+    const ambiguousInstallRecords: Array<Record<string, PluginInstallRecord>> = [
+      { "owner-one": linkedRecord, "owner-two": linkedRecord },
+      {
+        "linked-owner": linkedRecord,
+        "npm-owner": { source: "npm", installPath: pluginDir },
+      },
+    ];
+    for (const installRecords of ambiguousInstallRecords) {
+      const ambiguous = discover(installRecords);
+      const ambiguousMatches = matchingCandidates(ambiguous);
+      expect(ambiguousMatches).toHaveLength(2);
+      for (const candidate of ambiguousMatches) {
+        expectCandidateFields(candidate, {
+          origin: "bundled",
+          installOwner: undefined,
+          installOwnerAmbiguous: true,
+        });
+      }
+    }
+
+    for (const source of ["npm", "git", "archive", "marketplace"] as const) {
+      const matches = matchingCandidates(
+        discover({ owner: { source, sourcePath: pluginDir, installPath: pluginDir } }),
+      );
+      expect(matches).toHaveLength(2);
+      for (const candidate of matches) {
+        expectCandidateFields(candidate, { origin: "bundled", installOwner: undefined });
+      }
+    }
+
+    const mismatchedMatches = matchingCandidates(
+      discover({
+        owner: {
+          source: "path",
+          sourcePath: mismatchedSourceDir,
+          installPath: pluginDir,
+        },
+      }),
+    );
+    expect(mismatchedMatches).toHaveLength(2);
+    for (const candidate of mismatchedMatches) {
+      expectCandidateFields(candidate, { origin: "bundled", installOwner: undefined });
+    }
+  });
+
+  it.runIf(canCreateDirectorySymlinks)("hydrates bundled ownership through a path alias", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginDir = path.join(bundledRoot, "linked-bundled");
+    const aliasDir = path.join(stateDir, "linked-bundled-alias");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/linked-bundled",
+      pluginId: "linked-bundled",
+      entryPath: "index.js",
+    });
+    symlinkDirectory(pluginDir, aliasDir);
+
+    const { candidates } = withOpenClawPackageArgv(packageRoot, () =>
+      discoverOpenClawPlugins({
+        env: buildDiscoveryEnvWithOverrides(stateDir, {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+        }),
+        installRecords: {
+          "package-owner": { source: "path", sourcePath: aliasDir, installPath: pluginDir },
+        },
+      }),
+    );
+
+    const matches = candidates.filter((candidate) => candidate.idHint === "linked-bundled");
+    expect(matches).toHaveLength(1);
+    expectCandidateFields(matches[0], { origin: "bundled", installOwner: "package-owner" });
   });
 
   it("loads package extension packs", async () => {

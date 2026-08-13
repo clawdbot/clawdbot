@@ -55,6 +55,8 @@ function metadataSnapshot(params: {
           pluginId: id,
           ...(packageName ? { packageName } : {}),
           origin: params.origin ?? "bundled",
+          rootDir: `/tmp/${id}`,
+          ...(params.installRecord ? { installOwner: id } : {}),
           enabled: true,
         },
       ],

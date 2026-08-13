@@ -5,6 +5,7 @@ import type { PluginLoadOptions } from "../loader.js";
 const loadConfigMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+const resolvePluginMetadataSnapshotMock = vi.fn();
 
 let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
@@ -23,9 +24,20 @@ vi.mock("../loader.js", () => ({
     loadOpenClawPluginsMock({ ...options, activate: false }),
 }));
 
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+}));
+
+vi.mock("../plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => resolvePluginMetadataSnapshotMock(...args),
+  isPluginMetadataSnapshotCompatible: () => true,
+  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => "/resolved-workspace",
 }));
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
@@ -46,6 +58,21 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
+    resolvePluginMetadataSnapshotMock.mockReset().mockReturnValue({
+      policyHash: "test",
+      index: {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 0,
+        installRecords: {},
+        plugins: [],
+        diagnostics: [],
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
     loadConfigMock.mockReturnValue({ plugins: {} });
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,

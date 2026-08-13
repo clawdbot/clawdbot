@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -50,12 +51,15 @@ function createPluginCandidate(stateDir: string, pluginId: string): PluginCandid
     }),
     "utf8",
   );
-  return {
-    idHint: pluginId,
-    source,
-    rootDir,
-    origin: "global",
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: pluginId,
+      source,
+      rootDir,
+      origin: "global",
+    },
+    pluginId,
+  );
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {

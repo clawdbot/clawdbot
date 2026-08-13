@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
@@ -109,6 +110,13 @@ function createPluginCandidate(params: {
     packageDir: params.packageDir ?? params.rootDir,
     packageManifest: params.packageManifest,
   };
+}
+
+function withInstallOwner(
+  candidate: PluginCandidate,
+  installOwner = candidate.idHint,
+): PluginCandidate {
+  return recordPluginCandidateInstallOwner({ ...candidate }, installOwner);
 }
 
 function createRichPluginFixture(params: { id?: string; packageVersion?: string } = {}) {
@@ -611,7 +619,7 @@ describe("installed plugin index", () => {
     const fixture = createRichPluginFixture();
 
     const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
+      candidates: [withInstallOwner(fixture.candidate)],
       installRecords: {
         demo: {
           source: "npm",
@@ -684,11 +692,13 @@ describe("installed plugin index", () => {
           idHint: "duplicate-demo",
           origin: "bundled",
         }),
-        createPluginCandidate({
-          rootDir: globalDir,
-          idHint: "duplicate-demo",
-          origin: "global",
-        }),
+        withInstallOwner(
+          createPluginCandidate({
+            rootDir: globalDir,
+            idHint: "duplicate-demo",
+            origin: "global",
+          }),
+        ),
       ],
       installRecords: {
         "duplicate-demo": {
@@ -736,7 +746,7 @@ describe("installed plugin index", () => {
     );
 
     const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
+      candidates: [withInstallOwner(fixture.candidate)],
       config: cfg,
       installRecords: cfg.plugins?.installs,
       env: hermeticEnv(),
@@ -778,11 +788,11 @@ describe("installed plugin index", () => {
           integrity: "sha512-installed",
         },
       },
-      { stateDir, candidates: [fixture.candidate] },
+      { stateDir, candidates: [withInstallOwner(fixture.candidate)] },
     );
 
     const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
+      candidates: [withInstallOwner(fixture.candidate)],
       env: hermeticEnv(),
       stateDir,
       installRecords: loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
@@ -861,7 +871,7 @@ describe("installed plugin index", () => {
     );
 
     const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
+      candidates: [withInstallOwner(fixture.candidate)],
       config: cfg,
       installRecords: cfg.plugins?.installs,
       env: hermeticEnv(),

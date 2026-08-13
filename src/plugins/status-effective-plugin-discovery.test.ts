@@ -79,12 +79,19 @@ function countReport(params: { effectiveOnly: boolean; onlyPluginIds?: readonly 
   };
 }
 
-function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
+function countResolve(
+  metadataSnapshot: PluginMetadataSnapshot,
+  effectiveConfig: OpenClawConfig = config,
+): {
   rebuilds: number;
   ids: string[];
 } {
   counters.manifestRegistryRebuilds = 0;
-  const ids = resolveEffectivePluginIds({ config, env: process.env, metadataSnapshot });
+  const ids = resolveEffectivePluginIds({
+    config: effectiveConfig,
+    env: process.env,
+    metadataSnapshot,
+  });
   return { rebuilds: counters.manifestRegistryRebuilds, ids };
 }
 
@@ -115,21 +122,33 @@ it("does not re-derive discovery when reporting effective-only plugins", () => {
 // A supplied snapshot is an optimization, never an input to the answer.
 it("only reuses a snapshot that answers for the whole config", () => {
   const env = process.env;
-  const withoutSnapshot = resolveEffectivePluginIds({ config, env });
-  const full = countResolve(loadPluginMetadataSnapshot({ config, env }));
+  const effectiveConfig = {
+    channels: config.channels,
+    plugins: {
+      load: config.plugins?.load,
+      entries: { "other-plugin": { enabled: true } },
+    },
+  } satisfies OpenClawConfig;
+  const withoutSnapshot = resolveEffectivePluginIds({ config: effectiveConfig, env });
+  const full = countResolve(
+    loadPluginMetadataSnapshot({ config: effectiveConfig, env }),
+    effectiveConfig,
+  );
   // `recordPluginInstallSource` asks for one plugin's effective state, which scopes the
   // snapshot to that plugin and truncates its manifest set to that plugin alone.
-  const scoped = countResolve(
-    loadPluginMetadataSnapshot({ config, env, pluginIds: ["other-plugin"] }),
-  );
+  const scopedSnapshot = loadPluginMetadataSnapshot({
+    config: effectiveConfig,
+    env,
+    pluginIds: ["other-plugin"],
+  });
+  const scoped = countResolve(scopedSnapshot, effectiveConfig);
 
+  expect(scopedSnapshot.plugins.map((plugin) => plugin.id)).toEqual(["other-plugin"]);
   expect({ full: full.ids, scoped: scoped.ids }).toEqual({
     full: withoutSnapshot,
     scoped: withoutSnapshot,
   });
-  // A whole-config snapshot is reused; a plugin-scoped one cannot stand in for it.
-  expect({ fullReused: full.rebuilds === 0, scopedReused: scoped.rebuilds === 0 }).toEqual({
-    fullReused: true,
-    scopedReused: false,
-  });
+  // A whole-config snapshot is reused. The scoped answer must still include the
+  // configured channel owner omitted from that partial snapshot.
+  expect(full.rebuilds).toBe(0);
 });

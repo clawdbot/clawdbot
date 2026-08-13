@@ -391,6 +391,19 @@ function createDiscoveryResult(): PluginDiscoveryResult {
   };
 }
 
+function mergePluginCandidateInstallOwner(
+  target: PluginCandidate,
+  installOwner: string | undefined,
+  installOwnerAmbiguous = false,
+): void {
+  const targetOwner = resolvePluginCandidateInstallOwner(target);
+  const ambiguous =
+    isPluginCandidateInstallOwnerAmbiguous(target) ||
+    installOwnerAmbiguous ||
+    Boolean(targetOwner && installOwner && targetOwner !== installOwner);
+  recordPluginCandidateInstallOwner(target, ambiguous ? undefined : installOwner, ambiguous);
+}
+
 function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
@@ -404,18 +417,11 @@ function mergeDiscoveryResult(
     const key = safeRealpathSync(candidate.source, realpathCache) ?? path.resolve(candidate.source);
     const existing = candidatesBySource.get(key);
     if (existing) {
-      const existingOwner = resolvePluginCandidateInstallOwner(existing);
-      const candidateOwner = resolvePluginCandidateInstallOwner(candidate);
-      const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
-      if (
-        isPluginCandidateInstallOwnerAmbiguous(existing) ||
-        isPluginCandidateInstallOwnerAmbiguous(candidate) ||
-        ownerConflict
-      ) {
-        recordPluginCandidateInstallOwner(existing, undefined, true);
-      } else if (candidateOwner) {
-        recordPluginCandidateInstallOwner(existing, candidateOwner);
-      }
+      mergePluginCandidateInstallOwner(
+        existing,
+        resolvePluginCandidateInstallOwner(candidate),
+        isPluginCandidateInstallOwnerAmbiguous(candidate),
+      );
       continue;
     }
     candidatesBySource.set(key, candidate);
@@ -489,31 +495,34 @@ function addMissingRequiredPluginDiagnostics(
 type InstalledPluginRecordPath = {
   path: string;
   requireBuiltRuntimeEntry: boolean;
+  hasLinkedOwnerClaim?: true;
   installOwner?: string;
   installOwnerAmbiguous?: true;
 };
 
-function isLinkedLocalPluginRecord(params: {
+function resolveLinkedLocalPluginRecordPath(params: {
   record: PluginInstallRecord;
   env: NodeJS.ProcessEnv;
   realpathCache: Map<string, string>;
-}): boolean {
-  if (params.record.source !== "path") {
-    return false;
-  }
+}): string | undefined {
   if (
+    params.record.source !== "path" ||
     typeof params.record.sourcePath !== "string" ||
     !params.record.sourcePath.trim() ||
     typeof params.record.installPath !== "string" ||
     !params.record.installPath.trim()
   ) {
-    return false;
+    return undefined;
   }
-  return resolvesToSameDirectory(
+  const sourcePath = safeRealpathSync(
     resolveUserPath(params.record.sourcePath, params.env),
+    params.realpathCache,
+  );
+  const installPath = safeRealpathSync(
     resolveUserPath(params.record.installPath, params.env),
     params.realpathCache,
   );
+  return sourcePath && sourcePath === installPath ? installPath : undefined;
 }
 
 function collectInstalledPluginRecordPaths(
@@ -539,10 +548,15 @@ function collectInstalledPluginRecordPaths(
       continue;
     }
     const pathKey = safeRealpathSync(resolved, realpathCache) ?? path.resolve(resolved);
-    const requireBuiltRuntimeEntry = !isLinkedLocalPluginRecord({ record, env, realpathCache });
+    const linkedPath = resolveLinkedLocalPluginRecordPath({ record, env, realpathCache });
+    const hasLinkedOwnerClaim = linkedPath === pathKey;
+    const requireBuiltRuntimeEntry = !hasLinkedOwnerClaim;
     const existing = byPath.get(pathKey);
     if (existing) {
       existing.requireBuiltRuntimeEntry ||= requireBuiltRuntimeEntry;
+      if (hasLinkedOwnerClaim) {
+        existing.hasLinkedOwnerClaim = true;
+      }
       if (existing.installOwner !== installOwner) {
         delete existing.installOwner;
         existing.installOwnerAmbiguous = true;
@@ -558,12 +572,45 @@ function collectInstalledPluginRecordPaths(
     const installedPath: InstalledPluginRecordPath = {
       path: resolved,
       requireBuiltRuntimeEntry,
+      ...(hasLinkedOwnerClaim ? { hasLinkedOwnerClaim: true } : {}),
       installOwner,
     };
     byPath.set(pathKey, installedPath);
     paths.push(installedPath);
   }
   return paths;
+}
+
+function hydrateBundledCandidateInstallOwners(
+  candidates: PluginCandidate[],
+  installedPaths: InstalledPluginRecordPath[],
+  realpathCache: Map<string, string>,
+): void {
+  const ownerByPackagePath = new Map<string, InstalledPluginRecordPath>();
+  for (const installedPath of installedPaths) {
+    if (!installedPath.hasLinkedOwnerClaim) {
+      continue;
+    }
+    const pathKey = safeRealpathSync(installedPath.path, realpathCache);
+    if (pathKey) {
+      ownerByPackagePath.set(pathKey, installedPath);
+    }
+  }
+  for (const candidate of candidates) {
+    if (candidate.origin !== "bundled") {
+      continue;
+    }
+    const packagePath = safeRealpathSync(candidate.packageDir ?? candidate.rootDir, realpathCache);
+    const installedPath = packagePath ? ownerByPackagePath.get(packagePath) : undefined;
+    if (!installedPath) {
+      continue;
+    }
+    mergePluginCandidateInstallOwner(
+      candidate,
+      installedPath.installOwner,
+      installedPath.installOwnerAmbiguous === true,
+    );
+  }
 }
 
 // Discovery follows the install ledger's primary path choice; managed
@@ -1642,6 +1689,7 @@ export function discoverOpenClawPlugins(params: {
           realpathCache,
           result.diagnostics,
         );
+        hydrateBundledCandidateInstallOwners(result.candidates, installedPaths, realpathCache);
         const installedPluginDirKeys = collectManagedPluginDirKeys(
           installedPaths.map((installedPath) => installedPath.path),
           realpathCache,

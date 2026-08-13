@@ -32,6 +32,17 @@ vi.mock("../channels/config-presence.js", () => ({
     env: NodeJS.ProcessEnv,
     options?: { includePersistedAuthState?: boolean },
   ) => listPotentialConfiguredChannelIds(config, env, options),
+  listPotentialConfiguredChannelPresenceSignals: (
+    config: OpenClawConfig,
+    env: NodeJS.ProcessEnv,
+    options?: { includePersistedAuthState?: boolean },
+  ) =>
+    listPotentialConfiguredChannelIds(config, env, options).map((channelId: string) => ({
+      channelId,
+      source: Object.hasOwn(config.channels ?? {}, channelId)
+        ? ("config" as const)
+        : ("env" as const),
+    })),
   listExplicitlyDisabledChannelIdsForConfig: (config: OpenClawConfig) =>
     listExplicitlyDisabledChannelIdsForConfig(config),
 }));

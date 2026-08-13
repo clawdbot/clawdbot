@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -559,14 +560,15 @@ describe("plugin registry facade", () => {
     const rootDir = makeTempDir();
     const filePath = path.join(tempDir, "custom-registry.sqlite");
     const env = hermeticEnv();
+    const installRecords = {
+      demo: { source: "npm" as const, spec: "demo@1.0.0", installPath: rootDir },
+    };
     const persisted = loadPluginRegistrySnapshot({
-      candidates: [createCandidate(rootDir)],
+      candidates: [recordPluginCandidateInstallOwner(createCandidate(rootDir), "demo")],
+      installRecords,
       env,
       preferPersisted: false,
     });
-    persisted.installRecords = {
-      demo: { source: "npm", spec: "demo@1.0.0", installPath: rootDir },
-    };
     await writePersistedInstalledPluginIndex(persisted, { filePath });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ filePath, env });

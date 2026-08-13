@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
     () => "default",
   ),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
 }));
 
 vi.mock("../loader.js", () => ({
@@ -63,6 +66,11 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: (
     ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
   ) => mocks.isPluginMetadataSnapshotCompatible(...args),
+  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
+}));
+
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -70,6 +78,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
     mocks.resolveAgentWorkspaceDir(...args),
   resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
     mocks.resolveDefaultAgentId(...args),
+  tryResolveConfiguredAgentWorkspaceDir: (
+    ...args: Parameters<typeof mocks.tryResolveConfiguredAgentWorkspaceDir>
+  ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
 }));
 
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
