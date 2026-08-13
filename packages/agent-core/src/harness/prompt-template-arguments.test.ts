@@ -8,4 +8,10 @@ describe("prompt template arguments", () => {
     expect(parseCommandArgs("first '' third")).toEqual(["first", "", "third"]);
     expect(substituteArgs("$1|$2|$3", parseCommandArgs('first "" third'))).toBe("first||third");
   });
+
+  it("preserves literal dollar sequences in $ARGUMENTS and $@ substitution", () => {
+    const args = parseCommandArgs("price $$ and $& here");
+    expect(substituteArgs("Args: $ARGUMENTS", args)).toBe("Args: price $$ and $& here");
+    expect(substituteArgs("Args: $@", args)).toBe("Args: price $$ and $& here");
+  });
 });

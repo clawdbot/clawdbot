@@ -458,10 +458,7 @@ export function buildApprovalReactionPromptPayloadForRequest(params: {
 }
 
 function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  // Function replacement preserves literal `$` sequences so an approvalId
-  // containing `$&`/`$1`-`$9`/`$$` is not interpreted as a replacement pattern.
-  // Mirrors the escape already applied in extensions/imessage/src/approval-text.ts.
-  return (text ?? "").replace(/\/approve\s+<id>/g, () => `/approve ${approvalId}`);
+  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
 }
 
 /** Build reaction and manual-fallback pending approval content for a prepared view. */
