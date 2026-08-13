@@ -1108,7 +1108,7 @@ openclaw-settings-save-indicator {
   flex-shrink: 0;
   width: 14px;
   height: 14px;
-  color: var(--warn, #b7791f);
+  color: var(--warn);
 }
 
 .sidebar-attention__item--error .sidebar-attention__icon {
@@ -3953,11 +3953,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-pr-indicator--merged {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .sidebar-session-pr-indicator svg {

@@ -390,7 +390,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
 .channels-wizard__qr img {
   width: min(260px, 70vw);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
 }
 

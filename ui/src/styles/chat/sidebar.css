@@ -1546,37 +1546,35 @@ openclaw-session-discussion {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Code syntax palette (dark below, light overrides further down): deliberate
-   literal hexes tuned for code legibility, not theme tokens — the UI palette
-   has no per-token-kind roles and retinting per theme family is not wanted. */
+/* Code syntax palette is shared with highlighted message code via base tokens. */
 .file-view .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
 .file-view .tok-keyword {
-  color: #ff8a80;
+  color: var(--hljs-keyword);
 }
 
 .file-view
   :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
-  color: #79c0ff;
+  color: var(--hljs-number);
 }
 
 .file-view :where(.tok-string, .tok-string2) {
-  color: #a5d6ff;
+  color: var(--hljs-string);
 }
 
 .file-view :where(.tok-heading, .tok-definition) {
-  color: #d2a8ff;
+  color: var(--hljs-title);
 }
 
 .file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
-  color: #ffa657;
+  color: var(--hljs-type);
 }
 
 .file-view :where(.tok-propertyName, .tok-labelName) {
-  color: #7ee787;
+  color: var(--hljs-attribute);
 }
 
 .file-view :where(.tok-link, .tok-url) {
@@ -1584,16 +1582,16 @@ openclaw-session-discussion {
 }
 
 .file-view .tok-meta {
-  color: #c9d1d9;
+  color: var(--hljs-meta);
 }
 
 .file-view .tok-deleted {
-  color: #ffa198;
+  color: var(--hljs-deletion);
   background: rgba(248, 81, 73, 0.12);
 }
 
 .file-view .tok-inserted {
-  color: #7ee787;
+  color: var(--hljs-addition);
   background: rgba(46, 160, 67, 0.12);
 }
 
@@ -1603,38 +1601,6 @@ openclaw-session-discussion {
 
 .file-view .tok-strong {
   font-weight: 600;
-}
-
-:root[data-theme-mode="light"] .file-view .tok-keyword {
-  color: #cf222e;
-}
-
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
-  color: #0550ae;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-string, .tok-string2) {
-  color: #0a3069;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-heading, .tok-definition) {
-  color: #8250df;
-}
-
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
-  color: #953800;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-propertyName, .tok-labelName) {
-  color: #116329;
-}
-
-:root[data-theme-mode="light"] .file-view .tok-meta {
-  color: #57606a;
 }
 
 .file-view__loading {

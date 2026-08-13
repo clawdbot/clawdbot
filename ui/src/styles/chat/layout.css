@@ -1021,7 +1021,7 @@ openclaw-chat-page {
   padding: 0;
   border: 1px solid rgb(255 255 255 / 22%);
   border-radius: 8px;
-  color: #fff;
+  color: var(--media-foreground);
   background: rgb(12 16 24 / 78%);
   backdrop-filter: blur(8px);
   cursor: var(--cursor-action);
@@ -2054,8 +2054,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr[data-state="merged"] {
-  border-color: color-mix(in srgb, #a78bfa 32%, var(--border));
-  background: color-mix(in srgb, #a78bfa 7%, var(--panel));
+  border-color: color-mix(in srgb, var(--pr-merged) 32%, var(--border));
+  background: color-mix(in srgb, var(--pr-merged) 7%, var(--panel));
 }
 
 .chat-pr__link {
@@ -2088,11 +2088,7 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr[data-state="merged"] .chat-pr__icon {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .chat-pr[data-state="merged"] .chat-pr__icon {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .chat-pr[data-state="branch"] .chat-pr__icon {
@@ -2292,11 +2288,7 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr[data-state="merged"] .chat-pr__state {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .chat-pr[data-state="merged"] .chat-pr__state {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .chat-pr__warning {
@@ -3443,17 +3435,17 @@ button.chat-reply-preview--message:disabled {
   gap: 8px;
   padding: 0 12px;
   border-radius: var(--radius-full);
-  color: var(--danger, #ef4444);
-  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--danger, #ef4444) 24%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--danger) 24%, transparent);
   touch-action: none;
   -webkit-touch-callout: none;
   user-select: none;
 }
 
 .chat-send-btn--dictating .agent-chat__voice-activity-bar {
-  background: color-mix(in srgb, var(--danger, #ef4444) 88%, var(--text));
-  box-shadow: 0 0 5px color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
+  background: color-mix(in srgb, var(--danger) 88%, var(--text));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .chat-send-btn__dictation-time {
@@ -3467,7 +3459,7 @@ button.chat-reply-preview--message:disabled {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  color: var(--danger, #ef4444);
+  color: var(--danger);
   font-size: 12px;
 }
 
@@ -3496,7 +3488,7 @@ button.chat-reply-preview--message:disabled {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  background: #000;
+  background: var(--media-bg);
   box-shadow: var(--shadow-md);
 }
 
@@ -3524,7 +3516,7 @@ button.chat-reply-preview--message:disabled {
   padding: 7px;
   border: 1px solid color-mix(in srgb, white 28%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, #000 68%, transparent);
+  background: color-mix(in srgb, var(--media-bg) 68%, transparent);
   color: white;
   cursor: var(--cursor-action);
   place-items: center;
@@ -3532,7 +3524,7 @@ button.chat-reply-preview--message:disabled {
 }
 
 .agent-chat__video-preview-switch:hover:not(:disabled) {
-  background: color-mix(in srgb, #000 82%, transparent);
+  background: color-mix(in srgb, var(--media-bg) 82%, transparent);
 }
 
 .agent-chat__video-preview-switch:disabled {
@@ -3645,7 +3637,7 @@ button.chat-reply-preview--message:disabled {
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
-  color: color-mix(in srgb, var(--danger) 82%, #fff);
+  color: color-mix(in srgb, var(--danger) 82%, var(--media-foreground));
   box-shadow: none;
 }
 

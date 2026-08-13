@@ -26,6 +26,26 @@ export default {
   },
   overrides: [
     {
+      files: ["**/*.css"],
+      rules: {
+        "color-no-hex": true,
+      },
+    },
+    {
+      // Theme token definitions are the one source of stylesheet hex colors.
+      files: ["../ui/src/styles/base.css"],
+      rules: {
+        "color-no-hex": null,
+      },
+    },
+    {
+      // Lobster sprite artwork owns a fixed illustration palette, not UI theme colors.
+      files: ["../ui/src/styles/lobster-pet.css"],
+      rules: {
+        "color-no-hex": null,
+      },
+    },
+    {
       files: ["**/*.ts"],
       customSyntax: "postcss-lit",
     },
