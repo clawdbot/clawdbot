@@ -1021,9 +1021,11 @@ describe("server-channels auto restart", () => {
     expect(starts).toEqual([]);
   });
 
-  it("bounds a hung stopAccount so a host-thaw restart still completes", async () => {
+  it("defers host-thaw replacements while stopAccount remains timed out", async () => {
+    const onError = vi.fn();
     const stopAccount = vi.fn(async () => {
-      // A pathological plugin stop that never settles must not wedge recovery.
+      // A plugin stop hook that never settles may still own account-keyed state;
+      // replacement must wait for a later recovery pass instead of racing it.
       await new Promise<void>(() => {});
     });
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
@@ -1038,15 +1040,58 @@ describe("server-channels auto restart", () => {
 
     const restartTask = restartRunningChannelAccounts(manager, {
       shouldContinue: () => true,
-      onError: () => {},
+      onError,
     });
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     await restartTask;
 
     const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(stopAccount).toHaveBeenCalledTimes(1);
-    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(startAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+    expect(onError.mock.calls[0]?.[0]).toContain("stopAccount timed out");
+  });
+
+  it("retries host-thaw replacement after a timed-out stopAccount later settles", async () => {
+    const releaseFirstStop = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 1) {
+        await releaseFirstStop.promise;
+      }
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstRestart = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstRestart;
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseFirstStop.resolve();
+    await flushMicrotasks();
+
+    const secondRestart = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
+    await secondRestart;
+
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
   });
 
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {

@@ -86,6 +86,7 @@ type ChannelRuntimeStore = {
   stops: Map<string, ChannelAccountStopState>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+  stopAccountFences: Map<string, Promise<void>>;
 };
 
 function sanitizeAbortedTaskStatusPatch(
@@ -147,6 +148,7 @@ function createRuntimeStore(): ChannelRuntimeStore {
     stops: new Map(),
     tasks: new Map(),
     runtimes: new Map(),
+    stopAccountFences: new Map(),
   };
 }
 
@@ -555,7 +557,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         store.aborts.has(id) ||
         store.starting.has(id) ||
         store.stops.has(id) ||
-        store.tasks.has(id)
+        store.tasks.has(id) ||
+        store.stopAccountFences.has(id)
       ) {
         continue;
       }
@@ -658,6 +661,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const currentStop = store.stops.get(id);
         if (currentStop?.status === "stopping") {
           return;
+        }
+        const stopAccountFence = store.stopAccountFences.get(id);
+        if (stopAccountFence) {
+          const stopAccountSettled = await waitForChannelStopGracefully(
+            stopAccountFence,
+            CHANNEL_STOP_ABORT_TIMEOUT_MS,
+          );
+          if (!stopAccountSettled) {
+            setRuntime(channelId, id, {
+              accountId: id,
+              restartPending: true,
+              lastError: `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+            });
+            throw new Error(
+              `stopAccount timed out before restarting ${channelId} account ${id}`,
+            );
+          }
+          if (store.stopAccountFences.get(id) === stopAccountFence) {
+            store.stopAccountFences.delete(id);
+          }
         }
         const existingTask = store.tasks.get(id);
         const existingAbort = store.aborts.get(id);
@@ -1362,7 +1385,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           const log = ensureChannelLog(channelId);
           const runtime = ensureChannelRuntime(channelId);
           let outcome: ChannelAccountStopOutcome = { status: "fulfilled" };
-          if (plugin?.gateway?.stopAccount) {
+          const existingStopAccountFence = store.stopAccountFences.get(id);
+          if (existingStopAccountFence) {
+            const stopAccountSettled = await waitForChannelStopGracefully(
+              existingStopAccountFence,
+              CHANNEL_STOP_ABORT_TIMEOUT_MS,
+            );
+            if (stopAccountSettled) {
+              if (store.stopAccountFences.get(id) === existingStopAccountFence) {
+                store.stopAccountFences.delete(id);
+              }
+            } else {
+              outcome = {
+                status: "rejected",
+                error: new Error(`stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`),
+              };
+            }
+          }
+          if (outcome.status !== "rejected" && plugin?.gateway?.stopAccount) {
             try {
               const account = plugin.config.resolveAccount(cfg, id);
               // A plugin stopAccount that never settles must not wedge every
@@ -1407,8 +1447,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               );
               if (!stopAccountSettled) {
                 stopAttemptAbandoned = true;
+                let stopAccountFence: Promise<void>;
+                stopAccountFence = stopAccountAttempt.finally(() => {
+                  if (store.stopAccountFences.get(id) === stopAccountFence) {
+                    store.stopAccountFences.delete(id);
+                  }
+                });
+                store.stopAccountFences.set(id, stopAccountFence);
+                outcome = {
+                  status: "rejected",
+                  error: new Error(
+                    `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+                  ),
+                };
                 log.warn?.(
-                  `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; continuing stop`,
+                  `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; deferring replacement`,
                 );
               }
             } catch (error) {
