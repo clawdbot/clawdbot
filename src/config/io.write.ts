@@ -227,9 +227,9 @@ export async function writeConfigFileFromContext(
     !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)
       ? [["bindings"]]
       : []),
-    ...ownershipMaterialization.insertedPaths,
-    ...workspaceCollapse.insertedPaths,
-    ...authInheritanceOwnership.insertedPaths,
+    ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
+    ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
+    ...(persistOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 
