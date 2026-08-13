@@ -408,26 +408,18 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     vi.clearAllMocks();
   });
 
-  it("serializes concurrent onboarding runs sharing one state directory", async () => {
+  it("rejects concurrent onboarding runs sharing one state directory", async () => {
     await withStateDir("state-concurrent-onboard-", async (stateDir) => {
-      let activeWorkspaceSetups = 0;
-      let maxActiveWorkspaceSetups = 0;
       let workspaceSetupCalls = 0;
       let releaseFirstSetup!: () => void;
       const firstSetupEntered = new Promise<void>((resolve) => {
         ensureWorkspaceAndSessionsMock.mockImplementation(async () => {
           workspaceSetupCalls += 1;
-          activeWorkspaceSetups += 1;
-          maxActiveWorkspaceSetups = Math.max(maxActiveWorkspaceSetups, activeWorkspaceSetups);
-          try {
-            if (workspaceSetupCalls === 1) {
-              resolve();
-              await new Promise<void>((release) => {
-                releaseFirstSetup = release;
-              });
-            }
-          } finally {
-            activeWorkspaceSetups -= 1;
+          if (workspaceSetupCalls === 1) {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseFirstSetup = release;
+            });
           }
         });
       });
@@ -446,9 +438,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         await firstSetupEntered;
         const readsBeforeSecond = readConfigFileSnapshotMock.mock.calls.length;
         const writesBeforeSecond = capturedReplaceConfigFileCalls.length;
-        const second = runNonInteractiveSetup(options, runtime);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
+        await expect(runNonInteractiveSetup(options, runtime)).rejects.toMatchObject({
+          name: "SetupTargetLockedError",
+          code: "setup_target_locked",
+          holderPid: process.pid,
         });
 
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond);
@@ -456,8 +449,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
 
         releaseFirstSetup();
-        await Promise.all([first, second]);
-        expect(maxActiveWorkspaceSetups).toBe(1);
+        await first;
+        await runNonInteractiveSetup(options, runtime);
         expect(configWritePluginLeaseDepths).toHaveLength(2);
         expect(configWritePluginLeaseDepths.every((depth) => depth > 0)).toBe(true);
       } finally {
