@@ -558,6 +558,7 @@ describe("run-oxlint", () => {
     const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
     expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
     expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
+    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");

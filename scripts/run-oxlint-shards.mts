@@ -438,10 +438,7 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
 }
 
 /** Aggregate one deterministic, disjoint stripe into a single core Program. */
-export function selectCoreOxlintStripe(
-  shards: OxlintShard[],
-  stripe: CoreStripe | undefined,
-) {
+export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe | undefined) {
   if (!stripe) {
     return shards;
   }
@@ -451,6 +448,9 @@ export function selectCoreOxlintStripe(
   const targets = shards
     .filter((_, index) => index % stripe.total === stripe.index - 1)
     .flatMap((shard) => shard.args.slice(2));
+  if (targets.length === 0) {
+    return [];
+  }
   return [
     {
       name: `core:stripe:${stripe.index}`,

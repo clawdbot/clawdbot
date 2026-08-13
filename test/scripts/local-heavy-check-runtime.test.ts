@@ -380,7 +380,7 @@ describe("local-heavy-check-runtime", () => {
       "utf8",
     );
     fs.chmodSync(oxlintPath, 0o755);
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       CAPTURE_PATH: capturePath,
       OPENCLAW_LOCAL_CHECK: "1",
