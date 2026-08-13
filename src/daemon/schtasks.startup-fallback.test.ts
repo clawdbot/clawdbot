@@ -1067,11 +1067,15 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      let portInspections = 0;
       inspectPortUsageMock.mockImplementation(async (port) => {
-        schtasksResponses.length = 0;
-        queueNativeResponses({ code: 1, stdout: "", stderr: "restart denied" });
-        return portInspections++ === 0
+        // Takeover inspects the port before `/Run`; queueing the denial any earlier would
+        // consume that pre-run inspection and never reach the restart path. The kill call is
+        // this scenario's only real busy->free boundary.
+        if (schtasksCalls.some((call) => call[0] === "/Run")) {
+          schtasksResponses.length = 0;
+          queueNativeResponses({ code: 1, stdout: "", stderr: "restart denied" });
+        }
+        return killProcessTreeMock.mock.calls.length === 0
           ? {
               port,
               status: "busy",
