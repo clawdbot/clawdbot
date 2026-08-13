@@ -121,39 +121,49 @@ function rejectsNestedKey(
  * against the generated schema. Presence checks alone would pass on a leaf typed
  * as something other than boolean, which real config loading would refuse.
  */
-/** Every `healthMonitor` sub-schema reachable through composition, not just the first. */
-function collectHealthMonitorSchemas(schema: JsonSchemaLike | undefined): JsonSchemaLike[] {
+/**
+ * Whether the composed schema accepts the documented `{ enabled: false }`.
+ *
+ * Mirrors the combinators `rejectsKey` uses, because the same composition rules
+ * apply to values: `anyOf`/`oneOf` need one accepting branch, `allOf` needs every
+ * component to accept. Flattening them together over-rejects a valid union, and
+ * taking the first match under-rejects a conflicting intersection.
+ */
+function acceptsDocumentedOverride(
+  schema: JsonSchemaLike | undefined,
+  cacheKey: string,
+  depth = 0,
+): boolean {
   if (!schema) {
-    return [];
-  }
-  const direct = asSchema(schema.properties?.healthMonitor);
-  const branches = [
-    ...(schema.anyOf ?? []),
-    ...(schema.oneOf ?? []),
-    ...(schema.allOf ?? []),
-  ].flatMap((branch) => collectHealthMonitorSchemas(asSchema(branch)));
-  return direct ? [direct, ...branches] : branches;
-}
-
-function acceptsDocumentedOverride(schema: JsonSchemaLike | undefined, cacheKey: string): boolean {
-  // Validate the healthMonitor sub-schema rather than the channel object: a
-  // channel schema has its own required credentials, so a partial object would
-  // fail for reasons unrelated to this leaf. Every composed occurrence has to
-  // accept the value, since allOf is an intersection and taking the first match
-  // would miss a sibling branch that types the leaf differently.
-  const candidates = collectHealthMonitorSchemas(schema);
-  if (candidates.length === 0) {
     return false;
   }
-  return candidates.every(
-    (candidate, index) =>
-      validateJsonSchemaValue({
-        cacheKey: `health-monitor-contract.${cacheKey}.${index}`,
-        schema: candidate as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
-        value: { enabled: false },
-        cache: false,
-      }).ok,
-  );
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives) && alternatives.length > 0) {
+    return alternatives.some((branch, index) =>
+      acceptsDocumentedOverride(asSchema(branch), `${cacheKey}.any${depth}_${index}`, depth + 1),
+    );
+  }
+  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
+    return schema.allOf.every((branch, index) =>
+      acceptsDocumentedOverride(asSchema(branch), `${cacheKey}.all${depth}_${index}`, depth + 1),
+    );
+  }
+  const healthMonitor = asSchema(schema.properties?.healthMonitor);
+  if (!healthMonitor) {
+    // This component says nothing about the leaf, so it constrains nothing here.
+    // Whether an omission refuses the parent is the key question, which
+    // `rejectsNestedKey` already owns.
+    return true;
+  }
+  // Validate the sub-schema rather than the channel object: a channel schema has
+  // its own required credentials, so a partial object would fail for unrelated
+  // reasons.
+  return validateJsonSchemaValue({
+    cacheKey: `health-monitor-contract.${cacheKey}`,
+    schema: healthMonitor as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+    value: { enabled: false },
+    cache: false,
+  }).ok;
 }
 
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
@@ -185,6 +195,38 @@ describe("channel healthMonitor contract", () => {
 
     expect(propertySchema(composed, "healthMonitor")).toBeDefined();
     expect(rejectsNestedKey(composed, "healthMonitor", "enabled")).toBe(true);
+  });
+
+  it("accepts the documented value when one union branch allows it", () => {
+    // anyOf needs a single matching branch, so a boolean branch beside one that
+    // refuses booleans still loads. Requiring every branch would fail a valid
+    // union and report a working config as broken.
+    const union: JsonSchemaLike = {
+      anyOf: [
+        {
+          properties: {
+            healthMonitor: {
+              type: "object",
+              properties: { enabled: { type: "boolean" } },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        {
+          properties: {
+            healthMonitor: {
+              type: "object",
+              properties: { enabled: { type: "string" } },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
+    };
+
+    expect(acceptsDocumentedOverride(union, "union-branches")).toBe(true);
   });
 
   it("rejects the documented value when a sibling branch types the leaf differently", () => {
