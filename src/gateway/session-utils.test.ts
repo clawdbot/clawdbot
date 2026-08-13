@@ -3033,6 +3033,55 @@ describe("gateway session utils", () => {
     expect(agent?.thinkingDefault).toBe("medium");
     expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
   });
+
+  describe("listAgentsForGateway resolved model projection", () => {
+    test("publishes one resolved identity for model, runtime, and thinking capabilities", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "clawrouter/openai/gpt-5.6",
+              fallbacks: ["openai/gpt-5.6-luna"],
+            },
+            models: {
+              "openai/gpt-5.6-sol": {
+                alias: "clawrouter/openai/gpt-5.6",
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          reasoning: true,
+        },
+      ];
+
+      const agent = listAgentsForGateway(cfg, catalog).agents[0];
+
+      expect(agent).toMatchObject({
+        model: {
+          primary: "openai/gpt-5.6-sol",
+          fallbacks: ["openai/gpt-5.6-luna"],
+        },
+        agentRuntime: { id: "codex", source: "model" },
+        thinkingDefault: "medium",
+      });
+      expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
+      expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
+    });
+  });
 });
 
 describe("listSessionsFromStore selected model display", () => {
