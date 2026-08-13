@@ -719,7 +719,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
+    ["extensions/memory-core/src/memory/embeddings.test.ts"],
   ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],

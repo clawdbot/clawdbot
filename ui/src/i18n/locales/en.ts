@@ -2228,7 +2228,7 @@ export const en: TranslationMap = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
+      intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",

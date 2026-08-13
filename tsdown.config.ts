@@ -524,8 +524,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
-    "memory-core-local-embedding-worker":
-      "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,

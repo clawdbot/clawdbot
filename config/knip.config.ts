@@ -660,7 +660,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
-      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
+      entry: ["src/*.ts!", "src/host/embeddings.types.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {
@@ -827,12 +827,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
       project: ["**/*.{js,mjs,ts}!"],
-      ignoreDependencies: [
-        // The provider resolves node-llama-cpp from its own package at runtime
-        // so local embeddings use the plugin-owned native dependency.
-        "node-llama-cpp",
-        ...bundledPluginIgnoredRuntimeDependencies,
-      ],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
