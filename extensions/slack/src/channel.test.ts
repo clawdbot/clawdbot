@@ -1695,6 +1695,30 @@ describe("slackPlugin directory", () => {
 });
 
 describe("slackPlugin agentPrompt", () => {
+  it("teaches agents to author plain replies in standard Markdown", () => {
+    const hints = slackPlugin.agentPrompt?.inboundFormattingHints?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      },
+    });
+
+    expect(hints).toEqual({
+      text_markup: "markdown",
+      rules: [
+        "Write standard Markdown; OpenClaw converts it to Slack mrkdwn.",
+        "Bold uses **double asterisks**; italic uses *single asterisks*.",
+        "Links use [label](url).",
+        "Code blocks use triple backticks with an optional language identifier.",
+        "Markdown headings and lists are supported; pipe tables are converted according to the channel table mode.",
+      ],
+    });
+  });
+
   it("teaches agents to use typed presentation", () => {
     const hints = slackPlugin.agentPrompt?.messageToolHints?.({
       cfg: {

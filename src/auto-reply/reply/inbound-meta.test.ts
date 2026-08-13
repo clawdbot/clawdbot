@@ -31,13 +31,13 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
             }) => {
               formattingHintCalls.push(params);
               return {
-                text_markup: "slack_mrkdwn",
+                text_markup: "markdown",
                 rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
+                  "Write standard Markdown; OpenClaw converts it to Slack mrkdwn.",
+                  "Bold uses **double asterisks**; italic uses *single asterisks*.",
+                  "Links use [label](url).",
+                  "Code blocks use triple backticks with an optional language identifier.",
+                  "Markdown headings and lists are supported; pipe tables are converted according to the channel table mode.",
                 ],
               };
             },
@@ -283,7 +283,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
-  it("includes Slack mrkdwn response format hints for Slack chats and threads cfg", () => {
+  it("includes Markdown authoring hints for Slack chats and threads cfg", () => {
     formattingHintCalls.length = 0;
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
@@ -304,13 +304,13 @@ describe("buildInboundMetaSystemPrompt", () => {
             config: { listAccountIds: () => [], resolveAccount: () => ({}) },
             agentPrompt: {
               inboundFormattingHints: () => ({
-                text_markup: "slack_mrkdwn",
+                text_markup: "markdown",
                 rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
+                  "Write standard Markdown; OpenClaw converts it to Slack mrkdwn.",
+                  "Bold uses **double asterisks**; italic uses *single asterisks*.",
+                  "Links use [label](url).",
+                  "Code blocks use triple backticks with an optional language identifier.",
+                  "Markdown headings and lists are supported; pipe tables are converted according to the channel table mode.",
                 ],
               }),
             },
@@ -336,13 +336,13 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toEqual({
-      text_markup: "slack_mrkdwn",
+      text_markup: "markdown",
       rules: [
-        "Use Slack mrkdwn, not standard Markdown.",
-        "Bold uses *single asterisks*.",
-        "Links use <url|label>.",
-        "Code blocks use triple backticks without a language identifier.",
-        "Do not use markdown headings or pipe tables.",
+        "Write standard Markdown; OpenClaw converts it to Slack mrkdwn.",
+        "Bold uses **double asterisks**; italic uses *single asterisks*.",
+        "Links use [label](url).",
+        "Code blocks use triple backticks with an optional language identifier.",
+        "Markdown headings and lists are supported; pipe tables are converted according to the channel table mode.",
       ],
     });
     expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
@@ -370,7 +370,7 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     const responseFormat = payload["response_format"] as { text_markup?: string } | undefined;
-    expect(responseFormat?.text_markup).toBe("slack_mrkdwn");
+    expect(responseFormat?.text_markup).toBe("markdown");
     // Trusted metadata still identifies the system event; only authoring hints
     // follow the delivery channel.
     expect(payload["channel"]).toBe("heartbeat");
