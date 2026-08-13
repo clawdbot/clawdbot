@@ -141,6 +141,19 @@ read_when: signals: user announcing a conversion task
     expect(result.issues).toEqual([]);
   });
 
+  it("does not rewrite valid quoted sibling scalars with escape sequences", () => {
+    const content = `---
+name: sample-skill
+description: "line\\n: detail"
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("line\n: detail");
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
   it("leaves valid YAML description semantics untouched", () => {
     expect(
       parseFrontmatterBlock(`---

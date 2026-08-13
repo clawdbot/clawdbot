@@ -1,6 +1,6 @@
 // Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMap, isNode, isScalar, parseDocument } from "yaml";
+import { isMap, isNode, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
 
@@ -85,43 +85,37 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
 // without loosening strict parsing for structured fields like `metadata`.
 const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
 
-function normalizeFreeformValue(block: string, keyName: string): string {
+// Recover only the field whose value actually triggers BLOCK_AS_IMPLICIT_KEY,
+// located via the YAML error position. Valid sibling scalars (quoted values
+// with escape sequences, commented values) are not rewritten, preserving
+// their YAML decode semantics.
+function normalizeFreeformFieldAtError(block: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
-  if (!isMap(doc.contents)) {
+  if (doc.errors.length === 0 || !isMap(doc.contents)) {
     return block;
   }
-  const pair = doc.contents.items.find(
-    (candidate) => isScalar(candidate.key) && candidate.key.value === keyName,
+  const error = doc.errors.find(
+    (candidate) => candidate.code === "BLOCK_AS_IMPLICIT_KEY" && candidate.pos?.[0] !== undefined,
   );
-  const keyStart = isNode(pair?.key) ? pair.key.range?.[0] : undefined;
-  if (keyStart === undefined) {
+  const pos = error?.pos?.[0];
+  if (pos === undefined) {
     return block;
   }
-  const lineStart = block.lastIndexOf("\n", keyStart - 1) + 1;
-  const lineEnd = block.indexOf("\n", keyStart);
+  const lineStart = block.lastIndexOf("\n", pos) + 1;
+  const lineEnd = block.indexOf("\n", pos);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  const match = line.match(/^(?:[^:\n]+|"[^"]+"|'[^']+'):\s*(.*)$/);
-  const rawValue = match?.[1]?.trim();
-  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
+  const match = line.match(/^([\w-]+):\s*(.*)$/);
+  const keyName = match?.[1];
+  if (!keyName || !FREEFORM_TEXT_FIELDS.has(keyName)) {
     return block;
   }
-  // Only recover values whose inline colon+space triggers
-  // BLOCK_AS_IMPLICIT_KEY. Valid YAML scalars (e.g. `text # note`) are
-  // left untouched so their comment and quote semantics are preserved.
-  if (!/: /.test(rawValue)) {
+  const rawValue = match?.[2]?.trim();
+  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue) || !/: /.test(rawValue)) {
     return block;
   }
   const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
-}
-
-function normalizeFreeformTextFields(block: string): string {
-  let updated = block;
-  for (const field of FREEFORM_TEXT_FIELDS) {
-    updated = normalizeFreeformValue(updated, field);
-  }
-  return updated;
 }
 
 function parseYamlFrontmatterOnce(
@@ -203,7 +197,20 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   if (parsed.issues.length === 0) {
     return parsed;
   }
-  const recoveredBlock = normalizeFreeformTextFields(block);
+  // Recover one error-located field per iteration, retrying parse each time,
+  // so multiple colon-rich fields are fixed without rewriting valid siblings.
+  let recoveredBlock = block;
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size; i += 1) {
+    const next = normalizeFreeformFieldAtError(recoveredBlock);
+    if (next === recoveredBlock) {
+      break;
+    }
+    recoveredBlock = next;
+    const reparsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
+    if (reparsed.issues.length === 0) {
+      return reparsed;
+    }
+  }
   return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
 }
 
