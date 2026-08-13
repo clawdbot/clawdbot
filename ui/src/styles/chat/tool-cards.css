@@ -2042,7 +2042,7 @@ openclaw-tooltip.chat-tasks-status__preview {
   background: transparent;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
