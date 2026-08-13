@@ -81,7 +81,7 @@ import {
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
-const OPENCLAW_STATE_MIGRATION_ASSERTIONS = {
+const STATE_MIGRATION_ASSERTIONS = {
   5: assertOpenClawStateDatabaseV5ForMigration,
   6: assertOpenClawStateDatabaseV6ForMigration,
 } as const;
@@ -178,7 +178,7 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
         } else if (previousVersion === 5 || previousVersion === 6) {
-          OPENCLAW_STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
@@ -366,7 +366,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
         } else if (previousVersion === 5 || previousVersion === 6) {
-          OPENCLAW_STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
