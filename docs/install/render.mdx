@@ -27,6 +27,7 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
+    dockerCommand: node openclaw.mjs gateway --allow-unconfigured
     healthCheckPath: /startupz
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
@@ -58,7 +59,7 @@ services:
 | Starter   | Never             | 1GB+          | Personal use, small teams     |
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
-The Blueprint defaults to `starter`. To use the free tier, change `plan: free` in your fork's `render.yaml` — note that with no persistent disk, OpenClaw state resets on each deploy.
+The Blueprint defaults to `starter`. To use the free tier, change `plan: free` **and delete the `disk:` block** in your fork's `render.yaml`; Render rejects a Blueprint that attaches a persistent disk to a free instance. Without that disk, OpenClaw state resets on every deploy.
 
 ## After deployment
 
