@@ -359,6 +359,21 @@ describe("diffs tool", () => {
     ).rejects.toThrow("Invalid baseUrl");
   });
 
+  it("returns a tool input error for malformed raw arguments", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    await expect(tool.execute?.("tool-malformed-null", null)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
+    await expect(tool.execute?.("tool-malformed-undefined", undefined)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
+  });
+
   it("rejects oversized patch payloads", async () => {
     const tool = createDiffsTool({
       api: createApi(),
