@@ -601,6 +601,18 @@ export function createBackgroundTasksProps(
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
     onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
-    onOpenTaskDetail: opts.onOpenTaskDetail,
+    onOpenTaskDetail: opts.onOpenTaskDetail
+      ? (task) => {
+          // Opening retries a failed tasks.get: the panel's render-driven load
+          // must skip errored tasks (a retry there would loop every paint), so
+          // user selection is the one path that clears the error.
+          if (state.taskDetailErrors.has(task.id)) {
+            const next = new Map(state.taskDetailErrors);
+            next.delete(task.id);
+            state.taskDetailErrors = next;
+          }
+          opts.onOpenTaskDetail?.(task);
+        }
+      : undefined,
   };
 }

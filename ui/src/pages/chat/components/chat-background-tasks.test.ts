@@ -268,6 +268,42 @@ describe("background tasks rail state", () => {
     expect(props.taskDetails.get("task-1")?.prompt).toBe("Audit the background task UI");
   });
 
+  it("lets reopening a task retry a failed detail lookup", async () => {
+    const running = makeTask({ id: "task-1" });
+    let failLookup = true;
+    const { host, request } = createHost({
+      request: (method) => {
+        if (method !== "tasks.get") {
+          return Promise.resolve({ tasks: [running] });
+        }
+        return failLookup
+          ? Promise.reject(new Error("lookup blew up"))
+          : Promise.resolve({ task: { ...running, prompt: "Recovered prompt" } });
+      },
+    });
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} }).onLoadDetail?.(running);
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).taskDetailErrors.get("task-1")).toBe("lookup blew up");
+
+    // Selection clears the recorded error so the panel's render-driven load
+    // (which must skip errored tasks to avoid a retry loop) can run again.
+    failLookup = false;
+    const reopened = createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} });
+    reopened.onOpenTaskDetail?.(running);
+    const afterReopen = createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} });
+    expect(afterReopen.taskDetailErrors.has("task-1")).toBe(false);
+    afterReopen.onLoadDetail?.(running);
+    await flushAsync();
+
+    expect(request).toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
+    expect(createBackgroundTasksProps(host).taskDetails.get("task-1")?.prompt).toBe(
+      "Recovered prompt",
+    );
+  });
+
   it("promotes a newer detail snapshot into the grouped task list", async () => {
     const running = makeTask({ id: "task-1", status: "running", updatedAt: 2_000 });
     const completed = makeTask({

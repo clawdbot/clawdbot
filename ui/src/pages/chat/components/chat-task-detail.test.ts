@@ -86,4 +86,44 @@ describe("task detail panel", () => {
     expect(panel?.textContent).not.toContain("Loading task transcript");
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("never treats a subagent's requester session as its transcript", () => {
+    const task: TaskSummary = {
+      id: "task-queued-subagent",
+      taskId: "task-queued-subagent",
+      status: "queued",
+      runtime: "subagent",
+      agentId: "main",
+      title: "Queued child work",
+      // Requester is another conversation; no child session exists yet.
+      sessionKey: "agent:main:other-session",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const request = vi.fn();
+    const host: TaskDetailHost = {
+      sessionKey: "main",
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      html`${renderTaskDetailPanel({
+        backgroundTasks: backgroundTasks(task),
+        chat: { paneId: "pane-1" } as ChatProps,
+        host,
+        task,
+        transcript: {} as ChatTranscriptController,
+      })}`,
+      container,
+    );
+
+    const panel = container.querySelector("[data-task-detail-panel]");
+    expect(panel?.textContent).toContain("Inspect the current task.");
+    expect(panel?.textContent).not.toContain("Loading task transcript");
+    expect(request).not.toHaveBeenCalled();
+  });
 });

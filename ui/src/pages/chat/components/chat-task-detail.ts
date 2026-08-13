@@ -49,8 +49,12 @@ export function renderTaskDetailPanel(params: {
   }
   const detailedTask = backgroundTasks.taskDetails.get(task.id);
   const currentTask = newestTaskSnapshot(task, detailedTask);
+  // A subagent's sessionKey is its requester's conversation, never its own
+  // work; only the child session is that task's transcript.
   const transcriptSessionKey = normalizeOptionalString(
-    currentTask.childSessionKey ?? currentTask.sessionKey,
+    currentTask.runtime === "subagent"
+      ? currentTask.childSessionKey
+      : (currentTask.childSessionKey ?? currentTask.sessionKey),
   );
   const canonicalTranscriptKey = canonicalUiSessionKeyForPersistence(
     params.host,
