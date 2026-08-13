@@ -50,6 +50,11 @@ async function fixture(platform: NodeJS.Platform = "linux") {
   await fs.writeFile(path.join(bundledDir, "modules", "runtime.test.ts"), "throw new Error();\n");
   await fs.writeFile(path.join(bundledDir, "sidepanel.html"), "must not ship\n");
   await fs.writeFile(nativeHostPath, "export {};\n", { mode: 0o600 });
+  const privateNodePath = path.join(root, "node");
+  if (process.platform !== "win32") {
+    const nodeCommand = `'${process.execPath.replaceAll("'", `'"'"'`)}'`;
+    await fs.writeFile(privateNodePath, `#!/bin/sh\nexec ${nodeCommand} "$@"\n`, { mode: 0o700 });
+  }
   const deps = {
     platform,
     homeDir,
@@ -59,7 +64,7 @@ async function fixture(platform: NodeJS.Platform = "linux") {
       LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
     },
     nativeHostPath,
-    nodePath: process.execPath,
+    nodePath: process.platform === "win32" ? process.execPath : privateNodePath,
   };
   return { root, homeDir, stateDir, bundledDir, pluginRoot, nativeHostPath, deps };
 }
@@ -196,9 +201,10 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       });
 
       expect(status.installedCopy).toMatchObject({ present: true, owned: true });
-      expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe(
-        "owned",
-      );
+      expect(
+        status.registrations.find((entry) => entry.product === "chromium")?.state,
+        status.issues.join("\n"),
+      ).toBe("owned");
     } finally {
       lstatSpy.mockRestore();
       getuidSpy.mockRestore();
