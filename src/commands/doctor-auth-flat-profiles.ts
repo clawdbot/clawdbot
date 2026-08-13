@@ -19,10 +19,7 @@ import {
   hasMatchingOAuthIdentity,
 } from "../agents/auth-profiles/oauth-shared.js";
 import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
-import {
-  resolveSharedAuthStoreDir,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
@@ -812,7 +809,7 @@ function migrateLockedLegacyOAuthFile(params: {
   now: () => number;
   result: LegacyFlatAuthProfileRepairResult;
 }): void {
-  const mainAgentDir = resolveSharedAuthStoreDir(params.env);
+  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(params.env));
   const targetDatabasePath = resolveAuthProfileDatabasePath(mainAgentDir);
   const receipt = prepareAuthProfileSourceReceipt({
     pathname: params.oauthPath,
@@ -1188,7 +1185,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               database,
             );
             const loaded = loadMigratedStore(candidate.agentDir, { database });
-            const mainAgentDir = resolveSharedAuthStoreDir(params.env);
+            const mainAgentDir = path.dirname(resolveSharedAuthStorePath(params.env));
             const persistedStores = {
               isMainStore:
                 resolveMigrationTargetDatabasePath(candidate.agentDir) ===
@@ -1313,7 +1310,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       releaseSources?.();
     }
   }
-  const sharedMainAgentDir = resolveSharedAuthStoreDir(env);
+  const sharedMainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
   const sharedMainCredentialSourceRemains = [
     resolveAuthStorePath(sharedMainAgentDir),
     resolveLegacyAuthStorePath(sharedMainAgentDir),

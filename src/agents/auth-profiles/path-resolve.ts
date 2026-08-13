@@ -6,18 +6,31 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
-import {
-  resolveOpenClawStateSqliteDir,
-  resolveOpenClawStateSqlitePath,
-} from "../../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
+const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
 
 export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
 
-let sharedAuthStoreOwnership: SharedAuthStoreOwnership | undefined;
+// Explicit env callers can address another state root in the same process.
+// Pin each root once so later row changes require an owner-controlled restart.
+const sharedAuthStoreOwnershipByDatabasePath = new Map<string, SharedAuthStoreOwnership>();
+
+class SharedAuthStoreRelocatedUnsupportedError extends Error {
+  readonly code = "SHARED_AUTH_STORE_RELOCATED_UNSUPPORTED" as const;
+  readonly action = "openclaw doctor --fix" as const;
+  readonly location = "state-db" as const;
+
+  constructor() {
+    super(
+      "Shared auth store is recorded as relocated, but this build cannot serve it; run openclaw doctor --fix.",
+    );
+    this.name = "SharedAuthStoreRelocatedUnsupportedError";
+  }
+}
 
 function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
   if (value === undefined) {
@@ -39,24 +52,34 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
 export function resolveSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedAuthStoreOwnership {
-  sharedAuthStoreOwnership ??= parseSharedAuthStoreOwnership(
-    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env }),
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  const cached = sharedAuthStoreOwnershipByDatabasePath.get(databasePath);
+  if (cached) {
+    return cached;
+  }
+  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
+    throw new Error(
+      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
+    );
+  }
+  const ownership = parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
   );
-  return sharedAuthStoreOwnership;
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
 }
 
-/** Resolve the directory containing the shared auth store. */
+/** Resolve the legacy agent directory containing the shared auth store. */
 export function resolveSharedAuthStoreDir(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveSharedAuthStoreOwnership(env).location === "state-db"
-    ? resolveOpenClawStateSqliteDir(env)
-    : resolveSharedMainAuthAgentDir(env);
+  return path.dirname(resolveSharedAuthStorePath(env));
 }
 
-/** Resolve the shared auth store database path. */
+/** Resolve the shared auth database path, failing closed for unserved relocation. */
 export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveSharedAuthStoreOwnership(env).location === "state-db"
-    ? resolveOpenClawStateSqlitePath(env)
-    : path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  if (resolveSharedAuthStoreOwnership(env).location === "state-db") {
+    throw new SharedAuthStoreRelocatedUnsupportedError();
+  }
+  return path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
 }
 
 /** Resolve the user-facing auth profile database path. */

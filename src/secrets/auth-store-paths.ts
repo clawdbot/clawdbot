@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveSharedAuthStoreDir } from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -19,7 +19,7 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_AGENT_DIR: undefined,
   };
-  paths.add(resolveSharedAuthStoreDir(scopedEnv));
+  paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
 
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -34,7 +34,7 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
   // Configured agent dirs may live outside stateDir; include them after state-dir discovery.
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      paths.add(resolveSharedAuthStoreDir(scopedEnv));
+      paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);

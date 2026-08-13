@@ -30,6 +30,12 @@ let evictedOwnerMutationFloor = 0;
 const MAX_PERSISTED_MUTATION_OWNERS = 256;
 const MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER = 256;
 
+type RuntimeAuthProfileStoreSnapshotEntry = {
+  databasePath?: string;
+  agentDir?: string;
+  store: RuntimeAuthProfileStore;
+};
+
 type PersistedMutationRecord = {
   credentialRevision: number;
   credentialRevisionKnown: boolean;
@@ -155,11 +161,9 @@ function ownerState(
   };
 }
 
-function replaceChangesOwner(
-  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
-): boolean {
+function replaceChangesOwner(entries: RuntimeAuthProfileStoreSnapshotEntry[]): boolean {
   const next = new Map(
-    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+    entries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
   );
   const currentState = Array.from(
     runtimeAuthStoreSnapshots,
@@ -171,20 +175,16 @@ function replaceChangesOwner(
   return !isDeepStrictEqual(currentState, nextState);
 }
 
-function replaceChangesCredentials(
-  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
-): boolean {
+function replaceChangesCredentials(entries: RuntimeAuthProfileStoreSnapshotEntry[]): boolean {
   const next = new Map(
-    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+    entries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
   );
   return !isDeepStrictEqual(credentialState(runtimeAuthStoreSnapshots), credentialState(next));
 }
 
-function recordChangedSnapshotRevisions(
-  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
-): boolean {
+function recordChangedSnapshotRevisions(entries: RuntimeAuthProfileStoreSnapshotEntry[]): boolean {
   const next = new Map(
-    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+    entries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
   );
   const keys = new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]);
   let changed = false;
@@ -207,6 +207,14 @@ function recordChangedSnapshotRevisions(
 // and per-agent stores do not overwrite each other.
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
+}
+
+function resolveRuntimeSnapshotEntryKey(entry: {
+  databasePath?: string;
+  agentDir?: string;
+}): string {
+  // Enumeration already owns the canonical key; never reconstruct it from a projected directory.
+  return entry.databasePath ?? resolveRuntimeStoreKey(entry.agentDir);
 }
 
 function notifyRuntimeAuthStoreMutation(agentDir?: string): void {
@@ -263,12 +271,14 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   return requested ?? inherited;
 }
 
-/** Lists cloned live snapshots for transactional rollback composition. */
+/** Lists cloned snapshots while preserving their canonical database identity. */
 export function listRuntimeAuthProfileStoreSnapshots(): Array<{
+  databasePath: string;
   agentDir: string;
   store: RuntimeAuthProfileStore;
 }> {
   return Array.from(runtimeAuthStoreSnapshots, ([key, store]) => ({
+    databasePath: key,
     agentDir: path.dirname(key),
     store: cloneAuthProfileStore(store),
   }));
@@ -294,7 +304,7 @@ export function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean 
 
 /** Replaces all runtime auth profile snapshots with cloned entries. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
-  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
+  entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {
   const credentialsChanged = replaceChangesCredentials(entries);
   const ownerChanged = replaceChangesOwner(entries);
@@ -302,7 +312,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const next = new Map(
-    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+    entries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
   );
   for (const key of new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()])) {
     if (authProfilesChanged(runtimeAuthStoreSnapshots.get(key), next.get(key))) {
@@ -313,7 +323,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
     runtimeAuthStoreSnapshots.set(
-      resolveRuntimeStoreKey(entry.agentDir),
+      resolveRuntimeSnapshotEntryKey(entry),
       cloneAuthProfileStore(entry.store),
     );
   }

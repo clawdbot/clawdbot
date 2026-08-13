@@ -1,19 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  resolveOpenClawStateSqliteDir,
-  resolveOpenClawStateSqlitePath,
-} from "../../state/openclaw-state-db.paths.js";
 
-const tempDirs = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makeStateEnv(): Promise<NodeJS.ProcessEnv> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-shared-auth-store-"));
-  tempDirs.add(stateDir);
+function makeStateEnv(): NodeJS.ProcessEnv {
+  const stateDir = tempDirs.make("openclaw-shared-auth-store-");
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
 }
 
@@ -22,18 +16,12 @@ describe("shared auth store path resolution", () => {
     vi.resetModules();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    await Promise.all(
-      [...tempDirs].map(async (stateDir) => {
-        await fs.rm(stateDir, { recursive: true, force: true });
-        tempDirs.delete(stateDir);
-      }),
-    );
   });
 
   it("keeps the absent ownership record pinned to the shipped legacy-main path", async () => {
-    const env = await makeStateEnv();
+    const env = makeStateEnv();
     const { resolveSharedAuthStoreDir, resolveSharedAuthStorePath } =
       await import("./path-resolve.js");
     const { resolveSharedMainAuthAgentDir } = await import("./shared-main-dir.js");
@@ -43,26 +31,57 @@ describe("shared auth store path resolution", () => {
     expect(resolveSharedAuthStorePath(env)).toBe(path.join(legacyDir, "openclaw-agent.sqlite"));
 
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+    const aliasEnv = {
+      ...env,
+      OPENCLAW_STATE_DIR: path.join(env.OPENCLAW_STATE_DIR ?? "", "."),
+    };
 
-    expect(resolveSharedAuthStoreDir(env)).toBe(legacyDir);
-    expect(resolveSharedAuthStorePath(env)).toBe(path.join(legacyDir, "openclaw-agent.sqlite"));
+    expect(resolveSharedAuthStoreDir(aliasEnv)).toBe(legacyDir);
+    expect(resolveSharedAuthStorePath(aliasEnv)).toBe(
+      path.join(legacyDir, "openclaw-agent.sqlite"),
+    );
   });
 
-  it("resolves a preexisting state-db ownership record", async () => {
-    const env = await makeStateEnv();
+  it("fails closed when the ownership record says state-db", async () => {
+    const env = makeStateEnv();
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
-    const { resolveSharedAuthStoreDir, resolveSharedAuthStorePath } =
-      await import("./path-resolve.js");
+    const {
+      resolveSharedAuthStoreDir,
+      resolveSharedAuthStoreOwnership,
+      resolveSharedAuthStorePath,
+    } = await import("./path-resolve.js");
 
-    expect(resolveSharedAuthStoreDir(env)).toBe(resolveOpenClawStateSqliteDir(env));
-    expect(resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "state-db" });
+    for (const resolvePath of [resolveSharedAuthStoreDir, resolveSharedAuthStorePath]) {
+      try {
+        resolvePath(env);
+        throw new Error("expected relocated shared auth resolution to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({
+          name: "SharedAuthStoreRelocatedUnsupportedError",
+          code: "SHARED_AUTH_STORE_RELOCATED_UNSUPPORTED",
+          action: "openclaw doctor --fix",
+          location: "state-db",
+          message: expect.stringContaining("this build cannot serve it"),
+        });
+      }
+    }
   });
 
-  it("rejects a malformed ownership record instead of guessing a store", async () => {
-    const env = await makeStateEnv();
-    writeConfigMachineState("auth.sharedStore", { location: "legacy-main", extra: true }, { env });
-    const { resolveSharedAuthStorePath } = await import("./path-resolve.js");
+  it("caches ownership independently for each canonical state root", async () => {
+    const firstEnv = makeStateEnv();
+    const secondEnv = makeStateEnv();
+    const { resolveSharedAuthStoreOwnership } = await import("./path-resolve.js");
+    expect(resolveSharedAuthStoreOwnership(firstEnv)).toEqual({ location: "legacy-main" });
 
-    expect(() => resolveSharedAuthStorePath(env)).toThrow("auth.sharedStore is invalid");
+    writeConfigMachineState(
+      "auth.sharedStore",
+      { location: "legacy-main", extra: true },
+      { env: secondEnv },
+    );
+
+    expect(() => resolveSharedAuthStoreOwnership(secondEnv)).toThrow("auth.sharedStore is invalid");
+    expect(resolveSharedAuthStoreOwnership(firstEnv)).toEqual({ location: "legacy-main" });
   });
 });

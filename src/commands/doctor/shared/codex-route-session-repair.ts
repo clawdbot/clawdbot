@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../../../agents/agent-scope.js";
@@ -6,7 +7,7 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
-import { resolveSharedAuthStoreDir } from "../../../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStorePath } from "../../../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
   parseLegacyCredentialEntry,
@@ -332,7 +333,8 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
   const agentDir = resolveAgentDir(params.cfg, params.agentId, params.env);
   const localProfiles = loadPersistedAuthProfileStore(agentDir)?.profiles ?? {};
   const mainProfiles =
-    loadPersistedAuthProfileStore(resolveSharedAuthStoreDir(params.env))?.profiles ?? {};
+    loadPersistedAuthProfileStore(path.dirname(resolveSharedAuthStorePath(params.env)))?.profiles ??
+    {};
   const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
   const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
   const localLegacySource = localLegacySourceExists

@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
-import { resolveSharedAuthStoreDir, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 const AUTH_PROFILE_MIGRATION_REQUIRED_CODE = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
@@ -44,7 +44,7 @@ export function listLegacyAuthProfileSources(params: {
     { kind: "auth-state", path: path.join(agentDir, "auth-state.json") },
     { kind: "legacy-auth", path: path.join(agentDir, "auth.json") },
   ];
-  const sharedMainDir = resolveSharedAuthStoreDir(params.env);
+  const sharedMainDir = path.dirname(resolveSharedAuthStorePath(params.env));
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
@@ -98,7 +98,7 @@ function listStartupLegacyAuthProfileSources(params: {
   sources: LegacyAuthProfileSource[];
   credentialSources: LegacyAuthProfileSource[];
 }> {
-  const sharedMainDir = resolveSharedAuthStoreDir(params.env);
+  const sharedMainDir = path.dirname(resolveSharedAuthStorePath(params.env));
   return [...new Set([...params.agentDirs, sharedMainDir])].map((agentDir) => {
     const sources = listLegacyAuthProfileSources({ agentDir, env: params.env });
     return { agentDir, sources, credentialSources: sources.filter(isCredentialSource) };
