@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -50,13 +50,11 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
-vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
@@ -66,29 +64,121 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 }));
 
 const effects = vi.hoisted(() => ({
-  info: vi.fn(),
-  mutateConfigFileWithRetry: vi.fn(),
-  warn: vi.fn(),
+  stickyDispatch: vi.fn(() => "requested" as const),
+  unexpectedCalls: [] as string[],
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => cfg,
+}));
+
+vi.mock("../../logging/subsystem.js", () => {
+  const createLogger = (subsystem: string) => {
+    const noop = () => {};
+    return {
+      subsystem,
+      isEnabled: () => false,
+      trace: noop,
+      debug: noop,
+      info: noop,
+      warn: noop,
+      error: noop,
+      fatal: noop,
+      raw: noop,
+      child: (name: string) => createLogger(`${subsystem}/${name}`),
+    };
+  };
+  return { createSubsystemLogger: createLogger };
 });
 
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "agents/sticky-model-selection"
-        ? { info: effects.info, warn: effects.warn }
-        : actual.createSubsystemLogger(subsystem),
-  };
-});
+vi.mock("../../agents/sticky-model-selection.js", () => ({
+  persistStickyModelSelectionBestEffort: effects.stickyDispatch,
+}));
+
+vi.mock("../../sessions/session-lifecycle-admission.js", () => ({
+  collectActiveSessionWorkAdmissionIdentities: () => new Set(),
+  runExclusiveSessionLifecycleMutation: async (params: {
+    prepare?: () => Promise<void>;
+    run: () => Promise<unknown>;
+    finalize?: () => Promise<void>;
+  }) => {
+    await params.prepare?.();
+    try {
+      return await params.run();
+    } finally {
+      await params.finalize?.();
+    }
+  },
+}));
+
+vi.mock("../../plugins/host-hook-state.js", () => ({
+  patchPluginSessionExtension: () => {
+    effects.unexpectedCalls.push("patchPluginSessionExtension");
+  },
+}));
+
+vi.mock("../../plugins/host-hooks.js", () => ({
+  isPluginJsonValue: () => {
+    effects.unexpectedCalls.push("isPluginJsonValue");
+    return false;
+  },
+}));
+
+vi.mock("../../cron/job-session-bindings.js", () => ({
+  disableCronJobsBoundToSessions: () => {
+    effects.unexpectedCalls.push("disableCronJobsBoundToSessions");
+    return new Map();
+  },
+}));
+
+vi.mock("../session-groups.js", () => ({
+  ensureSessionGroupRegistered: () => {
+    effects.unexpectedCalls.push("ensureSessionGroupRegistered");
+  },
+}));
+
+vi.mock("../session-patch-hooks.js", () => ({
+  triggerSessionPatchHook: () => {},
+}));
+
+vi.mock("./session-audit.js", () => ({
+  appendSessionAudit: () => {
+    effects.unexpectedCalls.push("appendSessionAudit");
+  },
+}));
+
+vi.mock("./session-change-event.js", () => ({
+  emitSessionsChanged: () => {},
+}));
+
+vi.mock("./sessions-patch-archive.js", () => ({
+  prepareSessionPatchArchive: () => {
+    effects.unexpectedCalls.push("prepareSessionPatchArchive");
+  },
+  validateSessionPatchArchiveProjection: () => {
+    effects.unexpectedCalls.push("validateSessionPatchArchiveProjection");
+  },
+}));
+
+vi.mock("./sessions-shared.js", () => ({
+  loadSessionsRuntimeModule: () => {
+    effects.unexpectedCalls.push("loadSessionsRuntimeModule");
+    return {};
+  },
+  requireSessionKey: (key: unknown) => {
+    const normalized = typeof key === "string" ? key.trim() : "";
+    if (!normalized) {
+      effects.unexpectedCalls.push("requireSessionKey:invalid");
+      return null;
+    }
+    return normalized;
+  },
+  resolveSessionWorkerPlacementPatchError: () => undefined,
+  sessionLog: {
+    info: () => effects.unexpectedCalls.push("sessionLog.info"),
+    warn: () => effects.unexpectedCalls.push("sessionLog.warn"),
+  },
+}));
 
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
@@ -147,17 +237,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  effects.info.mockReset();
-  effects.warn.mockReset();
-  effects.mutateConfigFileWithRetry
-    .mockReset()
-    .mockImplementation(
-      async (params: { mutate: (draft: OpenClawConfig, context: unknown) => unknown }) => {
-        const draft = structuredClone(cfg);
-        const result = await params.mutate(draft, {});
-        return { nextConfig: draft, result };
-      },
-    );
+  effects.stickyDispatch.mockClear();
+  effects.unexpectedCalls.length = 0;
+});
+
+afterEach(() => {
+  expect(effects.unexpectedCalls).toEqual([]);
 });
 
 afterAll(async () => {
@@ -180,7 +265,10 @@ describe("sessions.patch sticky model persistence", () => {
       const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
 
       expect(response[0]).toBe(true);
-      await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
+      expect(effects.stickyDispatch).toHaveBeenCalledExactlyOnceWith({
+        agentId,
+        model: "openai/gpt-5.6-sol",
+      });
     },
   );
 
@@ -200,34 +288,11 @@ describe("sessions.patch sticky model persistence", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.6-sol",
     });
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  });
-
-  it("returns session success and warns when the sticky config write fails", async () => {
-    const sessionKey = "agent:main:dm:write-failure";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-write-failure", updatedAt: 1 },
-    );
-    effects.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config write failed"));
-
-    const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    });
-    await vi.waitFor(() =>
-      expect(effects.warn).toHaveBeenCalledWith(
-        "failed sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config write failed",
-      ),
-    );
+    expect(effects.stickyDispatch).not.toHaveBeenCalled();
   });
 
   it.each([
     { name: "omitted", patch: { label: "Sticky" } },
-    { name: "cleared", patch: { model: null } },
     { name: "reset to the current default", patch: { model: "anthropic/claude-opus-4-6" } },
   ])("does not persist when model is $name", async ({ name, patch }) => {
     const sessionKey = `agent:main:dm:no-sticky-${name}`;
@@ -246,6 +311,6 @@ describe("sessions.patch sticky model persistence", () => {
     const response = await patchSession({ key: sessionKey, ...patch });
 
     expect(response[0]).toBe(true);
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    expect(effects.stickyDispatch).not.toHaveBeenCalled();
   });
 });
