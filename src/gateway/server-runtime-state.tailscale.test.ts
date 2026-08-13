@@ -1,5 +1,7 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
@@ -17,7 +19,7 @@ async function requestStatus(options: RequestOptions): Promise<{ status: number;
   });
 }
 
-async function requestRejectedUpgrade(options: RequestOptions): Promise<{
+async function requestUpgrade(options: RequestOptions): Promise<{
   status: number;
   body: string;
 }> {
@@ -46,9 +48,9 @@ async function requestRejectedUpgrade(options: RequestOptions): Promise<{
         });
       });
     });
-    req.once("upgrade", (_res, socket) => {
+    req.once("upgrade", (res, socket, head) => {
       socket.destroy();
-      reject(new Error("expected upgrade to reject"));
+      resolve({ status: res.statusCode ?? 0, body: head.toString("utf8") });
     });
     req.once("error", reject);
     req.end();
@@ -229,6 +231,69 @@ describe("managed Tailscale gateway ingress", () => {
     }
   });
 
+  it("routes proxy-shaped WebSocket upgrades only to plugin-authenticated routes", async () => {
+    const registry = createEmptyPluginRegistry();
+    const observedClient = vi.fn();
+    registry.httpRoutes.push({
+      path: "/plugin-ws",
+      auth: "plugin",
+      match: "exact",
+      handler: () => false,
+      handleUpgrade: (req, socket) => {
+        observedClient({
+          remoteAddress: req.socket.remoteAddress,
+          clientIp: getPluginRuntimeGatewayRequestScope()?.client?.clientIp,
+        });
+        socket.end(
+          "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+        );
+        return true;
+      },
+      pluginId: "plugin-ws",
+      source: "test",
+    });
+    const runtime = await createGatewayRuntimeStateForTest(registry, {
+      tailscaleMode: "serve",
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+    });
+    openServers.push(runtime);
+    await runtime.startListening();
+    const ordinaryAddress = runtime.httpServer.address();
+    if (!ordinaryAddress || typeof ordinaryAddress === "string") {
+      throw new Error("expected ordinary gateway listener");
+    }
+    const proxyHeaders = {
+      "x-forwarded-for": "198.51.100.20",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.example",
+    };
+
+    await expect(
+      requestUpgrade({
+        host: "127.0.0.1",
+        port: ordinaryAddress.port,
+        path: "/plugin-ws",
+        headers: proxyHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 101 });
+    expect(observedClient).toHaveBeenCalledWith({
+      remoteAddress: "127.0.0.1",
+      clientIp: "127.0.0.1",
+    });
+    expect(observedClient).not.toHaveBeenCalledWith(
+      expect.objectContaining({ clientIp: "198.51.100.20" }),
+    );
+
+    const rejectedGatewayUpgrade = await requestUpgrade({
+      host: "127.0.0.1",
+      port: ordinaryAddress.port,
+      path: "/ready",
+      headers: proxyHeaders,
+    });
+    expect(rejectedGatewayUpgrade.status).toBe(403);
+    expect(rejectedGatewayUpgrade.body).toContain("proxy_attribution_required");
+  });
+
   it("reports HTTP and WebSocket proxy ingress once without warning for attributable traffic", async () => {
     const log = { info: vi.fn(), warn: vi.fn() };
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
@@ -276,7 +341,7 @@ describe("managed Tailscale gateway ingress", () => {
       },
     } satisfies RequestOptions;
     const rejectedHttp = await requestStatus(proxyRequest);
-    const rejectedWebSocket = await requestRejectedUpgrade(proxyRequest);
+    const rejectedWebSocket = await requestUpgrade(proxyRequest);
 
     expect(rejectedHttp.status).toBe(403);
     expect(rejectedHttp.body).toContain("proxy_attribution_required");

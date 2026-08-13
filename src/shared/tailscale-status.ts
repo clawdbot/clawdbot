@@ -115,21 +115,63 @@ function collectServeGatewayUrls(
   return urls;
 }
 
-function extractServeGatewayUrls(raw: string, gatewayPort: number): string[] {
+function extractServeGatewayUrls(raw: string, gatewayPort: number): string[] | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) {
-    return [];
+    return null;
   }
   const parsed = safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1));
   if (!parsed) {
-    return [];
+    return null;
   }
   // Service entries can load-balance to another node, while Funnel routes are public.
-  // Pairing fallbacks must stay pinned to this node and available only inside the tailnet.
+  // Gateway route discovery must stay pinned to this node and inside the tailnet.
   return [
     ...new Set(collectServeGatewayUrls(parsed, gatewayPort, parsed.AllowFunnel ?? {})),
   ].toSorted();
+}
+
+export type TailscaleServeGatewayInspection =
+  | { status: "ok"; urls: string[] }
+  | { status: "unavailable" }
+  | { status: "invalid" };
+
+/** Inspects persistent Serve routes without collapsing malformed output into route absence. */
+export async function inspectTailscaleServeGatewayUrlsWithRunner(
+  gatewayPort: number,
+  runCommandWithTimeout?: TailscaleStatusCommandRunner,
+): Promise<TailscaleServeGatewayInspection> {
+  if (!runCommandWithTimeout) {
+    return { status: "unavailable" };
+  }
+  let sawValidStatus = false;
+  let sawInvalidStatus = false;
+  for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
+    try {
+      const result = await runCommandWithTimeout([candidate, "serve", "status", "--json"], {
+        timeoutMs: 5000,
+      });
+      if (result.code !== 0 || !result.stdout.trim()) {
+        continue;
+      }
+      const urls = extractServeGatewayUrls(result.stdout, gatewayPort);
+      if (!urls) {
+        sawInvalidStatus = true;
+        continue;
+      }
+      sawValidStatus = true;
+      if (urls.length > 0) {
+        return { status: "ok", urls };
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (sawValidStatus) {
+    return { status: "ok", urls: [] };
+  }
+  return { status: sawInvalidStatus ? "invalid" : "unavailable" };
 }
 
 /** Resolves the host published to clients for tailnet or Tailscale Serve gateway modes. */
@@ -191,24 +233,9 @@ export async function resolveTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
 ): Promise<string[]> {
-  if (!runCommandWithTimeout) {
-    return [];
-  }
-  for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
-    try {
-      const result = await runCommandWithTimeout([candidate, "serve", "status", "--json"], {
-        timeoutMs: 5000,
-      });
-      if (result.code !== 0 || !result.stdout.trim()) {
-        continue;
-      }
-      const urls = extractServeGatewayUrls(result.stdout, gatewayPort);
-      if (urls.length > 0) {
-        return urls;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return [];
+  const inspection = await inspectTailscaleServeGatewayUrlsWithRunner(
+    gatewayPort,
+    runCommandWithTimeout,
+  );
+  return inspection.status === "ok" ? inspection.urls : [];
 }

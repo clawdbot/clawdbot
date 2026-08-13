@@ -94,6 +94,7 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
+    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -464,6 +465,43 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  if (
+    state.controlUiDeviceAuthMigrationPending &&
+    context.handler.isControlUiDeviceAuthMigrationPending?.() !== true
+  ) {
+    const hasDeviceIdentity = Boolean(device);
+    const message = "device auth migration completed during connect; reconnect";
+    markHandshakeFailure("control-ui-device-auth-migration-completed", {
+      device: hasDeviceIdentity ? "yes" : "no",
+    });
+    sendHandshakeErrorResponse(
+      hasDeviceIdentity ? ErrorCodes.NOT_PAIRED : ErrorCodes.INVALID_REQUEST,
+      message,
+      {
+        details: {
+          code: hasDeviceIdentity
+            ? ConnectErrorDetailCodes.PAIRING_REQUIRED
+            : ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        },
+      },
+    );
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+    return;
+  }
+
+  // Authentication may finish before pairing/profile work does. Revalidate at
+  // the registration boundary so a credential rotation cannot miss this client.
+  if (
+    sessionUsesSharedGatewayAuth &&
+    getRequiredSharedGatewaySessionGeneration &&
+    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
+  ) {
+    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+    await releasePendingNodePairingCleanup();
+    close(4001, "gateway auth changed");
+    return;
+  }
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {

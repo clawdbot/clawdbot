@@ -386,6 +386,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
+  const { prepareLegacyTailscaleServeConfigMigration } = await import("./doctor-tailscale.js");
+  applyConfigMutation(
+    await prepareLegacyTailscaleServeConfigMigration({
+      cfg: state.candidate,
+      env: process.env,
+    }),
+    {
+      fixHint: `Run "${doctorFixCommand}" to migrate legacy Tailscale Serve to managed ingress.`,
+      emitWarnings: true,
+    },
+  );
+
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
   const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({
     cfg: state.candidate,

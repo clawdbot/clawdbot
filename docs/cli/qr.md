@@ -66,6 +66,11 @@ Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tails
 
 The QR command advertises Tailscale URLs only when OpenClaw owns the route through `gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that target the ordinary Gateway listener are not advertised because that listener rejects Tailscale-shaped proxy ingress.
 
+If an older setup used `gateway.bind=lan` with a persistent default HTTPS Serve
+route, run `openclaw doctor` to preview migration to managed ingress. Apply it
+with `openclaw doctor --fix`, then restart the Gateway. Doctor leaves custom
+Serve ports and Tailscale Services unchanged and prints manual guidance.
+
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 
 ## Auth resolution (no `--remote`)
