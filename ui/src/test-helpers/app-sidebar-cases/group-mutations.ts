@@ -83,7 +83,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   async function openGroupMenu(sidebar: SidebarLifecycleState) {
     const actions = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-section="category:Alpha"] .sidebar-session-group-actions',
+      '[data-session-section="category:Alpha"] .sidebar-session-group-actions[aria-haspopup="menu"]',
     );
     if (!actions) {
       throw new Error("expected group actions trigger");
@@ -99,7 +99,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   async function renameGroupThroughDialog(sidebar: SidebarLifecycleState, name: string) {
     const menu = await openGroupMenu(sidebar);
-    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    menu.querySelector<HTMLButtonElement>('[value="rename-group"]')?.click();
     await submitInputDialog(name);
   }
 

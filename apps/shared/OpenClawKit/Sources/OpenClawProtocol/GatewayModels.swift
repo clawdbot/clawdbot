@@ -8437,6 +8437,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
     public let label: String?
+    public let category: String?
     public let model: String?
     public let thinkinglevel: String?
     public let incognito: Bool?
@@ -8462,6 +8463,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         key: String? = nil,
         agentid: String? = nil,
         label: String? = nil,
+        category: String? = nil,
         model: String? = nil,
         thinkinglevel: String? = nil,
         incognito: Bool? = nil,
@@ -8486,6 +8488,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.category = category
         self.model = model
         self.thinkinglevel = thinkinglevel
         self.incognito = incognito
@@ -8512,6 +8515,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case category
         case model
         case thinkinglevel = "thinkingLevel"
         case incognito
@@ -9202,18 +9206,26 @@ public struct SessionsDeleteParams: Codable, Sendable {
 public struct SessionGroup: Codable, Sendable {
     public let name: String
     public let position: Int
+    public let cwd: String?
+    public let worktree: Bool?
 
     public init(
         name: String,
-        position: Int)
+        position: Int,
+        cwd: String? = nil,
+        worktree: Bool? = nil)
     {
         self.name = name
         self.position = position
+        self.cwd = cwd
+        self.worktree = worktree
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
         case position
+        case cwd
+        case worktree
     }
 }
 
@@ -9270,6 +9282,28 @@ public struct SessionsGroupsRenameParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case to
+    }
+}
+
+public struct SessionsGroupsUpdateParams: Codable, Sendable {
+    public let name: String
+    public let cwd: AnyCodable
+    public let worktree: Bool
+
+    public init(
+        name: String,
+        cwd: AnyCodable,
+        worktree: Bool)
+    {
+        self.name = name
+        self.cwd = cwd
+        self.worktree = worktree
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case cwd
+        case worktree
     }
 }
 

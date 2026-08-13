@@ -37,12 +37,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       }
       const form = event.currentTarget as HTMLFormElement;
       const data = new FormData(form);
+      const cwd = data.get("cwd");
       submitting = true;
       failure = null;
       paint();
       try {
         failure = await options.submit({
-          cwd: String(data.get("cwd") ?? "").trim(),
+          cwd: typeof cwd === "string" ? cwd.trim() : "",
           worktree: data.get("mode") === "worktree",
         });
       } catch (error) {
