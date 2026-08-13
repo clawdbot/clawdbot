@@ -229,7 +229,7 @@ function installTestRegistry(
     | {
         plugin: ChannelPlugin<TestAccount>;
         origin: string;
-        channelRuntime?: PluginRuntime["channel"];
+        resolveChannelRuntime?: () => PluginRuntime["channel"];
       }
   >
 ) {
@@ -239,8 +239,8 @@ function installTestRegistry(
     registry.channels.push({
       pluginId: plugin.id,
       ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
-      ...(typeof candidate === "object" && "channelRuntime" in candidate
-        ? { channelRuntime: candidate.channelRuntime }
+      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
+        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
         : {}),
       source: "test",
       plugin,
@@ -2387,7 +2387,7 @@ describe("server-channels auto restart", () => {
     installTestRegistry({
       plugin: createTestPlugin({ startAccount }),
       origin: "bundled",
-      channelRuntime: activeRuntime,
+      resolveChannelRuntime: () => activeRuntime,
     });
     const manager = createManager({ resolveChannelRuntime });
 

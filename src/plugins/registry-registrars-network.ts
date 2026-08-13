@@ -302,7 +302,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
-    channelRuntime?: PluginChannelRegistration["channelRuntime"],
+    resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
     if (record.origin === "workspace" && !record.enabled) {
       pushDiagnostic({
@@ -333,7 +333,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
-        existingRuntime.channelRuntime = channelRuntime;
+        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
         existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
@@ -396,7 +396,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
-      channelRuntime,
+      resolveChannelRuntime,
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,

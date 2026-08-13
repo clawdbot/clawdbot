@@ -70,6 +70,73 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
+    let channelReads = 0;
+    const channel = { inbound: { buildContext: buildChannelInboundEventContext } };
+    const runtime = Object.defineProperty({} as PluginRuntime, "channel", {
+      configurable: true,
+      get: () => {
+        channelReads += 1;
+        return channel;
+      },
+    });
+    const registryBuilder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "deferred-channel", origin: "bundled" });
+    const api = registryBuilder.createApi(record, {
+      config: {} as OpenClawConfig,
+      registrationMode: "full",
+    });
+
+    api.registerChannel({
+      plugin: {
+        id: "deferred-channel",
+        meta: {
+          id: "deferred-channel",
+          label: "Deferred Channel",
+          selectionLabel: "Deferred Channel",
+          docsPath: "/channels/deferred-channel",
+          blurb: "test channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+
+    registryBuilder.registry.plugins.push(record);
+    markPluginRegistryActive(registryBuilder.registry);
+    const inactivePreparedRecord = createPluginRecord({
+      id: record.id,
+      origin: "bundled",
+    });
+    registryBuilder.createApi(inactivePreparedRecord, {
+      config: {} as OpenClawConfig,
+      registrationMode: "setup-only",
+    });
+
+    expect(channelReads).toBe(0);
+    const registeredRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
+    expect(registeredRuntime).toBeDefined();
+    expect(channelReads).toBe(1);
+
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const ingress = await resolveIngress("person-a");
+      expect(
+        inspect(registeredRuntime!.inbound.buildContext(contextParams({ ingress }))),
+      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("mints only for the exact active bundled record", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {

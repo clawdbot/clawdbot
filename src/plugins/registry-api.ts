@@ -108,7 +108,8 @@ export function createPluginApiFactory(
     registerCli,
     registerChannel,
   } = registrars;
-  const { resolvePluginRuntime, setPluginRuntimeRecord } = runtimeResolver;
+  const { resolvePluginRuntime, resolveRegisteredChannelRuntime, setPluginRuntimeRecord } =
+    runtimeResolver;
 
   const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
     const guard = { active: true };
@@ -389,7 +390,9 @@ export function createPluginApiFactory(
             record,
             registration,
             registrationMode,
-            resolvePluginRuntime(record.id).channel,
+            registrationCapabilities.runtimeChannel
+              ? () => resolveRegisteredChannelRuntime(record)
+              : undefined,
           ),
       },
     });

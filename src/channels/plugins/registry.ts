@@ -33,9 +33,9 @@ export function resolveChannelPluginRegistration(id: ChannelId):
   | {
       plugin: ChannelPlugin;
       origin?: string;
-      channelRuntime?: NonNullable<
+      resolveChannelRuntime?: NonNullable<
         ReturnType<typeof getLoadedChannelPluginEntryById>
-      >["channelRuntime"];
+      >["resolveChannelRuntime"];
     }
   | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
@@ -49,7 +49,9 @@ export function resolveChannelPluginRegistration(id: ChannelId):
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
       plugin: loadedEntry.plugin as ChannelPlugin,
-      ...(loadedEntry.channelRuntime ? { channelRuntime: loadedEntry.channelRuntime } : {}),
+      ...(loadedEntry.resolveChannelRuntime
+        ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
+        : {}),
       ...(origin ? { origin } : {}),
     };
   }

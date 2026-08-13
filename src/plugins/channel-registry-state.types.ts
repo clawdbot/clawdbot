@@ -23,7 +23,7 @@ export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
   origin?: import("./plugin-origin.types.js").PluginOrigin | null;
-  channelRuntime?: import("./runtime/types-channel.js").PluginRuntimeChannel;
+  resolveChannelRuntime?: () => import("./runtime/types-channel.js").PluginRuntimeChannel;
 };
 
 /** Active runtime channel registry snapshot. */

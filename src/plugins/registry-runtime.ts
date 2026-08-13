@@ -73,6 +73,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
   const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
+  const recordChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
+  const registeredChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
 
   const addPluginRuntimeResolutionContext = (params: {
     error: unknown;
@@ -98,6 +100,59 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       ].join("; ");
     }
     throw error;
+  };
+
+  const resolveRecordChannelRuntime = (
+    record: PluginRecord,
+    requireCurrentRuntimeRecord: boolean,
+  ): PluginRuntime["channel"] => {
+    const cache = requireCurrentRuntimeRecord ? recordChannelRuntime : registeredChannelRuntime;
+    const cached = cache.get(record);
+    if (cached) {
+      return cached;
+    }
+    const channel = (() => {
+      try {
+        return Reflect.get(
+          registryParams.runtime,
+          "channel",
+          registryParams.runtime,
+        ) as PluginRuntime["channel"];
+      } catch (error) {
+        return addPluginRuntimeResolutionContext({
+          error,
+          pluginId: record.id,
+          prop: "channel",
+        });
+      }
+    })();
+    if (record.origin !== "bundled") {
+      cache.set(record, channel);
+      return channel;
+    }
+    const buildHostContext = createHostChannelInboundEventContextBuilder(
+      channel.inbound.buildContext,
+    );
+    const buildContext = ((
+      params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
+    ) => {
+      const ownsLiveRegistrySlot =
+        activePluginRuntimeRecords.has(record) &&
+        (!requireCurrentRuntimeRecord || pluginRuntimeRecordById.get(record.id) === record) &&
+        isPluginRegistryActivated(registry) &&
+        !isPluginRegistryRetired(registry) &&
+        registry.plugins.some((candidate) => candidate === record && candidate.status === "loaded");
+      // Audit provenance is passive: stale closures still build the message context,
+      // but only the exact live bundled owner may attach participant evidence.
+      const builder = ownsLiveRegistrySlot ? buildHostContext : channel.inbound.buildContext;
+      return builder(params as never);
+    }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const scoped = {
+      ...channel,
+      inbound: { ...channel.inbound, buildContext },
+    } satisfies PluginRuntime["channel"];
+    cache.set(record, scoped);
+    return scoped;
   };
 
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
@@ -542,7 +597,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
     };
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
-    let scopedChannelRuntime: PluginRuntime["channel"] | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
@@ -665,38 +719,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["config"];
         }
         if (prop === "channel") {
-          if (scopedChannelRuntime) {
-            return scopedChannelRuntime;
-          }
-          const channel: PluginRuntime["channel"] = getRuntimeProperty();
           const ownerRecord = pluginRuntimeRecordById.get(pluginId);
-          if (ownerRecord?.origin !== "bundled") {
-            return channel;
+          if (!ownerRecord) {
+            return getRuntimeProperty();
           }
-          const buildHostContext = createHostChannelInboundEventContextBuilder(
-            channel.inbound.buildContext,
-          );
-          const buildContext = ((
-            params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
-          ) => {
-            const ownsLiveRegistrySlot =
-              activePluginRuntimeRecords.has(ownerRecord) &&
-              pluginRuntimeRecordById.get(pluginId) === ownerRecord &&
-              isPluginRegistryActivated(registry) &&
-              !isPluginRegistryRetired(registry) &&
-              registry.plugins.some(
-                (candidate) => candidate === ownerRecord && candidate.status === "loaded",
-              );
-            // Audit provenance is passive: stale closures still build the message context,
-            // but only the exact live bundled owner may attach participant evidence.
-            const builder = ownsLiveRegistrySlot ? buildHostContext : channel.inbound.buildContext;
-            return builder(params as never);
-          }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
-          scopedChannelRuntime = {
-            ...channel,
-            inbound: { ...channel.inbound, buildContext },
-          };
-          return scopedChannelRuntime;
+          return resolveRecordChannelRuntime(ownerRecord, true);
         }
         if (prop === "llm") {
           const llm = getRuntimeProperty();
@@ -948,6 +975,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 
   return {
     resolvePluginRuntime,
+    resolveRegisteredChannelRuntime: (record: PluginRecord) =>
+      resolveRecordChannelRuntime(record, false),
     setPluginRuntimeRecord: (record: PluginRecord) => {
       pluginRuntimeRecordById.set(record.id, record);
       activePluginRuntimeRecords.add(record);
