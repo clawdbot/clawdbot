@@ -8,6 +8,9 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
+const loadPluginManifestRegistryCoreMock = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [], diagnostics: [] })),
+);
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "gateway-session-utils-plugin-runtime-test-empty-plugin-metadata",
   plugins: [],
@@ -22,6 +25,11 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
+  loadPluginManifestRegistryCore: loadPluginManifestRegistryCoreMock,
+}));
+
 let sessionUtils: typeof import("./session-utils.js");
 
 describe("gateway session list plugin runtime normalization", () => {
@@ -32,6 +40,7 @@ describe("gateway session list plugin runtime normalization", () => {
 
   beforeEach(() => {
     normalizeProviderModelIdWithPluginMock.mockReset();
+    loadPluginManifestRegistryCoreMock.mockClear();
   });
 
   it("skips provider runtime normalization for lightweight list rows", async () => {
@@ -116,6 +125,7 @@ describe("gateway session list plugin runtime normalization", () => {
 
       expect(lifecycle.row?.model).toBe("custom-legacy-model");
       expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+      expect(loadPluginManifestRegistryCoreMock).not.toHaveBeenCalled();
 
       expect(sessionUtils.loadGatewaySessionRow(sessionKey)?.model).toBe("custom-modern-model");
       expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();

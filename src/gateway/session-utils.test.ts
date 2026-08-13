@@ -986,6 +986,7 @@ describe("gateway session utils", () => {
       storePath: "",
       store: {},
       key: "main",
+      lightweightListRow: false,
     });
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
