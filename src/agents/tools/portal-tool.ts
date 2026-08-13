@@ -52,7 +52,7 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
     label: "Portal",
     name: "portal",
     description:
-      "Expose a local HTTP dev server through the gateway so the operator can view it live (a portal). Flow: pick a port (if the workspace has .openclaw/portals.json, use its declared entries), call action=open with that port to get the portal URL, then start the server with the exec tool (background=true) passing PORT=<port> and PUBLIC_URL=<publicUrl> in env. The proxy carries HTTP and WebSockets (hot reload works) and shows a retry page until the server listens. action=list shows active portals; action=close removes one. Portals end when the gateway restarts.",
+      "Expose local HTTP server; operator sees it live in Control UI. Order matters: action=open with the port first, which returns the URL; then start the dev server as a background process, passing PORT and PUBLIC_URL from that result. Workspace may declare servers in .openclaw/portals.json. Proxies HTTP and WebSockets, so hot reload works; serves retry page until port listens. action=list and action=close manage portals. Portals end at gateway restart.",
     parameters: PortalToolSchema,
     outputSchema: PortalToolOutputSchema,
     execute: async (_toolCallId, rawArgs) => {

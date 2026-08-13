@@ -55,6 +55,36 @@ The application must honor `PORT`. Use `PUBLIC_URL` when it needs to generate ab
 
 The proxy rewrites `Host` to the local target, so typical development servers such as Vite and Next.js need no additional configuration. WebSockets and hot module replacement are proxied through the same portal.
 
+## Availability and configuration
+
+Portals add no dedicated configuration key. The `portal` tool follows ordinary tool policy, described in [Tools configuration](/gateway/config-tools).
+
+Out of the box:
+
+- `portal` belongs to `group:ui` and the `coding` profile, so coding agents have it while `messaging` and `minimal` agents do not.
+- Sandboxed sessions never receive it, because opening a portal starts a listener on the Gateway host.
+- It is blocked for HTTP `POST /tools/invoke` and restricted to the session owner, the same treatment `terminal` gets.
+
+To turn portals off for every agent, deny the tool by name:
+
+```json validate=false
+{
+  "agents": { "defaults": { "tools": { "deny": ["portal"] } } }
+}
+```
+
+To turn them off for a single agent, leaving the others unchanged:
+
+```json validate=false
+{
+  "agents": { "entries": { "<agentId>": { "tools": { "deny": ["portal"] } } } }
+}
+```
+
+`tools.profile`, `tools.allow`, `byProvider`, and `toolsBySender` apply to `portal` as they do to any other tool, so portals can also be limited to specific providers, models, or senders without a portal-specific setting.
+
+One consequence worth planning for: portal listeners bind the same interfaces as the Gateway. A Gateway bound to a LAN or tailnet address publishes its portal listener ports on that network too. Reaching one still requires the portal token, but deny the tool when the Gateway host must not offer operator-reachable application ports at all.
+
 ## Security model
 
 Each portal uses a separate origin on its own port and binds to the same interfaces as the Gateway. Access requires the token in the portal URL. On the first request, the proxy stores that token in an HttpOnly cookie and removes it from subsequent upstream requests. The proxy validates this cookie itself and never forwards it to the application.
