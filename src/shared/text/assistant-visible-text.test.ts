@@ -39,6 +39,11 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Visible",
     },
     {
+      name: "strips internal reflection tags",
+      input: ["<internal>", "private reflection", "</internal>", "Visible"].join("\n"),
+      expected: "Visible",
+    },
+    {
       name: "strips relevant-memories scaffolding blocks",
       input: [
         "<relevant-memories>",

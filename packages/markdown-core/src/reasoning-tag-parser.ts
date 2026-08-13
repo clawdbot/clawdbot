@@ -12,6 +12,7 @@ export const REASONING_TAG_NAMES = [
   "thinking",
   "thought",
   "reasoning",
+  "internal",
   "antthinking",
   "antml:think",
   "antml:thinking",
@@ -32,6 +33,7 @@ type ReasoningTagMatch = {
   text: string;
   isClose: boolean;
   isSelfClosing: boolean;
+  canRecoverUnclosed: boolean;
 };
 
 type ReasoningTagScan = {
@@ -127,6 +129,7 @@ export function parseReasoningTagAt(
           text: text.slice(start, end),
           isClose,
           isSelfClosing: !isClose && lastSignificant === "/",
+          canRecoverUnclosed: partialName !== "internal",
         },
       };
     }
@@ -254,6 +257,7 @@ export type ReductionState = {
     content: string;
     openTag: string;
     protectedClose: boolean;
+    canRecoverUnclosed: boolean;
     visibleBefore: boolean;
   };
 };
@@ -306,6 +310,7 @@ export function reduceReasoningText(
       index: scannedTag.index + start,
       isClose: scannedTag.isClose,
       isSelfClosing: scannedTag.isSelfClosing,
+      canRecoverUnclosed: scannedTag.canRecoverUnclosed,
       text: scannedTag.text,
     };
     if (!isInsideCode(tag.index, codeSpans)) {
@@ -357,8 +362,12 @@ export function reduceReasoningText(
           content: "",
           openTag: tag.text,
           protectedClose: false,
+          canRecoverUnclosed: tag.canRecoverUnclosed,
           visibleBefore: state.visibleEver,
         };
+      } else if (state.pending) {
+        // Any nested private block makes the whole unclosed region private on flush.
+        state.pending.canRecoverUnclosed &&= tag.canRecoverUnclosed;
       }
       state.depth += 1;
       cursor = tagEnd;
@@ -394,9 +403,10 @@ export function reduceReasoningText(
   if (options.final && state.depth > 0 && state.pending) {
     const pending = state.pending;
     const recoverAsText =
-      options.mode === "static-preserve" ||
-      (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
-      (options.mode === "visible" && !pending.protectedClose);
+      pending.canRecoverUnclosed &&
+      (options.mode === "static-preserve" ||
+        (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
+        (options.mode === "visible" && !pending.protectedClose));
     if (recoverAsText) {
       const value =
         options.mode === "visible" && pending.visibleBefore
