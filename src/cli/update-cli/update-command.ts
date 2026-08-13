@@ -268,7 +268,7 @@ async function updateCommandInternal(
     return;
   }
   // The effective dev channel (stored or explicit) must select the git flow:
-  // npm publishes no "dev" dist-tag, so a package-mode dev update can only fail.
+  // the documented dev-channel contract is a git checkout, not a package update.
   const switchToGit = channel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
