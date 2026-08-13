@@ -108,6 +108,10 @@ type RenderMessageGroupOptions = {
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
+// Each automatic load attempt costs 2 revisions (loading, then error), so
+// this bounds auto-retries to 3 before the manual retry affordance takes over.
+const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
+
 function buildGroupedMessageRenderOptions(
   group: MessageGroup,
   item: MessageGroup["messages"][number],
@@ -124,9 +128,15 @@ function buildGroupedMessageRenderOptions(
   ) {
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    const retriesExhausted =
+      expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
+      // Manual re-entry once the bounded automatic retries gave up.
+      ...(retriesExhausted
+        ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
+        : {}),
     };
   }
   return {
@@ -397,7 +407,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     // A transient load failure must not pin the truncated preview for the
     // whole session: retry on later render passes, bounded by revision
     // (each attempt costs 2 revisions) so a dead loader cannot hot-loop.
-    if (!expansion || (expansion.status === "error" && expansion.revision < 6)) {
+    if (
+      !expansion ||
+      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+    ) {
       opts.onToggleAssistantMessageExpanded?.(details.messageId);
     }
   }
