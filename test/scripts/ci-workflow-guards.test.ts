@@ -3995,21 +3995,23 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
   });
 
-  it("runs the Plugin SDK API baseline as a visible additional check", () => {
+  it("reports the Plugin SDK API diff as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
     const matrixRows = additionalJob.strategy.matrix.include;
     expect(matrixRows).toContainEqual({
-      check_name: "check-plugin-sdk-api-baseline",
-      group: "plugin-sdk-api-baseline",
+      check_name: "report-plugin-sdk-api-diff",
+      group: "plugin-sdk-api-diff",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
     );
-    expect(runStep.run).toContain("plugin-sdk-api-baseline)");
-    expect(runStep.run).toContain('run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check');
+    expect(runStep.run).toContain("plugin-sdk-api-diff)");
+    expect(runStep.run).toContain('run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff');
+    expect(runStep.run).toContain("--base");
+    expect(runStep.run).toContain("--head");
   });
 
   it("runs the SQLite transaction ratchet in the session boundary check", () => {
@@ -4391,17 +4393,13 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
   });
 
-  it("runs generated baseline drift checks in workflow sanity", () => {
+  it("runs committed generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;
     const stepNames = steps.map((step: WorkflowStep) => step.name);
 
-    expect(stepNames).toContain("Check plugin SDK API contract manifest");
     expect(stepNames).toContain("Check SQLite sessions/transcripts schema baseline drift");
     expect(stepNames).toContain("Check plugin SDK surface budget");
-    expect(stepNames.indexOf("Check plugin SDK API contract manifest")).toBeLessThan(
-      stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
-    );
     expect(
       stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     ).toBeLessThan(stepNames.indexOf("Check plugin SDK surface budget"));

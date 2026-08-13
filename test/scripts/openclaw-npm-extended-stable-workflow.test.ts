@@ -20,6 +20,11 @@ type Workflow = {
       inputs?: {
         bypass_extended_stable_guard?: { default?: boolean; type?: string };
         npm_dist_tag?: { options?: string[] };
+        plugin_sdk_api_acknowledgement?: {
+          default?: string;
+          required?: boolean;
+          type?: string;
+        };
         plugin_npm_run_id?: { required?: boolean; type?: string };
         release_candidate_branch?: { default?: string; required?: boolean; type?: string };
       };
@@ -68,6 +73,26 @@ describe("minimal npm extended-stable workflow", () => {
     ]) {
       expect(raw).not.toContain(forbidden);
     }
+  });
+
+  it("binds intentional Plugin SDK release changes to the reported digest", () => {
+    const parsed = workflow();
+    const input = parsed.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const apiDiff = step(parsed.jobs?.preflight_openclaw_npm, "Verify Plugin SDK API changes");
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(apiDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(apiDiff.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(apiDiff.run).toContain("--require-acknowledgement");
+    expect(apiDiff.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
   });
 
   it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {

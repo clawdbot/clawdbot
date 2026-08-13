@@ -1,0 +1,414 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { PluginSdkApiDeclarationSection } from "./api-baseline-declaration-closure.js";
+import {
+  renderPluginSdkApiBaseline,
+  type PluginSdkApiBaseline,
+  type PluginSdkApiExport,
+  type PluginSdkApiModule,
+} from "./api-baseline.js";
+
+const ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-entrypoints.json";
+const PRIVATE_ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-private-local-only-subpaths.json";
+const REPORT_ITEM_LIMIT = 40;
+const REPORT_TEXT_LINE_LIMIT = 20;
+const REPORT_AFFECTED_EXPORT_LIMIT = 5;
+const REPORT_BYTE_LIMIT = 64 * 1024;
+
+export type PluginSdkApiExportSnapshot = Pick<
+  PluginSdkApiExport,
+  "closureHash" | "declaration" | "kind"
+>;
+
+export type PluginSdkApiDeclarationChange = {
+  after: string | null;
+  before: string | null;
+  name: string;
+};
+
+export type PluginSdkApiExportChange = {
+  after: PluginSdkApiExportSnapshot | null;
+  before: PluginSdkApiExportSnapshot | null;
+  change: "added" | "reachable" | "removed" | "signature";
+  declarationChanges: PluginSdkApiDeclarationChange[];
+  entrypoint: string;
+  exportName: string;
+  importSpecifier: string;
+};
+
+export type PluginSdkApiEntrypointChange = {
+  entrypoint: string;
+  exportNames: string[];
+  importSpecifier: string;
+};
+
+export type PluginSdkApiDiffPayload = {
+  entrypointsAdded: PluginSdkApiEntrypointChange[];
+  entrypointsRemoved: PluginSdkApiEntrypointChange[];
+  exports: PluginSdkApiExportChange[];
+};
+
+export type PluginSdkApiDiff = PluginSdkApiDiffPayload & {
+  digest: string;
+};
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+async function readStringList(repoRoot: string, relativePath: string): Promise<string[]> {
+  const filePath = path.join(repoRoot, relativePath);
+  const parsed: unknown = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new Error(`${relativePath} must contain a JSON string array`);
+  }
+  return [...parsed];
+}
+
+/** Read the public entrypoint inventory owned by one repository revision. */
+export async function readPluginSdkApiEntrypoints(repoRoot: string): Promise<string[]> {
+  const [entrypoints, privateSubpaths] = await Promise.all([
+    readStringList(repoRoot, ENTRYPOINTS_PATH),
+    readStringList(repoRoot, PRIVATE_ENTRYPOINTS_PATH),
+  ]);
+  const privateEntrypoints = new Set(privateSubpaths.filter((entry) => !entry.includes("/")));
+  return entrypoints.filter((entrypoint) => !privateEntrypoints.has(entrypoint));
+}
+
+/** Render the public SDK surface using the inventory from that same repository revision. */
+export async function renderPluginSdkApiRoot(repoRoot: string): Promise<PluginSdkApiBaseline> {
+  return renderPluginSdkApiBaseline({
+    entrypoints: await readPluginSdkApiEntrypoints(repoRoot),
+    repoRoot,
+  });
+}
+
+function snapshot(
+  exportSurface: PluginSdkApiExport | undefined,
+): PluginSdkApiExportSnapshot | null {
+  return exportSurface
+    ? {
+        closureHash: exportSurface.closureHash,
+        declaration: exportSurface.declaration,
+        kind: exportSurface.kind,
+      }
+    : null;
+}
+
+function sectionKey(section: PluginSdkApiDeclarationSection): string {
+  return `${section.name}\0${section.text}`;
+}
+
+function collectDeclarationChanges(
+  before: readonly PluginSdkApiDeclarationSection[] | null,
+  after: readonly PluginSdkApiDeclarationSection[] | null,
+): PluginSdkApiDeclarationChange[] {
+  const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
+  const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
+  const removedByName = new Map<string, string[]>();
+  const addedByName = new Map<string, string[]>();
+  for (const [key, section] of beforeByKey) {
+    if (!afterByKey.has(key)) {
+      removedByName.set(section.name, [...(removedByName.get(section.name) ?? []), section.text]);
+    }
+  }
+  for (const [key, section] of afterByKey) {
+    if (!beforeByKey.has(key)) {
+      addedByName.set(section.name, [...(addedByName.get(section.name) ?? []), section.text]);
+    }
+  }
+
+  const names = new Set([...removedByName.keys(), ...addedByName.keys()]);
+  const changes: PluginSdkApiDeclarationChange[] = [];
+  for (const name of [...names].toSorted(compareText)) {
+    const removed = (removedByName.get(name) ?? []).toSorted(compareText);
+    const added = (addedByName.get(name) ?? []).toSorted(compareText);
+    const count = Math.max(removed.length, added.length);
+    for (let index = 0; index < count; index += 1) {
+      changes.push({
+        after: added[index] ?? null,
+        before: removed[index] ?? null,
+        name,
+      });
+    }
+  }
+  return changes;
+}
+
+function moduleChange(moduleSurface: PluginSdkApiModule): PluginSdkApiEntrypointChange {
+  return {
+    entrypoint: moduleSurface.entrypoint,
+    exportNames: moduleSurface.exports.map((exportSurface) => exportSurface.exportName).toSorted(),
+    importSpecifier: moduleSurface.importSpecifier,
+  };
+}
+
+function exportMap(moduleSurface: PluginSdkApiModule): Map<string, PluginSdkApiExport> {
+  return new Map(
+    moduleSurface.exports.map((exportSurface) => [exportSurface.exportName, exportSurface]),
+  );
+}
+
+/** Compare two rendered SDK surfaces without consulting committed approval state. */
+export function diffPluginSdkApi(
+  before: PluginSdkApiBaseline,
+  after: PluginSdkApiBaseline,
+): PluginSdkApiDiff {
+  const beforeModules = new Map(
+    before.modules.map((moduleSurface) => [moduleSurface.entrypoint, moduleSurface]),
+  );
+  const afterModules = new Map(
+    after.modules.map((moduleSurface) => [moduleSurface.entrypoint, moduleSurface]),
+  );
+  const entrypoints = new Set([...beforeModules.keys(), ...afterModules.keys()]);
+  const payload: PluginSdkApiDiffPayload = {
+    entrypointsAdded: [],
+    entrypointsRemoved: [],
+    exports: [],
+  };
+
+  for (const entrypoint of [...entrypoints].toSorted(compareText)) {
+    const beforeModule = beforeModules.get(entrypoint);
+    const afterModule = afterModules.get(entrypoint);
+    if (!beforeModule && afterModule) {
+      payload.entrypointsAdded.push(moduleChange(afterModule));
+      continue;
+    }
+    if (beforeModule && !afterModule) {
+      payload.entrypointsRemoved.push(moduleChange(beforeModule));
+      continue;
+    }
+    if (!beforeModule || !afterModule) {
+      continue;
+    }
+
+    const beforeExports = exportMap(beforeModule);
+    const afterExports = exportMap(afterModule);
+    const exportNames = new Set([...beforeExports.keys(), ...afterExports.keys()]);
+    for (const exportName of [...exportNames].toSorted(compareText)) {
+      const beforeExport = beforeExports.get(exportName);
+      const afterExport = afterExports.get(exportName);
+      if (!beforeExport && afterExport) {
+        payload.exports.push({
+          after: snapshot(afterExport),
+          before: null,
+          change: "added",
+          declarationChanges: [],
+          entrypoint,
+          exportName,
+          importSpecifier: afterModule.importSpecifier,
+        });
+        continue;
+      }
+      if (beforeExport && !afterExport) {
+        payload.exports.push({
+          after: null,
+          before: snapshot(beforeExport),
+          change: "removed",
+          declarationChanges: [],
+          entrypoint,
+          exportName,
+          importSpecifier: beforeModule.importSpecifier,
+        });
+        continue;
+      }
+      if (!beforeExport || !afterExport) {
+        continue;
+      }
+      if (
+        beforeExport.kind !== afterExport.kind ||
+        beforeExport.declaration !== afterExport.declaration
+      ) {
+        payload.exports.push({
+          after: snapshot(afterExport),
+          before: snapshot(beforeExport),
+          change: "signature",
+          declarationChanges: [],
+          entrypoint,
+          exportName,
+          importSpecifier: afterModule.importSpecifier,
+        });
+      } else if (beforeExport.closureHash !== afterExport.closureHash) {
+        payload.exports.push({
+          after: snapshot(afterExport),
+          before: snapshot(beforeExport),
+          change: "reachable",
+          declarationChanges: collectDeclarationChanges(
+            beforeExport.closureSections,
+            afterExport.closureSections,
+          ),
+          entrypoint,
+          exportName,
+          importSpecifier: afterModule.importSpecifier,
+        });
+      }
+    }
+  }
+
+  return {
+    ...payload,
+    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+  };
+}
+
+export function hasPluginSdkApiChanges(diff: PluginSdkApiDiff): boolean {
+  return (
+    diff.entrypointsAdded.length > 0 ||
+    diff.entrypointsRemoved.length > 0 ||
+    diff.exports.length > 0
+  );
+}
+
+export function pluginSdkApiAcknowledgement(diff: PluginSdkApiDiff): string {
+  return diff.digest.slice(0, 8);
+}
+
+function appendText(lines: string[], label: "after" | "before", text: string | null): void {
+  lines.push(`    ${label}:`);
+  const textLines = (text ?? "declaration unavailable").split("\n");
+  for (const line of textLines.slice(0, REPORT_TEXT_LINE_LIMIT)) {
+    lines.push(`      ${line}`);
+  }
+  if (textLines.length > REPORT_TEXT_LINE_LIMIT) {
+    lines.push(`      … ${textLines.length - REPORT_TEXT_LINE_LIMIT} more lines`);
+  }
+}
+
+function appendExportChanges(
+  lines: string[],
+  title: string,
+  changes: readonly PluginSdkApiExportChange[],
+): void {
+  if (changes.length === 0) {
+    return;
+  }
+  lines.push("", `## ${title} (${changes.length})`);
+  for (const change of changes.slice(0, REPORT_ITEM_LIMIT)) {
+    lines.push("", `- \`${change.importSpecifier}\` — \`${change.exportName}\``);
+    if (change.change === "signature") {
+      appendText(lines, "before", change.before?.declaration ?? null);
+      appendText(lines, "after", change.after?.declaration ?? null);
+    } else {
+      appendText(
+        lines,
+        change.change === "removed" ? "before" : "after",
+        change.before?.declaration ?? change.after?.declaration ?? null,
+      );
+    }
+  }
+  if (changes.length > REPORT_ITEM_LIMIT) {
+    lines.push("", `… ${changes.length - REPORT_ITEM_LIMIT} more`);
+  }
+}
+
+type ReachableReportChange = PluginSdkApiDeclarationChange & { affectedExports: string[] };
+
+function collectReachableReportChanges(
+  changes: readonly PluginSdkApiExportChange[],
+): ReachableReportChange[] {
+  const grouped = new Map<string, ReachableReportChange>();
+  for (const change of changes) {
+    if (change.change !== "reachable") {
+      continue;
+    }
+    const affectedExport = `${change.importSpecifier} :: ${change.exportName}`;
+    for (const declaration of change.declarationChanges) {
+      const key = `${declaration.name}\0${declaration.before ?? ""}\0${declaration.after ?? ""}`;
+      const current = grouped.get(key);
+      if (current) {
+        current.affectedExports.push(affectedExport);
+      } else {
+        grouped.set(key, { ...declaration, affectedExports: [affectedExport] });
+      }
+    }
+  }
+  return [...grouped.values()].toSorted(
+    (left, right) =>
+      compareText(left.name, right.name) ||
+      compareText(left.before ?? "", right.before ?? "") ||
+      compareText(left.after ?? "", right.after ?? ""),
+  );
+}
+
+/** Format a bounded PR/release summary. The full machine-readable diff stays in JSON. */
+export function formatPluginSdkApiDiffReport(params: {
+  baseLabel: string;
+  diff: PluginSdkApiDiff;
+  headLabel: string;
+}): string {
+  const { baseLabel, diff, headLabel } = params;
+  const lines = [
+    "# Plugin SDK API diff",
+    "",
+    `\`${baseLabel}\` → \`${headLabel}\``,
+    "",
+    `Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``,
+  ];
+  if (!hasPluginSdkApiChanges(diff)) {
+    lines.push("", "No Plugin SDK API changes.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  for (const [title, entrypoints] of [
+    ["Entrypoints removed", diff.entrypointsRemoved],
+    ["Entrypoints added", diff.entrypointsAdded],
+  ] as const) {
+    if (entrypoints.length > 0) {
+      lines.push("", `## ${title} (${entrypoints.length})`, "");
+      for (const entrypoint of entrypoints) {
+        lines.push(
+          `- \`${entrypoint.importSpecifier}\` (${entrypoint.exportNames.length} exports)`,
+        );
+      }
+    }
+  }
+
+  appendExportChanges(
+    lines,
+    "Exports removed",
+    diff.exports.filter((change) => change.change === "removed"),
+  );
+  appendExportChanges(
+    lines,
+    "Exports added",
+    diff.exports.filter((change) => change.change === "added"),
+  );
+  appendExportChanges(
+    lines,
+    "Signatures changed",
+    diff.exports.filter((change) => change.change === "signature"),
+  );
+
+  const reachable = collectReachableReportChanges(diff.exports);
+  if (reachable.length > 0) {
+    const affectedCount = diff.exports.filter((change) => change.change === "reachable").length;
+    lines.push(
+      "",
+      `## Reachable declarations changed (${reachable.length}; affects ${affectedCount} exports)`,
+    );
+    for (const change of reachable.slice(0, REPORT_ITEM_LIMIT)) {
+      lines.push("", `- \`${change.name}\``);
+      appendText(lines, "before", change.before);
+      appendText(lines, "after", change.after);
+      const affected = change.affectedExports.toSorted(compareText);
+      lines.push(
+        `    affects: ${affected
+          .slice(0, REPORT_AFFECTED_EXPORT_LIMIT)
+          .map((value) => `\`${value}\``)
+          .join(
+            ", ",
+          )}${affected.length > REPORT_AFFECTED_EXPORT_LIMIT ? ` (+${affected.length - REPORT_AFFECTED_EXPORT_LIMIT} more)` : ""}`,
+      );
+    }
+    if (reachable.length > REPORT_ITEM_LIMIT) {
+      lines.push("", `… ${reachable.length - REPORT_ITEM_LIMIT} more reachable declarations`);
+    }
+  }
+
+  const report = `${lines.join("\n")}\n`;
+  if (Buffer.byteLength(report, "utf8") <= REPORT_BYTE_LIMIT) {
+    return report;
+  }
+  return `${report.slice(0, REPORT_BYTE_LIMIT - 80)}\n\n… summary truncated; inspect the JSON artifact.\n`;
+}

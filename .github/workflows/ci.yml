@@ -2576,8 +2576,8 @@ jobs:
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-plugin-sdk-api-baseline
-            group: plugin-sdk-api-baseline
+          - check_name: report-plugin-sdk-api-diff
+            group: plugin-sdk-api-diff
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
@@ -2591,6 +2591,12 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
+      - name: Ensure Plugin SDK API diff base commit
+        if: matrix.group == 'plugin-sdk-api-diff'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -2801,8 +2807,13 @@ jobs:
                 run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
               ;;
-            plugin-sdk-api-baseline)
-              run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
+            plugin-sdk-api-diff)
+              mkdir -p .artifacts
+              run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
+                --base "${{ needs.preflight.outputs.diff_base_revision }}" \
+                --head "${{ needs.preflight.outputs.checkout_revision }}" \
+                --json .artifacts/plugin-sdk-api-diff.json \
+                --summary "$GITHUB_STEP_SUMMARY"
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -2818,6 +2829,14 @@ jobs:
           esac
 
           exit "$failures"
+
+      - name: Upload Plugin SDK API diff
+        if: always() && matrix.group == 'plugin-sdk-api-diff' && hashFiles('.artifacts/plugin-sdk-api-diff.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-sdk-api-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/plugin-sdk-api-diff.json
+          retention-days: 14
 
       # Only the protected writer refreshes the snapshot (pull_request mounts
       # never commit, so seeding there would burn wall clock on a discarded

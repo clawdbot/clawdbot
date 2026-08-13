@@ -47,6 +47,11 @@ on:
           - beta
           - latest
           - extended-stable
+      plugin_sdk_api_acknowledgement:
+        description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
+        required: false
+        default: ""
+        type: string
       bypass_extended_stable_guard:
         description: Testing only; relax the extended-stable patch and protected-main month policy on the canonical extended-stable branch
         required: true
@@ -327,6 +332,40 @@ jobs:
       # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
       # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
       # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
+      - name: Verify Plugin SDK API changes
+        env:
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
+            echo "Selected historical target predates plugin-sdk:api:diff; skipping unavailable check."
+            exit 0
+          fi
+          previous_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          previous_tag="v${previous_version}"
+          git rev-parse --verify "${previous_tag}^{commit}" >/dev/null
+          mkdir -p .artifacts
+          diff_args=(
+            --base "$previous_tag"
+            --head HEAD
+            --json .artifacts/plugin-sdk-api-release-diff.json
+            --summary "$GITHUB_STEP_SUMMARY"
+            --require-acknowledgement
+          )
+          if [ -n "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" ]; then
+            diff_args+=(--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT")
+          fi
+          pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"
+
+      - name: Upload Plugin SDK API release diff
+        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-diff.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/plugin-sdk-api-release-diff.json
+          retention-days: 30
+
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.core_package_tarballs.outputs.dir }}
