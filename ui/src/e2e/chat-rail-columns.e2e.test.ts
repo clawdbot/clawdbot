@@ -588,7 +588,7 @@ suite.define(() => {
         }
         await capture(page, "06-companion");
 
-        await page.getByRole("button", { name: "Hide discussion" }).click();
+        await page.getByRole("button", { name: "Hide discussion" }).press("Enter");
         await expect.poll(() => discussion.count()).toBe(0);
 
         await page.evaluate(() =>

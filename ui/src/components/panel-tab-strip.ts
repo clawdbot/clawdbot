@@ -298,6 +298,7 @@ export const panelTabStripStyles = css`
      the active surface; the action itself follows the bare rail-control contract. */
   .tabstrip-tab__close {
     flex: 0 0 auto;
+    align-self: center;
     margin-right: 1px;
     opacity: 0;
     transition: opacity 0.12s ease;
