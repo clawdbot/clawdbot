@@ -9,6 +9,7 @@ type ModelCatalogCacheEntry = {
   models: ModelCatalogEntry[];
   inFlight?: Promise<ModelCatalogEntry[]>;
   inFlightRefresh?: boolean;
+  inFlightRejects?: boolean;
 };
 
 const modelCatalogCache = new WeakMap<GatewayBrowserClient, Map<string, ModelCatalogCacheEntry>>();
@@ -24,17 +25,28 @@ function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCa
 
 export async function loadModels(
   client: GatewayBrowserClient,
-  opts?: { agentId?: string; preparedOnly?: boolean; refresh?: boolean },
+  opts?: {
+    agentId?: string;
+    preparedOnly?: boolean;
+    refresh?: boolean;
+    rejectOnFailure?: boolean;
+  },
 ): Promise<ModelCatalogEntry[]> {
   const cache = modelCatalogCacheFor(client);
   const agentId = opts?.agentId?.trim() ?? "";
+  const rejectOnFailure = opts?.rejectOnFailure === true;
   const cacheKey = `${agentId}\0${opts?.preparedOnly ? "prepared" : "exact"}`;
+  const preparedCacheKey = `${agentId}\0prepared`;
   const cached = cache.get(cacheKey);
   const now = Date.now();
   if (!opts?.refresh && cached?.models && cached.expiresAt > now) {
     return cached.models;
   }
-  if (cached?.inFlight && (!opts?.refresh || cached.inFlightRefresh === true)) {
+  if (
+    cached?.inFlight &&
+    cached.inFlightRejects === rejectOnFailure &&
+    (!opts?.refresh || cached.inFlightRefresh === true)
+  ) {
     return cached.inFlight;
   }
 
@@ -46,14 +58,21 @@ export async function loadModels(
     cached?.models,
     agentId || undefined,
     opts?.preparedOnly === true,
+    rejectOnFailure,
   )
     .then((result) => {
       const latest = cache.get(cacheKey);
       if (!latest || latest.inFlight === inFlight) {
-        cache.set(cacheKey, {
+        const entry = {
           expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
           models: result.models,
-        });
+        };
+        cache.set(cacheKey, entry);
+        if (result.fresh && opts?.preparedOnly !== true) {
+          // An exact catalog supersedes the prepared projection. Reusing it for
+          // automatic reads prevents route re-entry from restoring stale data.
+          cache.set(preparedCacheKey, entry);
+        }
       }
       return result.models;
     })
@@ -67,6 +86,7 @@ export async function loadModels(
     expiresAt: cached?.expiresAt ?? 0,
     models: cached?.models ?? [],
     inFlight,
+    inFlightRejects: rejectOnFailure,
     ...(opts?.refresh ? { inFlightRefresh: true } : {}),
   });
   return inFlight;
@@ -84,6 +104,7 @@ async function requestModels(
   fallback: ModelCatalogEntry[] | undefined,
   agentId: string | undefined,
   preparedOnly: boolean,
+  rejectOnFailure: boolean,
 ): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
@@ -92,7 +113,10 @@ async function requestModels(
       ...(preparedOnly ? { preparedOnly: true } : {}),
     });
     return { models: result?.models ?? [], fresh: true };
-  } catch {
+  } catch (error) {
+    if (rejectOnFailure) {
+      throw error;
+    }
     // Failed loads fall back without extending the TTL so the next call retries.
     return { models: fallback ?? [], fresh: false };
   }

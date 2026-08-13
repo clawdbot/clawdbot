@@ -155,6 +155,7 @@ function applyChatMetadataResult(
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
     host.chatModelCatalog = models;
+    host.chatModelCatalogError = null;
   }
   const commandsApplied =
     fields.commands === false
@@ -189,6 +190,7 @@ async function refreshCompatibilityModelCatalog(
   });
   if (ownsChatMetadataRequest(request)) {
     request.host.chatModelCatalog = models;
+    request.host.chatModelCatalogError = null;
   }
 }
 
@@ -237,6 +239,7 @@ export async function refreshChatMetadata(
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogError = null;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {
@@ -305,24 +308,31 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   const client = host.client;
   const agentId = resolveChatAgentId(host);
   const connectionEpoch = host.connectionEpoch;
+  const ownsRequest = () =>
+    host.client === client &&
+    host.connected &&
+    host.connectionEpoch === connectionEpoch &&
+    resolveChatAgentId(host) === agentId;
   host.chatModelsLoading = true;
+  host.chatModelCatalogError = null;
+  host.requestUpdate?.();
   try {
-    const models = await loadModels(client, agentId ? { agentId } : {});
-    if (
-      host.client === client &&
-      host.connected &&
-      host.connectionEpoch === connectionEpoch &&
-      resolveChatAgentId(host) === agentId
-    ) {
+    const models = await loadModels(client, {
+      ...(agentId ? { agentId } : {}),
+      rejectOnFailure: true,
+    });
+    if (ownsRequest()) {
       host.chatModelCatalog = models;
+      host.chatModelCatalogError = null;
+    }
+  } catch (error) {
+    if (ownsRequest()) {
+      // Keep the startup/prepared snapshot usable while making the failed
+      // discovery and its retry path visible in the open picker.
+      host.chatModelCatalogError = error instanceof Error ? error.message : String(error);
     }
   } finally {
-    if (
-      host.client === client &&
-      host.connected &&
-      host.connectionEpoch === connectionEpoch &&
-      resolveChatAgentId(host) === agentId
-    ) {
+    if (ownsRequest()) {
       host.chatModelsLoading = false;
       host.requestUpdate?.();
     }

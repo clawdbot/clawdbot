@@ -49,6 +49,9 @@ export function renderChatPaneComposerControls(params: {
 }) {
   const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess, onModelSetup } =
     params;
+  const hasModelSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
   return html`
     <div class="chat-composer-model-control">
       ${renderChatModelControls({
@@ -58,6 +61,17 @@ export function renderChatPaneComposerControls(params: {
         gatewayAvailable: Boolean(state.client),
         loading: state.chatLoading,
         modelCatalog: state.chatModelCatalog,
+        modelCatalogState: {
+          hasSnapshot: hasModelSnapshot,
+          onRetry: refreshModelCatalog,
+          status: state.chatModelCatalogError
+            ? "error"
+            : state.chatModelsLoading
+              ? hasModelSnapshot
+                ? "refreshing"
+                : "loading"
+              : "ready",
+        },
         modelOverrides: state.sessions.state.modelOverrides,
         modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
         modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
@@ -75,7 +89,7 @@ export function renderChatPaneComposerControls(params: {
           effortAccess.allowed
             ? switchChatFastMode(state, next, targetSessionKey)
             : Promise.resolve(false),
-        onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+        onModelPickerOpen: refreshModelCatalog,
         onModelSelect: (next, targetSessionKey) =>
           modelAccess.allowed
             ? switchChatModel(state, next, targetSessionKey)

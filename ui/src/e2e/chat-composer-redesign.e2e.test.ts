@@ -870,6 +870,67 @@ suite.define(() => {
     });
   });
 
+  it("keeps startup models visible and retries failed picker discovery", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const startupModel = {
+        id: "startup-model",
+        name: "Startup Model",
+        provider: "openai",
+        available: true,
+      };
+      const discoveredModel = {
+        id: "discovered-model",
+        name: "Discovered Model",
+        provider: "anthropic",
+        available: true,
+      };
+      const gateway = await installMockGateway(page, {
+        models: [startupModel],
+        methodResponses: {
+          "models.list": {
+            sequence: [
+              {
+                __mockError: {
+                  code: "UNAVAILABLE",
+                  message: "catalog discovery failed",
+                },
+              },
+              { models: [startupModel, discoveredModel] },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-catalog-state="error"]').isVisible())
+        .toBe(true);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/startup-model"]').isVisible())
+        .toBe(true);
+
+      await composer.locator('[data-chat-model-catalog-retry="true"]').click();
+
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect
+        .poll(() =>
+          composer.locator('[data-chat-model-option="anthropic/discovered-model"]').isVisible(),
+        )
+        .toBe(true);
+      expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
+      for (const request of await gateway.getRequests("models.list")) {
+        expect(request.params).toEqual(expect.objectContaining({ view: "configured" }));
+        expect(request.params).not.toEqual(expect.objectContaining({ preparedOnly: true }));
+      }
+    });
+  });
+
   it("does not request unscoped models when chat metadata is unavailable", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

@@ -41,7 +41,10 @@ import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -122,10 +125,8 @@ export function invalidateModelAuthStatusCache(): void {
 }
 
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
-  // Keep same-credential usage visible while the explicit refresh replaces it.
-  // A changed credential/config produces a different cache key below; logout
-  // still uses invalidateModelAuthStatusCache() and clears usage immediately.
-  clearCurrentProviderAuthState();
+  // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
+  // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
   try {
     await refreshActiveProviderAuthRuntimeSnapshot();
   } catch (err) {
@@ -344,8 +345,13 @@ function resolveEnvVarName(source: string): string | undefined {
 function resolveProviderApiKeys(
   cfg: OpenClawConfig,
   store: AuthProfileStore,
+  authAliasLookupParams: ProviderAuthAliasLookupParams,
 ): Map<string, ModelAuthStatusProvider["apiKey"]> {
-  const lookupMaps = resolveProviderEnvAuthLookupMaps({ config: cfg, env: process.env });
+  const lookupMaps = resolveProviderEnvAuthLookupMaps({
+    ...authAliasLookupParams,
+    config: cfg,
+    env: process.env,
+  });
   const providerIds = new Set<string>([
     ...Object.keys(cfg.models?.providers ?? {}),
     ...Object.values(cfg.auth?.profiles ?? {})
@@ -364,6 +370,7 @@ function resolveProviderApiKeys(
       const ref = coerceSecretRef(providerConfig?.apiKey, cfg.secrets?.defaults);
       const profileReference = resolveProviderEntryApiKeyProfileReference({
         cfg,
+        authAliasLookupParams,
         provider,
         store,
       });
@@ -411,10 +418,19 @@ function resolveProviderApiKeys(
   return apiKeys;
 }
 
-function resolveConfigBoundProfileIds(cfg: OpenClawConfig, store: AuthProfileStore): Set<string> {
+function resolveConfigBoundProfileIds(
+  cfg: OpenClawConfig,
+  store: AuthProfileStore,
+  authAliasLookupParams: ProviderAuthAliasLookupParams,
+): Set<string> {
   const profileIds = new Set<string>();
   for (const provider of Object.keys(cfg.models?.providers ?? {})) {
-    const reference = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
+    const reference = resolveProviderEntryApiKeyProfileReference({
+      cfg,
+      authAliasLookupParams,
+      provider,
+      store,
+    });
     if (reference.kind === "profile" || reference.kind === "profile-incompatible") {
       profileIds.add(reference.profileId);
     }
@@ -612,7 +628,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       cfg = preparedSnapshot.config;
       const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
-      const apiKeys = resolveProviderApiKeys(cfg, store);
+      // Generic auth helpers may consult provider metadata indirectly. Carry this owner's exact
+      // snapshot through them so a global miss cannot rediscover plugins on the event loop.
+      const authAliasLookupParams: ProviderAuthAliasLookupParams = {
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+        includeUntrustedWorkspacePlugins: false,
+      };
+      const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
       const configured = resolveConfiguredProviders(cfg, apiKeys);
       const statusProviderIds = new Set(configured.providers);
       for (const provider of apiKeys.keys()) {
@@ -629,11 +652,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg,
         providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
         allowKeychainPrompt: false,
-        authAliasLookupParams: {
-          workspaceDir,
-          metadataSnapshot: preparedSnapshot.metadataSnapshot,
-          includeUntrustedWorkspacePlugins: false,
-        },
+        authAliasLookupParams,
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status
@@ -679,7 +698,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           )
           .map(([profileId]) => profileId),
       );
-      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store);
+      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
       const providers = authHealth.providers.map((prov) =>
         mapProvider(
           prov,

@@ -5456,9 +5456,10 @@ describe("chat model controls", () => {
     const onModelPickerOpen = vi.fn();
     const container = renderModelControls(state, { onModelPickerOpen });
 
-    getChatModelSelect(container).dispatchEvent(
-      new CustomEvent("wa-show", { bubbles: true, composed: true }),
-    );
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    expect(picker).toBeInstanceOf(HTMLDetailsElement);
+    picker!.open = true;
+    picker!.dispatchEvent(new Event("toggle"));
 
     expect(onModelPickerOpen).toHaveBeenCalledOnce();
   });
