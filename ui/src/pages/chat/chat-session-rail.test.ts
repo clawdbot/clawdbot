@@ -58,7 +58,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
       taskIds: new Set<string>(),
       nextExpiryAt: null,
     },
-    view: { kind: "list" },
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),
@@ -69,8 +68,6 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     onRefresh: () => {},
     onCancel: () => {},
     onSelectTask: () => {},
-    onBack: () => {},
-    onOpenTranscript: () => {},
   };
 }
 

@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
-  observeSubagentTaskEvent,
-  readSubagentTranscript,
-  type SubagentDetailHost,
-} from "./chat-subagent-detail-state.ts";
+  observeTaskDetailEvent,
+  readTaskTranscript,
+  type TaskDetailHost,
+} from "./chat-task-detail-state.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,8 +25,9 @@ function history(text: string) {
   };
 }
 
-function hostWith(request: ReturnType<typeof vi.fn>): SubagentDetailHost {
+function hostWith(request: ReturnType<typeof vi.fn>): TaskDetailHost {
   return {
+    sessionKey: "agent:main:main",
     client: { request } as unknown as GatewayBrowserClient,
     connected: true,
     connectionEpoch: 4,
@@ -58,14 +59,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("subagent detail transcript state", () => {
+describe("task detail transcript state", () => {
   it("loads the selected child transcript", async () => {
     const pending = deferred<ReturnType<typeof history>>();
     const request = vi.fn().mockReturnValue(pending.promise);
     const host = hostWith(request);
 
     expect(
-      readSubagentTranscript(host, {
+      readTaskTranscript(host, {
         taskId: "task-1",
         sessionKey: "agent:main:subagent:child",
       }),
@@ -78,7 +79,7 @@ describe("subagent detail transcript state", () => {
     pending.resolve(history("Child transcript loaded."));
     await flushAsync();
     expect(
-      readSubagentTranscript(host, {
+      readTaskTranscript(host, {
         taskId: "task-1",
         sessionKey: "agent:main:subagent:child",
       }),
@@ -91,7 +92,7 @@ describe("subagent detail transcript state", () => {
   it("surfaces a history request failure", async () => {
     const pending = deferred<never>();
     const host = hostWith(vi.fn().mockReturnValue(pending.promise));
-    readSubagentTranscript(host, {
+    readTaskTranscript(host, {
       taskId: "task-1",
       sessionKey: "agent:main:subagent:child",
     });
@@ -99,7 +100,7 @@ describe("subagent detail transcript state", () => {
     pending.reject(new Error("history unavailable"));
     await flushAsync();
     expect(
-      readSubagentTranscript(host, {
+      readTaskTranscript(host, {
         taskId: "task-1",
         sessionKey: "agent:main:subagent:child",
       }),
@@ -113,13 +114,13 @@ describe("subagent detail transcript state", () => {
     const final = deferred<ReturnType<typeof history>>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(final.promise);
     const host = hostWith(request);
-    readSubagentTranscript(host, {
+    readTaskTranscript(host, {
       taskId: "task-1",
       sessionKey: "agent:main:subagent:child",
     });
 
-    observeSubagentTaskEvent(host, { action: "upserted", task: task("running") });
-    observeSubagentTaskEvent(host, { action: "upserted", task: task("completed") });
+    observeTaskDetailEvent(host, { action: "upserted", task: task("running") });
+    observeTaskDetailEvent(host, { action: "upserted", task: task("completed") });
     expect(request).toHaveBeenCalledTimes(1);
 
     first.resolve(history("Still running."));
@@ -132,7 +133,7 @@ describe("subagent detail transcript state", () => {
     final.resolve(history("Final child response."));
     await flushAsync();
     expect(
-      readSubagentTranscript(host, {
+      readTaskTranscript(host, {
         taskId: "task-1",
         sessionKey: "agent:main:subagent:child",
       }),

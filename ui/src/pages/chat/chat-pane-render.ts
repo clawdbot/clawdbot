@@ -229,8 +229,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       narrowLayout:
         chatLayoutWidth <
         WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
-      onOpenSubagentDetail: (task) =>
-        state.handleOpenSidebar({ kind: "subagent", taskId: task.id }),
+      openTaskId: state.sidebarContent?.kind === "task" ? state.sidebarContent.taskId : undefined,
+      onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
     // Only side-docked rails narrow the conversation region.
@@ -266,7 +266,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const props: ChatProps = {
       transcript: this.transcript,
-      backgroundTaskTranscript: this.backgroundTaskTranscript,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
@@ -613,7 +612,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
               fullMessageLoader,
               host: state,
               layout: sidebarLayout,
-              transcript: this.subagentSidebarTranscript,
+              transcript: this.taskSidebarTranscript,
             }),
           }
         : {}),
