@@ -267,8 +267,8 @@ export type SessionMaintenanceConfig = {
   maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
-   * Default: 80% of maxDiskBytes. Must be positive; a value that resolves to
-   * zero or less falls back to the default instead of clearing all history.
+   * Default: 80% of maxDiskBytes. A value that resolves to zero falls back to
+   * the default instead of clearing history; negative values are invalid.
    */
   highWaterBytes?: number | string;
 };
