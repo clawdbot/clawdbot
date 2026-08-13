@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  PUBLIC_GITHUB_COPILOT_DOMAIN,
-  resolveGithubCopilotDomain,
-} from "./domain.js";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 
 describe("github-copilot domain resolution", () => {
   const withDomain = (githubDomain: string) =>
