@@ -846,7 +846,7 @@ export function renderSessionWorkspaceToggle(
     return nothing;
   }
   const expanded = !sessionWorkspace.collapsed;
-  const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
+  const label = expanded ? t("chat.workspaceFiles.close") : t("chat.workspaceFiles.showFiles");
   const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
@@ -1272,18 +1272,16 @@ export function renderSessionWorkspaceRail(
               ${icons.refresh}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
+          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.close")} (⇧⌘B)`}>
             <button
               type="button"
               class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-              aria-label=${t("chat.workspaceFiles.collapse")}
+              aria-label=${t("chat.workspaceFiles.close")}
               aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
               @click=${sessionWorkspace.onToggleCollapsed}
             >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
-              >
+              <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.x}</span>
             </button>
           </openclaw-tooltip>
         </div>

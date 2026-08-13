@@ -206,14 +206,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     layout: chatTasksRailLayout,
     reservationPrefix: "chat-tasks-rail",
     isAvailable: () => true,
-    maxWidth: () => this.chatRailMaxWidth(".chat-workbench", ".chat-workspace-rail"),
+    maxWidth: () =>
+      this.chatRailMaxWidth(
+        ".chat-workbench",
+        ".chat-workspace-rail",
+        "chat-workbench--workspace-open",
+        "chat-workbench--tasks-open",
+      ),
     reserveViewport: false,
   });
   protected readonly workspaceRailLayout = new DockLayoutController(this, {
     layout: chatWorkspaceRailLayout,
     reservationPrefix: "chat-workspace-rail",
     isAvailable: () => true,
-    maxWidth: () => this.chatRailMaxWidth(".chat-workbench", ".chat-tasks-rail"),
+    maxWidth: () =>
+      this.chatRailMaxWidth(
+        ".chat-workbench",
+        ".chat-tasks-rail",
+        "chat-workbench--tasks-open",
+        "chat-workbench--workspace-open",
+      ),
     reserveViewport: false,
   });
 
@@ -258,11 +270,24 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     );
   }
 
-  private chatRailMaxWidth(containerSelector: string, siblingSelector?: string): number {
+  private chatRailMaxWidth(
+    containerSelector: string,
+    siblingSelector?: string,
+    siblingOpenClass?: string,
+    ownSideOpenClass?: string,
+  ): number {
     const container = this.querySelector<HTMLElement>(containerSelector);
-    const sibling = siblingSelector ? this.querySelector<HTMLElement>(siblingSelector) : null;
+    const ownRailIsSideDocked =
+      !ownSideOpenClass || container?.classList.contains(ownSideOpenClass) === true;
+    const sideSibling =
+      ownRailIsSideDocked &&
+      siblingSelector &&
+      siblingOpenClass &&
+      container?.classList.contains(siblingOpenClass)
+        ? this.querySelector<HTMLElement>(siblingSelector)
+        : null;
     const containerWidth = container?.getBoundingClientRect().width ?? this.paneWidth;
-    const siblingWidth = sibling?.getBoundingClientRect().width ?? 0;
+    const siblingWidth = sideSibling?.getBoundingClientRect().width ?? 0;
     return (
       containerWidth - siblingWidth - CHAT_RAIL_MAIN_MIN_WIDTH_PX - CHAT_RAIL_DIVIDERS_MAX_WIDTH_PX
     );

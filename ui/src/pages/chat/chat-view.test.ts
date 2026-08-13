@@ -819,8 +819,10 @@ function createSessionWorkspace(
     loading: false,
     error: null,
     activeId: null,
+    dock: "right",
     narrowLayout: false,
     onToggleCollapsed: () => undefined,
+    onSetDock: () => undefined,
     onRefresh: () => undefined,
     onBrowsePath: () => undefined,
     onCopyPath: () => undefined,
@@ -1867,7 +1869,7 @@ describe("chat composer workbench", () => {
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
     const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse session workspace"]',
+      'button[aria-label="Close session workspace"]',
     );
     expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
     collapseToggle?.click();
@@ -1920,8 +1922,28 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
     expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__terminal")).toBeNull();
-    expect(container.querySelector(".chat-session-diff-toggle")).toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle terminal"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle browser panel"]')).not.toBeNull();
+    expect(container.querySelector(".chat-session-diff-toggle")).not.toBeNull();
+  });
+
+  it("keeps a preferred bottom workspace below a side-docked Tasks rail", () => {
+    const container = renderChatView({
+      sessionWorkspace: createSessionWorkspace({ dock: "bottom" }),
+      workspaceRail: [820, html`<div class="chat-workspace-rail-resizer"></div>`],
+      backgroundTasks: createBackgroundTasks(),
+      tasksRail: [330, html`<div class="chat-tasks-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector(".chat-workbench");
+    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
+    expect(workbench?.classList.contains("chat-workbench--workspace-open")).toBe(false);
+    expect(workbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).toBeNull();
+    expect(workbench?.querySelector(".chat-tasks-rail-resizer")).not.toBeNull();
+    expect(
+      (workbench as HTMLElement | null)?.style.getPropertyValue("--chat-workspace-rail-width"),
+    ).toBe("820px");
   });
 
   it("keeps the pane header in the conversation column while rails span the workbench", () => {

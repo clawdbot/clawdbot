@@ -212,7 +212,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       draftScope: this.presentationId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
-    const railSideDocked = !sessionWorkspace.collapsed && !sessionWorkspace.narrowLayout;
+    const railSideDocked =
+      !sessionWorkspace.collapsed &&
+      !sessionWorkspace.narrowLayout &&
+      sessionWorkspace.dock !== "bottom";
     // The workspace claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:

@@ -39,6 +39,17 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
+  /* Shared rail chrome. Light and dark themes inherit their actual colors
+     through --border/--accent while keeping one geometry contract. */
+  --rail-header-height: 48px;
+  --rail-header-padding-start: 12px;
+  --rail-header-padding-end: 8px;
+  --rail-header-action-size: 28px;
+  --rail-divider-color: var(--border);
+  --rail-divider-size: 1px;
+  --rail-divider-active-size: 2px;
+  --rail-resizer-size: 4px;
+
   /*
    * Accent - Punchy signature red
    *

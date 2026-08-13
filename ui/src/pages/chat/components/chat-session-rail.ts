@@ -567,7 +567,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           <button
             class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
             type="button"
-            aria-label=${t("chat.rail.hide")}
+            aria-label=${t("chat.rail.close")}
             @click=${() => this.hide()}
           >
             ${icons.x}
@@ -653,7 +653,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
               type="button"
-              aria-label=${t("chat.rail.hide")}
+              aria-label=${t("chat.rail.close")}
               @click=${() => this.hide()}
             >
               ${icons.x}

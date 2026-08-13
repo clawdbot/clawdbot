@@ -251,34 +251,55 @@ export const dockPanelStyles = css`
     background: var(--bg, #0e1015);
     overflow: hidden;
   }
-  :is(.bp--bottom, .tp--bottom) {
-    border-top: 1px solid var(--border, #262b34);
-  }
-  :is(.bp--right, .tp--right) {
-    border-left: 1px solid var(--border, #262b34);
-  }
   :is(.bp-resizer, .tp-resizer) {
     position: absolute;
     z-index: 2;
     background: transparent;
   }
-  :is(.bp-resizer, .tp-resizer):hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
+  :is(.bp-resizer, .tp-resizer)::after {
+    position: absolute;
+    content: "";
+    background: var(--rail-divider-color, var(--border, #262b34));
+    transition:
+      background 150ms ease-out,
+      width 150ms ease-out,
+      height 150ms ease-out;
   }
   :is(.bp-resizer--bottom, .tp-resizer--bottom) {
     top: 0;
     left: 0;
     right: 0;
-    height: 5px;
+    height: var(--rail-resizer-size, 4px);
     cursor: ns-resize;
+  }
+  :is(.bp-resizer--bottom, .tp-resizer--bottom)::after {
+    top: 50%;
+    right: 0;
+    left: 0;
+    height: var(--rail-divider-size, 1px);
+    transform: translateY(-50%);
   }
   :is(.bp-resizer--right, .tp-resizer--right) {
     top: 0;
     bottom: 0;
     left: 0;
-    width: 5px;
+    width: var(--rail-resizer-size, 4px);
     cursor: ew-resize;
+  }
+  :is(.bp-resizer--right, .tp-resizer--right)::after {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: var(--rail-divider-size, 1px);
+    transform: translateX(-50%);
+  }
+  :is(.bp-resizer--bottom, .tp-resizer--bottom):hover::after {
+    height: var(--rail-divider-active-size, 2px);
+    background: var(--accent, #ff5c5c);
+  }
+  :is(.bp-resizer--right, .tp-resizer--right):hover::after {
+    width: var(--rail-divider-active-size, 2px);
+    background: var(--accent, #ff5c5c);
   }
   :is(.bp-header, .tp-header) {
     display: flex;

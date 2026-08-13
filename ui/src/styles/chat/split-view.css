@@ -747,7 +747,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-main__conversation-column
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
   padding-left: 88px;
 }
@@ -756,7 +756,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-main__conversation-column
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
   padding-left: 124px;
 }
@@ -792,7 +792,7 @@ html.openclaw-native-macos
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-main__conversation-column
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
   padding-left: 90px;
 }
@@ -807,7 +807,7 @@ html.openclaw-native-nav
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-main__conversation-column
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
   padding-left: 204px;
 }
@@ -824,7 +824,7 @@ html.openclaw-native-web-chrome
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-main__conversation-column
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
   padding-left: 246px;
 }

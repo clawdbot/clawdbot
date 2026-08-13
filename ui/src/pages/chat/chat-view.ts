@@ -295,7 +295,7 @@ export function renderChat(props: ChatProps) {
   const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
-      (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
+    (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
   );
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;

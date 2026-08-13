@@ -37,6 +37,7 @@ const historyMessages = Array.from({ length: 8 }, (_, index) => ({
 function railScenario(): ControlUiMockGatewayScenario {
   return {
     featureMethods: [
+      "browser.request",
       "chat.metadata",
       "chat.startup",
       "board.get",
@@ -49,6 +50,14 @@ function railScenario(): ControlUiMockGatewayScenario {
     historyMessages,
     methodResponses: {
       "artifacts.list": { artifacts: [] },
+      "browser.request": {
+        cases: [
+          {
+            match: { method: "GET", path: "/tabs" },
+            response: { running: true, tabs: [] },
+          },
+        ],
+      },
       "board.get": {
         sessionKey,
         revision: 1,
@@ -186,23 +195,35 @@ function railScenario(): ControlUiMockGatewayScenario {
   };
 }
 
-async function seedTheme(page: Page): Promise<void> {
+async function seedTheme(
+  page: Page,
+  options: { workspaceDock?: "bottom"; workspaceWidth?: number } = {},
+): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await page.addInitScript(
-    ({ key, mode }) => {
+    ({ key, mode, workspaceDock }) => {
       localStorage.setItem(
         key,
         JSON.stringify({
           theme: "claw",
           themeMode: mode,
+          ...(workspaceDock ? { chatWorkspaceDock: workspaceDock } : {}),
           boardSessionViews: {
             "agent:main:rail-columns": { activeTabId: "main", face: "dashboard" },
           },
         }),
       );
     },
-    { key: settingsKey, mode: theme },
+    { key: settingsKey, mode: theme, workspaceDock: options.workspaceDock },
   );
+  if (options.workspaceWidth) {
+    await page.addInitScript((width) => {
+      localStorage.setItem(
+        "openclaw.control.chat-workspace-rail.v1",
+        JSON.stringify({ dock: "right", height: 320, open: false, width }),
+      );
+    }, options.workspaceWidth);
+  }
 }
 
 async function expectFullHeightRail(page: Page, rail: Locator): Promise<void> {
@@ -229,6 +250,58 @@ async function expectFullHeightRail(page: Page, rail: Locator): Promise<void> {
     JSON.stringify(geometry),
   ).toBeLessThanOrEqual(1);
   expect(geometry.railTop, JSON.stringify(geometry)).toBeLessThan(geometry.headerBottom - 10);
+}
+
+async function expectSharedRailHeaders(page: Page, headers: Locator[]): Promise<void> {
+  const metrics = await Promise.all(
+    headers.map((header) =>
+      header.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          alignItems: style.alignItems,
+          borderBottomColor: style.borderBottomColor,
+          borderBottomWidth: style.borderBottomWidth,
+          height: element.getBoundingClientRect().height,
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+        };
+      }),
+    ),
+  );
+  expect(
+    metrics.every((metric) => Math.abs(metric.height - 48) <= 1),
+    JSON.stringify(metrics),
+  ).toBe(true);
+  expect(new Set(metrics.map((metric) => metric.borderBottomColor)).size).toBe(1);
+  for (const metric of metrics) {
+    expect(metric).toMatchObject({
+      alignItems: "center",
+      borderBottomWidth: "1px",
+      paddingLeft: "12px",
+      paddingRight: "8px",
+    });
+  }
+}
+
+async function expectSingleRailSeparator(page: Page, selector: string): Promise<void> {
+  const separators = page.locator(selector);
+  await separators.first().waitFor();
+  const metrics = await separators.evaluateAll((elements) =>
+    elements.map((element) => {
+      const line = getComputedStyle(element, "::after");
+      const probe = document.createElement("div");
+      probe.style.background = "var(--rail-divider-color)";
+      document.body.append(probe);
+      const railDivider = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { background: line.backgroundColor, railDivider, width: line.width };
+    }),
+  );
+  expect(metrics.length).toBeGreaterThan(0);
+  for (const metric of metrics) {
+    expect(metric.width).toBe("1px");
+    expect(metric.background).toBe(metric.railDivider);
+  }
 }
 
 async function capture(page: Page, name: string): Promise<void> {
@@ -273,11 +346,30 @@ suite.define(() => {
         await tasks.waitFor();
         await workspace.waitFor();
         await expect.poll(() => tasks.textContent()).toContain("Verify rail layout");
+        await page.getByRole("button", { name: "Show session companion" }).click();
+        const companion = page.locator("openclaw-chat-session-rail");
+        await companion.locator(".chat-session-rail--expanded").waitFor();
+        await companion.getByRole("button", { name: "Close session companion" }).waitFor();
         if (proofPhase === "after") {
           await expectFullHeightRail(page, tasks);
           await expectFullHeightRail(page, workspace);
+          await expectFullHeightRail(page, companion);
+          await expectSharedRailHeaders(page, [
+            workspace.locator(".chat-workspace-rail__header"),
+            tasks.locator(".chat-tasks-rail__header"),
+            companion.locator(".chat-session-rail__header"),
+          ]);
+          await expectSingleRailSeparator(page, ".chat-workspace-rail-resizer");
+          await expectSingleRailSeparator(page, ".chat-tasks-rail-resizer");
+          await expect
+            .poll(() =>
+              companion
+                .locator(".chat-session-rail--expanded")
+                .evaluate((element) => getComputedStyle(element).borderLeftWidth),
+            )
+            .toBe("1px");
         }
-        await capture(page, "01-workspace-tasks-default");
+        await capture(page, "01-three-rails-default");
 
         if (proofPhase === "after") {
           const workspaceWidth = await workspace.evaluate(
@@ -298,7 +390,7 @@ suite.define(() => {
           );
           await capture(page, "02-workspace-tasks-resized");
 
-          await page.locator(".chat-workspace-rail__collapse-toggle").click();
+          await workspace.getByRole("button", { name: "Close session workspace" }).click();
           await page.getByRole("button", { name: "Show session files", exact: true }).click();
           await expect
             .poll(() => workspace.evaluate((element) => element.getBoundingClientRect().width))
@@ -306,9 +398,19 @@ suite.define(() => {
           await capture(page, "03-workspace-tasks-reopened");
         }
 
-        await page.locator(".chat-workspace-rail__collapse-toggle").click();
-        await page.locator(".chat-tasks-rail__collapse-toggle").click();
-        await page.locator(".chat-session-diff-toggle").click();
+        await workspace.getByRole("button", { name: "Show session changes" }).click();
+        await workspace.getByRole("button", { name: "Close session workspace" }).click();
+        await tasks.getByRole("button", { name: "Close background tasks" }).click();
+        if (proofPhase === "after") {
+          await expectSingleRailSeparator(page, ".chat-companion-rail-resizer");
+          await expect
+            .poll(() =>
+              companion
+                .locator(".chat-session-rail--expanded")
+                .evaluate((element) => getComputedStyle(element).borderLeftWidth),
+            )
+            .toBe("0px");
+        }
         const changes = page.locator('.sidebar-column[data-column-id="detail-column"]');
         await changes.waitFor();
         if (proofPhase === "after") {
@@ -325,13 +427,35 @@ suite.define(() => {
         }
         await capture(page, "05-discussion-clickclack");
 
-        await page.getByRole("button", { name: "Show session companion" }).click();
-        const companion = page.locator("openclaw-chat-session-rail");
-        await companion.locator(".chat-session-rail--expanded").waitFor();
         if (proofPhase === "after") {
           await expectFullHeightRail(page, companion);
         }
         await capture(page, "06-companion");
+
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new CustomEvent("openclaw:browser-toggle", { detail: { open: true } }),
+          ),
+        );
+        const browser = page.locator("openclaw-browser-panel");
+        await browser.locator(".bp-header").waitFor();
+        await browser.getByRole("button", { name: "Close browser panel" }).waitFor();
+        if (proofPhase === "after") {
+          await expectSharedRailHeaders(page, [
+            changes.locator(".sidebar-column__header"),
+            companion.locator(".chat-session-rail__header"),
+            browser.locator(".bp-header"),
+          ]);
+          await expectSingleRailSeparator(page, '.sidebar-column__divider[role="separator"]');
+          await expectSingleRailSeparator(page, "openclaw-browser-panel .bp-resizer--right");
+        }
+        await capture(page, "07-companion-details-browser");
+
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+          ),
+        );
 
         await page.evaluate(() =>
           window.dispatchEvent(
@@ -340,7 +464,7 @@ suite.define(() => {
         );
         await gateway.waitForRequest("terminal.open");
         await page.locator("openclaw-terminal-panel .tp").waitFor();
-        await capture(page, "07-terminal-reference");
+        await capture(page, "08-terminal-reference");
 
         await page.evaluate(() =>
           window.dispatchEvent(
@@ -353,7 +477,96 @@ suite.define(() => {
         if (proofPhase === "after") {
           await expectFullHeightRail(page, boardChat);
         }
-        await capture(page, "08-board-chat");
+        const dashboardHeader = page.locator(".chat-pane-primary-column > .chat-pane__header");
+        await expect
+          .poll(() =>
+            dashboardHeader.evaluate((element) =>
+              Number.parseFloat(getComputedStyle(element).paddingLeft),
+            ),
+          )
+          .toBeGreaterThanOrEqual(88);
+        await capture(page, "09-board-chat-web");
+
+        await page.evaluate(() => {
+          document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
+          document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
+        });
+        await expect
+          .poll(() => dashboardHeader.evaluate((element) => getComputedStyle(element).paddingLeft))
+          .toBe("204px");
+        await capture(page, "10-board-chat-native");
+      },
+    );
+  });
+
+  it("preserves a bottom workspace beside Tasks without applying the side-sibling cap", async () => {
+    await suite.withPage(
+      {
+        colorScheme: theme,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1600 },
+      },
+      async ({ page }) => {
+        await seedTheme(page, { workspaceDock: "bottom", workspaceWidth: 820 });
+        await installMockGateway(page, railScenario());
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.locator(".chat-group").first().waitFor();
+
+        await page.getByRole("button", { name: "Show session files", exact: true }).click();
+        const workbench = page.locator(".chat-workbench");
+        await expect
+          .poll(() => workbench.getAttribute("class"))
+          .toContain("chat-workbench--dock-bottom");
+        await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+        await expect
+          .poll(() =>
+            workbench.evaluate((element) =>
+              Number.parseFloat(
+                getComputedStyle(element).getPropertyValue("--chat-workspace-rail-width"),
+              ),
+            ),
+          )
+          .toBeGreaterThan(0);
+        const widthBeforeTasks = await workbench.evaluate((element) =>
+          Number.parseFloat(
+            getComputedStyle(element).getPropertyValue("--chat-workspace-rail-width"),
+          ),
+        );
+        await page.getByRole("button", { name: "Show background tasks" }).click();
+        await expect
+          .poll(() => workbench.getAttribute("class"))
+          .toContain("chat-workbench--tasks-open");
+        await expect
+          .poll(() => workbench.getAttribute("class"))
+          .not.toContain("chat-workbench--workspace-open");
+        await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+        await expect
+          .poll(() =>
+            workbench.evaluate((element) =>
+              Number.parseFloat(
+                getComputedStyle(element).getPropertyValue("--chat-workspace-rail-width"),
+              ),
+            ),
+          )
+          .toBeGreaterThan(0);
+        const widthWithTasks = await workbench.evaluate((element) =>
+          Number.parseFloat(
+            getComputedStyle(element).getPropertyValue("--chat-workspace-rail-width"),
+          ),
+        );
+        expect(widthWithTasks).toBeCloseTo(widthBeforeTasks, 0);
+        await capture(page, "10-bottom-workspace-tasks");
+
+        await page
+          .locator(".chat-workspace-rail")
+          .getByRole("button", { name: "Close session workspace" })
+          .click();
+        await page.getByRole("button", { name: "Show session files", exact: true }).click();
+        await expect
+          .poll(() => workbench.getAttribute("class"))
+          .toContain("chat-workbench--dock-bottom");
+        await capture(page, "12-bottom-workspace-reopened");
       },
     );
   });

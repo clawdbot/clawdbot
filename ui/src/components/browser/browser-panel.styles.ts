@@ -17,6 +17,18 @@ export const browserPanelStyles = css`
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
   }
+  .bp-header {
+    box-sizing: border-box;
+    height: var(--rail-header-height, 48px);
+    min-height: var(--rail-header-height, 48px);
+    gap: 8px;
+    padding: 0 var(--rail-header-padding-end, 8px) 0 var(--rail-header-padding-start, 12px);
+    border-bottom-color: var(--rail-divider-color, var(--border, #262b34));
+  }
+  .bp-icon {
+    width: var(--rail-header-action-size, 28px);
+    height: var(--rail-header-action-size, 28px);
+  }
   .bp-icon.is-active {
     color: var(--accent, #ff5c5c);
     background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);

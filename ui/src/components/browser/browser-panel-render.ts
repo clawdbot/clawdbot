@@ -70,8 +70,8 @@ function renderHeaderActions(
       <button
         class="bp-icon"
         type="button"
-        title=${t("browser.hide")}
-        aria-label=${t("browser.hide")}
+        title=${t("browser.close")}
+        aria-label=${t("browser.close")}
         @click=${onClose}
       >
         ${CLOSE_GLYPH}

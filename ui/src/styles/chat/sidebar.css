@@ -17,7 +17,7 @@
 
 .chat-workbench--workspace-open {
   grid-template-columns:
-    minmax(0, 1fr) 4px
+    minmax(0, 1fr) var(--rail-resizer-size)
     minmax(260px, var(--chat-workspace-rail-width));
 }
 
@@ -46,13 +46,14 @@
    equal specificity. */
 .chat-workbench--tasks-open {
   grid-template-columns:
-    minmax(0, 1fr) 4px
+    minmax(0, 1fr) var(--rail-resizer-size)
     minmax(270px, var(--chat-tasks-rail-width));
 }
 
 .chat-workbench--workspace-open.chat-workbench--tasks-open {
   grid-template-columns:
-    minmax(0, 1fr) 4px minmax(260px, var(--chat-workspace-rail-width)) 4px
+    minmax(0, 1fr) var(--rail-resizer-size)
+    minmax(260px, var(--chat-workspace-rail-width)) var(--rail-resizer-size)
     minmax(270px, var(--chat-tasks-rail-width));
 }
 
@@ -222,8 +223,8 @@
 :is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer) {
   position: relative;
   z-index: 2;
-  width: 4px;
-  min-width: 4px;
+  width: var(--rail-resizer-size);
+  min-width: var(--rail-resizer-size);
   cursor: ew-resize;
   background: transparent;
 }
@@ -239,9 +240,9 @@
   top: 0;
   bottom: 0;
   left: 50%;
-  width: 1px;
+  width: var(--rail-divider-size);
   transform: translateX(-50%);
-  background: var(--border);
+  background: var(--rail-divider-color);
   content: "";
   transition:
     background 150ms ease-out,
@@ -253,8 +254,14 @@
   .chat-tasks-rail-resizer,
   .chat-companion-rail-resizer
 ):hover::after {
-  width: 2px;
+  width: var(--rail-divider-active-size);
   background: var(--accent);
+}
+
+/* The docked companion already has the shared resizer hairline. Its overlay
+   border is only for the narrow sheet presentation and would double this edge. */
+.chat-main--rail-docked > openclaw-chat-session-rail .chat-session-rail--expanded {
+  border-left-width: 0;
 }
 
 openclaw-chat-sidebar-region,
@@ -297,8 +304,6 @@ openclaw-chat-sidebar-region,
   flex: 0 0 auto;
   align-items: center;
   min-width: 0;
-  min-height: 42px;
-  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
 }
 
@@ -336,6 +341,10 @@ openclaw-chat-sidebar-region,
   white-space: nowrap;
 }
 
+.sidebar-column__tab:first-child::part(base) {
+  padding-left: 0;
+}
+
 .sidebar-column__tab[active]::part(base) {
   color: var(--text);
 }
@@ -356,14 +365,14 @@ openclaw-chat-sidebar-region,
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  padding-right: 5px;
 }
 
 .sidebar-column__actions .btn {
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 6px;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  padding: 5px;
 }
 
 .sidebar-column__body,
@@ -383,7 +392,7 @@ openclaw-chat-sidebar-region,
 .sidebar-column__panel--wide {
   position: absolute;
   z-index: 1;
-  top: 42px;
+  top: var(--rail-header-height);
   bottom: 0;
 }
 
@@ -446,7 +455,7 @@ openclaw-chat-sidebar-region,
   grid-column: 1;
   grid-row: 2;
   min-height: 0;
-  margin-top: 42px;
+  margin-top: var(--rail-header-height);
 }
 
 .sidebar-column--collapsed {
@@ -471,17 +480,11 @@ openclaw-chat-sidebar-region,
 
 .chat-workspace-rail__header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .chat-workspace-rail__title {
   display: flex;
   flex-direction: column;
-  gap: 2px;
   min-width: 0;
 }
 
@@ -502,15 +505,15 @@ openclaw-chat-sidebar-region,
 .chat-workspace-rail__actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
 }
 
 .chat-workspace-rail__refresh,
 .chat-workspace-rail__dock,
 .chat-workspace-rail__collapse-toggle {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
   padding: 0;
 }
 
@@ -888,18 +891,12 @@ openclaw-chat-sidebar-region,
 
 .chat-tasks-rail__header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .chat-tasks-rail__title {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
   min-width: 0;
 }
 
@@ -924,7 +921,45 @@ openclaw-chat-sidebar-region,
 .chat-tasks-rail__actions {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+}
+
+/* Every chat rail header resolves through this one geometry contract. The
+   Browser shadow DOM consumes the same variables in its scoped stylesheet. */
+:is(
+  .chat-workspace-rail__header,
+  .chat-tasks-rail__header,
+  .chat-session-rail__header,
+  .sidebar-column__header
+) {
+  box-sizing: border-box;
+  height: var(--rail-header-height);
+  min-height: var(--rail-header-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+}
+
+:is(.chat-workspace-rail__title, .chat-tasks-rail__title, .chat-session-rail__header-copy) {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+:is(
+  .chat-workspace-rail__actions,
+  .chat-tasks-rail__actions,
+  .chat-session-rail__actions,
+  .sidebar-column__actions
+) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
 }
 
 .chat-tasks-rail__refresh svg,
