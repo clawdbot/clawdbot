@@ -7,6 +7,7 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 /** Display row derived from a persisted session entry. */
@@ -41,6 +42,7 @@ export type SessionDisplayRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  totalTokensVersion?: 1;
   model?: string;
   modelProvider?: string;
   providerOverride?: string;
@@ -61,12 +63,11 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
-    sessionFile: entry?.sessionFile,
     spawnedBy: entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     parentSessionKey: entry?.parentSessionKey,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
@@ -87,6 +88,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     outputTokens: entry?.outputTokens,
     totalTokens: entry?.totalTokens,
     totalTokensFresh: entry?.totalTokensFresh,
+    totalTokensVersion: entry?.totalTokensVersion,
     model: entry?.model,
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,

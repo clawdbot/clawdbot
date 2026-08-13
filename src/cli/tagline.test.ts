@@ -1,6 +1,8 @@
 // Tagline tests cover CLI tagline selection and display formatting.
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TAGLINE, pickTagline } from "./tagline.js";
+import { pickTagline } from "./tagline.js";
+
+const EXPECTED_DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
 
 describe("pickTagline", () => {
   it("returns empty string when mode is off", () => {
@@ -8,7 +10,7 @@ describe("pickTagline", () => {
   });
 
   it("returns default tagline when mode is default", () => {
-    expect(pickTagline({ mode: "default" })).toBe(DEFAULT_TAGLINE);
+    expect(pickTagline({ mode: "default" })).toBe(EXPECTED_DEFAULT_TAGLINE);
   });
 
   it("keeps OPENCLAW_TAGLINE_INDEX behavior in random mode", () => {
@@ -19,7 +21,7 @@ describe("pickTagline", () => {
     expect(value).toBe(
       "Your terminal just grew claws\u2014type something and let the bot pinch the busywork.",
     );
-    expect(value).not.toBe(DEFAULT_TAGLINE);
+    expect(value).not.toBe(EXPECTED_DEFAULT_TAGLINE);
   });
 
   it("ignores partial OPENCLAW_TAGLINE_INDEX values", () => {

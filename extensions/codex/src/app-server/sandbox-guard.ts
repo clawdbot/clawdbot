@@ -17,7 +17,10 @@ type DirectMethodPolicy =
 const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["account/rateLimits/read", "allowed-control-plane"],
   ["account/read", "allowed-control-plane"],
+  ["app/installed", "allowed-control-plane"],
   ["app/list", "allowed-control-plane"],
+  ["app/read", "allowed-control-plane"],
+  ["config/batchWrite", "allowed-control-plane"],
   ["config/mcpServer/reload", "allowed-control-plane"],
   ["config/read", "allowed-control-plane"],
   ["config/value/write", "allowed-control-plane"],
@@ -30,6 +33,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["mcpServerStatus/list", "allowed-control-plane"],
   ["model/list", "allowed-control-plane"],
   ["plugin/install", "allowed-control-plane"],
+  ["plugin/installed", "allowed-control-plane"],
   ["plugin/list", "allowed-control-plane"],
   ["plugin/read", "allowed-control-plane"],
   ["skills/list", "allowed-control-plane"],

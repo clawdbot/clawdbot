@@ -2,9 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  appendMemoryHostEvent,
   readMemoryHostEventRecords,
   readMemoryHostEvents,
-  resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { describe, expect, it } from "vitest";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
@@ -193,20 +193,14 @@ describe("memory host event journal integration", () => {
 
   it("keeps legacy dreaming completion events without outcome readable", async () => {
     const workspaceDir = await createTempWorkspace("memory-core-legacy-dream-events-");
-    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
-    await fs.mkdir(path.dirname(eventLogPath), { recursive: true });
-    await fs.writeFile(
-      eventLogPath,
-      `${JSON.stringify({
-        type: "memory.dream.completed",
-        timestamp: "2026-04-05T13:00:00.000Z",
-        phase: "deep",
-        inlinePath: path.join(workspaceDir, "DREAMS.md"),
-        lineCount: 2,
-        storageMode: "inline",
-      })}\n`,
-      "utf8",
-    );
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.dream.completed",
+      timestamp: "2026-04-05T13:00:00.000Z",
+      phase: "deep",
+      inlinePath: path.join(workspaceDir, "DREAMS.md"),
+      lineCount: 2,
+      storageMode: "inline",
+    });
 
     const events = await readMemoryHostEvents({ workspaceDir });
 

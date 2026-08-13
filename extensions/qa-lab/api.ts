@@ -24,7 +24,6 @@ export {
   DEFAULT_WAIT_TIMEOUT_MS,
   type QaBusWaitMatch,
 } from "./src/bus-waiters.js";
-export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
   buildScriptEvidenceSummary,
@@ -49,6 +48,8 @@ export {
   readQaAgentIdentityMarkdown,
 } from "./src/qa-agent-bootstrap.js";
 export { seedQaAgentWorkspace } from "./src/qa-agent-workspace.js";
+export { createQaChannelTransport } from "./src/qa-channel-transport.js";
+export { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 export {
   buildQaGatewayConfig,
   DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
@@ -58,10 +59,11 @@ export {
   type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
 export {
-  renderQaMarkdownReport,
-  type QaReportCheck,
-  type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runtime";
+  TINY_PNG_BASE64,
+  type MockOpenAiRequestSnapshot,
+} from "./src/providers/mock-openai/mock-openai-contracts.js";
+export { startQaMockOpenAiServer } from "./src/providers/mock-openai/server.js";
+export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {
   type QaScenarioDefinition,
   type QaScenarioResult,
@@ -97,15 +99,10 @@ export {
 } from "./src/self-check.js";
 export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js";
 export {
-  testing,
-  testing as __testing,
-  buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
   type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
-  resolveQaControlUiRoot,
-  resolveQaGatewayChildProviderMode,
   startQaGatewayChild,
 } from "./src/gateway-child.js";
 export {

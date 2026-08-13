@@ -1,8 +1,10 @@
 // Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import {
   applyMigrationPluginSelection,
   applyMigrationSelectedPluginItemIds,
@@ -153,12 +155,7 @@ function expectItemStatus(
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function requireCodexPluginConfigPlugins(item: MigrationItem): Record<string, unknown> {
   const details = requireRecord(item.details, "config details");
@@ -167,6 +164,37 @@ function requireCodexPluginConfigPlugins(item: MigrationItem): Record<string, un
   const codexPlugins = requireRecord(config.codexPlugins, "codex plugin config");
   return requireRecord(codexPlugins.plugins, "configured plugins");
 }
+
+describe("applyMigrationItemSelection", () => {
+  it("keeps exact selected ids and skips other planned or conflicting items", () => {
+    const selected = applyMigrationItemSelection(
+      plan([
+        skillItem({ id: "memory:one", name: "one" }),
+        skillItem({ id: "memory:two", name: "two" }),
+        skillItem({
+          id: "memory:existing",
+          name: "existing",
+          status: "conflict",
+          reason: "target exists",
+        }),
+      ]),
+      ["memory:two"],
+    );
+
+    expectItemStatus(selected.items, "memory:one", "skipped", MIGRATION_NOT_SELECTED_REASON);
+    expectItemStatus(selected.items, "memory:two", "planned");
+    expectItemStatus(selected.items, "memory:existing", "skipped", MIGRATION_NOT_SELECTED_REASON);
+    expectSummaryFields(selected.summary, { planned: 1, skipped: 2, conflicts: 0 });
+  });
+
+  it("rejects stale or unavailable item ids", () => {
+    expect(() =>
+      applyMigrationItemSelection(plan([skillItem({ id: "memory:one", name: "one" })]), [
+        "memory:stale",
+      ]),
+    ).toThrow('Unknown or unavailable migration item ids: "memory:stale".');
+  });
+});
 
 describe("applyMigrationSkillSelection", () => {
   it("keeps selected skills and skips unselected skill copy items", () => {

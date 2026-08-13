@@ -8,7 +8,7 @@ import {
   collectRootDependencyOwnershipAudit,
   collectRootDependencyOwnershipCheckErrors,
   collectModuleSpecifiers,
-} from "../../scripts/root-dependency-ownership-audit.mjs";
+} from "../../scripts/root-dependency-ownership-audit.mts";
 
 const tempDirs: string[] = [];
 
@@ -38,9 +38,8 @@ describe("collectModuleSpecifiers", () => {
         const runtimeRequire = createRequire(runtimePackagePath);
         require.resolve("gaxios");
         runtimeRequire.resolve("openshell/package.json");
-        resolvePackageFileForCommandExplanation("tree-sitter-bash", "tree-sitter-bash.wasm");
       `),
-    ]).toEqual(["gaxios", "openshell/package.json", "tree-sitter-bash"]);
+    ]).toEqual(["gaxios", "openshell/package.json"]);
   });
 
   it("resolves simple string constants used by lazy runtime imports", () => {
@@ -130,19 +129,19 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     );
     writeRepoFile(
       repoRoot,
-      "extensions/qqbot/package.json",
+      "extensions/demo-channel/package.json",
       JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
     );
     writeRepoFile(
       repoRoot,
-      "extensions/qqbot/src/setup.ts",
+      "extensions/demo-channel/src/setup.ts",
       'const sdk = await import("vendor-sdk");\n',
     );
 
     const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
 
     expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([
-      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/setup.ts",
+      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
     ]);
   });
 
@@ -210,11 +209,11 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       collectRootDependencyOwnershipCheckErrors([
         {
           category: "extension_only_localizable",
-          declaredInExtensions: ["qqbot:dependencies"],
-          depName: "@tencent-connect/qqbot-connector",
+          declaredInExtensions: ["demo-channel:dependencies"],
+          depName: "vendor-sdk",
           recommendation:
             "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-          sampleFiles: ["extensions/qqbot/src/bridge/setup/finalize.ts"],
+          sampleFiles: ["extensions/demo-channel/src/setup.ts"],
         },
         {
           category: "unreferenced",
@@ -225,7 +224,7 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         },
       ]),
     ).toEqual([
-      "root dependency '@tencent-connect/qqbot-connector' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/bridge/setup/finalize.ts",
+      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
     ]);
   });
 

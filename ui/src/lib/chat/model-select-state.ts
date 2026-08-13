@@ -1,11 +1,11 @@
 // Chat model select state derivation.
-import { formatFastModeCurrentStatus } from "../../../../src/shared/fast-mode.js";
 import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildCatalogDisplayLookup,
@@ -26,7 +26,7 @@ type ChatModelSelectStateInput = {
   sessionsResult: SessionsListResult | null;
 };
 
-export type ChatModelSelectOption = {
+type ChatModelSelectOption = {
   value: string;
   label: string;
 };
@@ -119,31 +119,6 @@ function normalizeChatModelAvailabilityKey(value: string): string {
   )}`;
 }
 
-function buildUnavailableChatModelValues(
-  catalog: ModelCatalogEntry[],
-  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-): Set<string> {
-  const availableValues = new Set(
-    catalog
-      .filter((entry) => entry.available !== false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      ),
-  );
-  return new Set(
-    catalog
-      .filter((entry) => entry.available === false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      )
-      .filter((value) => !availableValues.has(value)),
-  );
-}
-
 function resolveAvailableChatModelValue(
   value: string,
   catalog: ModelCatalogEntry[],
@@ -178,20 +153,12 @@ function resolveAvailableChatModelValue(
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-  currentOverride: string,
-  defaultModel: string,
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
 
   const addOption = (value: string, label?: string) => {
     pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
-  };
-  const addAvailableOption = (value: string, label?: string) => {
-    if (!unavailableValues.has(normalizeChatModelAvailabilityKey(value))) {
-      addOption(value, label);
-    }
   };
 
   for (const entry of catalog) {
@@ -200,19 +167,6 @@ function buildChatModelOptions(
     }
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
     addOption(option.value, option.label);
-  }
-
-  if (currentOverride) {
-    addAvailableOption(
-      currentOverride,
-      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
-    );
-  }
-  if (defaultModel) {
-    addAvailableOption(
-      defaultModel,
-      formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
-    );
   }
   return options;
 }
@@ -235,9 +189,15 @@ export function resolveChatModelSelectState(
     displayLookup,
   );
   const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
-  const defaultSelectable =
-    !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
+  const options = buildChatModelOptions(catalog, displayLookup);
+  const defaultSelectable = Boolean(
+    defaultModel &&
+    options.some(
+      (option) =>
+        normalizeChatModelAvailabilityKey(option.value) ===
+        normalizeChatModelAvailabilityKey(defaultModel),
+    ),
+  );
 
   return {
     currentOverride,
@@ -245,7 +205,7 @@ export function resolveChatModelSelectState(
     defaultModel,
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
-    options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
+    options,
   };
 }
 
@@ -263,11 +223,25 @@ export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
 }
 
 export function resolveChatFastModeStatus(session: GatewaySessionRow | undefined): string {
-  return formatFastModeCurrentStatus({
-    mode: session?.effectiveFastMode ?? session?.fastMode,
-    source: session?.effectiveFastModeSource,
-    fastAutoOnSeconds: session?.fastAutoOnSeconds,
-  });
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  const value =
+    mode === "auto"
+      ? t("chat.commandResults.fast.autoValue", {
+          seconds: String(session?.fastAutoOnSeconds ?? 60),
+        })
+      : t(mode === true ? "chat.commandResults.fast.on" : "chat.commandResults.fast.off");
+  const source = session?.effectiveFastModeSource;
+  const sourceSuffix =
+    source === "session"
+      ? t("chat.commandResults.fast.sourceSession")
+      : source === "agent"
+        ? t("chat.commandResults.fast.sourceAgent")
+        : source === "config"
+          ? t("chat.commandResults.fast.sourceModel")
+          : source === "default"
+            ? t("chat.commandResults.fast.sourceDefault")
+            : "";
+  return `${t("chat.commandResults.fast.current", { value })}${sourceSuffix}.`;
 }
 
 function resolveProviderFromModelValue(

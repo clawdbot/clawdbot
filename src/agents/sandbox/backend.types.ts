@@ -33,10 +33,13 @@ export type SandboxBackendManager = {
 export type CreateSandboxBackendParams = {
   sessionKey: string;
   scopeKey: string;
+  /** Runtime IDs already registered for this backend and scope, newest first. */
+  registeredRuntimeIds?: readonly string[];
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  requireCurrentConfig?: boolean;
 };
 
 /** Factory that creates a backend handle for a sandbox session. */

@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import pMap from "p-map";
+import pMap, { pMapSkip } from "p-map";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -226,9 +226,9 @@ async function readRuntimeSourceFiles(
   repoRoot: string,
   absolutePaths: string[],
 ): Promise<RuntimeSourceGuardrailFile[]> {
-  const output = await pMap(
+  return await pMap(
     absolutePaths,
-    async (absolutePath): Promise<RuntimeSourceGuardrailFile | null> => {
+    async (absolutePath) => {
       try {
         return {
           relativePath: path.relative(repoRoot, absolutePath),
@@ -236,12 +236,11 @@ async function readRuntimeSourceFiles(
         };
       } catch {
         // File tracked by git but deleted on disk (e.g. pending deletion).
-        return null;
+        return pMapSkip;
       }
     },
     { concurrency: FILE_READ_CONCURRENCY, stopOnError: false },
   );
-  return output.filter((entry): entry is RuntimeSourceGuardrailFile => entry !== null);
 }
 
 async function main() {

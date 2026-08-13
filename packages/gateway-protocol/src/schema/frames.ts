@@ -3,11 +3,16 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
+import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export const GATEWAY_SERVER_CAPS = {
+  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
-  CRESTODIAN_SETUP_MODEL_REF: "crestodian-setup-model-ref",
+  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
+  SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
+  TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
 } as const;
 
 /**
@@ -43,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
   commands: Type.Optional(Type.Array(NonEmptyString)),
+  /** Additive node-local worker build identity; presence advertises session hosting. */
+  workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
   pathEnv: Type.Optional(Type.String()),
   role: Type.Optional(NonEmptyString),
@@ -70,7 +77,7 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with negotiated protocol and initial state. */
+/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
@@ -94,14 +101,32 @@ export const HelloOkSchema = closedObject({
         description: Type.Optional(Type.String()),
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
+        requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
       }),
     ),
   ),
+  // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
+  controlUiWidgetKinds: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        kind: NonEmptyString,
+        label: NonEmptyString,
+      }),
+    ),
+  ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  deviceAuthMigration: Type.Optional(
+    closedObject({
+      pending: Type.Literal(true),
+    }),
+  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
+    recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -120,6 +145,19 @@ export const HelloOkSchema = closedObject({
     maxPayload: Type.Integer({ minimum: 1 }),
     maxBufferedBytes: Type.Integer({ minimum: 1 }),
     tickIntervalMs: Type.Integer({ minimum: 1 }),
+    // Additive: unconditional decoded-size ceilings for chat attachments, so
+    // clients can validate a file before sending instead of hardcoding guesses.
+    // Per attachment, not per frame: the encoded request must still fit
+    // `maxPayload`. MIME acceptance and per-message counts stay server-side
+    // because they depend on the entrypoint, resolved model, and payload sniffing.
+    attachments: Type.Optional(
+      closedObject({
+        maxBytes: Type.Integer({ minimum: 1 }),
+        maxImageBytes: Type.Integer({ minimum: 1 }),
+      }),
+    ),
+    allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
+    hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
 });
 
@@ -138,6 +176,7 @@ export const RequestFrameSchema = closedObject({
   id: NonEmptyString,
   method: NonEmptyString,
   params: Type.Optional(Type.Unknown()),
+  traceparent: Type.Optional(Type.String({ maxLength: 128 })),
 });
 
 /** Server response frame envelope paired with a prior request id. */

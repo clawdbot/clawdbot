@@ -1,5 +1,5 @@
 // Memory Host SDK helper module supports batch utils behavior.
-import type { SsrFPolicy } from "./ssrf-policy.js";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
 // Common HTTP and grouping helpers for remote embedding batch clients.
 

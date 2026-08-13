@@ -1,5 +1,18 @@
 export type ProfileId = "smoke" | "default" | "large";
 
+export type IndexRepairJournalMode = "delete" | "wal";
+
+export const INDEX_REPAIR_INDEX_NAME = "idx_openclaw_reliability_records_identity";
+export const INDEX_REPAIR_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS openclaw_reliability_index_records (
+    id INTEGER PRIMARY KEY,
+    identity TEXT NOT NULL,
+    payload TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS ${INDEX_REPAIR_INDEX_NAME}
+    ON openclaw_reliability_index_records(identity);
+`;
+
 export type ProfileConfig = {
   iterations: number;
   maxWalBytes: number;
@@ -27,7 +40,43 @@ export type ReliabilityStateProof = {
 export type ReliabilityReport = {
   arch: string;
   concurrentRestoresVerified: number;
+  crashRecoveryProof: {
+    committedStatePreserved: true;
+    exit: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    };
+    partialVisibleAfterRecovery: false;
+    sourceRecovered: true;
+    stateAfterRecovery: ReliabilityStateProof;
+    stateBeforeKill: ReliabilityStateProof;
+    writerRestarted: true;
+  };
   iterations: number;
+  indexRepairInterruptionProof: {
+    rollbackJournal: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      repairedIndexes: string[];
+      recoveryVerified: true;
+      rowsPreserved: number;
+      walBytesObserved: number;
+    };
+    wal: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      repairedIndexes: string[];
+      recoveryVerified: true;
+      rowsPreserved: number;
+      walBytesObserved: number;
+    };
+  };
   maintenanceProof: {
     bloatBytes: number;
     compaction: {
@@ -49,12 +98,141 @@ export type ReliabilityReport = {
         before: number;
       };
     };
+    vacuumInterruption: {
+      autoVacuumAfterRecovery: number;
+      autoVacuumBeforeKill: number;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      payloadAfterRecovery: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      payloadBeforeKill: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      recoveryVerified: true;
+      stateAfterRecovery: ReliabilityStateProof;
+      stateBeforeKill: ReliabilityStateProof;
+      walBytesObserved: number;
+    };
     postCompact: {
       restoreMs: number;
       restoreVerified: true;
       snapshotBytes: number;
       snapshotMs: number;
       state: ReliabilityStateProof;
+    };
+    repositoryInterruption: {
+      afterCommit: {
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 0;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+      beforePending: {
+        crashSnapshotVerifiedAfterCrash: false;
+        crashSnapshotVisibleAfterCrash: false;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 1;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+      pending: {
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 0;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+    };
+    restoreInterruption: {
+      afterPublish: {
+        existingTargetPreserved: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        payloadAfterRecovery: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        recoveryVerified: true;
+        repositoryVerified: true;
+        retryRestored: false;
+        stagingEntries: number;
+        stateAfterRecovery: ReliabilityStateProof;
+        targetVerifiedAfterCrash: true;
+        targetVisibleAfterCrash: true;
+      };
+      beforePublish: {
+        existingTargetPreserved: false;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        payloadAfterRecovery: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        recoveryVerified: true;
+        repositoryVerified: true;
+        retryRestored: true;
+        stagingEntries: number;
+        stateAfterRecovery: ReliabilityStateProof;
+        targetVerifiedAfterCrash: false;
+        targetVisibleAfterCrash: false;
+      };
+      snapshotBytes: number;
     };
   };
   node: string;
@@ -66,6 +244,32 @@ export type ReliabilityReport = {
   };
   platform: NodeJS.Platform;
   profile: ProfileId;
+  publicationInterruptionProof: {
+    afterPublish: {
+      existingTargetPreserved: true;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: true;
+      targetVisibleAfterCrash: true;
+    };
+    beforePublish: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      retryPublished: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: false;
+      targetVisibleAfterCrash: false;
+    };
+  };
   retainedBatches: number;
   restoresVerified: number;
   rowsPerBatch: number;
@@ -101,7 +305,9 @@ export type ReliabilityReport = {
 
 export const PROFILES: Record<ProfileId, ProfileConfig> = {
   smoke: {
-    iterations: 4,
+    // One snapshot before the forced writer crash and one after restart prove
+    // both distinct smoke paths; larger profiles retain repeated stress loops.
+    iterations: 2,
     maxWalBytes: 64 * 1024 * 1024,
     payloadBytes: 512,
     retainedBatches: 32,

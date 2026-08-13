@@ -4,6 +4,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusHeartbeatValue,
   buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
@@ -15,6 +16,29 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("shows when heartbeat is waiting for a delivery route", () => {
+    expect(
+      buildStatusHeartbeatValue({
+        summary: {
+          heartbeat: {
+            defaultAgentId: "main",
+            agents: [
+              {
+                agentId: "main",
+                enabled: true,
+                every: "30m",
+                everyMs: 1_800_000,
+                waitingForRoute: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toBe(
+      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
+    );
+  });
+
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
       securityAudit: {
@@ -239,6 +263,7 @@ describe("status.command-sections", () => {
         durationMs: 42,
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 180_000,
           reasons: ["event_loop_delay"],
           intervalMs: 62_000,
           delayP99Ms: 61_000,
@@ -258,7 +283,8 @@ describe("status.command-sections", () => {
       {
         Item: "Event loop",
         Status: "warn(WARN)",
-        Detail: "reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
+        Detail:
+          "degraded for 3m · reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
       },
     ]);
   });

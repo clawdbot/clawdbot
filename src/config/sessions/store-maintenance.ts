@@ -12,6 +12,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
@@ -23,10 +24,9 @@ const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
-// Archived transcripts are the user's conversation history: retention keeps
-// them until the disk budget evicts oldest-first, never on a wall-clock timer.
-// The budget default below is what makes "keep archives" still bounded.
-const DEFAULT_SESSION_MAX_DISK_BYTES = 2 * 1024 * 1024 * 1024;
+// Conversation history stays in SQLite until physical main-file + WAL + artifact usage crosses
+// this budget. Cleanup then extracts historical sessions oldest-first before reclaiming rows.
+const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
@@ -58,7 +58,7 @@ export type ResolvedSessionMaintenanceConfigInput = Omit<
   Partial<Pick<ResolvedSessionMaintenanceConfig, "modelRunPruneAfterMs">>;
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
+  const raw = maintenance?.pruneAfter;
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
@@ -73,8 +73,8 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
 function resolveResetArchiveRetentionMs(
   maintenance: SessionMaintenanceConfig | undefined,
 ): number | null {
-  // null = keep archived transcripts indefinitely (disk budget still evicts
-  // oldest-first under pressure). An explicit duration opts back into
+  // null = keep extracted transcripts indefinitely (the disk budget still removes
+  // old archive artifacts under pressure). An explicit duration opts back into
   // wall-clock deletion; parse failures stay on the keep side because losing
   // history is the worse failure mode.
   const raw = maintenance?.resetArchiveRetention;
@@ -102,7 +102,13 @@ function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | n
     return DEFAULT_SESSION_MAX_DISK_BYTES;
   }
   try {
-    return parseByteSize(normalized, { defaultUnit: "b" });
+    const bytes = parseByteSize(normalized, { defaultUnit: "b" });
+    // A zero or negative budget is not a usable cap; treat it the same as an
+    // explicit disable so maintenance does not delete every session artifact.
+    if (bytes <= 0) {
+      return null;
+    }
+    return bytes;
   } catch {
     // A malformed explicit value must not opt the user into destructive
     // budget cleanup they never chose; disable the budget instead.
@@ -114,34 +120,25 @@ function resolveHighWaterBytes(
   maintenance: SessionMaintenanceConfig | undefined,
   maxDiskBytes: number | null,
 ): number | null {
-  const computeDefault = () => {
-    if (maxDiskBytes == null) {
-      return null;
-    }
-    if (maxDiskBytes <= 0) {
-      return 0;
-    }
-    return Math.max(
-      1,
-      Math.min(
-        maxDiskBytes,
-        Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO),
-      ),
-    );
-  };
   if (maxDiskBytes == null) {
     return null;
   }
+  const defaultHighWaterBytes = Math.max(
+    1,
+    Math.min(maxDiskBytes, Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO)),
+  );
   const raw = maintenance?.highWaterBytes;
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return computeDefault();
+    return defaultHighWaterBytes;
   }
   try {
     const parsed = parseByteSize(normalized, { defaultUnit: "b" });
-    return Math.min(parsed, maxDiskBytes);
+    // A zero target cannot stop cleanup while any bytes remain, so use the
+    // default instead of evicting every unprotected session and archive.
+    return parsed > 0 ? Math.min(parsed, maxDiskBytes) : defaultHighWaterBytes;
   } catch {
-    return computeDefault();
+    return defaultHighWaterBytes;
   }
 }
 
@@ -324,8 +321,6 @@ const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted o
 type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
-  /** Present when the entry transitioned from suspended to resuming. */
-  resumed?: { laneId?: string };
   /** True when the quota-suspension marker should be removed. */
   cleared: boolean;
 };
@@ -354,7 +349,6 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
   if (suspension.state === "suspended" && params.now >= resumeAtMs) {
     return {
       patch: { quotaSuspension: { ...suspension, state: "resuming" } },
-      resumed: { laneId: suspension.laneId },
       cleared: false,
     };
   }
@@ -394,6 +388,13 @@ function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
   return /^[^:]+:(?:group|channel):.+$/.test(rest);
 }
 
+function isPrimarySessionMaintenanceKey(sessionKey: string): boolean {
+  if (normalizeLowercaseStringOrEmpty(sessionKey) === "global") {
+    return true;
+  }
+  return parseAgentSessionKey(sessionKey)?.rest === "main";
+}
+
 function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
@@ -401,6 +402,11 @@ function isProtectedSessionMaintenanceEntry(
   // Human conversation surfaces are protected; synthetic automation sessions are disposable.
   if (isSyntheticSessionMaintenanceKey(sessionKey)) {
     return false;
+  }
+  // Primary sessions are operator-facing and must survive maintenance even without an active
+  // admission. Global scope uses the literal `global` key instead of `agent:<id>:main`.
+  if (isPrimarySessionMaintenanceKey(sessionKey)) {
+    return true;
   }
   if (parseSessionThreadInfoFast(sessionKey).threadId) {
     return true;
@@ -411,7 +417,9 @@ function isProtectedSessionMaintenanceEntry(
   if (isExternalGroupOrChannelSessionKey(sessionKey)) {
     return true;
   }
-  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  const chatType = normalizeLowercaseStringOrEmpty(
+    entry?.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+  );
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
@@ -420,6 +428,10 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
+  // Archived and pinned sessions are user-retained; only an explicit user action may release them.
+  if (params.entry?.archivedAt !== undefined || params.entry?.pinnedAt !== undefined) {
+    return true;
+  }
   // A model lock is durable harness ownership, not merely a UI restriction.
   // Evicting the row can strand its native runtime binding and later recreate
   // the same conversation under an incompatible model, so pressure may exceed
@@ -428,6 +440,17 @@ export function shouldPreserveMaintenanceEntry(params: {
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
+}
+
+function getSessionEntryMaintenanceEligibleKeys(
+  store: Record<string, SessionEntry>,
+  preserveKeys?: ReadonlySet<string>,
+): string[] {
+  // Maintenance triggers and eviction must share this eligibility boundary.
+  // Preserved sessions remain outside the ordinary-session allowance.
+  return Object.keys(store).filter(
+    (key) => !shouldPreserveMaintenanceEntry({ key, entry: store[key], preserveKeys }),
   );
 }
 
@@ -483,39 +506,28 @@ function wouldCapActiveSession(params: {
   activeSessionKey: string;
   maxEntries: number;
 }): boolean {
-  if (params.keys.length <= params.maxEntries) {
+  const eligibleKeys = params.keys.filter(
+    (key) => !shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
+  );
+  if (eligibleKeys.length <= params.maxEntries) {
     return false;
   }
   if (params.maxEntries <= 0) {
     return true;
   }
 
-  const protectedCount = params.keys.filter(
-    (key) =>
-      key !== params.activeSessionKey &&
-      shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
-  ).length;
-  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
-  // If protected entries fill the cap, the active unprotected session would be the one removed.
-  if (maxRemovableEntries <= 0) {
-    return true;
-  }
-
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
   let newerOrTieBeforeActive = 0;
   let seenActive = false;
-  for (const key of params.keys) {
+  for (const key of eligibleKeys) {
     if (key === params.activeSessionKey) {
       seenActive = true;
-      continue;
-    }
-    if (shouldPreserveMaintenanceEntry({ key, entry: params.store[key] })) {
       continue;
     }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
     if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
       newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= maxRemovableEntries) {
+      if (newerOrTieBeforeActive >= params.maxEntries) {
         return true;
       }
     }
@@ -525,34 +537,23 @@ function wouldCapActiveSession(params: {
 }
 
 /**
- * Cap the store to the N most recently updated entries.
+ * Cap eviction-eligible sessions to the N most recently updated entries.
+ * Preserved sessions remain outside the quota.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
  * Mutates `store` in-place.
  */
 export function capEntryCount(
   store: Record<string, SessionEntry>,
-  overrideMax?: number,
+  maxEntries: number,
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
-  const preservedCount = Object.entries(store).filter(([key, entry]) =>
-    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
-  ).length;
-  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
-  // Protected entries reduce the removable budget instead of being counted as deletion targets.
-  const keys = Object.keys(store).filter(
-    (key) =>
-      !shouldPreserveMaintenanceEntry({
-        key,
-        entry: store[key],
-        preserveKeys: opts.preserveKeys,
-      }),
-  );
-  if (keys.length <= maxRemovableEntries) {
+  const keys = getSessionEntryMaintenanceEligibleKeys(store, opts.preserveKeys);
+  const retainedEligibleEntries = Math.max(0, maxEntries);
+  if (keys.length <= retainedEligibleEntries) {
     return 0;
   }
 
@@ -563,7 +564,7 @@ export function capEntryCount(
     return bTime - aTime;
   });
 
-  const toRemove = sorted.slice(maxRemovableEntries);
+  const toRemove = sorted.slice(retainedEligibleEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {

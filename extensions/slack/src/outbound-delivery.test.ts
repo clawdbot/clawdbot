@@ -1,12 +1,12 @@
 // Slack tests cover outbound delivery plugin behavior.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   addTestHook,
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
@@ -54,7 +54,7 @@ describe("slack outbound shared hook wiring", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
   });
 
   it("fires message_sending once with shared routing fields", async () => {
@@ -62,13 +62,13 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });
     initializeGlobalHookRunner(hookRegistry);
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -99,7 +99,7 @@ describe("slack outbound shared hook wiring", () => {
   });
 
   it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -125,13 +125,13 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue({ cancel: true });
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });
     initializeGlobalHookRunner(hookRegistry);
 
-    const result = await deliverOutboundPayloads({
+    const result = await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -142,6 +142,6 @@ describe("slack outbound shared hook wiring", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(sendMessageSlackMock).not.toHaveBeenCalled();
-    expect(result).toStrictEqual([]);
+    expect(result).toMatchObject({ status: "suppressed", results: [] });
   });
 });

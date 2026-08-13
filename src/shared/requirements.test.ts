@@ -1,204 +1,163 @@
 // Requirement tests cover merging and formatting runtime requirements.
 import { describe, expect, it } from "vitest";
-import {
-  buildConfigChecks,
-  evaluateRequirements,
-  evaluateRequirementsFromMetadata,
-  evaluateRequirementsFromMetadataWithRemote,
-  resolveMissingAnyBins,
-  resolveMissingBins,
-  resolveMissingEnv,
-  resolveMissingOs,
-} from "./requirements.js";
+import { evaluateRequirementsFromMetadataWithRemote } from "./requirements.js";
 
-describe("requirements helpers", () => {
-  it("resolveMissingBins respects local+remote", () => {
-    expect(
-      resolveMissingBins({
-        required: ["a", "b", "c"],
-        hasLocalBin: (bin) => bin === "a",
-        hasRemoteBin: (bin) => bin === "b",
-      }),
-    ).toEqual(["c"]);
+type EvaluationParams = Parameters<typeof evaluateRequirementsFromMetadataWithRemote>[0];
+
+function evaluate(overrides: Partial<EvaluationParams> = {}) {
+  return evaluateRequirementsFromMetadataWithRemote({
+    always: false,
+    hasLocalBin: () => false,
+    localPlatform: "linux",
+    isEnvSatisfied: () => false,
+    isConfigSatisfied: () => false,
+    ...overrides,
   });
+}
 
-  it("resolveMissingAnyBins requires at least one", () => {
-    expect(
-      resolveMissingAnyBins({
-        required: [],
-        hasLocalBin: () => false,
-      }),
-    ).toStrictEqual([]);
-    expect(
-      resolveMissingAnyBins({
-        required: ["a", "b"],
-        hasLocalBin: () => false,
-        hasRemoteAnyBin: () => false,
-      }),
-    ).toEqual(["a", "b"]);
-    expect(
-      resolveMissingAnyBins({
-        required: ["a", "b"],
-        hasLocalBin: (bin) => bin === "b",
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("resolveMissingOs allows remote platform", () => {
-    expect(resolveMissingOs({ required: [], localPlatform: "linux" })).toStrictEqual([]);
-    expect(resolveMissingOs({ required: ["linux"], localPlatform: "linux" })).toStrictEqual([]);
-    expect(resolveMissingOs({ required: ["macos"], localPlatform: "darwin" })).toStrictEqual([]);
-    expect(
-      resolveMissingOs({
-        required: ["macos"],
-        localPlatform: "linux",
-        remotePlatforms: ["darwin"],
-      }),
-    ).toStrictEqual([]);
-    expect(resolveMissingOs({ required: ["darwin"], localPlatform: "linux" })).toEqual(["darwin"]);
-  });
-
-  it("resolveMissingEnv uses predicate", () => {
-    expect(
-      resolveMissingEnv({ required: ["A", "B"], isSatisfied: (name) => name === "B" }),
-    ).toEqual(["A"]);
-  });
-
-  it("buildConfigChecks includes status", () => {
-    expect(
-      buildConfigChecks({
-        required: ["a.b"],
-        isSatisfied: (p) => p === "a.b",
-      }),
-    ).toEqual([{ path: "a.b", satisfied: true }]);
-  });
-
-  it("evaluateRequirementsFromMetadata derives required+missing", () => {
-    const res = evaluateRequirementsFromMetadata({
-      always: false,
-      metadata: {
-        requires: { bins: ["a"], anyBins: ["b"], env: ["E"], config: ["cfg.value"] },
-        os: ["darwin"],
-      },
+describe("requirements evaluation", () => {
+  it("resolves required bins across local and remote capabilities", () => {
+    const result = evaluate({
+      metadata: { requires: { bins: ["a", "b", "c"] } },
       hasLocalBin: (bin) => bin === "a",
-      localPlatform: "linux",
-      isEnvSatisfied: (name) => name === "E",
-      isConfigSatisfied: () => false,
+      remote: { hasBin: (bin) => bin === "b" },
     });
 
-    expect(res.required.bins).toEqual(["a"]);
-    expect(res.missing.config).toEqual(["cfg.value"]);
-    expect(res.missing.os).toEqual(["darwin"]);
-    expect(res.eligible).toBe(false);
+    expect(result.missing.bins).toEqual(["c"]);
   });
 
-  it("evaluateRequirements reports config checks and all missing categories directly", () => {
-    const res = evaluateRequirements({
-      always: false,
-      required: {
-        bins: ["node"],
-        anyBins: ["bun", "deno"],
-        env: ["OPENAI_API_KEY"],
-        config: ["browser.enabled", "gateway.enabled"],
+  it("requires at least one any-bin locally or remotely", () => {
+    const metadata = { requires: { anyBins: ["a", "b"] } };
+
+    expect(evaluate({ metadata }).missing.anyBins).toEqual(["a", "b"]);
+    expect(
+      evaluate({
+        metadata,
+        hasLocalBin: (bin) => bin === "b",
+      }).missing.anyBins,
+    ).toStrictEqual([]);
+    expect(
+      evaluate({
+        metadata,
+        remote: { hasAnyBin: (bins) => bins.includes("b") },
+      }).missing.anyBins,
+    ).toStrictEqual([]);
+  });
+
+  it("normalizes macos and accepts local or remote platforms", () => {
+    expect(evaluate({ metadata: { os: ["linux"] } }).missing.os).toStrictEqual([]);
+    expect(
+      evaluate({
+        metadata: { os: ["macos"] },
+        localPlatform: "darwin",
+      }).missing.os,
+    ).toStrictEqual([]);
+    expect(
+      evaluate({
+        metadata: { os: ["macos"] },
+        remote: { platforms: ["darwin"] },
+      }).missing.os,
+    ).toStrictEqual([]);
+    expect(evaluate({ metadata: { os: ["darwin"] } }).missing.os).toEqual(["darwin"]);
+  });
+
+  it("reports missing environment and config requirements with config status", () => {
+    const result = evaluate({
+      metadata: {
+        requires: {
+          env: ["A", "B"],
+          config: ["a.b", "c.d"],
+        },
+      },
+      isEnvSatisfied: (name) => name === "B",
+      isConfigSatisfied: (path) => path === "a.b",
+    });
+
+    expect(result.missing.env).toEqual(["A"]);
+    expect(result.missing.config).toEqual(["c.d"]);
+    expect(result.configChecks).toEqual([
+      { path: "a.b", satisfied: true },
+      { path: "c.d", satisfied: false },
+    ]);
+  });
+
+  it("reports every missing category through the public wrapper", () => {
+    const result = evaluate({
+      metadata: {
+        requires: {
+          bins: ["node"],
+          anyBins: ["bun", "deno"],
+          env: ["OPENAI_API_KEY"],
+          config: ["browser.enabled", "gateway.enabled"],
+        },
         os: ["darwin"],
       },
-      hasLocalBin: () => false,
-      hasRemoteBin: (bin) => bin === "node",
-      hasRemoteAnyBin: () => false,
-      localPlatform: "linux",
-      remotePlatforms: ["windows"],
-      isEnvSatisfied: () => false,
+      remote: {
+        hasBin: (bin) => bin === "node",
+        hasAnyBin: () => false,
+        platforms: ["windows"],
+      },
       isConfigSatisfied: (path) => path === "gateway.enabled",
     });
 
-    expect(res.missing).toEqual({
+    expect(result.required).toEqual({
+      bins: ["node"],
+      anyBins: ["bun", "deno"],
+      env: ["OPENAI_API_KEY"],
+      config: ["browser.enabled", "gateway.enabled"],
+      os: ["darwin"],
+    });
+    expect(result.missing).toEqual({
       bins: [],
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY"],
       config: ["browser.enabled"],
       os: ["darwin"],
     });
-    expect(res.configChecks).toEqual([
+    expect(result.configChecks).toEqual([
       { path: "browser.enabled", satisfied: false },
       { path: "gateway.enabled", satisfied: true },
     ]);
-    expect(res.eligible).toBe(false);
+    expect(result.eligible).toBe(false);
   });
 
   it("clears missing requirements when always is true but preserves config checks", () => {
-    const res = evaluateRequirements({
+    const result = evaluate({
       always: true,
-      required: {
-        bins: ["node"],
-        anyBins: ["bun"],
-        env: ["OPENAI_API_KEY"],
-        config: ["browser.enabled"],
-        os: ["darwin"],
-      },
-      hasLocalBin: () => false,
-      localPlatform: "linux",
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
-    });
-
-    expect(res.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
-    expect(res.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
-    expect(res.eligible).toBe(true);
-  });
-
-  it("evaluateRequirementsFromMetadataWithRemote wires remote predicates and platforms through", () => {
-    const res = evaluateRequirementsFromMetadataWithRemote({
-      always: false,
       metadata: {
-        requires: { bins: ["node"], anyBins: ["bun"], env: ["OPENAI_API_KEY"] },
+        requires: {
+          bins: ["node"],
+          anyBins: ["bun"],
+          env: ["OPENAI_API_KEY"],
+          config: ["browser.enabled"],
+        },
         os: ["darwin"],
       },
-      remote: {
-        hasBin: (bin) => bin === "node",
-        hasAnyBin: (bins) => bins.includes("bun"),
-        platforms: ["darwin"],
-      },
-      hasLocalBin: () => false,
-      localPlatform: "linux",
-      isEnvSatisfied: (name) => name === "OPENAI_API_KEY",
-      isConfigSatisfied: () => true,
     });
 
-    expect(res.required).toEqual({
-      bins: ["node"],
-      anyBins: ["bun"],
-      env: ["OPENAI_API_KEY"],
-      config: [],
-      os: ["darwin"],
-    });
-    expect(res.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
-    expect(res.eligible).toBe(true);
+    expect(result.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(result.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
+    expect(result.eligible).toBe(true);
   });
 
-  it("evaluateRequirementsFromMetadata defaults missing metadata to empty requirements", () => {
-    const res = evaluateRequirementsFromMetadata({
-      always: false,
-      hasLocalBin: () => false,
-      localPlatform: "linux",
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
-    });
+  it("defaults missing metadata to empty requirements", () => {
+    const result = evaluate();
 
-    expect(res.required).toEqual({
+    expect(result.required).toEqual({
       bins: [],
       anyBins: [],
       env: [],
       config: [],
       os: [],
     });
-    expect(res.missing).toEqual({
+    expect(result.missing).toEqual({
       bins: [],
       anyBins: [],
       env: [],
       config: [],
       os: [],
     });
-    expect(res.configChecks).toStrictEqual([]);
-    expect(res.eligible).toBe(true);
+    expect(result.configChecks).toStrictEqual([]);
+    expect(result.eligible).toBe(true);
   });
 });

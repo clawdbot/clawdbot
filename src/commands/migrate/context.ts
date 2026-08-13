@@ -1,6 +1,9 @@
 /** Migration provider context and report-directory helpers. */
 import path from "node:path";
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
+import { listAgentIds } from "../../agents/agent-scope.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,9 +35,33 @@ export function buildMigrationReportDir(
   return path.join(stateDir, "migration", providerId, stamp);
 }
 
+/** Resolves an explicit migration owner without allowing typo-created agent stores. */
+export function resolveMigrationTargetAgentId(
+  config: OpenClawConfig,
+  rawAgentId: string | undefined,
+): string | undefined {
+  const raw = rawAgentId?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (!isValidAgentId(raw)) {
+    throw new Error(`Invalid agent id "${raw}".`);
+  }
+  const agentId = normalizeAgentId(raw);
+  const knownAgentIds = new Set(listAgentIds(config).map(normalizeAgentId));
+  if (!knownAgentIds.has(agentId)) {
+    throw new Error(
+      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+    );
+  }
+  return agentId;
+}
+
 /** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
+  targetAgentId?: string;
+  itemKinds?: readonly string[];
   includeSecrets?: boolean;
   overwrite?: boolean;
   providerOptions?: Record<string, unknown>;
@@ -49,6 +76,8 @@ export function buildMigrationContext(params: {
   return {
     config,
     stateDir,
+    targetAgentId: resolveMigrationTargetAgentId(config, params.targetAgentId),
+    itemKinds: params.itemKinds,
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),
     overwrite: Boolean(params.overwrite),

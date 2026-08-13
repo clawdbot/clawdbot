@@ -27,9 +27,3 @@ export async function pruneMatrixStaleGatewayDevices(opts: MatrixActionClientOpt
     };
   });
 }
-
-export async function getMatrixDeviceHealth(opts: MatrixActionClientOpts = {}) {
-  return await withResolvedActionClient(opts, async (client) =>
-    summarizeMatrixDeviceHealth(await client.listOwnDevices()),
-  );
-}

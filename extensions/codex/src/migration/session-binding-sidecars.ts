@@ -5,11 +5,20 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+  pathExists,
+} from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -66,6 +75,7 @@ type BindingOwnerCollection = {
 type SourceMigrationResult = {
   archived: boolean;
   importedKeys: number;
+  notice?: string;
   warning?: string;
 };
 
@@ -86,10 +96,13 @@ type MigratedBindingRow =
     };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
+  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+  // session-accessor/kysely graph, so it stays behind lazy imports in async bodies.
+  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
-  const stateRoot = await canonicalizePath(params.stateDir);
+  const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
   const add = async (root: string, storePath: string, agentId: string, scan: boolean) => {
-    const canonicalRoot = await canonicalizePath(root);
+    const canonicalRoot = await canonicalPathFromExistingAncestor(root);
     const surface = surfaces.get(canonicalRoot) ?? {
       root: canonicalRoot,
       scan: false,
@@ -125,7 +138,12 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
       env: params.env,
     });
     const root = path.dirname(storePath);
-    await add(root, storePath, agentId, isPathWithin(stateRoot, await canonicalizePath(root)));
+    await add(
+      root,
+      storePath,
+      agentId,
+      isPathInside(stateRoot, await canonicalPathFromExistingAncestor(root)),
+    );
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
@@ -141,7 +159,7 @@ async function collectLegacyBindingSources(
   const surfaces = await collectSessionSurfaces(params);
   const sources = new Map<string, LegacyBindingSource>();
   const addSource = async (sidecarPath: string, surface: SessionSurface) => {
-    const canonicalSidecar = await canonicalizePath(sidecarPath);
+    const canonicalSidecar = await canonicalPathFromExistingAncestor(sidecarPath);
     const source = sources.get(canonicalSidecar) ?? {
       sidecarPath: canonicalSidecar,
       transcriptPath: sidecarPath.slice(0, -LEGACY_BINDING_SUFFIX.length),
@@ -257,7 +275,7 @@ async function* iterateIndexedSidecars(surface: SessionSurface): AsyncGenerator<
         continue;
       }
       const sidecarPath = `${transcriptPath}${LEGACY_BINDING_SUFFIX}`;
-      if (await isRegularFile(sidecarPath)) {
+      if (await legacyStateFileExists(sidecarPath)) {
         yield sidecarPath;
       }
     }
@@ -289,8 +307,11 @@ async function collectBindingOwners(
   surfaces: SessionSurface[],
   params: MigrationEnvironment,
 ): Promise<BindingOwnerCollection> {
+  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const sourcePaths = new Set(
-    await Promise.all(sources.map((source) => canonicalizePath(source.transcriptPath))),
+    await Promise.all(
+      sources.map((source) => canonicalPathFromExistingAncestor(source.transcriptPath)),
+    ),
   );
   const owners = new Map<string, Map<string, LegacyBindingOwner>>();
   const storePaths = new Set(surfaces.flatMap((surface) => [...surface.storePaths]));
@@ -306,7 +327,7 @@ async function collectBindingOwners(
   }
   const failures: string[] = [];
   for (const storePath of storePaths) {
-    const canonicalStorePath = await canonicalizePath(storePath);
+    const canonicalStorePath = await canonicalPathFromExistingAncestor(storePath);
     const index = await readLegacySessionIndex(storePath);
     if ("failure" in index) {
       failures.push(index.failure);
@@ -324,7 +345,8 @@ async function collectBindingOwners(
       let canonicalLegacyTranscriptPath: string;
       try {
         legacyTranscriptPath = await resolveLegacySessionFileLocator(sessionsDir, entry, sessionId);
-        canonicalLegacyTranscriptPath = await canonicalizePath(legacyTranscriptPath);
+        canonicalLegacyTranscriptPath =
+          await canonicalPathFromExistingAncestor(legacyTranscriptPath);
       } catch {
         failures.push(`session index ${storePath} has an invalid locator for ${sessionKey}`);
         continue;
@@ -378,10 +400,10 @@ async function resolveLegacySessionFileLocator(
   }
   const candidate = path.resolve(base, sessionFile);
   const [canonicalBase, canonicalCandidate] = await Promise.all([
-    canonicalizePathForContainment(base),
-    canonicalizePathForContainment(candidate),
+    canonicalPathFromExistingAncestor(base),
+    canonicalPathFromExistingAncestor(candidate),
   ]);
-  if (!isPathWithin(canonicalBase, canonicalCandidate)) {
+  if (!isPathInside(canonicalBase, canonicalCandidate)) {
     throw new Error("legacy session file locator escapes its session directory");
   }
   return candidate;
@@ -429,6 +451,11 @@ async function migrateSource(
     importedKeys,
     warning: `Left Codex binding sidecar in place because ${reason}: ${source.sidecarPath}`,
   });
+  const retainNotice = (reason: string): SourceMigrationResult => ({
+    archived: false,
+    importedKeys,
+    notice: `Left Codex binding sidecar in place because ${reason}: ${source.sidecarPath}`,
+  });
   const owner = candidates.length === 1 ? candidates[0] : undefined;
   try {
     return await withFileLock(source.sidecarPath, LEGACY_BINDING_LOCK_OPTIONS, async () => {
@@ -467,7 +494,10 @@ async function migrateSource(
         return retain(`${candidates.length} matching session owners make ownership ambiguous`);
       }
       if (owner?.agentHarnessId && owner.agentHarnessId !== CODEX_AGENT_HARNESS_ID) {
-        return retain(`its session is owned by agent harness ${owner.agentHarnessId}`);
+        // Explicit foreign ownership is a complete decision, not an unsafe
+        // migration conflict. Preserve the sidecar for that harness without
+        // blocking every later Gateway startup.
+        return retainNotice(`its session is owned by agent harness ${owner.agentHarnessId}`);
       }
       const sourceSessionFile =
         typeof raw.sessionFile === "string" && raw.sessionFile.trim()
@@ -611,7 +641,10 @@ async function migrateSource(
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
             }
           }
-          return retain(ownershipWarning);
+          // Imported active session state is retired before reaching here.
+          // The remaining sidecar may belong to the new owner, so preserve it
+          // as a note; failed retirement and revalidation stay warnings above.
+          return retainNotice(ownershipWarning);
         }
         for (const entry of entries) {
           if (!hasExpected(await store.lookup(entry.key), entry.value)) {
@@ -621,7 +654,16 @@ async function migrateSource(
       }
       // Legacy writers only created sidecars for an existing session file. Once
       // unique ownership is recorded, or zero ownership is proven, it is safe to archive.
-      await archiveBindingSidecar(source.sidecarPath);
+      const archiveWarnings: string[] = [];
+      await archiveLegacyStateSource({
+        filePath: source.sidecarPath,
+        label: "Codex app-server binding",
+        changes: [],
+        warnings: archiveWarnings,
+      });
+      if (archiveWarnings.length > 0 && (await pathExists(source.sidecarPath))) {
+        return retain(archiveWarnings.join("; "));
+      }
       return { archived: true, importedKeys };
     });
   } catch (error) {
@@ -640,6 +682,7 @@ async function recordSessionOwner(
   owner: LegacyBindingOwner,
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
+  const { patchSessionEntry } = await import("openclaw/plugin-sdk/session-store-runtime");
   const currentIndex = await readLegacySessionIndex(owner.storePath);
   if ("failure" in currentIndex) {
     return "its legacy session owner could not be revalidated";
@@ -661,8 +704,8 @@ async function recordSessionOwner(
     return "its session owner changed before Codex ownership could be recorded";
   }
   if (
-    (await canonicalizePath(currentTranscriptPath)) !==
-      (await canonicalizePath(owner.transcriptPath)) ||
+    (await canonicalPathFromExistingAncestor(currentTranscriptPath)) !==
+      (await canonicalPathFromExistingAncestor(owner.transcriptPath)) ||
     currentOwner.entry.lifecycleRevision !== owner.lifecycleRevision
   ) {
     return "its session owner changed before Codex ownership could be recorded";
@@ -740,18 +783,6 @@ async function readDirectoryEntries(directory: string) {
   }
 }
 
-async function isRegularFile(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function isSafeLegacySessionId(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
@@ -760,78 +791,6 @@ function isSafeLegacySessionId(value: unknown): value is string {
   return (
     trimmed.length > 0 && trimmed.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed)
   );
-}
-
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  // Bare ".." (candidate is root's parent) must stay outside; treating it as
-  // inside would let doctor recursively scan the whole tree above stateDir.
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
-}
-
-async function canonicalizePath(filePath: string): Promise<string> {
-  try {
-    return await fs.realpath(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
-
-async function canonicalizePathForContainment(filePath: string): Promise<string> {
-  const resolved = path.resolve(filePath);
-  const suffix: string[] = [];
-  let probe = resolved;
-  while (true) {
-    try {
-      const realProbe = await fs.realpath(probe);
-      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function firstFreeArchivePath(sourcePath: string): Promise<string> {
-  for (let index = 2; ; index++) {
-    const candidate = `${sourcePath}.migrated.${index}`;
-    if (!(await pathExists(candidate))) {
-      return candidate;
-    }
-  }
-}
-
-async function archiveBindingSidecar(sourcePath: string): Promise<void> {
-  const archivePath = `${sourcePath}.migrated`;
-  if (await pathExists(archivePath)) {
-    const [sourceBytes, archiveBytes] = await Promise.all([
-      fs.readFile(sourcePath),
-      fs.readFile(archivePath),
-    ]);
-    if (sourceBytes.equals(archiveBytes)) {
-      await fs.rm(sourcePath, { force: true });
-      return;
-    }
-    await fs.rename(sourcePath, await firstFreeArchivePath(sourcePath));
-    return;
-  }
-  await fs.rename(sourcePath, archivePath);
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -851,6 +810,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       const { sources, surfaces } = await collectLegacyBindingSources(params);
       if (sources.length === 0) {
         return { changes, warnings };
@@ -871,10 +831,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       let partialImports = 0;
       for (const source of sources) {
         const candidates =
-          ownerCollection.owners.get(await canonicalizePath(source.transcriptPath)) ?? [];
+          ownerCollection.owners.get(
+            await canonicalPathFromExistingAncestor(source.transcriptPath),
+          ) ?? [];
         const result = await migrateSource(source, candidates, params, store);
         if (result.warning) {
           warnings.push(result.warning);
+        }
+        if (result.notice) {
+          notices.push(result.notice);
         }
         if (result.archived) {
           migrated++;
@@ -892,7 +857,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
         );
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     },
   },
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,9 +7,8 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
-  stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
@@ -33,7 +32,7 @@ export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw: string[] = Array.isArray(raw) ? normalizeStringEntries(raw) : [];
+  const sectionsRaw = Array.isArray(raw) ? raw.map((section) => String(section).trim()) : [];
   if (sectionsRaw.length === 0) {
     return { sections: [], invalid: [] };
   }
@@ -104,10 +103,4 @@ export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   });
 /** Styled select prompt wrapper that also normalizes option hints. */
 export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  clackSelect(styleSelectParams(params));

@@ -32,7 +32,7 @@ function inheritedUpdateTimeout(
   command?: Command,
 ): string | undefined {
   const timeout = opts.timeout as string | undefined;
-  if (timeout) {
+  if (timeout !== undefined) {
     return timeout;
   }
   return inheritOptionFromParent<string>(command, "timeout");
@@ -59,6 +59,18 @@ function inheritedUpdateClawHubRisk(command?: Command): boolean {
     inheritOptionFromParent<boolean>(command, "acknowledgeClawhubRisk") ??
     inheritOptionFromParent<boolean>(command, "acknowledgeClawHubRisk"),
   );
+}
+
+function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
+  if (!inheritOptionFromParent<boolean>(command, "dryRun")) {
+    return false;
+  }
+
+  defaultRuntime.error(
+    `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+  );
+  defaultRuntime.exit(1);
+  return true;
 }
 
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
@@ -90,11 +102,17 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(async (opts, actionCommand) => {
       try {
+        if (rejectUnsupportedInheritedUpdateDryRun(actionCommand)) {
+          return;
+        }
+
         await updateFinalizeCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
-          channel: opts.channel as string | undefined,
+          channel:
+            (opts.channel as string | undefined) ??
+            inheritOptionFromParent<string>(actionCommand, "channel"),
           timeout: inheritedUpdateTimeout(opts, actionCommand),
-          yes: Boolean(opts.yes),
+          yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
           restart: false,
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
@@ -209,6 +227,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(async (opts, command) => {
       try {
+        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
+          return;
+        }
+
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
         });

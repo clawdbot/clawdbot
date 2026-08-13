@@ -1,6 +1,7 @@
 // Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -10,7 +11,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -32,23 +33,6 @@ const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
     label: "OpenAI",
     isConfigured: () => true,
   }) as unknown as RealtimeTranscriptionProviderPlugin;
-
-const createDeferred = (): {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-} => {
-  let resolve: (() => void) | undefined;
-  let reject: ((error: Error) => void) | undefined;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-};
 
 const waitForAbort = (signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
@@ -95,108 +79,40 @@ const requireTalkEvent = (events: TalkEvent[], type: TalkEvent["type"]) => {
   return requireRecord(event, `${type} Talk event`);
 };
 
-describe("MediaStreamHandler TTS queue", () => {
-  it("serializes TTS playback and resolves in order", async () => {
-    const handler = new MediaStreamHandler({
-      transcriptionProvider: createStubSttProvider(),
-      providerConfig: {},
-    });
-    const started: number[] = [];
-    const finished: number[] = [];
-
-    let resolveFirst: (() => void) | undefined;
-    const firstGate = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    if (!resolveFirst) {
-      throw new Error("Expected first TTS gate resolver to be initialized");
-    }
-
-    const first = handler.queueTts("stream-1", async () => {
-      started.push(1);
-      await firstGate;
-      finished.push(1);
-    });
-    const second = handler.queueTts("stream-1", async () => {
-      started.push(2);
-      finished.push(2);
-    });
-
-    expect(started).toEqual([1]);
-
-    resolveFirst();
-    await first;
-    await second;
-
-    expect(started).toEqual([1, 2]);
-    expect(finished).toEqual([1, 2]);
-  });
-
-  it("cancels active playback and clears queued items", async () => {
-    const handler = new MediaStreamHandler({
-      transcriptionProvider: createStubSttProvider(),
-      providerConfig: {},
-    });
-
-    let queuedRan = false;
-    const started: string[] = [];
-
-    const active = handler.queueTts("stream-1", async (signal) => {
-      started.push("active");
-      await waitForAbort(signal);
-    });
-    const queued = handler.queueTts("stream-1", async () => {
-      queuedRan = true;
-    });
-
-    expect(started).toEqual(["active"]);
-
-    handler.clearTtsQueue("stream-1");
-    await active;
-    await withTimeout(queued);
-
-    expect(queuedRan).toBe(false);
-  });
-
-  it("resolves pending queued playback during stream teardown", async () => {
-    const handler = new MediaStreamHandler({
-      transcriptionProvider: createStubSttProvider(),
-      providerConfig: {},
-    });
-
-    let queuedRan = false;
-    const active = handler.queueTts("stream-1", async (signal) => {
-      await waitForAbort(signal);
-    });
-    const queued = handler.queueTts("stream-1", async () => {
-      queuedRan = true;
-    });
-
-    (
-      handler as unknown as {
-        clearTtsState(streamSid: string): void;
-      }
-    ).clearTtsState("stream-1");
-
-    await withTimeout(active);
-    await withTimeout(queued);
-    expect(queuedRan).toBe(false);
-  });
-});
-
 describe("MediaStreamHandler security hardening", () => {
-  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
-    let error: unknown;
-    try {
-      parseTwilioMediaMessage(Buffer.from("{not json"));
-    } catch (caught) {
-      error = caught;
-    }
+  it("wraps malformed Twilio media stream JSON with an owned parser error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
-    expect(error).not.toBeInstanceOf(SyntaxError);
-    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    try {
+      const ws = await connectWs(server.url);
+      ws.send("{not json");
+
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          "[MediaStream] Error processing message:",
+          expect.objectContaining({
+            message: "Twilio media stream message was malformed JSON",
+          }),
+        );
+      });
+      const error = errorSpy.mock.calls.find(
+        ([message]) => message === "[MediaStream] Error processing message:",
+      )?.[1];
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(SyntaxError);
+      expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      errorSpy.mockRestore();
+      await server.close();
+    }
   });
 
   it("rejects start frames when no stream acceptance validator is configured", async () => {
@@ -436,19 +352,59 @@ describe("MediaStreamHandler security hardening", () => {
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
-  it("sanitizes websocket close reason before logging", () => {
-    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
-    expect(reason).not.toContain("\n");
-    expect(reason).not.toContain("\r");
-    expect(reason).not.toContain("\t");
-    expect(reason).toContain("forged line entry");
+  it("sanitizes websocket close reason before logging", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, "forged\nline\r\tentry");
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("reason: forged line entry"));
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\n");
+      expect(line).not.toContain("\r");
+      expect(line).not.toContain("\t");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
   });
 
-  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", () => {
-    const reason = sanitizeLogText(`abc\uD83D\uDE80tail`, 4);
-    expect(reason).toBe("abc...");
-    expect(reason).not.toContain("\uD83D");
-    expect(reason).not.toContain("\uDE80");
+  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, `${"a".repeat(119)}\uD83D\uDE80`);
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`reason: ${"a".repeat(119)}...`),
+        );
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\uD83D");
+      expect(line).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
   });
 
   it("closes idle pre-start connections after timeout", async () => {
@@ -778,9 +734,9 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("defers transcription readiness until STT connect resolves", async () => {
-    const sttReady = createDeferred();
-    const sttConnectStarted = createDeferred();
-    const transcriptionReady = createDeferred();
+    const sttReady = createDeferred<void>();
+    const sttConnectStarted = createDeferred<void>();
+    const transcriptionReady = createDeferred<void>();
     const events: string[] = [];
 
     const session: RealtimeTranscriptionSession = {
@@ -845,10 +801,10 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("forwards early Twilio media into the STT session before readiness", async () => {
-    const sttReady = createDeferred();
-    const sttConnectStarted = createDeferred();
-    const transcriptionReady = createDeferred();
-    const audioReceived = createDeferred();
+    const sttReady = createDeferred<void>();
+    const sttConnectStarted = createDeferred<void>();
+    const transcriptionReady = createDeferred<void>();
+    const audioReceived = createDeferred<void>();
     const receivedAudio: Buffer[] = [];
     let onConnectCalls = 0;
     let onTranscriptionReadyCalls = 0;
@@ -929,8 +885,8 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("closes the media stream and disconnects once when STT readiness fails", async () => {
-    const sttConnectStarted = createDeferred();
-    const onDisconnectReady = createDeferred();
+    const sttConnectStarted = createDeferred<void>();
+    const onDisconnectReady = createDeferred<void>();
     const onConnect = vi.fn();
     const onTranscriptionReady = vi.fn();
     const onDisconnect = vi.fn(() => {

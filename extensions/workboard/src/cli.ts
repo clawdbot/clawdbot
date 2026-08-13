@@ -1,3 +1,8 @@
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 // Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -6,14 +11,15 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
+import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
-import type { WorkboardCard } from "./types.js";
 
 type JsonOptions = {
   json?: boolean;
 };
 
 type GatewayOptions = JsonOptions & {
+  admin?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -56,27 +62,15 @@ function splitLabels(value: string | undefined): string[] | undefined {
     .filter(Boolean);
 }
 
+function isWorkboardStatus(value: string): value is WorkboardStatus {
+  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
+}
+
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
   const agent = card.agentId ? ` ${card.agentId}` : "";
-  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}`;
-}
-
-function redactClaimToken(card: WorkboardCard): WorkboardCard {
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return card;
-  }
-  return {
-    ...card,
-    metadata: {
-      ...card.metadata,
-      claim: {
-        ...claim,
-        token: "[redacted]",
-      },
-    },
-  };
+  const archived = card.metadata?.archivedAt ? " (archived)" : "";
+  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
 function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {
@@ -106,7 +100,9 @@ async function callWorkboardGateway(
 ): Promise<unknown> {
   return await callGatewayFromCli(method, options, params, {
     mode: "cli",
-    scopes: ["operator.write", "operator.read"],
+    scopes: options.admin
+      ? ["operator.admin", "operator.write", "operator.read"]
+      : ["operator.write", "operator.read"],
   });
 }
 
@@ -207,6 +203,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           agentId: options.agent,
           boardId: options.board,
           labels: splitLabels(options.labels),
+          workspaceAccess: { unrestricted: true },
         });
         if (options.json) {
           writeJson({ card: redactClaimToken(card) });
@@ -237,6 +234,29 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       }
     });
 
+  workboard
+    .command("move")
+    .argument("<id>", "Card id or prefix")
+    .description("Move a Workboard card to another status")
+    .requiredOption("--status <status>", "Target status")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { status: string }) => {
+      if (!isWorkboardStatus(options.status)) {
+        throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+      }
+      const cards = await params.store.list();
+      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+      if (!card) {
+        throw new Error(error);
+      }
+      const updated = await params.store.move(card.id, options.status, undefined);
+      if (options.json) {
+        writeJson({ card: redactClaimToken(updated) });
+      } else {
+        writeLine(formatCardLine(updated));
+      }
+    });
+
   addGatewayClientOptions(
     workboard
       .command("dispatch")
@@ -247,6 +267,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         "Maximum new worker runs to start in this pass (default 3)",
         (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
       )
+      .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
   ).action(async (options: DispatchOptions) => {
     try {

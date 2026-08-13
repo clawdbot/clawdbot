@@ -46,6 +46,7 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => undefined),
+  resolveSessionAgentId: vi.fn(({ agentId }: { agentId?: string }) => agentId ?? "main"),
   resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "main" })),
 }));
 
@@ -57,8 +58,7 @@ vi.mock("../../agents/system-prompt-params.js", () => ({
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
     userTimezone: "UTC",
-    userTime: "12:00 PM",
-    userTimeFormat: "12h",
+    userDate: "2026-01-05",
   })),
 }));
 
@@ -70,8 +70,10 @@ vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 function makeParams(): HandleCommandsParams {

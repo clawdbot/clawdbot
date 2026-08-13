@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type {
+  WorkboardArtifact,
+  WorkboardCard,
+  WorkboardClaim,
+  WorkboardNotification,
+  WorkboardRunAttempt,
+} from "@openclaw/workboard-contract";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendEvent,
   assertCanMutateClaimedCard,
   capText,
+  cardBoardId,
   cardChildIds,
   cardParentIds,
   cardRunId,
@@ -14,50 +25,56 @@ import {
 import {
   addWorkboardDurationMs,
   DEFAULT_CLAIM_TTL_MS,
+  isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
   MAX_CARD_COMMENTS,
   MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
   secondsToDurationMs,
 } from "./store-constants.js";
-import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type {
   WorkboardBlockInput,
   WorkboardClaimInput,
+  WorkboardClaimOptions,
   WorkboardCompleteInput,
   WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
-  WorkboardPromoteInput,
   WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
 import {
+  appendCompletionProof,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
-  normalizeOptionalString,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
-import type {
-  WorkboardArtifact,
-  WorkboardCard,
-  WorkboardNotification,
-  WorkboardRunAttempt,
-} from "./types.js";
+import { WorkboardPromoteStore } from "./store-promote.js";
 
-export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
+function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
+  const token = normalizeOptionalString(input.token);
+  const ownerId = normalizeOptionalString(input.ownerId);
+  if (token && !safeEqualSecret(token, claim.token)) {
+    throw new Error("claim token does not match.");
+  }
+  if (!token && ownerId && ownerId !== claim.ownerId) {
+    throw new Error("claim owner does not match.");
+  }
+}
+
+export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async claim(
     id: string,
     input: WorkboardClaimInput,
+    options: WorkboardClaimOptions = {},
   ): Promise<{ card: WorkboardCard; token: string }> {
     const ownerId = normalizeBoundedString(input.ownerId, undefined, 120, "claim owner");
     if (!ownerId) {
@@ -76,9 +93,33 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
       const guarded = await this.promoteDependencyReady(id, now);
+      if (guarded.metadata?.archivedAt) {
+        throw new Error("card is archived.");
+      }
+      const expectedAuthority = options.expectedAuthority;
+      if (
+        expectedAuthority &&
+        (guarded.status !== expectedAuthority.status ||
+          cardBoardId(guarded) !== expectedAuthority.boardId ||
+          guarded.agentId !== expectedAuthority.agentId ||
+          !isDeepStrictEqual(
+            guarded.metadata?.automation?.workspace,
+            expectedAuthority.workspace,
+          ) ||
+          !isDeepStrictEqual(
+            guarded.metadata?.automation?.workspaceAccess,
+            expectedAuthority.workspaceAccess,
+          ))
+      ) {
+        throw new Error("card workspace authority changed before claim.");
+      }
       const existingClaim = guarded.metadata?.claim;
       const activeClaim =
-        existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })
+        existingClaim &&
+        (isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now }) ||
+          // Direct claims must honor the same running-worker heartbeat grace
+          // as dispatcher recovery; otherwise they silently steal live tokens.
+          (guarded.status === "running" && !isWorkboardClaimReclaimable(existingClaim, now)))
           ? existingClaim
           : undefined;
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
@@ -93,7 +134,11 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const claimable =
+        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
+          : guarded;
+      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
         metadata: {
           ...metadata,
@@ -119,14 +164,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
         throw new Error("card is not claimed.");
       }
       const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
-      const token = normalizeOptionalString(input.token);
-      const ownerId = normalizeOptionalString(input.ownerId);
-      if (token && token !== claim.token) {
-        throw new Error("claim token does not match.");
-      }
-      if (!token && ownerId && ownerId !== claim.ownerId) {
-        throw new Error("claim owner does not match.");
-      }
+      assertClaimIdentity(claim, input);
       const nextClaim = {
         ...claim,
         lastHeartbeatAt: now,
@@ -171,14 +209,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
           : normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
-        const token = normalizeOptionalString(input.token);
-        const ownerId = normalizeOptionalString(input.ownerId);
-        if (token && token !== claim.token) {
-          throw new Error("claim token does not match.");
-        }
-        if (!token && ownerId && ownerId !== claim.ownerId) {
-          throw new Error("claim owner does not match.");
-        }
+        assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
         id,
@@ -228,6 +259,13 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
       input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
         ? (input.proof as WorkboardProofInput)
         : undefined;
+    const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
+    if (input.proofId !== undefined && !proofId) {
+      throw new Error("proofId must be a non-empty string.");
+    }
+    if (proofId && !proofInput) {
+      throw new Error("proof is required when proofId is provided.");
+    }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
@@ -273,7 +311,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF) : metadata.proof,
+          proof: proof ? appendCompletionProof(metadata.proof, proof, proofId) : metadata.proof,
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
@@ -282,7 +320,10 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
           ),
         },
       },
-      { enforceStatusHolds: true },
+      {
+        enforceStatusHolds: true,
+        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
+      },
     );
   }
 
@@ -344,39 +385,6 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
       return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
-    });
-  }
-
-  async promote(
-    id: string,
-    input: WorkboardPromoteInput = {},
-    scope?: WorkboardMutationScope | null,
-  ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
-      const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
-      const comments = reason
-        ? [
-            ...(existing.metadata?.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: Date.now() },
-          ].slice(-MAX_CARD_COMMENTS)
-        : existing.metadata?.comments;
-      return await this.updateCard(
-        id,
-        {
-          status: "ready",
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
-            comments,
-            stale: null,
-          },
-        },
-        { enforceStatusHolds: input.force !== true },
-      );
     });
   }
 

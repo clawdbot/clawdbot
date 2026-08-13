@@ -1,13 +1,15 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
+// Presentation-free by contract: confirmations and secret reveals belong to the owning
+// page, because native window.confirm/window.prompt silently answer in webviews with no
+// dialog bridge and would end the action with no outcome and no recorded reason.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
-  clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
-  loadDeviceAuthTokenFromStore,
-  storeDeviceAuthTokenInStore,
-} from "../../../../src/shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../../../../src/shared/device-auth.js";
-import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
+  type DeviceAuthStore,
+  normalizeDeviceAuthRole,
+  normalizeDeviceAuthScopes,
+} from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -160,7 +162,7 @@ type ExecApprovalsState = NodesRequestState & {
   chatError?: string | null;
 };
 
-export type NodesPageDataState = NodesState & DevicesState & ExecApprovalsState;
+export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
 
 type StoredIdentity = {
   version: 1;
@@ -180,9 +182,9 @@ const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
-export function createInitialNodesState(
+export function createInitialDevicesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
-): NodesPageDataState {
+): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
@@ -292,10 +294,6 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   if (!client || !state.connected) {
     return;
   }
-  const confirmed = window.confirm("Reject this device pairing request?");
-  if (!confirmed) {
-    return;
-  }
   const generation = state.requestGeneration;
   try {
     await client.request("device.pair.reject", { requestId });
@@ -349,10 +347,6 @@ export async function removeInventoryEntry(state: InventoryState, entry: Invento
   if (!client || !state.connected) {
     return;
   }
-  const confirmed = window.confirm(`Remove ${entry.name} (${entry.id.slice(0, 12)}…)?`);
-  if (!confirmed) {
-    return;
-  }
   try {
     await removeInventoryEntryRpc(client, entry);
     await reloadInventory(state);
@@ -367,12 +361,6 @@ export async function removeStaleInventoryEntries(
 ) {
   const client = state.client;
   if (!client || !state.connected || entries.length === 0) {
-    return;
-  }
-  const confirmed = window.confirm(
-    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair silently on their next connection.`,
-  );
-  if (!confirmed) {
     return;
   }
   const failures: string[] = [];
@@ -409,10 +397,6 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
   if (!state.client || !state.connected) {
     return;
   }
-  const confirmed = window.confirm("Reject this node pairing request?");
-  if (!confirmed) {
-    return;
-  }
   try {
     await state.client.request("node.pair.reject", { requestId });
     await reloadInventory(state);
@@ -421,13 +405,14 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
   }
 }
 
+/** Returns the rotated token for the owning page to reveal; the Gateway never resends it. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
-) {
+): Promise<string | null> {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
+    return null;
   }
   const generation = state.requestGeneration;
   try {
@@ -438,13 +423,17 @@ export async function rotateDeviceToken(
       deviceId?: string;
       scopes?: Array<string>;
     }>("device.token.rotate", requestParams);
+    const token = res?.token ?? null;
+    // A retired epoch stops every state write below, but never the return: the previous
+    // credential is already dead on the server, so discarding this response would leave
+    // the operator locked out with no way to ask for the replacement again.
     if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
+      return token;
     }
-    if (res?.token) {
+    if (token) {
       const identity = await loadOrCreateDeviceIdentity();
       if (!isCurrentNodesRequest(state, client, generation)) {
-        return;
+        return token;
       }
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
@@ -452,19 +441,18 @@ export async function rotateDeviceToken(
           deviceId: identity.deviceId,
           gatewayUrl,
           role,
-          token: res.token,
+          token,
           scopes: res.scopes ?? params.scopes ?? [],
         });
       }
-      window.prompt("New device token (copy and store securely):", res.token);
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
+    await loadDevices(state);
+    return token;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = String(err);
     }
+    return null;
   }
 }
 
@@ -474,10 +462,6 @@ export async function revokeDeviceToken(
 ) {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(`Revoke token for ${params.deviceId} (${params.role})?`);
-  if (!confirmed) {
     return;
   }
   const generation = state.requestGeneration;
@@ -661,7 +645,7 @@ export function removeExecApprovalsFormValue(
 }
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
-  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function removeLegacyDeviceAuthStore(storage: Storage | null) {
@@ -734,19 +718,34 @@ function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
   }
 }
 
+function canonicalDeviceAuthTokens(tokens: DeviceAuthStore["tokens"]) {
+  const canonical: DeviceAuthStore["tokens"] = {};
+  for (const [rawRole, entry] of Object.entries(tokens)) {
+    const role = normalizeDeviceAuthRole(rawRole);
+    if (!role || !entry || typeof entry.token !== "string") {
+      continue;
+    }
+    canonical[role] = {
+      token: entry.token,
+      role,
+      scopes: normalizeDeviceAuthScopes(Array.isArray(entry.scopes) ? entry.scopes : undefined),
+      updatedAtMs: Number.isFinite(entry.updatedAtMs) ? entry.updatedAtMs : 0,
+    };
+  }
+  return canonical;
+}
+
 export function loadDeviceAuthToken(params: {
   deviceId: string;
   gatewayUrl: string;
   role: string;
 }): DeviceAuthEntry | null {
-  return loadDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return null;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  return canonicalDeviceAuthTokens(store.tokens)[role] ?? null;
 }
 
 export function storeDeviceAuthToken(params: {
@@ -756,16 +755,23 @@ export function storeDeviceAuthToken(params: {
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
-  return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
+  const existing = readStore(params.gatewayUrl);
+  const role = normalizeDeviceAuthRole(params.role);
+  const entry: DeviceAuthEntry = {
     token: params.token,
-    scopes: params.scopes,
+    role,
+    scopes: normalizeDeviceAuthScopes(params.scopes),
+    updatedAtMs: Date.now(),
+  };
+  writeStore(params.gatewayUrl, {
+    version: 1,
+    deviceId: params.deviceId,
+    tokens: {
+      ...(existing?.deviceId === params.deviceId ? canonicalDeviceAuthTokens(existing.tokens) : {}),
+      [role]: entry,
+    },
   });
+  return entry;
 }
 
 export function clearDeviceAuthToken(params: {
@@ -773,14 +779,17 @@ export function clearDeviceAuthToken(params: {
   gatewayUrl: string;
   role: string;
 }) {
-  clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  if (!store.tokens[role]) {
+    return;
+  }
+  const tokens = canonicalDeviceAuthTokens(store.tokens);
+  delete tokens[role];
+  writeStore(params.gatewayUrl, { ...store, tokens });
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -898,3 +907,4 @@ export async function signDevicePayload(privateKeyBase64Url: string, payload: st
   const sig = await signAsync(data, key);
   return base64UrlEncode(sig);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

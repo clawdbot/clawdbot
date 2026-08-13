@@ -31,6 +31,24 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    expectTelegramConfigIssue({ dmPolicy: "allowlist", botToken: "fake" }, "allowFrom");
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectTelegramConfigValid({
+      allowFrom: ["12345"],
+      accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+    });
+  });
+
+  it("rejects account allowlist without account or channel allowFrom", () => {
+    expectTelegramConfigIssue(
+      { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
+      "accounts.bot1.allowFrom",
+    );
+  });
+
   it("defaults dm/group policy", () => {
     const res = TelegramConfigSchema.safeParse({});
 
@@ -67,37 +85,6 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("accepts pollingStallThresholdMs overrides per account", () => {
-    const res = TelegramConfigSchema.safeParse({
-      pollingStallThresholdMs: 120_000,
-      accounts: { ops: { pollingStallThresholdMs: 180_000 } },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.pollingStallThresholdMs).toBe(120_000);
-      expect(res.data.accounts?.ops?.pollingStallThresholdMs).toBe(180_000);
-    }
-  });
-
-  it("accepts mediaGroupFlushMs overrides per account", () => {
-    const res = TelegramConfigSchema.safeParse({
-      mediaGroupFlushMs: 750,
-      accounts: { ops: { mediaGroupFlushMs: 1500 } },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.mediaGroupFlushMs).toBe(750);
-      expect(res.data.accounts?.ops?.mediaGroupFlushMs).toBe(1500);
-    }
-  });
-
-  it("rejects mediaGroupFlushMs outside the supported flush bounds", () => {
-    expectTelegramConfigIssue({ mediaGroupFlushMs: 9 }, "mediaGroupFlushMs");
-    expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
-  });
-
   it("accepts Telegram progress commentary config", () => {
     expectTelegramConfigValid({
       streaming: {
@@ -130,11 +117,6 @@ describe("telegram custom commands schema", () => {
       },
       "direct.123456789",
     );
-  });
-
-  it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
-    expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
-    expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");
   });
 
   it("accepts textChunkLimit", () => {

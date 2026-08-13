@@ -1,5 +1,6 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -106,6 +107,7 @@ export type RuntimeConfigSnapshotMetadata = {
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
+let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 type ManagedRuntimeConfigWritePreflight = (
@@ -117,6 +119,7 @@ const managedRuntimeConfigWriteOwners = new Map<
   Set<{ id: symbol; preflight?: ManagedRuntimeConfigWritePreflight }>
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
+const runtimeConfigSnapshotPreparers = new Set<(config: OpenClawConfig) => void>();
 
 function stableConfigStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -164,9 +167,31 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  for (const prepare of runtimeConfigSnapshotPreparers) {
+    prepare(config);
+  }
+  clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+}
+
+export function registerRuntimeConfigSnapshotPreparer(
+  prepare: (config: OpenClawConfig) => void,
+): () => void {
+  runtimeConfigSnapshotPreparers.add(prepare);
+  if (runtimeConfigSnapshot) {
+    prepare(runtimeConfigSnapshot);
+  }
+  return () => runtimeConfigSnapshotPreparers.delete(prepare);
+}
+
+export function setAppliedRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): void {
+  setRuntimeConfigSnapshot(config, sourceConfig);
+  runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 
 /** Publish a newer canonical source without changing the active runtime object. */
@@ -186,9 +211,11 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
 }
 
 export function resetConfigRuntimeState(): void {
+  clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
+  runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
   resetPublishedConfigRuntimeEnv();
 }
@@ -207,6 +234,15 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
 
 export function getRuntimeConfigSnapshotMetadata(): RuntimeConfigSnapshotMetadata | null {
   return runtimeConfigSnapshotMetadata;
+}
+
+/** Resolved source-config revision accepted by the active Gateway runtime. */
+export function getRuntimeConfigAppliedHash(): string | null {
+  return runtimeConfigAppliedHash;
+}
+
+export function setRuntimeConfigAppliedHash(hash: string | null): void {
+  runtimeConfigAppliedHash = hash;
 }
 
 export function resolveRuntimeConfigCacheKey(config: OpenClawConfig): string {

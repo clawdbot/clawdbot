@@ -9,7 +9,17 @@ import {
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
+} from "../../scripts/ui.mts";
+// writeFileSync creates the file before its content lands, so an existence
+// poll can observe an empty file on loaded runners; wait for bytes instead.
+function readNonEmpty(file: string): string | null {
+  try {
+    const content = fs.readFileSync(file, "utf8");
+    return content.length > 0 ? content : null;
+  } catch {
+    return null;
+  }
+}
 
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
   const startedAt = Date.now();
@@ -18,7 +28,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_00
       throw new Error(`timed out waiting for ${label}`);
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }
@@ -191,8 +201,8 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("honors build-all no-pnpm mode before requiring a pnpm runner", () => {
-    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", "--help"], {
+  it.each(["--help", "-h"])("keeps no-pnpm build %s informational", (helpFlag) => {
+    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", helpFlag], {
       cwd: path.resolve("."),
       encoding: "utf8",
       env: {
@@ -206,6 +216,22 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(result.status).toBe(0);
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
+    expect(output).not.toContain("Control UI performance");
+  });
+
+  it.each(["check-control-ui-precompressed-assets.mts", "check-control-ui-performance.mts"])(
+    "keeps %s in the canonical build wrapper",
+    (validator) => {
+      expect(fs.readFileSync("scripts/ui.mts", "utf8")).toContain(validator);
+    },
+  );
+
+  it("keeps the package script on the canonical UI build wrapper", () => {
+    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["ui:build"]).toBe("node scripts/ui.js build");
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(
@@ -244,7 +270,7 @@ describe("scripts/ui windows spawn behavior", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
+        await waitFor(() => readNonEmpty(readyFile) !== null, "UI runner readiness");
         expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
         wrapper.kill(signal);
 
@@ -293,7 +319,10 @@ describe("scripts/ui windows spawn behavior", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(descendantPidFile), "UI runner descendant readiness");
+        await waitFor(
+          () => readNonEmpty(descendantPidFile) !== null,
+          "UI runner descendant readiness",
+        );
         descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 25);

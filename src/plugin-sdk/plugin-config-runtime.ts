@@ -1,8 +1,10 @@
 // Plugin config runtime helpers load and normalize plugin-owned configuration at execution time.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 
 export { normalizePluginsConfig, resolveEffectiveEnableState };
+export { mergeDeep } from "../infra/deep-merge.js";
 
 /** Requires an already-resolved runtime config at plugin runtime boundaries. */
 export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
@@ -20,9 +22,7 @@ export function resolvePluginConfigObject(
   pluginId: string,
 ): Record<string, unknown> | undefined {
   const pluginConfig = normalizePluginsConfig(config?.plugins).entries[pluginId]?.config;
-  return pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
-    ? (pluginConfig as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(pluginConfig);
 }
 
 /** Resolves live plugin config through a loader, falling back to startup config when unavailable. */

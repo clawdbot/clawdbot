@@ -2,8 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asNullableRecord as readRecord,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
@@ -396,9 +401,22 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
   const handle = await fs.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, TEXT_PREVIEW_BYTES, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) {
+        break;
+      }
+      bytesRead += result.bytesRead;
+    }
+    const decoder = new StringDecoder("utf8");
+    let text = decoder.write(buffer.subarray(0, Math.min(bytesRead, TEXT_PREVIEW_BYTES)));
+    // The sentinel distinguishes a capped preview from real EOF. Only real EOF should
+    // flush an incomplete final sequence as a replacement character.
+    if (bytesRead <= TEXT_PREVIEW_BYTES) {
+      text += decoder.end();
+    }
     if (mediaKind !== "json") {
       return text;
     }
@@ -550,16 +568,6 @@ async function buildArtifactView(params: {
   };
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readCountRecord(value: unknown): Record<string, number> {
   const record = readRecord(value);
   if (!record) {
@@ -596,7 +604,7 @@ function readMatrixDimensionIds(params: {
       if (typeof entry === "string") {
         return entry;
       }
-      return readString(readRecord(entry)?.id);
+      return readStringValue(readRecord(entry)?.id) ?? null;
     }),
     params,
   );
@@ -653,9 +661,9 @@ function readMatrixCells(params: {
     : [];
   const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
   return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
-    const rawSurface = readString(cell.surface);
-    const rawStage = readString(cell.stage);
-    const rawStatus = readString(cell.status) ?? "proof-gap";
+    const rawSurface = readStringValue(cell.surface) ?? null;
+    const rawStage = readStringValue(cell.stage) ?? null;
+    const rawStatus = readStringValue(cell.status) ?? "proof-gap";
     if (!rawSurface || !rawStage) {
       return [];
     }
@@ -669,7 +677,7 @@ function readMatrixCells(params: {
         repoRoot: params.repoRoot,
       });
     const readRunnerString = (value: unknown) => {
-      const text = readString(value);
+      const text = readStringValue(value);
       return text ? sanitizeCellString(text) : null;
     };
     return [
@@ -781,8 +789,8 @@ async function buildProducerContext(params: {
   const matrix = await readJsonIfExists(matrixPath, allowedRoots);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
   const run = readRecord(manifest?.run);
-  const runId = readString(run?.runId);
-  const runStatus = readString(run?.status);
+  const runId = readStringValue(run?.runId) ?? null;
+  const runStatus = readStringValue(run?.status) ?? null;
   const producerFiles = Object.fromEntries(
     await Promise.all(
       UX_MATRIX_PRODUCER_FILES.map(async (file) => [
@@ -892,21 +900,19 @@ export async function buildQaEvidenceGalleryModel(params: {
           repoRoot,
         });
       return {
-        artifacts: await Promise.all(
-          (entry.execution?.artifacts ?? []).map((artifact, artifactIndex) =>
-            limitArtifactView(() =>
-              buildArtifactView({
-                allowedArtifactFiles,
-                artifact,
-                artifactIndex,
-                evidenceDir,
-                entryIndex,
-                extraRoots: [requestedRepoRoot],
-                hrefEvidencePath,
-                repoRoot,
-              }),
-            ),
-          ),
+        artifacts: await limitArtifactView.map(
+          entry.execution?.artifacts ?? [],
+          (artifact, artifactIndex) =>
+            buildArtifactView({
+              allowedArtifactFiles,
+              artifact,
+              artifactIndex,
+              evidenceDir,
+              entryIndex,
+              extraRoots: [requestedRepoRoot],
+              hrefEvidencePath,
+              repoRoot,
+            }),
         ),
         coverage: entry.coverage.map((coverage) => ({
           id: sanitizeEntryText(coverage.id),
@@ -947,3 +953,4 @@ export async function buildQaEvidenceGalleryModel(params: {
     schemaVersion: summary.schemaVersion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

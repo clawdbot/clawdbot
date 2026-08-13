@@ -1,59 +1,19 @@
 // Litellm tests cover image generation provider plugin behavior.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
   postMultipartRequestMock,
-  assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadlineMock,
   resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
-  postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork),
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined as unknown,
-  })),
-  resolveProviderOperationTimeoutMsMock: vi.fn(
-    (params: Record<string, unknown>) => params.defaultTimeoutMs,
-  ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
-}));
+} = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
-    "openclaw/plugin-sdk/provider-http",
-  );
-  return {
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    createProviderOperationDeadline: createProviderOperationDeadlineMock,
-    postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-  };
-});
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
-  vi.resetModules();
-});
+installProviderHttpMockCleanup();
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -64,6 +24,15 @@ function jsonResponse(payload: unknown): Response {
 
 function mockGeneratedPngResponse() {
   postJsonRequestMock.mockResolvedValue({
+    response: jsonResponse({
+      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+    }),
+    release: vi.fn(async () => {}),
+  });
+}
+
+function mockEditedPngResponse() {
+  postMultipartRequestMock.mockResolvedValue({
     response: jsonResponse({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
@@ -92,12 +61,12 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("litellm image generation provider", () => {
+  beforeEach(() => {
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "litellm-key" });
+  });
+
   afterEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
-    postJsonRequestMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
+    postMultipartRequestMock.mockReset();
   });
 
   it("declares litellm id and OpenAI-compatible size hints", () => {
@@ -187,8 +156,8 @@ describe("litellm image generation provider", () => {
     });
   });
 
-  it("routes to the edit endpoint when input images are provided", async () => {
-    mockGeneratedPngResponse();
+  it("routes to the edit endpoint as multipart when input images are provided", async () => {
+    mockEditedPngResponse();
 
     const provider = buildLitellmImageGenerationProvider();
     await provider.generateImage({
@@ -204,9 +173,40 @@ describe("litellm image generation provider", () => {
       ],
     });
 
-    expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/edits");
-    const call = postJsonRequestMock.mock.calls[0]?.[0] as { body: { images: unknown[] } };
-    expect(call.body.images).toHaveLength(1);
+    // Edits must be multipart, never JSON: LiteLLM's /images/edits maps onto
+    // `aimage_edit(image=...)` and rejects a JSON body outright.
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(mockObjectArg(postMultipartRequestMock).url).toBe("http://localhost:4000/images/edits");
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    expect(form.get("model")).toBe("gpt-image-2");
+    expect(form.get("prompt")).toBe("refine the hero");
+    // A single reference uses the singular `image` part name.
+    expect(form.getAll("image")).toHaveLength(1);
+    expect(form.getAll("image[]")).toHaveLength(0);
+    expect(form.get("image")).toBeInstanceOf(Blob);
+  });
+
+  it("sends multiple reference images as repeated image[] parts", async () => {
+    mockEditedPngResponse();
+
+    const provider = buildLitellmImageGenerationProvider();
+    await provider.generateImage({
+      provider: "litellm",
+      model: "gpt-image-2",
+      prompt: "merge these",
+      cfg: {},
+      inputImages: [
+        { buffer: Buffer.from("first"), mimeType: "image/png" },
+        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
+      ],
+    });
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    // Both names are accepted by OpenAI-compatible edit endpoints, but only one
+    // may be present per request — sending both is an error.
+    expect(form.getAll("image[]")).toHaveLength(2);
+    expect(form.getAll("image")).toHaveLength(0);
   });
 
   it("throws a clear error when the API key is missing", async () => {
@@ -224,7 +224,10 @@ describe("litellm image generation provider", () => {
   });
 
   it("forwards dispatcherPolicy from resolveProviderHttpRequestConfig to postJsonRequest", async () => {
-    const dispatcherPolicy = { proxyUrl: "http://corp-proxy:3128" } as unknown;
+    const dispatcherPolicy = {
+      mode: "explicit-proxy",
+      proxyUrl: "http://corp-proxy:3128",
+    } as const;
     resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
       baseUrl: "https://proxy.example.com/v1",
       allowPrivateNetwork: false,
@@ -254,7 +257,9 @@ describe("litellm image generation provider", () => {
     const cases = [
       "http://localhost:4000",
       "http://127.0.0.1:4000",
+      "http://127.255.255.254:4000",
       "http://[::1]:4000",
+      "http://[0:0:0:0:0:0:0:1]:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
     ] as const;
@@ -283,6 +288,7 @@ describe("litellm image generation provider", () => {
       "https://192.168.5.10:4000",
       "http://printer.local:4000",
       "http://proxy.internal:4000",
+      "http://127.evil.com:4000",
       "https://metadata.google.internal",
     ] as const;
     for (const baseUrl of cases) {
@@ -303,33 +309,36 @@ describe("litellm image generation provider", () => {
     }
   });
 
-  it("honors explicit private-network opt-in for a LAN LiteLLM proxy", async () => {
-    mockGeneratedPngResponse();
+  it.each(["http://192.168.5.10:4000", "http://127.evil.com:4000"])(
+    "honors explicit private-network opt-in for %s",
+    async (baseUrl) => {
+      mockGeneratedPngResponse();
 
-    const provider = buildLitellmImageGenerationProvider();
-    await provider.generateImage({
-      provider: "litellm",
-      model: "gpt-image-2",
-      prompt: "x",
-      cfg: {
-        models: {
-          providers: {
-            litellm: {
-              baseUrl: "http://192.168.5.10:4000",
-              request: { allowPrivateNetwork: true },
-              models: [],
+      const provider = buildLitellmImageGenerationProvider();
+      await provider.generateImage({
+        provider: "litellm",
+        model: "gpt-image-2",
+        prompt: "x",
+        cfg: {
+          models: {
+            providers: {
+              litellm: {
+                baseUrl,
+                request: { allowPrivateNetwork: true },
+                models: [],
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
-      allowPrivateNetwork: undefined,
-      request: { allowPrivateNetwork: true },
-    });
-    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-  });
+      expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
+        allowPrivateNetwork: undefined,
+        request: { allowPrivateNetwork: true },
+      });
+      expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
+    },
+  );
 
   it("does not allow private network for public hosts that embed private strings in the URL", async () => {
     // Must not be fooled by an attacker-controlled URL that mentions

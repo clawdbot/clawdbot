@@ -22,6 +22,12 @@ vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({
   runNodeIdentityProbe: (params: NodeIdentityProbeParams) => probeMock(params),
 }));
 
+vi.mock("../skills/runtime/remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/remote.js")>()),
+  // Pairing coverage does not need the unrelated 5s connect-time bin refresh.
+  refreshRemoteNodeBins: vi.fn(async () => {}),
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 
 async function waitFor<T>(
@@ -36,7 +42,7 @@ async function waitFor<T>(
       return value;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`timed out waiting for ${what}`);

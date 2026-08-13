@@ -30,9 +30,10 @@ import type {
   PermissionRequest as SdkPermissionRequest,
   PermissionRequestResult as SdkPermissionRequestResult,
 } from "@github/copilot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /** Request shape forwarded to host-implemented policies. */
-export interface CopilotPermissionContext {
+interface CopilotPermissionContext {
   /** SDK session id that originated the request. */
   sessionId: string;
   /** Original SDK request payload. */
@@ -53,7 +54,7 @@ export type CopilotPermissionPolicy = (
 ) => SdkPermissionRequestResult | undefined | Promise<SdkPermissionRequestResult | undefined>;
 
 /** Built-in fail-closed default. Mirrors the pre-bridge attempt.ts stub. */
-export const REJECT_ALL_FEEDBACK =
+const REJECT_ALL_FEEDBACK =
   "copilot agent runtime: no permission policy installed (fail-closed default)";
 
 export const rejectAllPolicy: CopilotPermissionPolicy = () => ({
@@ -83,20 +84,9 @@ export function createPermissionBridge(
     } catch (error) {
       return {
         kind: "reject",
-        feedback: `copilot permission policy threw: ${formatError(error)}`,
+        feedback: `copilot permission policy threw: ${formatErrorMessage(error)}`,
       };
     }
     return { kind: "reject", feedback: REJECT_ALL_FEEDBACK };
   };
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }

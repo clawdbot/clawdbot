@@ -1,16 +1,18 @@
 // Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
 import * as childProcess from "node:child_process";
-import { createCipheriv, createDecipheriv, hash } from "node:crypto";
+import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { log } from "../../../agents/auth-profiles/constants.js";
+import { authProfilesLog } from "../../../agents/auth-profiles/constants.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
-import { loadJsonFile } from "../../../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
+import { isPathInside } from "../../../infra/path-safety.js";
 
 export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
@@ -38,10 +40,6 @@ type LegacyOAuthEncryptedPayload = {
   tag: string;
   ciphertext: string;
 };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 /** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 export function resolveLegacyOAuthSidecarPath(
@@ -112,45 +110,6 @@ function buildLegacyOAuthSecretKey(seed: string): Buffer {
   return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
 }
 
-function encryptLegacyOAuthMaterialForTest(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-  seed: string;
-  material: Record<string, string>;
-}): LegacyOAuthEncryptedPayload {
-  const iv = Buffer.from("0102030405060708090a0b0c", "hex");
-  const cipher = createCipheriv(
-    LEGACY_OAUTH_SECRET_ALGORITHM,
-    buildLegacyOAuthSecretKey(params.seed),
-    iv,
-  );
-  cipher.setAAD(
-    buildLegacyOAuthSecretAad({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-    }),
-  );
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(params.material), "utf8"),
-    cipher.final(),
-  ]);
-  return {
-    algorithm: LEGACY_OAUTH_SECRET_ALGORITHM,
-    iv: iv.toString("base64url"),
-    tag: cipher.getAuthTag().toString("base64url"),
-    ciphertext: ciphertext.toString("base64url"),
-  };
-}
-
-function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean {
-  const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function uniquePaths(paths: Array<string | undefined>): string[] {
   return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
@@ -198,7 +157,7 @@ function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): stri
 function resolveLegacyOAuthSecretKeyFilePath(env: NodeJS.ProcessEnv): string | undefined {
   const stateDir = resolveStateDir(env);
   return resolveLegacyOAuthSecretKeyFileCandidates(env).find(
-    (candidate) => !isPathInsideOrEqual(stateDir, candidate),
+    (candidate) => !isPathInside(stateDir, candidate),
   );
 }
 
@@ -340,19 +299,13 @@ function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
     return;
   }
   keychainOnlyMigrationHintEmitted = true;
-  log.warn(
+  authProfilesLog.warn(
     "Legacy Codex OAuth credentials are stored only in macOS Keychain on this host. " +
       "Headless paths cannot prompt for Keychain access; run `openclaw doctor --fix` " +
       "from an interactive terminal to migrate them back to inline auth-profiles.json credentials.",
     { profileId },
   );
 }
-
-export const legacyOAuthSidecarInternalTestUtils = {
-  resetKeychainOnlyMigrationHint(): void {
-    keychainOnlyMigrationHintEmitted = false;
-  },
-};
 
 export function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;
@@ -362,7 +315,7 @@ export function loadLegacyOAuthSidecarMaterial(params: {
   env?: NodeJS.ProcessEnv;
 }): LegacyOAuthSecretMaterial | null {
   const env = params.env ?? process.env;
-  const raw = loadJsonFile(resolveLegacyOAuthSidecarPath(params.ref, env));
+  const raw = loadJsonFileThroughSymlink(resolveLegacyOAuthSidecarPath(params.ref, env));
   if (!isRecord(raw)) {
     return null;
   }
@@ -386,9 +339,3 @@ export function loadLegacyOAuthSidecarMaterial(params: {
   }
   return normalizeLegacyOAuthSecretMaterial(raw);
 }
-
-export const legacyOAuthSidecarTestUtils = {
-  buildLegacyOAuthSecretAad,
-  buildLegacyOAuthSecretKey,
-  encryptLegacyOAuthMaterial: encryptLegacyOAuthMaterialForTest,
-};

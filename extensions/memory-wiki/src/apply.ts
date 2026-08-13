@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -54,9 +58,7 @@ type UpdateMetadataMemoryWikiMutation = {
   status?: string;
 };
 
-export type ApplyMemoryWikiMutation =
-  | CreateSynthesisMemoryWikiMutation
-  | UpdateMetadataMemoryWikiMutation;
+type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
 type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
 
@@ -102,7 +104,7 @@ function normalizeMemoryWikiMutationOp(
 }
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
-  const params = rawParams as {
+  const params = asNonArrayRecord(rawParams) as {
     op: MemoryWikiMutationInputOp;
     title?: string;
     body?: string;

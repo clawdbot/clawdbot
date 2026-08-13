@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
-import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
+import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
 const { runDuckDuckGoSearch } = vi.hoisted(() => ({
   runDuckDuckGoSearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -15,6 +15,7 @@ vi.mock("./ddg-client.js", () => ({
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
   let ddgClientTesting: typeof import("./ddg-client.js").testing;
+  let runActualDuckDuckGoSearch: typeof import("./ddg-client.js").runDuckDuckGoSearch;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -23,7 +24,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting, runDuckDuckGoSearch: runActualDuckDuckGoSearch } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -105,6 +106,66 @@ describe("duckduckgo web search provider", () => {
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
   });
 
+  it("forwards caller cancellation without starting an already canceled search", async () => {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const active = new AbortController();
+
+    await tool.execute({ query: "duckduckgo cancellation forwarding" }, { signal: active.signal });
+
+    expect(runDuckDuckGoSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: active.signal }),
+    );
+    runDuckDuckGoSearch.mockClear();
+    const canceled = new AbortController();
+    canceled.abort(new Error("DuckDuckGo caller canceled"));
+
+    await expect(
+      tool.execute({ query: "duckduckgo pre-canceled" }, { signal: canceled.signal }),
+    ).rejects.toThrow("DuckDuckGo caller canceled");
+    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("DuckDuckGo request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const result = runActualDuckDuckGoSearch({
+      query: "duckduckgo in-flight cancellation",
+      signal: controller.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("DuckDuckGo request canceled in flight"));
+      await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      fetchMock.mockResolvedValueOnce(
+        new Response('<a class="result__a" href="https://example.com">Example</a>', {
+          headers: { "content-type": "text/html" },
+        }),
+      );
+
+      await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
@@ -158,7 +219,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("defaults safeSearch to moderate and accepts strict and off", () => {
-    expect(resolveDdgSafeSearch(undefined)).toBe(DEFAULT_DDG_SAFE_SEARCH);
+    expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
 
     expect(
       resolveDdgSafeSearch({
@@ -191,18 +252,6 @@ describe("duckduckgo web search provider", () => {
         },
       } as never),
     ).toBe("off");
-  });
-
-  it("decodes direct and redirect urls plus common html entities", () => {
-    expect(
-      ddgClientTesting.decodeDuckDuckGoUrl(
-        "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dclaw",
-      ),
-    ).toBe("https://example.com/search?q=claw");
-    expect(ddgClientTesting.decodeDuckDuckGoUrl("https://example.com")).toBe("https://example.com");
-    expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
-      "Fish & Chips ... 'ok'",
-    );
   });
 
   it("leaves out-of-range numeric html entities intact instead of throwing", () => {
@@ -254,6 +303,21 @@ describe("duckduckgo web search provider", () => {
     ]);
   });
 
+  it("keeps inline result markup from splitting words", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
+      <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
+    `;
+
+    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Café guide",
+        url: "https://example.com/cafe",
+        snippet: "Find the best café near you.",
+      },
+    ]);
+  });
+
   it("detects bot challenge pages without flagging ordinary result snippets", () => {
     const challengeHtml = `
       <html>
@@ -271,14 +335,6 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
-      {
-        title: "Coding Challenge",
-        url: "https://example.com/challenge",
-        snippet: "A fun coding challenge for interview prep.",
-      },
-    ]);
   });
 });

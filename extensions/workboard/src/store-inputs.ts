@@ -1,10 +1,12 @@
 import type {
+  WorkboardBoardSummary,
   WorkboardCard,
   WorkboardDiagnostic,
-  WorkboardOrchestrationSettings,
-  WorkboardStatus,
   WorkboardWorkspace,
-} from "./types.js";
+  WorkboardWorkspaceAccess,
+} from "@openclaw/workboard-contract";
+
+export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -27,6 +29,8 @@ type WorkboardCardInput = {
   idempotencyKey?: unknown;
   skills?: unknown;
   workspace?: unknown;
+  /** Trusted mutation provenance; not accepted from public tool schemas. */
+  workspaceAccess?: unknown;
   maxRuntimeSeconds?: unknown;
   maxRetries?: unknown;
   scheduledAt?: unknown;
@@ -81,6 +85,18 @@ export type WorkboardClaimInput = {
   token?: unknown;
   ttlSeconds?: unknown;
 };
+export type WorkboardClaimOptions = {
+  /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
+  expectedAuthority?: {
+    boardId: string;
+    status: WorkboardCard["status"];
+    agentId?: string;
+    workspace?: WorkboardWorkspace;
+    workspaceAccess?: WorkboardWorkspaceAccess;
+  };
+  /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
+  adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
+};
 export type WorkboardHeartbeatInput = {
   token?: unknown;
   ownerId?: unknown;
@@ -96,6 +112,7 @@ export type WorkboardCompleteInput = {
   token?: unknown;
   summary?: unknown;
   proof?: unknown;
+  proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
@@ -116,21 +133,6 @@ export type WorkboardListOptions = {
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
-};
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
-  total: number;
-  active: number;
-  archived: number;
-  byStatus: Partial<Record<WorkboardStatus, number>>;
-  updatedAt?: number;
-  archivedAt?: number;
 };
 export type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;

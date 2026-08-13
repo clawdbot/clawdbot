@@ -1,7 +1,8 @@
-// Verifies plugin setup registry discovery and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+// Verifies plugin setup registry discovery and lookup behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -24,7 +25,7 @@ const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
-let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
+let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 let setPluginSetupRegistryModuleLoaderFactoryForTest:
@@ -171,12 +172,7 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   expect(unhandledRejections).toStrictEqual([]);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCall(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -254,7 +250,7 @@ describe("setup-registry module loader", () => {
     vi.resetModules();
     ({
       resolvePluginSetupRegistry,
-      resolvePluginSetupProvider,
+      resolvePluginSetupProviderCore,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
     } = await import("./setup-registry.js"));
@@ -466,11 +462,11 @@ describe("setup-registry module loader", () => {
     });
 
     const provider = requireRecord(
-      resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} }),
+      resolvePluginSetupProviderCore({ provider: "amazon-bedrock", env: {} }),
     );
     expect(provider.id).toBe("amazon-bedrock");
     expect(provider.label).toBe("Amazon Bedrock");
-    expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
   });
@@ -514,7 +510,7 @@ describe("setup-registry module loader", () => {
       });
     });
 
-    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+    const provider = requireRecord(resolvePluginSetupProviderCore({ provider: "openai", env: {} }));
     expect(provider.id).toBe("openai");
     expect(provider.label).toBe("OpenAI");
   });
@@ -541,7 +537,7 @@ describe("setup-registry module loader", () => {
       diagnostics: [],
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
     const registry = resolvePluginSetupRegistry({ env: {} });
     expect(registry.providers).toEqual([]);
@@ -682,7 +678,7 @@ describe("setup-registry module loader", () => {
 
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspaceRoot);
     try {
-      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+      expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     } finally {
       cwdSpy.mockRestore();
     }
@@ -798,7 +794,9 @@ describe("setup-registry module loader", () => {
     });
 
     await expectNoUnhandledRejection(() => {
-      const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+      const provider = requireRecord(
+        resolvePluginSetupProviderCore({ provider: "openai", env: {} }),
+      );
       expect(provider.id).toBe("openai");
       expect(provider.label).toBe("OpenAI");
     });
@@ -838,7 +836,7 @@ describe("setup-registry module loader", () => {
       kind: "provider",
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -848,7 +846,7 @@ describe("setup-registry module loader", () => {
       kind: "provider",
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -907,9 +905,11 @@ describe("setup-registry module loader", () => {
     }));
     mocks.createJiti.mockImplementation(() => loadSetupModule);
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
-    expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })?.id).toBe("openai");
+    expect(resolvePluginSetupProviderCore({ provider: "anthropic", env: {} })?.id).toBe(
+      "anthropic",
+    );
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })?.id).toBe("openai");
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
       "codex-cli",
@@ -1135,3 +1135,4 @@ describe("setup-registry module loader", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

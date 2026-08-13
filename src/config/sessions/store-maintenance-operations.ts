@@ -1,6 +1,7 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -62,6 +63,7 @@ type FileBackedSessionStoreMaintenanceParams = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
+  commitReducedStore?: () => Promise<void>;
 };
 
 type FileBackedSessionStoreMaintenanceResult = {
@@ -91,8 +93,8 @@ function rememberRemovedSessionFile(
   removedSessionFiles: RemovedSessionFiles,
   entry: SessionEntry,
 ): void {
-  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  if (!removedSessionFiles.has(entry.sessionId)) {
+    removedSessionFiles.set(entry.sessionId, undefined);
   }
 }
 
@@ -176,15 +178,21 @@ async function cleanupRemovedSessionArtifacts(params: {
     archivedDirs.size > 0
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
-  // Both retention reasons ride one cleanup call so each save enumerates the
-  // sessions dir at most once; a listing per reason would scan twice per save.
-  await params.operation.artifacts.cleanupArchivedSessionTranscripts({
-    directories: targetDirs,
-    rules: [
-      { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-      { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-    ],
-  });
+  // Both reasons ride one advisory cleanup call: earlier artifact moves may
+  // have committed, so retention failure must not block the primary store save.
+  await params.operation.artifacts
+    .cleanupArchivedSessionTranscripts({
+      directories: targetDirs,
+      rules: [
+        { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+        { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+      ],
+    })
+    .catch((error: unknown) => {
+      params.operation.log.warn("session transcript archive retention cleanup failed", {
+        error: String(error),
+      });
+    });
 }
 
 async function applyEnforcedMaintenance(params: {
@@ -192,32 +200,34 @@ async function applyEnforcedMaintenance(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   beforeCount: number;
   forceMaintenance: boolean;
+  preserveSessionKeys: ReadonlySet<string> | undefined;
 }): Promise<FileBackedSessionStoreMaintenanceResult> {
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
-    storePath: params.operation.storePath,
-    store: params.operation.store,
-    baseKeys: [params.operation.activeSessionKey],
-  });
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: params.beforeCount,
+    entryCount: countSessionEntryMaintenanceEligibleEntries(
+      params.operation.store,
+      params.preserveSessionKeys,
+    ),
     force: params.forceMaintenance,
   })
     ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
         onPruned: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
-        preserveKeys: preserveSessionKeys,
+        preserveKeys: params.preserveSessionKeys,
       })
     : 0;
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },
-    preserveKeys: preserveSessionKeys,
+    preserveKeys: params.preserveSessionKeys,
   });
-  const countAfterPrune = Object.keys(params.operation.store).length;
+  const countAfterPrune = countSessionEntryMaintenanceEligibleEntries(
+    params.operation.store,
+    params.preserveSessionKeys,
+  );
   const shouldRunCapMaintenance =
     params.forceMaintenance ||
     shouldRunSessionEntryMaintenance({
@@ -229,7 +239,7 @@ async function applyEnforcedMaintenance(params: {
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
-        preserveKeys: preserveSessionKeys,
+        preserveKeys: params.preserveSessionKeys,
       })
     : 0;
   const referencedSessionIds = collectReferencedSessionIds(params.operation.store);
@@ -247,10 +257,11 @@ async function applyEnforcedMaintenance(params: {
     store: params.operation.store,
     storePath: params.operation.storePath,
     activeSessionKey: params.operation.activeSessionKey,
-    preserveKeys: preserveSessionKeys,
+    preserveKeys: params.preserveSessionKeys,
     maintenance: params.maintenance,
     warnOnly: false,
     log: params.operation.log,
+    commitEvictedIndex: params.operation.commitReducedStore,
   });
   await params.operation.onMaintenanceApplied?.({
     mode: params.maintenance.mode,
@@ -279,8 +290,13 @@ export async function applyFileBackedSessionStoreMaintenance(
   const maintenance = resolveMaintenanceForOperation(params);
   const beforeCount = Object.keys(params.store).length;
   const forceMaintenance = params.maintenanceOverride !== undefined;
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+    storePath: params.storePath,
+    store: params.store,
+    baseKeys: [params.activeSessionKey],
+  });
   const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
-    entryCount: beforeCount,
+    entryCount: countSessionEntryMaintenanceEligibleEntries(params.store, preserveSessionKeys),
     maxEntries: maintenance.maxEntries,
     force: forceMaintenance,
   });
@@ -300,5 +316,6 @@ export async function applyFileBackedSessionStoreMaintenance(
     maintenance,
     beforeCount,
     forceMaintenance,
+    preserveSessionKeys,
   });
 }

@@ -31,7 +31,7 @@ function countDynamicPatternTokens(tokens: PathPatternToken[]): number {
 /**
  * Parses a dotted target pattern into literal, wildcard, and array traversal tokens.
  */
-export function parsePathPattern(pathPattern: string): PathPatternToken[] {
+function parsePathPattern(pathPattern: string): PathPatternToken[] {
   const segments = parseDotPath(pathPattern);
   return segments.map((segment) => {
     if (segment === "*") {

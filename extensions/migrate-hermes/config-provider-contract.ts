@@ -1,10 +1,12 @@
+// Hermes provider config contract parsing and normalization.
+import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
   mcpValueHasEnvReferences,
   resolveMcpEnvReferences,
 } from "./config-env.js";
-// Hermes provider config contract parsing and normalization.
-import { childRecord, isRecord, readString, readStringArray } from "./helpers.js";
+import { childRecord, readStringArray } from "./helpers.js";
 import { normalizeHermesCustomProviderId, normalizeHermesProviderId } from "./model.js";
 
 type OpenClawModelApi =
@@ -46,6 +48,8 @@ const HERMES_SPECIAL_BASE_URL_ENV_VARS: Record<string, readonly string[]> = {
   "openai-api": ["OPENAI_BASE_URL"],
   "xai-oauth": ["HERMES_XAI_BASE_URL", "XAI_BASE_URL"],
   "qwen-oauth": ["HERMES_QWEN_BASE_URL"],
+  "qwen-cli": ["HERMES_QWEN_BASE_URL"],
+  "qwen-portal": ["HERMES_QWEN_BASE_URL"],
   "minimax-cn": ["MINIMAX_CN_BASE_URL"],
   "alibaba-coding-plan": ["ALIBABA_CODING_PLAN_BASE_URL"],
 };
@@ -160,15 +164,13 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
+export { readPositiveNumber };
 
 export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,
 ): OpenClawModelApi | undefined {
-  const transport = readString(raw.transport) ?? readString(raw.api_mode);
+  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.api_mode);
   const sourceProvider = providerId?.trim().toLowerCase() ?? "";
   if (sourceProvider === "openai-codex") {
     return "openai-chatgpt-responses";
@@ -178,10 +180,10 @@ export function resolveProviderApi(
   }
   const provider = sourceProvider ? normalizeHermesProviderId(sourceProvider) : "";
   const baseUrl =
-    readString(raw.base_url) ??
-    readString(raw.baseUrl) ??
-    readString(raw.url) ??
-    readString(raw.api);
+    normalizeOptionalString(raw.base_url) ??
+    normalizeOptionalString(raw.baseUrl) ??
+    normalizeOptionalString(raw.url) ??
+    normalizeOptionalString(raw.api);
   let hostname = "";
   let pathname = "";
   try {
@@ -236,7 +238,7 @@ function normalizeProviderBaseUrl(baseUrl: string, api: OpenClawModelApi): strin
 }
 
 export function readEnvReference(value: unknown): string | undefined {
-  const raw = readString(value);
+  const raw = normalizeOptionalString(value);
   const match = raw?.match(/^\$\{([^}]+)\}$/u);
   return match ? normalizeHermesEnvReferenceName(match[1] ?? "") : undefined;
 }
@@ -249,10 +251,10 @@ function normalizeHermesEnvReferenceName(value: string): string | undefined {
 
 export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | undefined {
   return (
-    readString(raw.key_env) ??
-    readString(raw.api_key_env) ??
-    readString(raw.apiKeyEnv) ??
-    readString(raw.env) ??
+    normalizeOptionalString(raw.key_env) ??
+    normalizeOptionalString(raw.api_key_env) ??
+    normalizeOptionalString(raw.apiKeyEnv) ??
+    normalizeOptionalString(raw.env) ??
     readEnvReference(raw.api_key)
   );
 }
@@ -300,9 +302,9 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
     });
   }
   for (const modelId of [
-    readString(raw.default_model),
-    readString(raw.default),
-    readString(raw.model),
+    normalizeOptionalString(raw.default_model),
+    normalizeOptionalString(raw.default),
+    normalizeOptionalString(raw.model),
   ]) {
     if (modelId && !models.has(modelId)) {
       models.set(modelId, { id: modelId, ...rootMetadata });
@@ -345,10 +347,10 @@ export function readProviderBaseUrl(
   env: Record<string, string>,
 ): { baseUrl?: string; sensitive: boolean; unresolved: boolean } {
   const value =
-    readString(raw.base_url) ??
-    readString(raw.baseUrl) ??
-    readString(raw.url) ??
-    readString(raw.api);
+    normalizeOptionalString(raw.base_url) ??
+    normalizeOptionalString(raw.baseUrl) ??
+    normalizeOptionalString(raw.url) ??
+    normalizeOptionalString(raw.api);
   if (!value) {
     return { sensitive: false, unresolved: false };
   }

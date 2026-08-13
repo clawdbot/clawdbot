@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -75,9 +75,10 @@ class AboutPage extends OpenClawLightDomElement {
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const gatewayVersion = gatewaySnapshot.connected
-      ? gatewaySnapshot.hello?.server?.version?.trim() || null
-      : null;
+    const gatewayVersion =
+      gatewaySnapshot.phase === "connected"
+        ? gatewaySnapshot.hello?.server?.version?.trim() || null
+        : null;
     const body = renderAbout({
       buildInfo: CONTROL_UI_BUILD_INFO,
       gatewayVersion,
@@ -90,7 +91,6 @@ class AboutPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("about")}</div>
-          <div class="page-sub">${subtitleForRoute("about")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}
@@ -98,4 +98,6 @@ class AboutPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-about-page", AboutPage);
+if (!customElements.get("openclaw-about-page")) {
+  customElements.define("openclaw-about-page", AboutPage);
+}

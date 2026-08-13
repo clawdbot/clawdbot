@@ -53,7 +53,7 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
+function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);

@@ -23,6 +23,10 @@ type DiscordDraftStream = {
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
+  /** Move the active draft to another Discord channel, preserving its current text. */
+  retarget: (channelId: string) => Promise<void>;
+  /** Retry cleanup for drafts left behind by a failed retarget delete. */
+  cleanupRetargeted: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: (mode?: "preserve" | "discard") => void;
 };
@@ -42,7 +46,7 @@ export function createDiscordDraftStream(params: {
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
-  const channelId = params.channelId;
+  let channelId = params.channelId;
   const rest = params.rest;
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
   const resolveReplyToMessageId = () =>
@@ -56,6 +60,7 @@ export function createDiscordDraftStream(params: {
   let streamGeneration = 0;
   let activeCreateGeneration: number | undefined;
   let discardActiveCreate = false;
+  let retargetedCleanup: Array<{ channelId: string; messageId: string }> = [];
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const generation = streamGeneration;
@@ -185,6 +190,56 @@ export function createDiscordDraftStream(params: {
     loop.resetPending();
     loop.resetThrottleWindow();
   };
+  const cleanupRetargeted = async () => {
+    const pending = retargetedCleanup;
+    retargetedCleanup = [];
+    for (const stale of pending) {
+      try {
+        await deleteChannelMessage(rest, stale.channelId, stale.messageId);
+      } catch (err) {
+        retargetedCleanup.push(stale);
+        params.warn?.(`discord stream preview retarget cleanup failed: ${formatErrorMessage(err)}`);
+      }
+    }
+  };
+  const retarget = async (nextChannelId: string) => {
+    const normalized = nextChannelId.trim();
+    if (!normalized || normalized === channelId) {
+      return;
+    }
+    await loop.waitForInFlight();
+    const pendingText = loop.takePending?.() ?? "";
+    const previousChannelId = channelId;
+    const previousMessageId = streamMessageId;
+    const previousText = pendingText || lastSentText;
+    streamGeneration += 1;
+    channelId = normalized;
+    streamMessageId = undefined;
+    lastSentText = "";
+    streamState.stopped = false;
+    streamState.final = false;
+    loop.resetThrottleWindow();
+    if (previousText) {
+      update(previousText);
+      await loop.flush();
+    }
+    if (previousMessageId) {
+      const stale = {
+        channelId: previousChannelId,
+        messageId: previousMessageId,
+      };
+      if (!streamMessageId) {
+        retargetedCleanup.push(stale);
+        throw new Error("discord stream preview retarget replacement failed");
+      }
+      try {
+        await deleteChannelMessage(rest, previousChannelId, previousMessageId);
+      } catch (err) {
+        retargetedCleanup.push(stale);
+        params.warn?.(`discord stream preview retarget cleanup failed: ${formatErrorMessage(err)}`);
+      }
+    }
+  };
   const deleteCurrentMessage = async () => {
     loop.resetPending();
     await loop.waitForInFlight();
@@ -213,6 +268,8 @@ export function createDiscordDraftStream(params: {
     discardPending,
     seal,
     stop,
+    retarget,
+    cleanupRetargeted,
     forceNewMessage,
   };
 }

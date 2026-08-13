@@ -26,7 +26,21 @@ function withoutAiRuntimeDependency(value) {
   return next.length > 0 ? next : undefined;
 }
 
+function ensureDependencyIgnores(root) {
+  const gitignorePath = path.join(root, ".gitignore");
+  const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+  const lines = new Set(existing.split(/\r?\n/u));
+  const required = ["node_modules", "**/node_modules/", "pnpm-lock.yaml"];
+  const missing = required.filter((entry) => !lines.has(entry));
+  if (missing.length === 0) {
+    return;
+  }
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  fs.writeFileSync(gitignorePath, `${prefix}${missing.join("\n")}\n`);
+}
+
 function prepare(root) {
+  ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
@@ -39,6 +53,10 @@ function prepare(root) {
   fs.rmSync(aiRuntimeTarget, { force: true, recursive: true });
   fs.mkdirSync(path.dirname(aiRuntimeTarget), { recursive: true });
   fs.renameSync(aiRuntimeSource, aiRuntimeTarget);
+  const relocatedAiRuntimePackageJson = path.join(aiRuntimeTarget, "package.json");
+  const relocatedAiRuntimePackage = readJson(relocatedAiRuntimePackageJson);
+  delete relocatedAiRuntimePackage.devDependencies;
+  writeJson(relocatedAiRuntimePackageJson, relocatedAiRuntimePackage);
 
   packageJson.dependencies ??= {};
   packageJson.dependencies["@openclaw/ai"] = "file:.openclaw-fixture/packages/ai";
@@ -51,10 +69,6 @@ function prepare(root) {
     delete packageJson.bundledDependencies;
   }
   writeJson(packageJsonPath, packageJson);
-
-  // The shipped shrinkwrap points at the published package graph. This fixture is
-  // intentionally local-git shaped, so let npm resolve the staged file dependency.
-  fs.rmSync(path.join(root, "npm-shrinkwrap.json"), { force: true });
 }
 
 if (command !== "prepare" || !rootArg) {

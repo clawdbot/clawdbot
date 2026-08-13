@@ -199,12 +199,15 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
 
 /** Starts process-wide managed proxy routing and returns the owner stop handle. */
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
-  if (config?.enabled !== true) {
+  if (
+    config?.enabled === false ||
+    (!config?.proxyUrl?.trim() && !process.env["OPENCLAW_PROXY_URL"]?.trim())
+  ) {
     return null;
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const loopbackMode = config.loopbackMode ?? "gateway-only";
+  const loopbackMode = config?.loopbackMode ?? "gateway-only";
   const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
   const activeProxyUrl = getActiveManagedProxyUrl();

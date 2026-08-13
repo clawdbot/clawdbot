@@ -2,10 +2,11 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveDoctorCrossStateDirImports } from "../../commands/doctor-invocation.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "workspaceSuggestions",
@@ -32,7 +33,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
-  program
+  const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
     .addHelpText(
@@ -40,7 +41,7 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
     )
-    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
+    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
@@ -78,7 +79,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--json",
-      "With --lint, --post-upgrade, --state-sqlite, or --session-sqlite: emit machine-readable JSON output",
+      "Run read-only lint checks as JSON (or emit JSON for another machine mode)",
       false,
     )
     .option(
@@ -109,7 +110,21 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime.exit(2);
         return;
       }
-      if (opts.lint === true) {
+      const jsonImpliesLint =
+        opts.json === true &&
+        opts.lint !== true &&
+        opts.postUpgrade !== true &&
+        typeof opts.stateSqlite !== "string" &&
+        typeof opts.sessionSqlite !== "string" &&
+        !hasSessionSqliteOnlyDoctorOptions(opts);
+      if (jsonImpliesLint && (opts.repair === true || opts.fix === true || opts.force === true)) {
+        defaultRuntime.error(
+          "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true || jsonImpliesLint) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
@@ -171,11 +186,11 @@ export function registerMaintenanceCommands(program: Command) {
           sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
           sessionSqliteGithubIssue: Boolean(opts.githubIssue),
           json: Boolean(opts.json),
-          crossStateDirImports: resolveDoctorCrossStateDirImports(),
         });
         defaultRuntime.exit(0);
       });
     });
+  setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
   program
     .command("dashboard")
@@ -257,20 +272,12 @@ export function registerMaintenanceCommands(program: Command) {
 }
 
 function hasLintOnlyDoctorOptions(opts: {
-  readonly json?: boolean;
-  readonly postUpgrade?: boolean;
-  readonly stateSqlite?: unknown;
-  readonly sessionSqlite?: unknown;
   readonly severityMin?: unknown;
   readonly all?: boolean;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
-    (opts.json === true &&
-      opts.postUpgrade !== true &&
-      typeof opts.stateSqlite !== "string" &&
-      typeof opts.sessionSqlite !== "string") ||
     typeof opts.severityMin === "string" ||
     opts.all === true ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||

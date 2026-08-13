@@ -13,34 +13,33 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
-import { collectPromptCacheToolNames } from "../prompt-cache-observability.js";
+import { collectPromptCacheTools } from "../prompt-cache-observability.js";
 import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
-} from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+} from "./attempt-sessions-yield.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
+import {
+  sanitizeOpenAIResponsesReplayForStream,
+  sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnSanitizeMalformedToolCalls,
+} from "./attempt-tool-call-replay-sanitization.js";
+import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
+import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
-import {
-  sanitizeOpenAIResponsesReplayForStream,
-  sanitizeReplayToolCallIdsForStream,
-  shouldApplyReplayToolCallIdSanitizer,
-  wrapStreamFnPromoteStandaloneTextToolCalls,
-  wrapStreamFnSanitizeMalformedToolCalls,
-  wrapStreamFnTrimToolCallNames,
-} from "./attempt.tool-call-normalization.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -51,20 +50,15 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
-
 export function installEmbeddedAttemptStreamGuards(input: {
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   sessionAgentId: string;
   cacheTrace: CacheTrace;
-  allCustomTools: Array<{ name?: string }>;
+  allCustomTools: Array<{ name?: string; description?: string; parameters?: unknown }>;
   systemPromptText: string;
   transcriptPolicy: TranscriptPolicy;
   sessionManager: SessionManager | undefined;
-  sessionLockController: AttemptSessionLockController;
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
@@ -83,9 +77,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const attempt = input.attempt;
   const session = input.session;
   const cacheObservabilityEnabled = Boolean(input.cacheTrace) || log.isEnabled("debug");
-  const promptCacheToolNames = collectPromptCacheToolNames(
-    input.allCustomTools as Array<{ name?: string }>,
-  );
+  const promptCacheTools = cacheObservabilityEnabled
+    ? collectPromptCacheTools(input.allCustomTools)
+    : [];
   if (input.cacheTrace) {
     input.cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
@@ -138,7 +132,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
         });
         if (repair.repaired) {
           input.onRejectedThinkingReplayRepaired();
-          input.sessionLockController.refreshAfterOwnedSessionWrite();
           return;
         }
         log.warn(
@@ -345,9 +338,10 @@ export function installEmbeddedAttemptStreamGuards(input: {
         firstModelCallStarted: true,
       });
     },
+    suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
   return {
     cacheObservabilityEnabled,
-    promptCacheToolNames,
+    promptCacheTools,
   };
 }

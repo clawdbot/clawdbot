@@ -5,6 +5,8 @@ import OSLog
 
 extension Notification.Name {
     static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
+    static let openclawNodeHostWorkerRetryExhausted = Notification.Name(
+        "openclaw.node-host-worker.retry-exhausted")
 }
 
 struct MacNodeHostManifest: Equatable, Sendable {
@@ -14,10 +16,22 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let pathEnv: String
 }
 
+struct MacNodeHostWorkerLaunch: Equatable, Sendable {
+    let command: [String]
+    let currentDirectoryURL: URL?
+
+    init(command: [String], currentDirectoryURL: URL? = nil) {
+        self.command = command
+        self.currentDirectoryURL = currentDirectoryURL
+    }
+}
+
 protocol MacNodeHostWorking: Sendable {
-    func start(command: [String]) async throws -> MacNodeHostManifest
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest
     func supports(_ command: String) async -> Bool
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse
+    func handleInput(invokeId: String, seq: Int, payloadJSON: String) async
+    func cancel(invokeId: String) async
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool
     func publishInventory(ifCurrentRoute route: GatewayNodeSessionRoute) async
     func stop() async
@@ -28,6 +42,13 @@ protocol MacNodeHostWorking: Sendable {
 /// and keeps TCC-sensitive execution behind the native exec-host socket.
 final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     nonisolated static let defaultStartupTimeout: TimeInterval = 300
+    private static let maxPendingInvokeControlIDs = 32
+    private static let maxPendingInvokeControlsPerID = 64
+
+    private enum PendingInvokeControl {
+        case input(seq: Int, payloadJSON: String)
+        case cancel
+    }
 
     enum WorkerError: LocalizedError {
         case unavailable(String)
@@ -52,7 +73,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var stdoutSource: DispatchSourceRead?
     private var stderrSource: DispatchSourceRead?
     private var processGeneration: UUID?
-    private var launchedCommand: [String]?
+    private var launchedWorker: MacNodeHostWorkerLaunch?
     private var stdoutBuffer = Data()
     private var manifest: MacNodeHostManifest?
     private var inventoryData: Data?
@@ -60,6 +81,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var routeAuthorityGeneration: UInt64 = 0
     private var startContinuation: CheckedContinuation<MacNodeHostManifest, Error>?
     private var invokeContinuations: [String: CheckedContinuation<BridgeInvokeResponse, Never>] = [:]
+    private var pendingInvokeControls: [String: [PendingInvokeControl]] = [:]
+    private var pendingInvokeControlOrder: [String] = []
     private var startTimer: DispatchSourceTimer?
     private var eventDeliveryTask: Task<Void, Never>?
     private var inventoryPublicationTask: Task<Void, Never>?
@@ -76,12 +99,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.onUnexpectedExit = onUnexpectedExit
     }
 
-    func start(command: [String]) async throws -> MacNodeHostManifest {
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         try await withCheckedThrowingContinuation { continuation in
             self.queue.async {
                 if let manifest = self.manifest,
                    self.process?.isRunning == true,
-                   self.launchedCommand == command
+                   self.launchedWorker == launch
                 {
                     continuation.resume(returning: manifest)
                     return
@@ -91,7 +114,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     return
                 }
                 self.startContinuation = continuation
-                self.startLocked(command: command)
+                self.startLocked(launch: launch)
             }
         }
     }
@@ -131,11 +154,91 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                         "type": "invoke",
                         "request": workerRequest,
                     ])
+                    for control in self.takePendingInvokeControlsLocked(invokeId: request.id) {
+                        try self.enqueueInvokeControlLocked(control, invokeId: request.id)
+                    }
                 } catch {
                     self.invokeContinuations.removeValue(forKey: request.id)?.resume(returning:
                         Self.unavailableResponse(request.id, "UNAVAILABLE: node-host worker write failed"))
                 }
             }
+        }
+    }
+
+    func handleInput(invokeId: String, seq: Int, payloadJSON: String) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                let control = PendingInvokeControl.input(seq: seq, payloadJSON: payloadJSON)
+                if self.invokeContinuations[invokeId] != nil {
+                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                } else if self.process?.isRunning == true, self.manifest != nil {
+                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    func cancel(invokeId: String) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                let control = PendingInvokeControl.cancel
+                if self.invokeContinuations[invokeId] != nil {
+                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                } else if self.process?.isRunning == true, self.manifest != nil {
+                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    private func bufferInvokeControlLocked(_ control: PendingInvokeControl, invokeId: String) {
+        // Gateway control events can overtake detached invoke dispatch. Keep the
+        // short race window bounded, then flush controls after the invoke frame.
+        if self.pendingInvokeControls[invokeId] == nil {
+            if self.pendingInvokeControlOrder.count >= Self.maxPendingInvokeControlIDs,
+               let oldest = self.pendingInvokeControlOrder.first
+            {
+                self.pendingInvokeControlOrder.removeFirst()
+                self.pendingInvokeControls.removeValue(forKey: oldest)
+            }
+            self.pendingInvokeControlOrder.append(invokeId)
+            self.pendingInvokeControls[invokeId] = []
+        }
+        var controls = self.pendingInvokeControls[invokeId] ?? []
+        if controls.contains(where: {
+            if case .cancel = $0 { return true }
+            return false
+        }) {
+            return
+        }
+        if controls.count >= Self.maxPendingInvokeControlsPerID {
+            controls.removeFirst()
+        }
+        controls.append(control)
+        self.pendingInvokeControls[invokeId] = controls
+    }
+
+    private func takePendingInvokeControlsLocked(invokeId: String) -> [PendingInvokeControl] {
+        self.pendingInvokeControlOrder.removeAll { $0 == invokeId }
+        return self.pendingInvokeControls.removeValue(forKey: invokeId) ?? []
+    }
+
+    private func enqueueInvokeControlLocked(_ control: PendingInvokeControl, invokeId: String) throws {
+        switch control {
+        case let .input(seq, payloadJSON):
+            try self.enqueueWriteLocked([
+                "type": "invoke-input",
+                "invokeId": invokeId,
+                "seq": seq,
+                "payloadJSON": payloadJSON,
+            ])
+        case .cancel:
+            try self.enqueueWriteLocked([
+                "type": "invoke-cancel",
+                "invokeId": invokeId,
+            ])
         }
     }
 
@@ -192,7 +295,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
     }
 
-    private func startLocked(command: [String]) {
+    private func startLocked(launch: MacNodeHostWorkerLaunch) {
+        let command = launch.command
         guard let executable = command.first, !executable.isEmpty else {
             self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker command missing")))
             return
@@ -204,8 +308,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
+            return
+        }
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Array(command.dropFirst())
+        process.currentDirectoryURL = launch.currentDirectoryURL
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
@@ -215,7 +324,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         self.process = process
-        self.launchedCommand = command
+        self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
@@ -296,14 +405,16 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     private func consumeStdoutLocked(_ data: Data) {
+        var searchStart = self.stdoutBuffer.count
         self.stdoutBuffer.append(data)
         guard self.stdoutBuffer.count <= 25 * 1024 * 1024 else {
             self.stopLocked(reason: "worker response exceeded limit", notifyUnexpectedExit: true)
             return
         }
-        while let newline = self.stdoutBuffer.firstIndex(of: 0x0A) {
+        while let newline = self.stdoutBuffer[searchStart...].firstIndex(of: 0x0A) {
             let line = self.stdoutBuffer.prefix(upTo: newline)
             self.stdoutBuffer.removeSubrange(...newline)
+            searchStart = 0
             guard !line.isEmpty,
                   let message = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
             else { continue }
@@ -547,7 +658,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.process?.terminate()
         }
         self.process = nil
-        self.launchedCommand = nil
+        self.launchedWorker = nil
         self.stdinPipe = nil
         self.stdoutPipe = nil
         self.stderrPipe = nil
@@ -561,6 +672,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
         let pending = self.invokeContinuations
         self.invokeContinuations.removeAll()
+        self.pendingInvokeControls.removeAll()
+        self.pendingInvokeControlOrder.removeAll()
         for (id, continuation) in pending {
             continuation.resume(returning: Self.unavailableResponse(id, "UNAVAILABLE: node-host worker stopped"))
         }

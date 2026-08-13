@@ -1,7 +1,15 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
+import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
+
+function renderConfigForm(
+  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+    onShowAdvanced?: () => void;
+  },
+) {
+  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+}
 
 const rootSchema = {
   type: "object",
@@ -43,7 +51,65 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+function selectSegmented(control: HTMLElement) {
+  const group = expectElement(
+    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
+    "segmented radio group",
+  );
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("config form renderer", () => {
+  it("conceals core-classified encryption, private-key, and local service env values", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        encryptKey: { type: "string" },
+        privateKey: { type: "string" },
+        localService: {
+          type: "object",
+          properties: {
+            env: {
+              type: "object",
+              properties: { FOO: { type: "string" } },
+            },
+          },
+        },
+      },
+    });
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          encryptKey: "encrypt-value",
+          privateKey: "private-value",
+          localService: { env: { FOO: "env-value" } },
+        },
+        revealSensitive: false,
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>(`input[aria-label='${label}']`),
+        `${label} input`,
+      );
+      expect(input.readOnly).toBe(true);
+      expect(input.classList.contains("cfg-redacted")).toBe(true);
+      expect(input.value).toBe("");
+    }
+    expect(container.innerHTML).not.toContain("encrypt-value");
+    expect(container.innerHTML).not.toContain("private-value");
+    expect(container.innerHTML).not.toContain("env-value");
+  });
+
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
@@ -73,17 +139,17 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
     const tokenButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "token",
       ),
       "token segmented button",
     );
-    tokenButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectSegmented(tokenButton);
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
-      "enabled checkbox",
+      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      "enabled switch",
     );
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
@@ -106,13 +172,130 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
 
     const tailnetButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "tailnet",
       ),
       "tailnet segmented button",
     );
-    tailnetButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectSegmented(tailnetButton);
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
+  });
+
+  it("shows phone presentations without changing raw config values", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        fromNumber: { type: "string" },
+        target: { type: "string" },
+        accounts: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              allowFrom: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          fromNumber: { presentation: "phone-number" },
+          target: { presentation: "phone-number" },
+          "accounts.*.allowFrom.*": { presentation: "phone-number" },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          fromNumber: "+4930123456",
+          target: "token-value",
+          accounts: { work: { allowFrom: ["+81312345678"] } },
+        },
+        onPatch,
+      }),
+      container,
+    );
+
+    const phoneInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>(".settings-phone-presentation input"),
+    );
+    expect(phoneInputs.map((input) => input.value)).toEqual(
+      expect.arrayContaining(["+4930123456", "+81312345678", "token-value"]),
+    );
+    expect(phoneInputs).toHaveLength(3);
+    expect(
+      Array.from(container.querySelectorAll(".settings-phone-presentation__value")).map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(expect.arrayContaining(["Germany · +49 30 123456", "Japan · +81 3 1234 5678"]));
+    const tokenInput = expectElement(
+      Array.from(container.querySelectorAll<HTMLInputElement>("input.settings-input")).find(
+        (input) => input.value === "token-value",
+      ),
+      "token input",
+    );
+    const tokenPresentation = expectElement(
+      tokenInput.closest(".settings-phone-presentation"),
+      "token phone presentation wrapper",
+    );
+    expect(tokenPresentation.querySelector(".settings-phone-presentation__value")).toBeNull();
+
+    const fromNumberInput = expectElement(
+      phoneInputs.find((input) => input.value === "+4930123456"),
+      "from number input",
+    );
+    fromNumberInput.value = " +4930123456 ";
+    fromNumberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], " +4930123456 ");
+    fromNumberInput.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], "+4930123456");
+  });
+
+  it("keeps phone inputs focused while presentation appears and disappears", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: { phone: { type: "string" } },
+    });
+    const renderValue = (phone: string) => {
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: { phone: { presentation: "phone-number", advanced: false } },
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: { phone },
+          onPatch: vi.fn(),
+        }),
+        container,
+      );
+    };
+
+    renderValue("+123");
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input.settings-input"),
+      "phone input",
+    );
+    input.focus();
+
+    renderValue("+4930123456");
+    expect(container.querySelector(".settings-phone-presentation__value")?.textContent).toContain(
+      "+49 30 123456",
+    );
+    expect(container.querySelector("input.settings-input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+
+    renderValue("+123");
+    expect(container.querySelector(".settings-phone-presentation__value")).toBeNull();
+    expect(container.querySelector("input.settings-input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    container.remove();
   });
 
   it("renders subsection labels exactly once", () => {
@@ -143,7 +326,7 @@ describe("config form renderer", () => {
     expect(rowTitles).toEqual(["Token"]);
   });
 
-  it("renders boolean fields as label-wrapped toggle rows", () => {
+  it("renders boolean fields as named toggle rows", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -169,15 +352,16 @@ describe("config form renderer", () => {
     );
 
     const checkbox = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
-      "beta checkbox",
+      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      "beta switch",
     );
     const row = expectElement(checkbox.closest(".settings-row"), "beta toggle row");
-    expect(row.tagName).toBe("LABEL");
+    expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe("Beta");
     expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
       "Enable beta features",
     );
+    expect(checkbox.textContent?.trim()).toBe("Beta");
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["features", "beta"], true);
@@ -313,10 +497,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security", "secret"] },
+          "gateway.auth.token": { tags: ["security", "advanced", "secret"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
+        showAdvanced: true,
         onPatch,
       }),
       container,
@@ -331,11 +516,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
+          "gateway.auth.token": { tags: ["security", "advanced"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
-        searchQuery: "tag:security",
+        searchQuery: "tag:advanced",
         onPatch,
       }),
       container,
@@ -522,7 +707,7 @@ describe("config form renderer", () => {
           type: "array",
           items: { type: "string" },
         },
-        chatMessageMaxWidth: {
+        displayWidth: {
           type: "string",
         },
       },
@@ -540,7 +725,7 @@ describe("config form renderer", () => {
           lastTouchedAt: "2026-05-05T00:00:00.000Z",
           setupCommand: "apt-get update",
           allowedDomains: ["example.com"],
-          chatMessageMaxWidth: "960px",
+          displayWidth: "960px",
         },
         onPatch: vi.fn(),
       }),
@@ -581,5 +766,121 @@ describe("config form renderer", () => {
     );
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+  });
+
+  it("shows field help once instead of repeating it on every array item", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        allowFrom: {
+          type: "array",
+          items: { type: "string" },
+          default: ["+15550000000"],
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        // Item paths collapse their numeric segment, so the item rows resolve
+        // this same hint; only the array header should render it.
+        uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { allowFrom: ["+15550001111", "+15550002222"] },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
+      (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
+    );
+    expect(help).toHaveLength(1);
+    expect(container.textContent).toContain('Default: ["+15550000000"]');
+  });
+
+  it("does not repeat array header metadata on nested array items", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        groups: {
+          type: "array",
+          default: [["root-default"]],
+          items: {
+            type: "array",
+            default: ["nested-default"],
+            items: { type: "string" },
+          },
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: { groups: { help: "Group sender ids." } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { groups: [["first"], ["second"]] },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const descriptions = Array.from(container.querySelectorAll(".settings-row__desc")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(descriptions.filter((description) => description === "Group sender ids.")).toHaveLength(
+      1,
+    );
+    expect(
+      descriptions.filter((description) => description === 'Default: [["root-default"]]'),
+    ).toHaveLength(1);
+    expect(descriptions.some((description) => description?.includes("nested-default"))).toBe(false);
+  });
+
+  it("renders section help when the top-level hint has a docs URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } },
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const button = expectElement(
+      container.querySelector<HTMLButtonElement>(".settings-section__help-button"),
+      "section help button",
+    );
+    expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
+    const link = expectElement(
+      container.querySelector<HTMLAnchorElement>(".settings-section__help-popover a"),
+      "section guide link",
+    );
+    expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("omits section help when the top-level hint has no docs URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: {},
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });
 });

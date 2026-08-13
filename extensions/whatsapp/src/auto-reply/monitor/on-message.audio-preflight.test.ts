@@ -95,70 +95,70 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   }),
 }));
 
+import { normalizeAdmittedWebInboundMessage } from "../../inbound/message-aliases.js";
 import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebAudioInboundMessage,
 } from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import type { AdmittedWebInboundMessage, WebInboundMessageInput } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function makeAudioMsg(): WebInboundMessage {
-  return createTestWebAudioInboundMessage();
+function admitTestMessage(msg: WebInboundMessageInput): AdmittedWebInboundMessage {
+  return normalizeAdmittedWebInboundMessage(msg);
+}
+
+function makeAudioMsg(): AdmittedWebInboundMessage {
+  return admitTestMessage(createTestWebAudioInboundMessage());
 }
 
 function makeLegacyAudioMsg() {
   return createTestLegacyFlatWebInboundMessage({
-    body: "<media:audio>",
+    body: "",
     mediaPath: "/tmp/voice.ogg",
     mediaType: "audio/ogg; codecs=opus",
   });
 }
 
-function makeGroupAudioMsg(): WebInboundMessage {
-  return createTestWebAudioInboundMessage({
-    platform: { chatJid: "1203630@g.us" },
-    admission: {
-      conversation: {
-        kind: "group",
-        id: "1203630@g.us",
+function makeGroupAudioMsg(): AdmittedWebInboundMessage {
+  return admitTestMessage(
+    createTestWebAudioInboundMessage({
+      platform: { chatJid: "1203630@g.us" },
+      admission: {
+        conversation: {
+          kind: "group",
+          id: "1203630@g.us",
+        },
+        senderAccess: {
+          reasonCode: "group_policy_allowed",
+        },
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
-    },
-    wasMentioned: false,
-  });
+      wasMentioned: false,
+    }),
+  );
 }
 
-function makeBlockedDirectAudioMsg(): WebInboundMessage {
-  return createTestWebAudioInboundMessage({
-    admission: {
-      ingress: {
-        admission: "drop",
-        decision: "block",
-        reasonCode: "dm_policy_not_allowlisted",
+function makeBlockedDirectAudioMsg(): AdmittedWebInboundMessage {
+  return admitTestMessage(
+    createTestWebAudioInboundMessage({
+      admission: {
+        ingress: {
+          admission: "drop",
+          decision: "block",
+          reasonCode: "dm_policy_not_allowlisted",
+        },
+        senderAccess: {
+          allowed: false,
+          decision: "block",
+          reasonCode: "dm_policy_not_allowlisted",
+        },
+        activationAccess: {
+          allowed: false,
+          shouldSkip: true,
+          reasonCode: "dm_policy_not_allowlisted",
+        },
       },
-      senderAccess: {
-        allowed: false,
-        decision: "block",
-        reasonCode: "dm_policy_not_allowlisted",
-      },
-      activationAccess: {
-        allowed: false,
-        shouldSkip: true,
-        reasonCode: "dm_policy_not_allowlisted",
-      },
-    },
-  });
-}
-
-function makeEchoTracker() {
-  return {
-    has: () => false,
-    forget: () => {},
-    rememberText: () => {},
-    buildCombinedKey: (p: { combinedBody: string }) => p.combinedBody,
-  };
+    }),
+  );
 }
 
 function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
@@ -188,7 +188,6 @@ function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHand
     groupHistoryLimit: 20,
     groupHistories: new Map(),
     groupMemberNames: new Map(),
-    echoTracker: makeEchoTracker() as never,
     backgroundTasks: new Set(),
     replyResolver: vi.fn() as never,
     replyLogger: {
@@ -281,7 +280,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
   it("skips early DM ack/preflight for legacy audio without explicit access proof", async () => {
     const handler = makeHandler();
 
-    await handler(makeLegacyAudioMsg());
+    await handler(admitTestMessage(makeLegacyAudioMsg()));
 
     expect(events).toStrictEqual([]);
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
@@ -313,7 +312,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
       } as never,
     });
 
-    await handler(makeLegacyAudioMsg());
+    await handler(admitTestMessage(makeLegacyAudioMsg()));
 
     expect(events).toStrictEqual(["stt"]);
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
@@ -465,8 +464,13 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeAudioMsg());
 
     expect(capturedCtx).toEqual({
-      MediaPaths: ["/tmp/voice.ogg"],
-      MediaTypes: ["audio/ogg; codecs=opus"],
+      media: [
+        {
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+        },
+      ],
       From: "+15550000002",
       To: "+15550000001",
       Provider: "whatsapp",

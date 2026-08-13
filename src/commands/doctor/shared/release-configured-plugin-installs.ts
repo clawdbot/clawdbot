@@ -1,7 +1,7 @@
 // Release-era repair for configs that imply official plugin installs before install records existed.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
-import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
@@ -22,9 +22,9 @@ import {
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
-import { asObjectRecord } from "./object.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
@@ -59,9 +59,9 @@ function collectBlockedPluginIds(cfg: OpenClawConfig): string[] {
       }
     }
   }
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asObjectRecord(entry)?.enabled === false && pluginId.trim()) {
+    if (asNullableRecord(entry)?.enabled === false && pluginId.trim()) {
       ids.add(pluginId.trim());
     }
   }
@@ -73,8 +73,8 @@ function isPluginEntryDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
 }
 
 function isChannelDisabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = asObjectRecord(cfg.channels);
-  const entry = asObjectRecord(channels?.[channelId]);
+  const channels = asNullableRecord(cfg.channels);
+  const entry = asNullableRecord(channels?.[channelId]);
   return entry?.enabled === false;
 }
 
@@ -87,22 +87,22 @@ function isDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
 }
 
 function hasMaterialPluginEntry(entry: unknown): boolean {
-  const record = asObjectRecord(entry);
+  const record = asNullableRecord(entry);
   if (!record) {
     return false;
   }
   return (
     record.enabled === true ||
-    asObjectRecord(record.config) !== null ||
-    asObjectRecord(record.hooks) !== null ||
-    asObjectRecord(record.subagent) !== null ||
+    asNullableRecord(record.config) !== null ||
+    asNullableRecord(record.hooks) !== null ||
+    asNullableRecord(record.subagent) !== null ||
     record.apiKey !== undefined ||
     record.env !== undefined
   );
 }
 
 function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   if (!entries) {
     return [];
   }
@@ -113,7 +113,7 @@ function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
-  const slots = asObjectRecord(cfg.plugins?.slots);
+  const slots = asNullableRecord(cfg.plugins?.slots);
   return ["memory", "contextEngine"]
     .map((key) => normalizeId(slots?.[key]))
     .filter(
@@ -123,31 +123,16 @@ function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const ids = new Set<string>();
-  const channels = asObjectRecord(cfg.channels);
-  if (channels) {
-    for (const [channelId, value] of Object.entries(channels)) {
-      if (channelId === "defaults" || channelId === "modelByChannel" || !channelId.trim()) {
-        continue;
-      }
-      const entry = asObjectRecord(value);
-      if (entry?.enabled === false) {
-        continue;
-      }
-      if (entry?.enabled === true || Object.keys(entry ?? {}).some((key) => key !== "enabled")) {
-        ids.add(channelId.trim());
-      }
-    }
-  }
-  for (const signal of listPotentialConfiguredChannelPresenceSignals(cfg, env, {
-    includePersistedAuthState: false,
-  })) {
-    const channelId = normalizeChatChannelId(signal.channelId) ?? signal.channelId;
-    if (!isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env)) {
-      ids.add(channelId);
-    }
-  }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "enabled-or-meaningful",
+    env,
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    mapEnvironmentChannelId: (channelId) => normalizeChatChannelId(channelId) ?? channelId,
+    environmentChannelIsConfigured: (channelId) =>
+      !isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env),
+    sort: "locale",
+  });
 }
 
 function collectAgentHarnessRuntimePluginIds(
@@ -212,13 +197,13 @@ function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  const acp = asObjectRecord(cfg.acp);
+  const acp = asNullableRecord(cfg.acp);
   if (!acp) {
     return [];
   }
   const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
   const configured =
-    acp.enabled === true || asObjectRecord(acp.dispatch)?.enabled === true || backend === "acpx";
+    acp.enabled === true || asNullableRecord(acp.dispatch)?.enabled === true || backend === "acpx";
   if (!configured || (backend && backend !== "acpx")) {
     return [];
   }
@@ -255,7 +240,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 }
 
 /** Return true when this config has not yet crossed the configured-plugin install release gate. */
-export function shouldRunConfiguredPluginInstallReleaseStep(params: {
+function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
   releaseVersion?: string;
@@ -273,7 +258,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
 }
 
 /** Collect plugin/channel ids implied by config for the release install backfill step. */
-export function collectReleaseConfiguredPluginIds(params: {
+function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ReleaseConfiguredPluginIds {
@@ -350,6 +335,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   warnings: string[];
   completed: boolean;
   touchedConfig: boolean;
+  pluginInventoryChanged?: true;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 }> {
   const env = params.env ?? process.env;
@@ -381,6 +367,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
+      ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
       ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
     };
   }
@@ -406,6 +393,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     warnings,
     completed,
     touchedConfig: completed,
+    ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
 }

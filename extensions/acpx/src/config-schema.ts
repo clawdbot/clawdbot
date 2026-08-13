@@ -39,9 +39,8 @@ export type AcpxPluginConfig = {
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge?: boolean;
   openClawToolsMcpBridge?: boolean;
-  strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
-  queueOwnerTtlSeconds?: number;
+  piSessionCatalog?: { enabled?: boolean };
   mcpServers?: Record<string, McpServerConfig>;
   agents?: Record<string, { command: string; args?: string[] }>;
 };
@@ -55,13 +54,7 @@ export type ResolvedAcpxPluginConfig = {
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
   openClawToolsMcpBridge: boolean;
-  strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
-  queueOwnerTtlSeconds: number;
-  legacyCompatibilityConfig: {
-    strictWindowsCmdWrapper?: boolean;
-    queueOwnerTtlSeconds?: number;
-  };
   mcpServers: Record<string, McpServerConfig>;
   agents: Record<string, string>;
 };
@@ -106,16 +99,14 @@ export const AcpxPluginConfigSchema = z.strictObject({
   openClawToolsMcpBridge: z
     .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
     .optional(),
-  strictWindowsCmdWrapper: z
-    .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
-    .optional(),
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
     .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
-  queueOwnerTtlSeconds: z
-    .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
+  piSessionCatalog: z
+    .strictObject({
+      enabled: z.boolean({ error: "piSessionCatalog.enabled must be a boolean" }).default(true),
+    })
     .optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   agents: z

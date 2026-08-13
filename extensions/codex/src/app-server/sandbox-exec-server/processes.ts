@@ -4,9 +4,11 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
+import { resolveExecServerPath } from "./path-uri.js";
 import type { ManagedProcess, OpenClawExecServer, ProcessChunk } from "./types.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -26,7 +28,7 @@ export async function startProcess(
     throw new Error(`process already exists: ${processId}`);
   }
   const argv = requireStringArray(record.argv, "argv");
-  const cwd = requireString(record.cwd, "cwd");
+  const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
   rejectUnsupportedArg0(record.arg0);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
@@ -68,7 +70,7 @@ export async function startProcess(
     await runProcess(execServer, managed, { argv, cwd, env });
   } catch (error) {
     processes.delete(processId);
-    managed.failure = error instanceof Error ? error.message : String(error);
+    managed.failure = coerceErrorMessage(error);
     managed.exitCode = null;
     managed.exited = true;
     managed.closed = true;
@@ -113,11 +115,11 @@ async function runProcess(
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (error) {
-    managed.failure = error instanceof Error ? error.message : String(error);
+    managed.failure = coerceErrorMessage(error);
     await finalizeProcess(managed).catch((finalizeError: unknown) => {
       embeddedAgentLog.warn("codex sandbox exec-server finalize after start failure failed", {
         processId: managed.processId,
-        error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        error: coerceErrorMessage(finalizeError),
       });
     });
     throw error;
@@ -208,7 +210,7 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
     });
   }
   void finalizeProcess(managed).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = coerceErrorMessage(error);
     managed.failure ??= message;
     embeddedAgentLog.warn("codex sandbox exec-server finalize failed", {
       processId: managed.processId,

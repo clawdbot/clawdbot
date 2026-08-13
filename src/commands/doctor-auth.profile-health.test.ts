@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileFailureReason, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -22,7 +22,8 @@ const authProfileMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
   ensureAuthProfileStore: authProfileMocks.ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
@@ -31,6 +32,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../agents/auth-profiles/doctor.js", () => ({
+  formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
+}));
 
 import { note } from "../../packages/terminal-core/src/note.js";
 import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./doctor-auth.js";
@@ -110,6 +114,101 @@ describe("noteAuthProfileHealth", () => {
     ]);
   });
 
+  it("does not warn while Claude CLI owns refresh of an expiring access token", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 3 * 60 * 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps expiring warnings for static and custom Claude CLI profiles", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "token",
+          provider: "claude-cli",
+          token: "token",
+          expires: now + 3 * 60 * 60_000,
+        },
+        "anthropic:custom-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 3 * 60 * 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings.map((finding) => finding.target)).toEqual([
+      "anthropic:claude-cli",
+      "anthropic:custom-cli",
+    ]);
+  });
+
+  it("still warns once a Claude CLI access token is expired", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now - 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile anthropic:claude-cli is expired (0m).",
+        target: "anthropic:claude-cli",
+      }),
+    ]);
+  });
+
   it("maps disabled auth profiles to structured findings", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -143,6 +242,146 @@ describe("noteAuthProfileHealth", () => {
         target: "openai:billing",
         fixHint: "Top up credits (provider billing) or switch provider.",
       }),
+    ]);
+  });
+
+  it.each([
+    [
+      "auth_permanent",
+      "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:disabled'`.",
+    ],
+    ["unknown", "Wait for cooldown or switch provider."],
+  ] satisfies Array<[AuthProfileFailureReason, string]>)(
+    "maps disabled %s profiles to their production health hint",
+    async (reason, expectedHint) => {
+      const now = 1_700_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const mainDir = path.join(tempDir, "main-agent");
+      authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+      authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+      authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+        version: 1,
+        profiles: {
+          "openai:disabled": { type: "api_key", provider: "openai", key: "secret" },
+        },
+        usageStats: {
+          "openai:disabled": {
+            disabledUntil: now + 5 * 60_000,
+            disabledReason: reason,
+          },
+        },
+      } satisfies AuthProfileStore);
+
+      const findings = await collectAuthProfileHealthFindings({
+        cfg: {
+          agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+        } as OpenClawConfig,
+      });
+
+      expect(findings).toEqual([expect.objectContaining({ fixHint: expectedHint })]);
+    },
+  );
+
+  it("reports a session-expired Claude CLI profile with its exact re-login action", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: now + 60_000,
+        },
+      },
+      usageStats: {
+        "anthropic:claude-cli": {
+          cooldownUntil: now + 5 * 60_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile anthropic:claude-cli is cooldown:session_expired (5m).",
+        fixHint:
+          "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+      }),
+    ]);
+  });
+
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "google-gemini-cli:legacy": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: now + 3 * 24 * 60 * 60_000,
+        },
+      },
+      usageStats: {
+        "google-gemini-cli:legacy": {
+          cooldownUntil: now + 5 * 60_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        target: "google-gemini-cli:legacy",
+        fixHint: expect.stringContaining("--provider google`"),
+      }),
+    ]);
+    expect(findings[0]?.fixHint).not.toContain("--provider google-gemini-cli");
+  });
+
+  it("maps cooldown profiles to cooldown guidance", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+      usageStats: { "openai:cooldown": { cooldownUntil: now + 5 * 60_000 } },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({ fixHint: "Wait for cooldown or switch provider." }),
     ]);
   });
 
@@ -216,7 +455,10 @@ describe("noteAuthProfileHealth", () => {
   });
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
-      cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
+      cfg: {
+        agents: { entries: { main: { default: true } } },
+        channels: { telegram: { enabled: true } },
+      } as OpenClawConfig,
       prompter: {} as DoctorPrompter,
       allowKeychainPrompt: false,
     });
@@ -251,7 +493,7 @@ describe("noteAuthProfileHealth", () => {
     });
   });
 
-  it("labels model auth diagnostics by agent when multiple agent auth stores are checked", async () => {
+  it("aggregates model auth diagnostics and labels strict agent subsets", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const mainDir = path.join(tempDir, "main-agent");
@@ -285,14 +527,48 @@ describe("noteAuthProfileHealth", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:main"),
-      "Model auth (agent: main)",
+    const modelAuthCalls = noteMock.mock.calls.filter(([, title]) => title === "Model auth");
+    expect(modelAuthCalls).toHaveLength(1);
+    const body = String(modelAuthCalls[0]?.[0]);
+    expect(body).toContain("openai-codex:coder");
+    expect(body).toContain("(agents: coder)");
+    expect(body).toContain("openai-codex:main");
+    expect(body).toContain("(agents: main)");
+  });
+
+  it("deduplicates model auth diagnostics shared by every agent", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    const coderDir = path.join(tempDir, "coder-agent");
+    writeAuthStore(mainDir);
+    writeAuthStore(coderDir);
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue(
+      expiredStore("openai-codex:shared", now - 60_000),
     );
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:coder"),
-      "Model auth (agent: coder)",
-    );
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", default: true, agentDir: mainDir },
+            { id: "coder", agentDir: coderDir },
+          ],
+        },
+      } as OpenClawConfig,
+      prompter: {
+        confirmAutoFix: vi.fn(async () => false),
+      } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    const modelAuthCalls = noteMock.mock.calls.filter(([, title]) => title === "Model auth");
+    expect(modelAuthCalls).toHaveLength(1);
+    const body = String(modelAuthCalls[0]?.[0]);
+    expect(body.match(/openai-codex:shared/g)).toHaveLength(1);
+    expect(body).not.toContain("(agents:");
   });
 
   it("does not treat inherited main auth as a local secondary-agent source", async () => {
@@ -377,7 +653,7 @@ describe("noteAuthProfileHealth", () => {
     );
   });
 
-  it("passes the target agent dir when refreshing OAuth profiles", async () => {
+  it("forces refresh for expiring OAuth profiles in the target agent dir", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const coderDir = path.join(tempDir, "coder-agent");
@@ -388,7 +664,7 @@ describe("noteAuthProfileHealth", () => {
     );
     authProfileMocks.ensureAuthProfileStore.mockImplementation((agentDir) => {
       if (agentDir === coderDir) {
-        return expiredStore("openai-codex:coder", now - 60_000);
+        return expiredStore("openai-codex:coder", now + 60 * 60_000);
       }
       return { version: 1, profiles: {} };
     });
@@ -412,8 +688,54 @@ describe("noteAuthProfileHealth", () => {
     expect(authProfileMocks.resolveApiKeyForProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: coderDir,
+        forceRefresh: true,
         profileId: "openai-codex:coder",
       }),
     );
   });
+
+  it.each([
+    [
+      "openai-codex:default",
+      "OAuth token refresh failed for openai-codex: refresh_token_reused. Please try again or re-authenticate.",
+      "- openai-codex:default: re-auth required [refresh_token_reused] — Run `openclaw models auth login --provider openai`.",
+    ],
+    [
+      "openai-codex:default",
+      "OAuth token refresh failed for openai-codex: temporary upstream issue. Please try again or re-authenticate.",
+      "- openai-codex:default: OAuth refresh failed — Try again; if this persists, run `openclaw models auth login --provider openai`.",
+    ],
+    [
+      "OpenAI Work Profile",
+      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
+      "- OpenAI Work Profile: re-auth required [invalid_grant] — Run `openclaw models auth login --provider openai --profile-id 'OpenAI Work Profile'`.",
+    ],
+    [
+      "openai-codex:default",
+      "OAuth token refresh failed for openai-codex`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
+      "- openai-codex:default: re-auth required [invalid_grant] — Run `openclaw models auth login --provider openai`.",
+    ],
+  ])(
+    "formats OAuth refresh failures through the doctor command path",
+    async (profileId, message, expected) => {
+      const now = 1_700_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const agentDir = path.join(tempDir, "main-agent");
+      authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+      authProfileMocks.ensureAuthProfileStore.mockReturnValue(
+        expiredStore(profileId, now - 60_000),
+      );
+      authProfileMocks.resolveApiKeyForProfile.mockRejectedValue(new Error(message));
+
+      await noteAuthProfileHealth({
+        cfg: {
+          agents: { list: [{ id: "main", default: true, agentDir }] },
+        } as OpenClawConfig,
+        prompter: { confirmAutoFix: vi.fn(async () => true) } as unknown as DoctorPrompter,
+        allowKeychainPrompt: false,
+      });
+
+      expect(noteMock).toHaveBeenCalledWith(expected, "OAuth refresh errors");
+    },
+  );
 });

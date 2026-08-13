@@ -20,7 +20,6 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 type BrowserFixture = {
-  context: BrowserContext;
   page: Page;
 };
 
@@ -81,9 +80,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>
@@ -198,48 +195,67 @@ function sessionsTableHtml() {
             </tbody>
           </table>
         </div>
+        <div class="data-table-pagination">
+          <div class="data-table-pagination__info">1-25 of 30 rows</div>
+          <div class="data-table-pagination__controls">
+            <select class="data-table-pagination__size" aria-label="Rows per page">
+              <option value="10">10 per page</option>
+              <option value="25" selected>25 per page</option>
+              <option value="50">50 per page</option>
+            </select>
+            <button>Previous</button>
+            <button>Next</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
 }
 
 async function openFixture(
-  browser: Browser,
+  context: BrowserContext,
   width: number,
   height: number,
 ): Promise<BrowserFixture> {
-  const context = await browser.newContext({ viewport: { width, height } });
   let page: Page | undefined;
   try {
     page = await context.newPage();
+    await page.setViewportSize({ width, height });
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
     );
-    return { context, page };
+    return { page };
   } catch (error) {
-    await context.close().catch(() => {});
+    await page?.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeFixture(fixture: BrowserFixture): Promise<void> {
-  await fixture.context.close().catch(() => {});
+  await fixture.page.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   let browser: Browser;
+  let context: BrowserContext;
 
   beforeAll(async () => {
-    // Browser startup dominates this suite; fresh contexts keep viewport state isolated.
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    try {
+      context = await browser.newContext();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await context?.close().catch(() => {});
     await browser?.close().catch(() => {});
   });
 
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
-    const fixture = await openFixture(browser, width, height);
+    const fixture = await openFixture(context, width, height);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {
@@ -293,6 +309,17 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);
+    } finally {
+      await closeFixture(fixture);
+    }
+  });
+
+  it("exposes the page-size selector by its localized accessible name", async () => {
+    const fixture = await openFixture(context, 1440, 900);
+    try {
+      const pageSize = fixture.page.getByRole("combobox", { name: "Rows per page" });
+      await pageSize.waitFor();
+      expect(await pageSize.inputValue()).toBe("25");
     } finally {
       await closeFixture(fixture);
     }

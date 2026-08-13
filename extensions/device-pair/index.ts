@@ -731,6 +731,10 @@ export default definePluginEntry({
       name: "pair",
       description: "Generate setup codes and approve device pairing requests.",
       acceptsArgs: true,
+      clientPresentation: {
+        when: "no-arguments",
+        action: { kind: "device-pairing" },
+      },
       requiredScopes: ["operator.pairing"],
       handler: async (ctx) => {
         const args = normalizeOptionalString(ctx.args) ?? "";
@@ -1011,3 +1015,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

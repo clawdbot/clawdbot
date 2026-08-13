@@ -37,7 +37,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
  * agentRuntime.id should report `acpx` (or whatever runtime id is actually
  * driving the session) so that the JSON faithfully classifies the session.
  * The fix likely belongs at the caller (sessions.ts:294 and the other
- * call sites in `src/gateway/server-methods/sessions.ts`,
+ * call sites in `src/gateway/server-methods/sessions-*.ts`,
  * `src/gateway/session-utils.ts`) so it can pass session-key context to
  * `resolveModelAgentRuntimeMetadata`.
  */
@@ -64,6 +64,7 @@ function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
         },
         {
           id: "main",
+          default: true,
         },
       ],
       // No `defaults.agentRuntime` either.

@@ -17,7 +17,13 @@ fs.writeFileSync(
       name: "clickclack",
       version: "0.0.1",
       type: "module",
-      openclaw: { extensions: ["./index.mjs"] },
+      openclaw: {
+        extensions: ["./index.mjs"],
+        channel: {
+          id: "clickclack",
+          configuredState: { env: { anyOf: ["CLICKCLACK_BOT_TOKEN"] } },
+        },
+      },
     },
     null,
     2,
@@ -30,7 +36,6 @@ fs.writeFileSync(
       id: "clickclack",
       activation: { onStartup: false },
       channels: ["clickclack"],
-      channelEnvVars: { clickclack: ["CLICKCLACK_BOT_TOKEN"] },
       channelConfigs: {
         clickclack: {
           schema: {
@@ -103,6 +108,7 @@ async function requestJson(account, method, pathname, body) {
       ...(body == null ? {} : { "content-type": "application/json" }),
     },
     ...(body == null ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     throw new Error(\`ClickClack fixture \${response.status}: \${await response.text()}\`);

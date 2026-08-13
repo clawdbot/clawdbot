@@ -50,6 +50,7 @@ import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FilePolicyKind = "read" | "write";
 type FilePolicyAskMode = "off" | "on-miss" | "always";
@@ -85,10 +86,7 @@ type NodeFilePolicyConfig = {
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
 function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as FilePolicyConfig;
+  return asNullableRecord(value) as FilePolicyConfig | null;
 }
 
 function readFilePolicyConfigFromPluginConfig(pluginConfig: unknown): FilePolicyConfig | null {
@@ -154,6 +152,13 @@ function matchesAny(target: string, patterns: string[]): boolean {
     }
   }
   return false;
+}
+
+function matchesAnyDeny(target: string, patterns: string[]): boolean {
+  if (matchesAny(target, patterns)) {
+    return true;
+  }
+  return matchesAny(`${target.replace(/[\\/]+$/u, "")}/`, patterns);
 }
 
 function resolveNodePolicy(
@@ -262,7 +267,7 @@ export function evaluateFilePolicy(input: {
 
   // 1. Deny patterns always win.
   const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
-  if (matchesAny(input.path, denyPatterns)) {
+  if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
       code: "POLICY_DENIED",

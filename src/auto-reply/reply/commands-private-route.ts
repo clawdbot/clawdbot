@@ -107,7 +107,10 @@ export async function deliverPrivateCommandReply(params: {
       }),
     ),
   );
-  return results.some((result) => result.status === "fulfilled" && result.value.ok);
+  return results.some(
+    (result) =>
+      result.status === "fulfilled" && (result.value.delivered || result.value.suppressed === true),
+  );
 }
 
 /** Reads the command message thread id from command context. */
@@ -200,8 +203,11 @@ function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): S
   }
   if (channel && to) {
     keys.add(`${channel}:${to}`);
-    if (channel === "telegram") {
-      keys.add(`tg:${to}`);
+    for (const prefix of getLoadedChannelPlugin(channel)?.messaging?.targetPrefixes ?? []) {
+      const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+      if (normalizedPrefix) {
+        keys.add(`${normalizedPrefix}:${to}`);
+      }
     }
   }
   return keys;

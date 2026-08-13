@@ -11,7 +11,6 @@ import type {
 } from "./verification-manager.js";
 
 type MatrixCryptoFacadeClient = {
-  getRoom: (roomId: string) => { hasEncryptionStateEvent: () => boolean } | null;
   getCrypto: () => unknown;
   getUserId: () => string | null;
 };
@@ -106,11 +105,7 @@ export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
-  getRoomStateEvent: (
-    roomId: string,
-    eventType: string,
-    stateKey?: string,
-  ) => Promise<Record<string, unknown>>;
+  isRoomEncrypted: (roomId: string) => Promise<boolean>;
   downloadContent: (
     mxcUrl: string,
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
@@ -129,18 +124,7 @@ export function createMatrixCryptoFacade(deps: {
     ) => {
       // compatibility no-op
     },
-    isRoomEncrypted: async (roomId: string): Promise<boolean> => {
-      const room = deps.client.getRoom(roomId);
-      if (room?.hasEncryptionStateEvent()) {
-        return true;
-      }
-      try {
-        const event = await deps.getRoomStateEvent(roomId, "m.room.encryption", "");
-        return typeof event.algorithm === "string" && event.algorithm.length > 0;
-      } catch {
-        return false;
-      }
-    },
+    isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
       return await deps.verificationManager.requestOwnUserVerification(crypto);

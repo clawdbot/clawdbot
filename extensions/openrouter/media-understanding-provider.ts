@@ -100,7 +100,7 @@ type OpenRouterSttResponse = {
   text?: string;
 };
 
-export async function transcribeOpenRouterAudio(
+async function transcribeOpenRouterAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const model = params.model?.trim() || DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL;
@@ -141,6 +141,7 @@ export async function transcribeOpenRouterAudio(
       ...(temperature !== undefined ? { temperature } : {}),
     },
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

@@ -203,6 +203,10 @@ describe("fleet cli", () => {
       error: /--cpus must be a positive number/,
     },
     {
+      argv: ["create", "tenant-a", "--cpus", "0x10"],
+      error: /--cpus must be a positive number/,
+    },
+    {
       argv: ["logs", "tenant-a", "--tail", "1.5"],
       error: /--tail must be a positive integer/,
     },

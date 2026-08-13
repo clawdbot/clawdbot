@@ -1,37 +1,72 @@
-/** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
-import crypto from "node:crypto";
+/** Session-scoped MCP runtime catalog loader and transport lifecycle. */
 import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ErrorCode,
+  McpError,
   type CallToolResult,
   type ClientCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { toErrorObject } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import {
+  completeDeferredSessionMcpRuntimeRetirement,
+  disposeAllSessionMcpRuntimes,
+  getAdvertisedScopedMcpCatalog,
+  getOrCreateRequesterScopedMcpRuntime,
+  getOrCreateSessionMcpRuntime,
+  getSessionMcpRuntimeManagerForTesting,
+  peekSessionMcpRuntime,
+  rememberAdvertisedScopedMcpCatalog,
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+} from "./agent-bundle-mcp-manager-api.js";
+import {
+  createSessionMcpRuntimeManager,
+  setDefaultCreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager.js";
+import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import {
+  loadSessionMcpConfig,
+  resolveSessionMcpConfigSummary,
+} from "./agent-bundle-mcp-runtime-config.js";
+import { resolveSessionMcpRuntimeIdleTtlMs } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
+  RequesterMcpConnect,
+  SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
-import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import {
+  normalizeMcpCodexToolAnnotations,
+  resolveMcpCodexToolApprovalMode,
+} from "./mcp-codex-tool-approval.js";
+import {
+  applyMcpConnectionOverride,
+  type McpServerConnectionResolved,
+} from "./mcp-connection-resolver.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
+import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -51,22 +86,18 @@ type BundleMcpSession = {
   detachStderr?: () => void;
 };
 
-type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
-type CreateSessionMcpRuntime = (
-  params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
-) => SessionMcpRuntime;
-
-const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
-const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
-const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
+const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
+const BUNDLE_MCP_MAX_LIST_PAGES = 128;
+const BUNDLE_MCP_MAX_LIST_ITEMS = 16_384;
+const BUNDLE_MCP_MAX_LIST_BYTES = 10 * 1024 * 1024;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
 type BundleMcpTestState = { disposeTimeoutMs?: number };
@@ -88,66 +119,102 @@ type McpToolSelection = {
 };
 
 type McpServerBackoffState = {
+  session: BundleMcpSession;
   failures: number;
   retryAfterMs?: number;
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
-function connectWithTimeout(
+async function connectWithTimeout(
+  serverName: string,
   client: Client,
   transport: Transport,
   timeoutMs: number,
 ): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    client.connect(transport).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  const abortController = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let deadlineExpired = false;
+  try {
+    // Client.connect() owns both transport startup and the initialize round trip.
+    // Give the SDK the deadline so initialize is cancelled, while the outer race
+    // also bounds transports whose start() has not reached initialize yet.
+    await Promise.race([
+      client.connect(transport, {
+        signal: abortController.signal,
+        timeout: timeoutMs,
+        maxTotalTimeout: timeoutMs,
+      }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          deadlineExpired = true;
+          abortController.abort();
+          reject(new Error("MCP connect deadline expired"));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (deadlineExpired || (isRecord(error) && error.code === ErrorCode.RequestTimeout)) {
+      if (transport instanceof OpenClawStdioClientTransport) {
+        await transport.forceClose();
+      }
+      // Closing the SDK client settles its pending initialize request. Without
+      // this, later runtime disposal waits its full teardown timeout even though
+      // the stdio child is already dead.
+      await settleWithin(client.close(), Math.min(timeoutMs, 1_000));
+      throw new Error(
+        `MCP server "${serverName}" timed out: did not complete initialize within ${timeoutMs / 1_000}s`,
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function redactMcpDiagnosticError(error: unknown): string {
+  return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
+}
+
+async function listAllTools(client: Client, timeoutMs: number, signal: AbortSignal) {
+  return await collectMcpPaginatedItems({
+    label: "MCP tool listing",
+    itemLabel: "tools",
+    timeoutMs,
+    maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
+    maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
+    maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
+    signal,
+    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
+        timeout: requestTimeoutMs,
+        maxTotalTimeout: requestTimeoutMs,
+        signal: requestSignal,
+      });
+      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
+    },
   });
 }
 
-function redactErrorUrls(error: unknown): string {
-  return redactSensitiveUrlLikeString(String(error));
-}
-
-async function listAllTools(client: Client, timeoutMs: number) {
-  const tools: ListedTool[] = [];
-  let cursor: string | undefined;
-  do {
-    const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs });
-    tools.push(...page.tools);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return tools;
-}
-
 function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isMcpConfigRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
-  return message.includes("-32601") || /method not found/i.test(message);
+  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
 }
 
 async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
+  signal: AbortSignal;
   suppressUnsupported: boolean;
 }): Promise<ListedTool[]> {
   try {
-    return await listAllTools(params.client, params.timeoutMs);
+    return await listAllTools(params.client, params.timeoutMs, params.signal);
   } catch (error) {
     if (params.suppressUnsupported && isMcpMethodNotFoundError(error)) {
       return [];
@@ -209,29 +276,8 @@ function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
   return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
 }
 
-async function listAllResources(client: Client, timeoutMs: number) {
-  const resources: unknown[] = [];
-  let cursor: string | undefined;
-  do {
-    const params = cursor ? { cursor } : undefined;
-    const page = await client.listResources(params, { timeout: timeoutMs });
-    resources.push(...page.resources);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return resources;
-}
-
-async function listAllPrompts(client: Client, timeoutMs: number) {
-  const prompts: unknown[] = [];
-  let cursor: string | undefined;
-  do {
-    const params = cursor ? { cursor } : undefined;
-    const page = await client.listPrompts(params, { timeout: timeoutMs });
-    prompts.push(...page.prompts);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return prompts;
-}
+type ListedResource = Awaited<ReturnType<Client["listResources"]>>["resources"][number];
+type ListedPrompt = Awaited<ReturnType<Client["listPrompts"]>>["prompts"][number];
 
 function normalizeStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -252,7 +298,7 @@ function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | und
 }
 
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
-  if (!isMcpConfigRecord(rawServer) || !isMcpConfigRecord(rawServer.toolFilter)) {
+  if (!isRecord(rawServer) || !isRecord(rawServer.toolFilter)) {
     return {};
   }
   return {
@@ -333,74 +379,8 @@ async function disposeSession(session: BundleMcpSession) {
   }
 }
 
-function createCatalogFingerprint(params: {
-  servers: Record<string, unknown>;
-  mcpAppsEnabled: boolean;
-}): string {
-  // Session MCP fingerprints only invalidate in-memory runtime catalogs.
-  // Algorithm changes can cause one cache miss, but no persisted state migration.
-  return crypto.createHash("sha256").update(JSON.stringify(params)).digest("hex");
-}
-
-function loadSessionMcpConfig(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  logDiagnostics?: boolean;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-}): {
-  loaded: LoadedMcpConfig;
-  fingerprint: string;
-} {
-  const loaded = loadEmbeddedAgentMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    manifestRegistry: params.manifestRegistry,
-  });
-  if (params.logDiagnostics !== false) {
-    for (const diagnostic of loaded.diagnostics) {
-      logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
-    }
-  }
-  return {
-    loaded,
-    fingerprint: createCatalogFingerprint({
-      servers: loaded.mcpServers,
-      mcpAppsEnabled: params.cfg?.mcp?.apps?.enabled === true,
-    }),
-  };
-}
-
-/**
- * Loads enabled MCP config metadata for a session without creating runtimes,
- * connecting transports, or issuing MCP tools/list requests.
- */
-export function resolveSessionMcpConfigSummary(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-}): { fingerprint: string; serverNames: string[] } {
-  const { loaded, fingerprint } = loadSessionMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    logDiagnostics: false,
-    manifestRegistry: params.manifestRegistry,
-  });
-  return {
-    fingerprint,
-    serverNames: Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b)),
-  };
-}
-
 function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
-}
-
-function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.mcp?.sessionIdleTtlMs;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }
 
 export function createSessionMcpRuntime(params: {
@@ -410,57 +390,104 @@ export function createSessionMcpRuntime(params: {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  includeServerNames?: ReadonlySet<string>;
+  excludeServerNames?: ReadonlySet<string>;
+  /**
+   * Precomputed name→safeName for the full declared server set. Required for
+   * stable tool names when this runtime holds only a subset of servers.
+   */
+  safeServerNamesByServer?: ReadonlyMap<string, string>;
+  /** Resolved per-requester url/headers; never logged/persisted as credentials. */
+  connectionOverrides?: ReadonlyMap<string, McpServerConnectionResolved>;
+  redactConnectionServerNames?: ReadonlySet<string>;
+  requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
+  configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): SessionMcpRuntime {
-  const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
+  const { loaded, fingerprint: computedFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     logDiagnostics: true,
     manifestRegistry: params.manifestRegistry,
+    includeServerNames: params.includeServerNames,
+    excludeServerNames: params.excludeServerNames,
+    redactConnectionServerNames: params.redactConnectionServerNames,
+    safeServerNamesByServer: params.safeServerNamesByServer,
+    toolOverrides: params.toolOverrides,
   });
+  const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
   let disposed = false;
+  const lifecycleAbortController = new AbortController();
   let catalog: McpToolCatalog | null = null;
+  let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
+  const invalidateCatalog = () => {
+    catalogInvalidationGeneration += 1;
+    catalog = null;
+    catalogRetryAfterMs = undefined;
+    catalogInFlight = undefined;
+  };
+  const scheduleCatalogServerRetry = (serverName: string, message: string) => {
+    const currentCatalog = catalog;
+    const server = currentCatalog?.servers[serverName];
+    const existing = currentCatalog?.diagnostics?.find(
+      (diagnostic) => diagnostic.serverName === serverName,
+    );
+    if (!currentCatalog) {
+      invalidateCatalog();
+      return;
+    }
+    let diagnostic: McpToolCatalogDiagnostic;
+    if (existing) {
+      diagnostic = { ...existing, message };
+    } else if (server) {
+      diagnostic = {
+        serverName,
+        safeServerName: server.safeServerName ?? serverName,
+        launchSummary: server.launchSummary,
+        message,
+      };
+    } else {
+      invalidateCatalog();
+      return;
+    }
+    catalogInvalidationGeneration += 1;
+    catalog = {
+      ...currentCatalog,
+      diagnostics: [
+        ...(currentCatalog.diagnostics?.filter((entry) => entry.serverName !== serverName) ?? []),
+        diagnostic,
+      ].toSorted((left, right) => left.serverName.localeCompare(right.serverName)),
+    };
+    catalogRetryAfterMs = Date.now();
+    catalogInFlight = undefined;
+  };
+  const catalogRetryIsDue = (): boolean =>
+    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
-  const recordServerToolFailure = (serverName: string, nowMs: number) => {
+  const recordServerToolFailure = (
+    serverName: string,
+    session: BundleMcpSession,
+    nowMs: number,
+  ) => {
+    if (sessions.get(serverName) !== session || session.retiring) {
+      return undefined;
+    }
     const previous = serverBackoff.get(serverName);
-    const failures = (previous?.failures ?? 0) + 1;
-    const nextBackoff: McpServerBackoffState = { failures };
+    const failures = (previous?.session === session ? previous.failures : 0) + 1;
+    const nextBackoff: McpServerBackoffState = { session, failures };
     if (failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
       nextBackoff.retryAfterMs = nowMs + BUNDLE_MCP_FAILURE_COOLDOWN_MS;
     }
     serverBackoff.set(serverName, nextBackoff);
-  };
-  const runGuardedServerRequest = async <T>(
-    serverName: string,
-    request: () => Promise<T>,
-    options?: McpRequestOptions,
-  ): Promise<T> => {
-    const tracksFailureBackoff = options?.failureBackoff !== "ignore";
-    const nowMs = Date.now();
-    const backoff = serverBackoff.get(serverName);
-    if (tracksFailureBackoff && backoff?.retryAfterMs && nowMs < backoff.retryAfterMs) {
-      throw new Error(
-        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
-      );
-    }
-    try {
-      const result = await request();
-      if (tracksFailureBackoff) {
-        serverBackoff.delete(serverName);
-      }
-      return result;
-    } catch (error) {
-      if (tracksFailureBackoff) {
-        recordServerToolFailure(serverName, nowMs);
-      }
-      throw error;
-    }
+    return failures;
   };
   const failIfDisposed = () => {
     if (disposed) {
@@ -489,6 +516,7 @@ export function createSessionMcpRuntime(params: {
       return;
     }
     session.connectPromise ??= connectWithTimeout(
+      session.serverName,
       session.client,
       session.transport,
       connectionTimeoutMs,
@@ -513,15 +541,104 @@ export function createSessionMcpRuntime(params: {
     await disposeSession(session);
     return true;
   };
-
-  const getCatalog = async (): Promise<McpToolCatalog> => {
-    failIfDisposed();
-    if (catalog) {
-      return catalog;
+  const localRequestTimeouts = new WeakSet<object>();
+  const runMcpRequest = async <T>(
+    session: BundleMcpSession,
+    request: (signal: AbortSignal) => Promise<T>,
+    parentSignal?: AbortSignal,
+  ): Promise<T> => {
+    const abortController = new AbortController();
+    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
+      timeout: session.requestTimeoutMs,
+    });
+    const timeout = setTimeout(() => {
+      localRequestTimeouts.add(timeoutError);
+      abortController.abort(timeoutError);
+    }, session.requestTimeoutMs);
+    timeout.unref?.();
+    try {
+      const signal = parentSignal
+        ? AbortSignal.any([parentSignal, abortController.signal])
+        : abortController.signal;
+      signal.throwIfAborted();
+      return await request(signal);
+    } finally {
+      clearTimeout(timeout);
     }
+  };
+  const runGuardedServerRequest = async <T>(
+    serverName: string,
+    session: BundleMcpSession,
+    request: () => Promise<T>,
+    options?: McpRequestOptions,
+  ): Promise<T> => {
+    const tracksFailureBackoff = options?.failureBackoff !== "ignore";
+    const nowMs = Date.now();
+    const backoff = serverBackoff.get(serverName);
+    if (
+      tracksFailureBackoff &&
+      backoff?.session === session &&
+      backoff.retryAfterMs &&
+      nowMs < backoff.retryAfterMs
+    ) {
+      throw new Error(
+        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
+      );
+    }
+    if (backoff && backoff.session !== session) {
+      serverBackoff.delete(serverName);
+    }
+    try {
+      const result = await request();
+      if (tracksFailureBackoff && serverBackoff.get(serverName)?.session === session) {
+        serverBackoff.delete(serverName);
+      }
+      return result;
+    } catch (error) {
+      // A stateful server uses HTTP 404 to invalidate an expired MCP session.
+      // Reinitialize a fresh client, but never replay a possibly mutating call.
+      const sessionExpired =
+        session.transportType === "streamable-http" &&
+        session.transport instanceof StreamableHTTPClientTransport &&
+        session.transport.sessionId !== undefined &&
+        error instanceof StreamableHTTPError &&
+        error.code === 404;
+      let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
+      if (sessionExpired) {
+        recycleReason = "expired HTTP session";
+      } else if (tracksFailureBackoff) {
+        const failures = recordServerToolFailure(serverName, session, nowMs);
+        const requestTimedOut =
+          error !== null && typeof error === "object" && localRequestTimeouts.has(error);
+        if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
+          recycleReason = "repeated request timeouts";
+        }
+      }
+      if (recycleReason) {
+        serverBackoff.delete(serverName);
+        scheduleCatalogServerRetry(serverName, recycleReason);
+        const timedOut = recycleReason === "repeated request timeouts";
+        logWarn(
+          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
+        );
+        void retireSessionIfCurrent(serverName, session).catch((retireError: unknown) => {
+          logWarn(
+            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
+          );
+        });
+      }
+      throw error;
+    }
+  };
+
+  const loadCatalog = async (retryBaseCatalog?: McpToolCatalog): Promise<McpToolCatalog> => {
+    failIfDisposed();
     if (catalogInFlight) {
       return catalogInFlight;
     }
+    const retryServerNames = retryBaseCatalog
+      ? new Set(retryBaseCatalog.diagnostics?.map((diagnostic) => diagnostic.serverName))
+      : undefined;
     const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async () => {
       if (Object.keys(loaded.mcpServers).length === 0) {
@@ -533,35 +650,77 @@ export function createSessionMcpRuntime(params: {
         };
       }
 
-      const servers: Record<string, McpServerCatalog> = {};
-      const tools: McpCatalogTool[] = [];
+      // A cooldown retry replaces only diagnostic-bearing servers. Healthy clients
+      // keep their SDK tool-metadata snapshot and remain callable during recovery.
+      const servers: Record<string, McpServerCatalog> = Object.fromEntries(
+        Object.entries(retryBaseCatalog?.servers ?? {}).filter(
+          ([serverName]) => !retryServerNames?.has(serverName),
+        ),
+      );
+      const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
+        (tool) => !retryServerNames?.has(tool.serverName),
+      );
+      const sessionDeniedTools: McpCatalogTool[] = (
+        retryBaseCatalog?.sessionDeniedTools ?? []
+      ).filter((tool) => !retryServerNames?.has(tool.serverName));
       const diagnostics: McpToolCatalogDiagnostic[] = [];
-      const usedServerNames = new Set<string>();
+      // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
+      const safeServerNamesByServer =
+        params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
+      const usedServerNames = new Set<string>(
+        [...safeServerNamesByServer.values()].map((name) => normalizeLowercaseStringOrEmpty(name)),
+      );
 
       try {
-        // Pre-compute safe server names sequentially (synchronous, fast — no I/O)
+        // Safe names come from the full declared set (precomputed), not from who resolved.
         const preparedEntries: Array<{
           serverName: string;
           rawServer: (typeof loaded.mcpServers)[string];
           resolved: NonNullable<ReturnType<typeof resolveMcpTransport>>;
           safeServerName: string;
+          launchDescription: string;
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer, {
+          if (retryServerNames && !retryServerNames.has(serverName)) {
+            continue;
+          }
+          const override = params.connectionOverrides?.get(serverName);
+          // Overrides supply per-requester transport only; never write them back to config.
+          const transportSource = override
+            ? applyMcpConnectionOverride(rawServer, override)
+            : rawServer;
+          const dataDirOwnership = Object.hasOwn(loaded.prepareDataDirsByServer ?? {}, serverName)
+            ? loaded.prepareDataDirsByServer?.[serverName]
+            : undefined;
+          const resolved = resolveMcpTransport(serverName, transportSource, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            prepareDataDir: dataDirOwnership?.dataDir,
+            requesterScope: params.requesterScope,
           });
           if (!resolved) {
             continue;
           }
-          const safeServerName = sanitizeServerName(serverName, usedServerNames);
+          const safeServerName =
+            safeServerNamesByServer.get(serverName) ??
+            sanitizeServerName(serverName, usedServerNames);
           if (safeServerName !== serverName) {
             logWarn(
               `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
             );
           }
-          preparedEntries.push({ serverName, rawServer, resolved, safeServerName });
+          // Never put per-user resolved URLs into catalog/diagnostics/model text.
+          const launchDescription = override
+            ? `${serverName}: requester-scoped connection`
+            : resolved.description;
+          preparedEntries.push({
+            serverName,
+            rawServer,
+            resolved,
+            safeServerName,
+            launchDescription,
+          });
         }
 
         // Bounded fan-out keeps common 4-5 server setups parallel without letting
@@ -574,7 +733,7 @@ export function createSessionMcpRuntime(params: {
         };
 
         const tasks = preparedEntries.map(
-          ({ serverName, rawServer, resolved, safeServerName }) =>
+          ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
 
@@ -611,12 +770,10 @@ export function createSessionMcpRuntime(params: {
                         onChanged: (error) => {
                           if (error) {
                             logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
-                          catalogInvalidationGeneration += 1;
-                          catalog = null;
-                          catalogInFlight = undefined;
+                          invalidateCatalog();
                         },
                       },
                     },
@@ -639,8 +796,20 @@ export function createSessionMcpRuntime(params: {
                 // terminal for this client/transport pair.
                 // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
                 client.onclose = () => {
+                  const wasConnected = createdSession.connected;
                   createdSession.connected = false;
                   createdSession.disconnectReason = "mcp transport closed";
+                  // Only established current sessions invalidate the catalog. Startup closes
+                  // already belong to catalog loading, and retirement must not start a rebuild.
+                  if (
+                    wasConnected &&
+                    !disposed &&
+                    !createdSession.retiring &&
+                    sessions.get(serverName) === createdSession
+                  ) {
+                    scheduleCatalogServerRetry(serverName, "mcp transport closed");
+                    logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
+                  }
                 };
                 session = createdSession;
                 sessions.set(serverName, session);
@@ -663,19 +832,28 @@ export function createSessionMcpRuntime(params: {
                 const listedTools = await listAllToolsBestEffort({
                   client: session.client,
                   timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+                  signal: lifecycleAbortController.signal,
                   suppressUnsupported: Boolean(
                     !capabilities.tools && (capabilities.resources || capabilities.prompts),
                   ),
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
-                const exposedTools = listedTools.filter((tool) =>
+                const denialMap = params.toolOverrides?.mcpToolsDeny;
+                const deniedToolNames = new Set(
+                  denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
+                );
+                const policyEligibleTools = listedTools.filter((tool) =>
                   shouldExposeMcpTool(selection, tool.name.trim()),
                 );
+                const exposedTools = policyEligibleTools.filter((tool) => {
+                  const toolName = tool.name.trim();
+                  return !deniedToolNames.has(toolName);
+                });
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
-                  launchSummary: resolved.description,
+                  launchSummary: launchDescription,
                   toolCount: exposedTools.length,
                   requestTimeoutMs: resolved.requestTimeoutMs,
                   supportsParallelToolCalls: resolved.supportsParallelToolCalls,
@@ -699,9 +877,13 @@ export function createSessionMcpRuntime(params: {
                         },
                       }
                     : {}),
+                  ...(deniedToolNames.size > 0
+                    ? { deniedToolNames: [...deniedToolNames].toSorted() }
+                    : {}),
+                  codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of exposedTools) {
+                for (const tool of policyEligibleTools) {
                   const toolName = tool.name.trim();
                   if (!toolName) {
                     continue;
@@ -724,9 +906,11 @@ export function createSessionMcpRuntime(params: {
                     title: tool.title,
                     description: sanitizeMcpMetadataText(tool.description),
                     inputSchema: tool.inputSchema,
-                    fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                    fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
+                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
+                    codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
                   });
                 }
                 return {
@@ -736,18 +920,18 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
-                const message = redactErrorUrls(error);
+                const message = redactMcpDiagnosticError(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(
-                    `bundle-mcp: failed to ${action} server "${serverName}" (${resolved.description}): ${message}`,
+                    `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
                   );
                 }
                 const diags: McpToolCatalogDiagnostic[] = [
                   {
                     serverName,
                     safeServerName,
-                    launchSummary: resolved.description,
+                    launchSummary: launchDescription,
                     message,
                   },
                 ];
@@ -794,7 +978,13 @@ export function createSessionMcpRuntime(params: {
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
-          tools.push(...toolEntries);
+          for (const tool of toolEntries) {
+            if (tool.deniedBySession) {
+              sessionDeniedTools.push(tool);
+            } else {
+              tools.push(tool);
+            }
+          }
           diagnostics.push(...serverDiags);
         }
 
@@ -804,6 +994,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
@@ -821,6 +1012,9 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       if (catalogInvalidationGeneration === catalogGeneration) {
         catalog = nextCatalog;
+        catalogRetryAfterMs = nextCatalog.diagnostics?.length
+          ? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS
+          : undefined;
       }
       return nextCatalog;
     } finally {
@@ -830,12 +1024,35 @@ export function createSessionMcpRuntime(params: {
     }
   };
 
+  const getCatalog = async (): Promise<McpToolCatalog> => {
+    failIfDisposed();
+    if (catalog && !catalogRetryIsDue()) {
+      return catalog;
+    }
+    if (!catalog) {
+      return loadCatalog();
+    }
+
+    const staleCatalog = catalog;
+    catalogRetryAfterMs = undefined;
+    void loadCatalog(staleCatalog).catch(() => {
+      if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+      }
+    });
+    return staleCatalog;
+  };
+
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     configFingerprint,
+    ...(params.requesterScope ? { requesterScope: params.requesterScope } : {}),
+    ...(params.requesterConnect ? { requesterConnect: params.requesterConnect } : {}),
+    // A runtime partition hosts either only static or only requester-scoped servers.
+    isRequesterScopedServer: () => params.requesterScope !== undefined,
     mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
@@ -861,6 +1078,10 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    /** Session-owned timeout that survives catalog invalidation. */
+    getServerRequestTimeoutMs(serverName: string) {
+      return sessions.get(serverName)?.requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
@@ -870,14 +1091,17 @@ export function createSessionMcpRuntime(params: {
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
+        session,
         async () =>
-          (await session.client.callTool(
-            {
-              name: toolName,
-              arguments: isMcpConfigRecord(input) ? input : {},
-            },
-            undefined,
-            { timeout: session.requestTimeoutMs },
+          (await runMcpRequest(session, async (signal) =>
+            session.client.callTool(
+              {
+                name: toolName,
+                arguments: isRecord(input) ? input : {},
+              },
+              undefined,
+              { timeout: session.requestTimeoutMs, signal },
+            ),
           )) as CallToolResult,
       );
     },
@@ -885,8 +1109,10 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
+      return await runGuardedServerRequest(serverName, session, async () =>
+        runMcpRequest(session, async (signal) =>
+          session.client.listTools(requestParams, { timeout: session.requestTimeoutMs, signal }),
+        ),
       );
     },
     async listResources(serverName, options) {
@@ -895,7 +1121,37 @@ export function createSessionMcpRuntime(params: {
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
-        async () => listAllResources(session.client, session.requestTimeoutMs),
+        session,
+        async () =>
+          collectMcpPaginatedItems<ListedResource>({
+            label: "MCP resource listing",
+            itemLabel: "resources",
+            timeoutMs: session.requestTimeoutMs,
+            maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
+            maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
+            maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
+            signal: lifecycleAbortController.signal,
+            loadPage: async ({ cursor, requestTimeoutMs, signal: paginationSignal }) => {
+              const page = await runMcpRequest(
+                session,
+                async (signal) =>
+                  await session.client.listResources(
+                    cursor === undefined ? undefined : { cursor },
+                    {
+                      timeout: requestTimeoutMs,
+                      maxTotalTimeout: requestTimeoutMs,
+                      signal,
+                    },
+                  ),
+                paginationSignal,
+              );
+              return {
+                items: page.resources,
+                nextCursor: page.nextCursor,
+                serializedValue: page,
+              };
+            },
+          }),
         options,
       );
     },
@@ -905,8 +1161,11 @@ export function createSessionMcpRuntime(params: {
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
+        session,
         async () =>
-          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+          runMcpRequest(session, async (signal) =>
+            session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal }),
+          ),
         options,
       );
     },
@@ -914,31 +1173,55 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        session.client.listResourceTemplates(requestParams, {
-          timeout: session.requestTimeoutMs,
-        }),
+      return await runGuardedServerRequest(serverName, session, async () =>
+        runMcpRequest(session, async (signal) =>
+          session.client.listResourceTemplates(requestParams, {
+            timeout: session.requestTimeoutMs,
+            signal,
+          }),
+        ),
       );
     },
     async listPrompts(serverName) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        listAllPrompts(session.client, session.requestTimeoutMs),
+      return await runGuardedServerRequest(serverName, session, async () =>
+        collectMcpPaginatedItems<ListedPrompt>({
+          label: "MCP prompt listing",
+          itemLabel: "prompts",
+          timeoutMs: session.requestTimeoutMs,
+          maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
+          maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
+          maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
+          signal: lifecycleAbortController.signal,
+          loadPage: async ({ cursor, requestTimeoutMs, signal: paginationSignal }) => {
+            const page = await runMcpRequest(
+              session,
+              async (signal) =>
+                await session.client.listPrompts(cursor === undefined ? undefined : { cursor }, {
+                  timeout: requestTimeoutMs,
+                  maxTotalTimeout: requestTimeoutMs,
+                  signal,
+                }),
+              paginationSignal,
+            );
+            return { items: page.prompts, nextCursor: page.nextCursor, serializedValue: page };
+          },
+        }),
       );
     },
     async getPrompt(serverName, name, args) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(
-        serverName,
-        async () =>
-          await session.client.getPrompt(
+      return await runGuardedServerRequest(serverName, session, async () =>
+        runMcpRequest(session, async (signal) =>
+          session.client.getPrompt(
             { name, ...(args ? { arguments: args } : {}) },
-            { timeout: session.requestTimeoutMs },
+            { timeout: session.requestTimeoutMs, signal },
           ),
+        ),
       );
     },
     async dispose() {
@@ -946,7 +1229,9 @@ export function createSessionMcpRuntime(params: {
         return;
       }
       disposed = true;
+      lifecycleAbortController.abort(createDisposedError(params.sessionId));
       catalog = null;
+      catalogRetryAfterMs = undefined;
       catalogInFlight = undefined;
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();
@@ -955,340 +1240,22 @@ export function createSessionMcpRuntime(params: {
   };
 }
 
-function createSessionMcpRuntimeManager(
-  opts: {
-    createRuntime?: CreateSessionMcpRuntime;
-    now?: () => number;
-    enableIdleSweepTimer?: boolean;
-    idleSweepIntervalMs?: number;
-  } = {},
-): SessionMcpRuntimeManager {
-  const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
-  const sessionIdBySessionKey = new Map<string, string>();
-  const idleTtlMsBySessionId = new Map<string, number>();
-  const deferredRetirementSessionIds = new Set<string>();
-  const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
-  const now = opts.now ?? Date.now;
-  const createInFlight = new Map<
-    string,
-    {
-      promise: Promise<SessionMcpRuntime>;
-      workspaceDir: string;
-      agentDir?: string;
-      configFingerprint: string;
-    }
-  >();
-  const idleSweepIntervalMs = opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS;
-  let idleSweepTimer: ReturnType<typeof setInterval> | undefined;
-  let idleSweepInFlight: Promise<void> | undefined;
+setDefaultCreateSessionMcpRuntime(createSessionMcpRuntime);
 
-  const forgetSessionKeysForSessionId = (sessionId: string) => {
-    for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
-      if (mappedSessionId === sessionId) {
-        sessionIdBySessionKey.delete(sessionKey);
-      }
-    }
-  };
-
-  const sweepIdleRuntimes = async (): Promise<number> => {
-    const nowMs = now();
-    const expired: SessionMcpRuntime[] = [];
-    for (const [sessionId, runtime] of runtimesBySessionId.entries()) {
-      const idleTtlMs =
-        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
-      if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
-        continue;
-      }
-      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
-        continue;
-      }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      deferredRetirementSessionIds.delete(sessionId);
-      forgetSessionKeysForSessionId(sessionId);
-      expired.push(runtime);
-    }
-    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
-    return expired.length;
-  };
-
-  const queueIdleSweep = () => {
-    if (idleSweepInFlight) {
-      return;
-    }
-    idleSweepInFlight = sweepIdleRuntimes()
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
-      })
-      .finally(() => {
-        idleSweepInFlight = undefined;
-      });
-  };
-
-  const ensureIdleSweepTimer = () => {
-    if (opts.enableIdleSweepTimer === false || idleSweepIntervalMs <= 0 || idleSweepTimer) {
-      return;
-    }
-    idleSweepTimer = setInterval(queueIdleSweep, idleSweepIntervalMs);
-    idleSweepTimer.unref?.();
-  };
-
-  const clearIdleSweepTimer = () => {
-    if (!idleSweepTimer) {
-      return;
-    }
-    clearInterval(idleSweepTimer);
-    idleSweepTimer = undefined;
-  };
-
-  const disposeManagedSession = async (sessionId: string): Promise<void> => {
-    deferredRetirementSessionIds.delete(sessionId);
-    const inFlight = createInFlight.get(sessionId);
-    createInFlight.delete(sessionId);
-    let runtime = runtimesBySessionId.get(sessionId);
-    if (!runtime && inFlight) {
-      runtime = await inFlight.promise.catch(() => undefined);
-    }
-    runtimesBySessionId.delete(sessionId);
-    idleTtlMsBySessionId.delete(sessionId);
-    if (!runtime) {
-      forgetSessionKeysForSessionId(sessionId);
-      return;
-    }
-    forgetSessionKeysForSessionId(sessionId);
-    await runtime.dispose();
-  };
-
-  return {
-    async getOrCreate(params) {
-      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
-      if (runtimesBySessionId.has(params.sessionId)) {
-        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
-      }
-      await sweepIdleRuntimes();
-      if (idleTtlMs > 0) {
-        ensureIdleSweepTimer();
-      }
-      if (params.sessionKey) {
-        sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
-      }
-      const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        logDiagnostics: false,
-        manifestRegistry: params.manifestRegistry,
-      });
-      const existing = runtimesBySessionId.get(params.sessionId);
-      if (existing) {
-        if (
-          existing.workspaceDir !== params.workspaceDir ||
-          existing.agentDir !== params.agentDir ||
-          existing.configFingerprint !== nextFingerprint
-        ) {
-          runtimesBySessionId.delete(params.sessionId);
-          deferredRetirementSessionIds.delete(params.sessionId);
-          await existing.dispose();
-        } else {
-          // A new run now owns this runtime. Cancel an earlier one-shot retirement
-          // so an old app view cannot dispose the runtime out from under this run.
-          deferredRetirementSessionIds.delete(params.sessionId);
-          existing.markUsed();
-          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
-          return existing;
-        }
-      }
-      const inFlight = createInFlight.get(params.sessionId);
-      if (inFlight) {
-        if (
-          inFlight.workspaceDir === params.workspaceDir &&
-          inFlight.agentDir === params.agentDir &&
-          inFlight.configFingerprint === nextFingerprint
-        ) {
-          return inFlight.promise;
-        }
-        createInFlight.delete(params.sessionId);
-        const staleRuntime = await inFlight.promise.catch(() => undefined);
-        runtimesBySessionId.delete(params.sessionId);
-        idleTtlMsBySessionId.delete(params.sessionId);
-        deferredRetirementSessionIds.delete(params.sessionId);
-        await staleRuntime?.dispose();
-      }
-      const created = Promise.resolve(
-        createRuntime({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-          manifestRegistry: params.manifestRegistry,
-          configFingerprint: nextFingerprint,
-        }),
-      ).then((runtime) => {
-        deferredRetirementSessionIds.delete(params.sessionId);
-        runtime.markUsed();
-        runtimesBySessionId.set(params.sessionId, runtime);
-        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
-        return runtime;
-      });
-      createInFlight.set(params.sessionId, {
-        promise: created,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        configFingerprint: nextFingerprint,
-      });
-      try {
-        return await created;
-      } finally {
-        createInFlight.delete(params.sessionId);
-      }
-    },
-    bindSessionKey(sessionKey, sessionId) {
-      sessionIdBySessionKey.set(sessionKey, sessionId);
-    },
-    resolveSessionId(sessionKey) {
-      return sessionIdBySessionKey.get(sessionKey);
-    },
-    /** Synchronous lookup only; must not create runtimes or connect transports. */
-    peekSession(params) {
-      const sessionId =
-        params.sessionId ??
-        (params.sessionKey ? sessionIdBySessionKey.get(params.sessionKey) : undefined);
-      return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
-    },
-    async disposeSession(sessionId) {
-      await disposeManagedSession(sessionId);
-    },
-    deferRetirement(sessionId) {
-      if (!runtimesBySessionId.has(sessionId)) {
-        return false;
-      }
-      deferredRetirementSessionIds.add(sessionId);
-      return true;
-    },
-    async completeDeferredRetirement(sessionId, runtime) {
-      if (
-        !deferredRetirementSessionIds.has(sessionId) ||
-        runtimesBySessionId.get(sessionId) !== runtime ||
-        (runtime.activeLeases ?? 0) > 0
-      ) {
-        return false;
-      }
-      await disposeManagedSession(sessionId);
-      return true;
-    },
-    async disposeAll() {
-      clearIdleSweepTimer();
-      const inFlightRuntimes = Array.from(createInFlight.values());
-      createInFlight.clear();
-      const runtimes = Array.from(runtimesBySessionId.values());
-      runtimesBySessionId.clear();
-      sessionIdBySessionKey.clear();
-      idleTtlMsBySessionId.clear();
-      deferredRetirementSessionIds.clear();
-      const lateRuntimes = await Promise.all(
-        inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
-      );
-      const allRuntimes = new Set<SessionMcpRuntime>(runtimes);
-      for (const runtime of lateRuntimes) {
-        if (runtime) {
-          allRuntimes.add(runtime);
-        }
-      }
-      await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
-    },
-    sweepIdleRuntimes,
-    listSessionIds() {
-      return Array.from(runtimesBySessionId.keys());
-    },
-  };
-}
-
-function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
-  return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
-}
-
-export async function getOrCreateSessionMcpRuntime(params: {
-  sessionId: string;
-  sessionKey?: string;
-  workspaceDir: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-}): Promise<SessionMcpRuntime> {
-  return await getSessionMcpRuntimeManager().getOrCreate(params);
-}
-
-/** Looks up an existing session MCP runtime without creating it or connecting transports. */
-export function peekSessionMcpRuntime(params: {
-  sessionId?: string | null;
-  sessionKey?: string | null;
-}): SessionMcpRuntime | undefined {
-  const sessionId = normalizeOptionalString(params.sessionId);
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  return getSessionMcpRuntimeManager().peekSession({
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-  });
-}
-
-async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
-  await getSessionMcpRuntimeManager().disposeSession(sessionId);
-}
-
-export async function retireSessionMcpRuntime(params: {
-  sessionId?: string | null;
-  reason: string;
-  preserveActiveLeases?: boolean;
-  onError?: (error: unknown, sessionId: string, reason: string) => void;
-}): Promise<boolean> {
-  const sessionId = normalizeOptionalString(params.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  const runtime = peekSessionMcpRuntime({ sessionId });
-  if (params.preserveActiveLeases === true && (runtime?.activeLeases ?? 0) > 0) {
-    getSessionMcpRuntimeManager().deferRetirement(sessionId);
-    return true;
-  }
-  try {
-    await disposeSessionMcpRuntime(sessionId);
-    return true;
-  } catch (error) {
-    params.onError?.(error, sessionId, params.reason);
-    return false;
-  }
-}
-
-/** Completes a one-shot retirement after its final run, view, or request lease releases. */
-export async function completeDeferredSessionMcpRuntimeRetirement(
-  runtime: SessionMcpRuntime,
-): Promise<boolean> {
-  return await getSessionMcpRuntimeManager().completeDeferredRetirement(runtime.sessionId, runtime);
-}
-
-export async function retireSessionMcpRuntimeForSessionKey(params: {
-  sessionKey?: string | null;
-  reason: string;
-  preserveActiveLeases?: boolean;
-  onError?: (error: unknown, sessionId: string, reason: string) => void;
-}): Promise<boolean> {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return false;
-  }
-  const sessionId = getSessionMcpRuntimeManager().resolveSessionId(sessionKey);
-  return await retireSessionMcpRuntime({
-    sessionId,
-    reason: params.reason,
-    preserveActiveLeases: params.preserveActiveLeases,
-    onError: params.onError,
-  });
-}
-
-export async function disposeAllSessionMcpRuntimes(): Promise<void> {
-  await getSessionMcpRuntimeManager().disposeAll();
-}
+export {
+  completeDeferredSessionMcpRuntimeRetirement,
+  disposeAllSessionMcpRuntimes,
+  getAdvertisedScopedMcpCatalog,
+  getOrCreateRequesterScopedMcpRuntime,
+  getOrCreateSessionMcpRuntime,
+  peekSessionMcpRuntime,
+  rememberAdvertisedScopedMcpCatalog,
+  resolveSessionMcpConfigSummary,
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+};
+export { createSessionMcpRuntimeManager };
+export { mergeMcpToolCatalogs };
 
 export const testing = {
   buildMcpClientCapabilities,
@@ -1297,11 +1264,28 @@ export const testing = {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
     setBundleMcpDisposeTimeoutMsForTest();
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest();
+    resolverTesting.setMcpConnectionResolverTimeoutMsForTest();
+    resolverTesting.setMcpConnectionRevalidateMsForTest();
   },
   getCachedSessionIds() {
-    return getSessionMcpRuntimeManager().listSessionIds();
+    return getSessionMcpRuntimeManagerForTesting().listSessionIds();
+  },
+  getCachedRuntimeKeys() {
+    return getSessionMcpRuntimeManagerForTesting().listRuntimeKeys();
+  },
+  getBookkeepingSizes(manager: SessionMcpRuntimeManager): Record<string, number> {
+    const sizes = (
+      manager as SessionMcpRuntimeManager & {
+        bookkeepingSizesForTest?: () => Record<string, number>;
+      }
+    ).bookkeepingSizesForTest?.();
+    return sizes ?? {};
   },
   setBundleMcpCatalogListTimeoutMsForTest,
   setBundleMcpDisposeTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
+  mergeMcpToolCatalogs,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

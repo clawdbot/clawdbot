@@ -146,31 +146,25 @@ describe("startQaLiveLaneGateway", () => {
         },
         slots: {
           memory: "memory-core",
-          contextEngine: "qmd",
+          contextEngine: "custom-context",
         },
       },
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: true,
-            sync: {
-              onSearch: true,
-              onSessionStart: true,
-              watch: true,
-            },
-          },
+      memory: {
+        search: {
+          enabled: true,
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
     expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
     expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
     expect(cfg?.plugins?.slots?.memory).toBe("none");
-    expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
-    expect(cfg?.agents?.defaults?.memorySearch?.enabled).toBe(false);
-    expect(cfg?.agents?.defaults?.memorySearch?.sync?.onSearch).toBe(false);
-    expect(cfg?.agents?.defaults?.memorySearch?.sync?.onSessionStart).toBe(false);
-    expect(cfg?.agents?.defaults?.memorySearch?.sync?.watch).toBe(false);
+    expect(cfg?.plugins?.slots?.contextEngine).toBe("custom-context");
+    expect(cfg?.memory?.search?.enabled).toBe(false);
   });
 
   it("forwards gateway stop options to the child harness", async () => {

@@ -1,11 +1,13 @@
+// @vitest-environment node
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import type { AgentsRouteData } from "./agents/agents-page.ts";
-import { page as agentsPage } from "./agents/route.ts";
-import type { NodesRouteData } from "./nodes/nodes-page.ts";
-import { page as nodesPage } from "./nodes/route.ts";
+import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
+import type { DevicesRouteData } from "./devices/devices-page.ts";
+import { page as devicesPage } from "./devices/route.ts";
+import type { ModelProvidersRouteData } from "./model-providers/model-providers-page.ts";
+import { page as modelProvidersPage } from "./model-providers/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
 import { page as pluginsPage } from "./plugins/route.ts";
 import { page as sessionsPage } from "./sessions/route.ts";
@@ -42,8 +44,9 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -87,12 +90,12 @@ describe("route preload gateway provenance", () => {
     expect(agentsData.gateway).toBe(agentsGateway.gateway);
     expect(agentsData.gatewaySnapshot).toBe(agentsGateway.gateway.snapshot);
 
-    const nodesGateway = mutableGateway(snapshot(null, false));
-    const nodesData = await loadRoute<NodesRouteData>(nodesPage, {
-      gateway: nodesGateway.gateway,
+    const devicesGateway = mutableGateway(snapshot(null, false));
+    const devicesData = await loadRoute<DevicesRouteData>(devicesPage, {
+      gateway: devicesGateway.gateway,
     } as unknown as ApplicationContext);
-    expect(nodesData.gateway).toBe(nodesGateway.gateway);
-    expect(nodesData.gatewaySnapshot).toBe(nodesGateway.gateway.snapshot);
+    expect(devicesData.gateway).toBe(devicesGateway.gateway);
+    expect(devicesData.gatewaySnapshot).toBe(devicesGateway.gateway.snapshot);
   });
 
   it("keeps sessions provenance from before its async preload", async () => {
@@ -116,6 +119,25 @@ describe("route preload gateway provenance", () => {
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
   });
 
+  it("preloads a bounded session roster without an implicit recency filter", async () => {
+    const list = vi.fn(async (_options: unknown) => null);
+    await loadRoute<SessionsRouteData>(sessionsPage, {
+      gateway: mutableGateway(snapshot(null, false)).gateway,
+      sessions: { list },
+      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
+    } as unknown as ApplicationContext);
+
+    expect(list).toHaveBeenCalledWith({
+      limit: 50,
+      search: undefined,
+      includeGlobal: true,
+      includeUnknown: false,
+      archivedFilter: "active",
+    });
+    expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
+  });
+
   it("keeps usage provenance from before its async preload", async () => {
     const client = {
       request: vi.fn(async () => ({})),
@@ -133,6 +155,36 @@ describe("route preload gateway provenance", () => {
 
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
+  });
+
+  it("keeps model providers provenance from before its lazy module load", async () => {
+    const originalRequest = vi.fn(async () => ({}));
+    const originalClient = { request: originalRequest } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacementClient = {
+      request: replacementRequest,
+    } as unknown as GatewayBrowserClient;
+    const mutable = mutableGateway(snapshot(originalClient, true));
+    const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
+      gateway: mutable.gateway,
+      agents: {
+        state: { agentsList: null },
+        ensureList: vi.fn(async () => ({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "project",
+          agents: [{ id: "main" }],
+        })),
+      },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
+    } as unknown as ApplicationContext);
+
+    mutable.replaceSnapshot(snapshot(replacementClient, true));
+    const data = await request;
+
+    expect(data.client).toBe(originalClient);
+    expect(originalRequest).toHaveBeenCalled();
+    expect(replacementRequest).not.toHaveBeenCalled();
   });
 
   it("keeps skills provenance from before its async preload", async () => {

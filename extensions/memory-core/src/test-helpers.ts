@@ -3,9 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
-import { normalizeDailyIngestionState, normalizeSessionIngestionState } from "./dreaming-phases.js";
+import {
+  normalizeDailyIngestionState,
+  normalizeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
 import {
   configureMemoryCoreDreamingState,
   DREAMING_DAILY_INGESTION_NAMESPACE,
@@ -22,11 +26,9 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import {
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-  type ShortTermRecallEntry,
-} from "./short-term-promotion.js";
+import { normalizeShortTermPhaseSignalStore } from "./short-term-promotion-store.js";
+import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
+import type { ShortTermRecallEntry } from "./short-term-promotion.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 
@@ -51,12 +53,6 @@ type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 async function readShortTermStoreEntries<T>(params: {
   namespace: string;
@@ -87,8 +83,8 @@ async function writeRawShortTermStore(params: {
   namespace: string;
   metaKey: "recall" | "phase";
 }): Promise<void> {
-  const record = asRecord(params.raw);
-  const entries = asRecord(record?.entries);
+  const record = asOptionalRecord(params.raw);
+  const entries = asOptionalRecord(record?.entries);
   await Promise.all([
     writeMemoryCoreWorkspaceEntries({
       namespace: params.namespace,

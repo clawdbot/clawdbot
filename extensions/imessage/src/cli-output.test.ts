@@ -1,11 +1,7 @@
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 // iMessage tests cover canonical bounded CLI execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  IMESSAGE_CLI_STDERR_TAIL_BYTES,
-  IMESSAGE_CLI_STDOUT_MAX_BYTES,
-  runIMessageCliJsonCommand,
-} from "./cli-output.js";
+import { runIMessageCliJsonCommand } from "./cli-output.js";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -47,8 +43,8 @@ describe("runIMessageCliJsonCommand", () => {
       ["/usr/local/bin/imsg", "send", "--text", "hello", "--db", "/tmp/chat.db", "--json"],
       expect.objectContaining({
         maxOutputBytes: {
-          stdout: IMESSAGE_CLI_STDOUT_MAX_BYTES,
-          stderr: IMESSAGE_CLI_STDERR_TAIL_BYTES,
+          stdout: 8 * 1024 * 1024,
+          stderr: 64 * 1024,
         },
         outputCapture: { stdout: "head", stderr: "tail" },
         terminateOnOutputLimit: { stdout: true },
@@ -75,7 +71,7 @@ describe("runIMessageCliJsonCommand", () => {
       commandResult({ code: null, termination: "signal", outputLimitExceeded: true }),
     );
     await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
-      `imsg stdout exceeded ${IMESSAGE_CLI_STDOUT_MAX_BYTES} bytes`,
+      "imsg stdout exceeded 8388608 bytes",
     );
   });
 

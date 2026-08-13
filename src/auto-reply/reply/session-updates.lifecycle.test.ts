@@ -205,14 +205,14 @@ describe("session-updates lifecycle hooks", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
-    expect(sessionStore[sessionKey]?.sessionFile).toContain("s2.jsonl");
+    expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
     expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
     expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual(["s1", "s2"]);
     expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
     expect(sessionStore[sessionKey]?.totalTokens).toBe(123);
     expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
     expect(persisted?.sessionId).toBe("s2");
-    expect(persisted?.sessionFile).toContain("s2.jsonl");
+    expect(persisted).not.toHaveProperty("sessionFile");
     expect(persisted?.usageFamilyKey).toBe(sessionKey);
     expect(persisted?.usageFamilySessionIds).toEqual(["s1", "s2"]);
     expect(persisted?.compactionCount).toBe(1);

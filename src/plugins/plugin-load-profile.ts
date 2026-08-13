@@ -7,7 +7,7 @@
  *
  *     [plugin-load-profile] phase=<X> plugin=<Y> elapsedMs=<N> [extras…] source=<S>
  *
- * The same `OPENCLAW_PLUGIN_LOAD_PROFILE=1` env flag activates all probes.
+ * The `plugin.load-profile` diagnostics flag activates all probes.
  *
  * Tooling that scrapes these lines (e.g. PERF-STARTUP-PLAN.md profiling
  * methodology) depends on the field order being:
@@ -21,8 +21,10 @@
  * Keep this contract stable — downstream parsers rely on it.
  */
 
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
+
 export function shouldProfilePluginLoader(): boolean {
-  return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
+  return isDiagnosticFlagEnabled("plugin.load-profile");
 }
 
 /**

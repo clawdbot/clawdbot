@@ -409,9 +409,16 @@ contains_disallowed_chars() {
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
 }
 
-is_valid_timezone() {
+is_valid_timezone_in_image() {
   local value="$1"
-  [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
+  docker run --rm --network none --entrypoint node "$IMAGE_NAME" -e '
+const timezone = process.argv[1];
+try {
+  new Intl.DateTimeFormat("en", { timeZone: timezone }).format(0);
+} catch {
+  process.exit(1);
+}
+' "$value"
 }
 
 validate_mount_path_value() {
@@ -497,9 +504,6 @@ if [[ -n "$TIMEZONE" ]]; then
   if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
     fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
   fi
-  if ! is_valid_timezone "$TIMEZONE"; then
-    fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
-  fi
 fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
@@ -538,6 +542,9 @@ export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
 export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL="${OTEL_EXPORTER_OTLP_METRICS_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL="${OTEL_EXPORTER_OTLP_LOGS_PROTOCOL:-}"
 export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
 export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
@@ -745,6 +752,9 @@ upsert_env "$ENV_FILE" \
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
   OTEL_EXPORTER_OTLP_PROTOCOL \
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL \
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL \
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL \
   OTEL_SERVICE_NAME \
   OTEL_SEMCONV_STABILITY_OPT_IN \
   OPENCLAW_OTEL_PRELOADED \
@@ -782,6 +792,10 @@ else
   fi
 fi
 
+if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
+  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
+fi
+
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
@@ -792,13 +806,19 @@ echo "==> Fixing data-directory permissions"
 # Use -xdev to restrict chown to the config-dir mount only — without it,
 # the recursive chown would cross into the workspace bind mount and rewrite
 # ownership of all user project files on Linux hosts.
+# Run a no-dereference chown from each entry's directory. This keeps ownership
+# repair for sockets/FIFOs while preventing a swapped symlink leaf from
+# redirecting the root operation outside the mounted tree.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   chown node:node /home/node/.config; \
-   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
+   /usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   /usr/bin/chown -h node:node /home/node/.config; \
+   /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
+     /usr/bin/find -P /home/node/.openclaw/workspace/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   fi || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then
@@ -971,4 +991,4 @@ echo "Token: stored in Docker environment/config (not printed)."
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"
+echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // CLI tagline selection helpers, including deterministic random/default/holiday modes.
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
 export type TaglineMode = "random" | "default" | "off";
@@ -330,5 +330,3 @@ export function pickTagline(options: TaglineOptions = {}): string {
   const index = Math.floor(rand() * pool.length) % pool.length;
   return expectDefined(pool[index], "pool entry at index");
 }
-
-export { DEFAULT_TAGLINE };

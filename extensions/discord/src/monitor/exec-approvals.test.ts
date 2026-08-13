@@ -16,7 +16,10 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", async (importOriginal) =
   };
 });
 
-import { ExecApprovalButton, createDiscordExecApprovalButtonContext } from "./exec-approvals.js";
+import {
+  createDiscordExecApprovalButtonContext,
+  createExecApprovalButton,
+} from "./exec-approvals.js";
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>["execApprovals"],
@@ -90,7 +93,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("rejects invalid approval button payloads", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
     });
@@ -105,7 +108,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("blocks non-approvers from approving", async () => {
     const interaction = createInteraction({ userId: "999" });
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
     });
@@ -130,7 +133,7 @@ describe("discord exec approval monitor helpers", () => {
             resolution: createApprovalResolution(),
           }) as const,
       );
-      const button = new ExecApprovalButton({
+      const button = createExecApprovalButton({
         getApprovers: () => ["123"],
         resolveApproval,
       });
@@ -138,7 +141,7 @@ describe("discord exec approval monitor helpers", () => {
       await button.run(interaction, { kind: approvalKind, id: "abc", action: "allow-once" });
 
       expect(interaction["acknowledge"]).toHaveBeenCalled();
-      expect(resolveApproval).toHaveBeenCalledWith("abc", approvalKind, "allow-once");
+      expect(resolveApproval).toHaveBeenCalledWith("abc", approvalKind, "allow-once", "123");
       expect(JSON.stringify(editReply.mock.calls[0]?.[0])).toContain("Approval resolved");
       expect(interaction["followUp"]).not.toHaveBeenCalled();
     },
@@ -150,7 +153,7 @@ describe("discord exec approval monitor helpers", () => {
         throw new Error("message edit failed");
       }),
     });
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({
         ok: true,
@@ -180,7 +183,7 @@ describe("discord exec approval monitor helpers", () => {
       decision: "deny",
     });
     resolveApprovalOverGatewayMock.mockResolvedValueOnce(resolution);
-    const button = new ExecApprovalButton(
+    const button = createExecApprovalButton(
       createDiscordExecApprovalButtonContext({
         cfg: buildConfig({ enabled: true, approvers: ["123"] }),
         accountId: "default",
@@ -214,7 +217,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("shows a follow-up when gateway resolution fails", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: false, reason: "error" }),
     });
@@ -230,7 +233,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("shows a follow-up for already-resolved approval clicks", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: false, reason: "not-found" }),
     });
@@ -259,7 +262,7 @@ describe("discord exec approval monitor helpers", () => {
       });
 
       expect(ctx.getApprovers()).toEqual(["123"]);
-      await expect(ctx.resolveApproval("abc", approvalKind, "allow-once")).resolves.toEqual({
+      await expect(ctx.resolveApproval("abc", approvalKind, "allow-once", "123")).resolves.toEqual({
         ok: true,
         resolution,
       });
@@ -268,8 +271,10 @@ describe("discord exec approval monitor helpers", () => {
         approvalId: "abc",
         approvalKind,
         decision: "allow-once",
+        channel: "discord",
+        accountId: "default",
+        senderId: "123",
         gatewayUrl: "ws://127.0.0.1:18789",
-        clientDisplayName: "Discord approval (default)",
       });
     },
   );
@@ -282,7 +287,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "error",
     });
@@ -300,7 +305,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "plugin", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "plugin", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "not-found",
     });
@@ -314,7 +319,7 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once")).resolves.toEqual({
+    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "error",
     });

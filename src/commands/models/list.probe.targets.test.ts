@@ -19,8 +19,9 @@ const resolveAuthProfileEligibilityMock = vi.fn<
 }));
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
@@ -90,6 +91,10 @@ vi.mock("../../agents/model-auth.js", () => ({
       : null;
   },
 }));
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) =>
+    provider === "byteplus-plan" ? "byteplus" : provider,
+}));
 vi.mock("../../agents/model-selection.js", () => {
   const normalizeProviderId = (value: string) =>
     value.trim().toLowerCase() === "z.ai" || value.trim().toLowerCase() === "z-ai"
@@ -110,7 +115,7 @@ vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
 vi.mock("../status-all/format.js", () => ({
-  redactSecrets: (value: string) => value,
+  redactStatusSecrets: (value: string) => value,
 }));
 vi.mock("./shared.js", () => ({
   DEFAULT_PROVIDER: "openai",
@@ -679,6 +684,136 @@ describe("buildProbeTargets reason codes", () => {
           expect.objectContaining({ source: "env", label: "env: ZAI_API_KEY", mode: "token" }),
         );
       },
+    );
+  });
+
+  it("keeps alias model selection while resolving profiles from the auth provider", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "byteplus:plan": {
+          type: "api_key",
+          provider: "byteplus",
+          key: "byteplus-plan-key",
+        },
+      },
+      order: { byteplus: ["byteplus:plan"] },
+    };
+    mockAllowedProfiles = ["byteplus:plan"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    loadModelCatalogMock.mockResolvedValueOnce([
+      { provider: "byteplus", id: "seed-2-0-mini", name: "BytePlus Standard" },
+      { provider: "byteplus-plan", id: "ark-code-latest", name: "BytePlus Plan" },
+    ]);
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            "byteplus-plan": {
+              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+        auth: { order: { byteplus: ["byteplus:plan"] } },
+      } as OpenClawConfig,
+      providers: ["byteplus-plan"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toStrictEqual([
+      {
+        label: "byteplus:plan",
+        mode: "api_key",
+        model: { provider: "byteplus-plan", model: "ark-code-latest" },
+        profileId: "byteplus:plan",
+        provider: "byteplus-plan",
+        source: "profile",
+      },
+    ]);
+  });
+
+  it("keeps profiles stored under the requested provider alias", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "byteplus-plan:saved": {
+          type: "api_key",
+          provider: "byteplus-plan",
+          key: "byteplus-plan-key",
+        },
+      },
+      order: { "byteplus-plan": ["byteplus-plan:saved"] },
+    };
+    mockAllowedProfiles = ["byteplus-plan:saved"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["byteplus-plan"],
+      modelCandidates: ["byteplus-plan/ark-code-latest"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toContainEqual(
+      expect.objectContaining({
+        provider: "byteplus-plan",
+        profileId: "byteplus-plan:saved",
+        source: "profile",
+      }),
+    );
+  });
+
+  it("keeps no_model when a credential has no account-visible catalog model", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "provider:account": {
+          type: "oauth",
+          provider: "provider",
+          access: "account-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: { provider: ["provider:account"] },
+    };
+    mockAllowedProfiles = ["provider:account"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    loadModelCatalogMock.mockResolvedValueOnce([]);
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["provider"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.targets).toStrictEqual([]);
+    expect(plan.results).toContainEqual(
+      expect.objectContaining({
+        provider: "provider",
+        profileId: "provider:account",
+        status: "no_model",
+        reasonCode: "no_model",
+      }),
     );
   });
 

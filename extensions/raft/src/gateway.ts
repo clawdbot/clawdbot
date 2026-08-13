@@ -6,8 +6,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from "node:net";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
 import { dispatchRaftWake } from "./inbound.js";
@@ -42,10 +43,33 @@ const WAKE_EVENT_ID_FIELDS = [
 
 type RaftBridgeProcess = Pick<ChildProcess, "kill"> & Pick<EventEmitter, "once">;
 
+type RaftWakeReplayEvent = { accountId: string; key: string };
+
+function createRaftWakeReplayGuard(params?: {
+  env?: NodeJS.ProcessEnv;
+  onDiskError?: (error: unknown) => void;
+}) {
+  return createChannelReplayGuard<RaftWakeReplayEvent>({
+    dedupe: {
+      ttlMs: WAKE_DEDUPE_TTL_MS,
+      memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
+      pluginId: RAFT_CHANNEL_ID,
+      namespacePrefix: "raft-wake-dedupe",
+      stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
+      ...(params?.env ? { env: params.env } : {}),
+      ...(params?.onDiskError ? { onDiskError: params.onDiskError } : {}),
+    },
+    buildReplayKey: (event) => event.key,
+    namespace: (event) => event.accountId,
+  });
+}
+
+type RaftWakeReplayGuard = ReturnType<typeof createRaftWakeReplayGuard>;
+
 type RaftGatewayDeps = {
   createToken?: () => string;
   spawnBridge?: (params: { profile: string; endpoint: string; token: string }) => RaftBridgeProcess;
-  wakeDedupe?: ClaimableDedupe;
+  wakeDedupe?: RaftWakeReplayGuard;
 };
 
 class WakeRequestError extends Error {
@@ -224,12 +248,7 @@ export async function startRaftGatewayAccount(
   const wakeQueue = new KeyedAsyncQueue();
   const wakeDedupe =
     deps.wakeDedupe ??
-    createClaimableDedupe({
-      ttlMs: WAKE_DEDUPE_TTL_MS,
-      memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
-      pluginId: RAFT_CHANNEL_ID,
-      namespacePrefix: "raft-wake-dedupe",
-      stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
+    createRaftWakeReplayGuard({
       onDiskError: (error) => {
         ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
       },
@@ -292,23 +311,21 @@ export async function startRaftGatewayAccount(
         if (ctx.abortSignal?.aborted) {
           throw new WakeRequestError(503, "Raft Gateway is stopping.");
         }
-        const claim = await wakeDedupe.claim(dedupeKey, { namespace: ctx.accountId });
-        if (claim.kind === "duplicate") {
+        const result = await wakeDedupe.processGuarded(
+          { accountId: ctx.accountId, key: dedupeKey },
+          async () => {
+            await dispatchRaftWake({ ctx });
+          },
+        );
+        if (result.kind === "duplicate") {
           return false;
         }
-        if (claim.kind === "inflight") {
-          if (await claim.pending) {
+        if (result.kind === "inflight") {
+          if (await result.pending) {
             return false;
           }
           throw new WakeRequestError(503, "Raft wake delivery is retrying.");
         }
-        try {
-          await dispatchRaftWake({ ctx });
-        } catch (error) {
-          wakeDedupe.release(dedupeKey, { namespace: ctx.accountId, error });
-          throw error;
-        }
-        await wakeDedupe.commit(dedupeKey, { namespace: ctx.accountId });
         return true;
       });
       sendJson(response, 202, {
@@ -361,13 +378,12 @@ export async function startRaftGatewayAccount(
       }
     });
 
-    ctx.setStatus({
-      accountId: ctx.accountId,
-      running: true,
-      connected: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-    });
+    ctx.setStatus(
+      channelReadyPatch({
+        accountId: ctx.accountId,
+        lastStartAt: Date.now(),
+      }),
+    );
     ctx.log?.info?.(`Raft bridge started for profile "${profile}".`);
 
     await keepHttpServerTaskAlive({

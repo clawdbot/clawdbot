@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import {
+  fetchSessionMenuWork,
+  resolveSessionPullRequestIndicatorState,
+} from "./session-menu-work.ts";
 
 function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
   return {
@@ -15,15 +18,40 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
   };
 }
 
+function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
+  return {
+    request: request as never,
+  };
+}
+
+describe("session pull request indicators", () => {
+  it.each([
+    {
+      name: "prioritizes an active PR over merged history",
+      pullRequests: [
+        pullRequest({ number: 1, state: "merged" }),
+        pullRequest({ number: 2, state: "draft" }),
+      ],
+      expected: "open",
+    },
+    {
+      name: "shows merged history",
+      pullRequests: [pullRequest({ state: "merged" })],
+      expected: "merged",
+    },
+    {
+      name: "ignores closed history",
+      pullRequests: [pullRequest({ state: "closed" })],
+      expected: "none",
+    },
+  ] as const)("$name", ({ pullRequests, expected }) => {
+    expect(resolveSessionPullRequestIndicatorState(pullRequests)).toBe(expected);
+  });
+});
+
 describe("fetchSessionMenuWork", () => {
   it("resolves the PR URL and worktree path in one pass", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "controlUi.sessionPullRequests") {
-        return Promise.resolve({
-          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
-          rateLimited: false,
-        });
-      }
+    const request = vi.fn((_method: string) => {
       return Promise.resolve({
         worktrees: [
           {
@@ -42,29 +70,34 @@ describe("fetchSessionMenuWork", () => {
 
     await expect(
       fetchSessionMenuWork({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
         agentId: "main",
+        loadPullRequests: async () => ({
+          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
+          rateLimited: false,
+          status: "ready",
+        }),
         worktreeId: "wt-1",
       }),
     ).resolves.toEqual({
       pullRequestUrl: "https://example.test/pr",
       worktreePath: "/work/trees/demo",
     });
-    expect(request).toHaveBeenCalledWith("controlUi.sessionPullRequests", {
-      sessionKey: "agent:main:demo",
-      agentId: "main",
-    });
+    expect(request).toHaveBeenCalledWith("worktrees.list", {});
   });
 
   it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
     const failing = vi.fn(() => Promise.reject(new Error("offline")));
     await expect(
       fetchSessionMenuWork({
-        client: { request: failing as never },
+        client: sessionMenuClient(failing),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
+        loadPullRequests: async () => {
+          throw new Error("offline");
+        },
         worktreeId: "wt-1",
       }),
     ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });
@@ -74,7 +107,7 @@ describe("fetchSessionMenuWork", () => {
     );
     await expect(
       fetchSessionMenuWork({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: false,
         sessionKey: "agent:main:demo",
         worktreeId: "wt-1",

@@ -7,9 +7,11 @@ import {
   enableTailscaleFunnel,
   enableTailscaleServe,
   getTailnetHostname,
+  getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
+import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -25,60 +27,77 @@ export async function startGatewayTailscaleExposure(params: {
   }
   const serviceName =
     params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
+  let effectiveMode = params.tailscaleMode;
+  let preservedFunnel = false;
+  let clearPublishedOrigin: (() => void) | undefined;
 
   try {
     if (params.tailscaleMode === "serve") {
       if (params.preserveFunnel === true) {
         const funnelCovers = await hasTailscaleFunnelRouteForPort(params.port);
         if (funnelCovers) {
+          effectiveMode = "funnel";
+          preservedFunnel = true;
           const resetSuffix = params.resetOnExit
             ? "; resetOnExit is a no-op because no Serve route was applied this run"
             : "";
           params.logTailscale.info(
             `serve skipped: preserving externally configured Tailscale Funnel for port ${params.port}${resetSuffix}`,
           );
-          // Skip the resetOnExit teardown deliberately: the Funnel route is
-          // owned by an external operator, so we must not run
-          // disableTailscaleServe on shutdown either.
-          return null;
         }
       }
-      if (serviceName) {
-        await enableTailscaleServe(params.port, undefined, serviceName);
-      } else {
-        await enableTailscaleServe(params.port);
+      if (!preservedFunnel) {
+        if (serviceName) {
+          await enableTailscaleServe(params.port, undefined, serviceName);
+        } else {
+          await enableTailscaleServe(params.port);
+        }
       }
     } else {
       await enableTailscaleFunnel(params.port);
     }
-    const host = await getTailnetHostname().catch(() => null);
+    const host = await (
+      params.tailscaleMode === "serve" && !preservedFunnel
+        ? getTailnetHostnameAfterServe()
+        : getTailnetHostname()
+    ).catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       const publicHost = resolveTailscalePublishedHost({
-        tailscaleMode: params.tailscaleMode,
+        tailscaleMode: effectiveMode,
         tailnetHost: host,
-        serviceName,
+        serviceName: effectiveMode === "serve" ? serviceName : undefined,
       });
       if (publicHost) {
-        const serviceLabel = serviceName ? ` for ${serviceName}` : "";
-        params.logTailscale.info(
-          `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
-        );
-      } else {
+        clearPublishedOrigin = prepareMcpAppChannelOrigin({
+          origin: `https://${publicHost}`,
+          reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
+        });
+        if (!preservedFunnel) {
+          const serviceLabel = serviceName ? ` for ${serviceName}` : "";
+          params.logTailscale.info(
+            `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
+          );
+        }
+      } else if (!preservedFunnel) {
         params.logTailscale.info(`${params.tailscaleMode} enabled`);
       }
-    } else {
+    } else if (!preservedFunnel) {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }
   } catch (err) {
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
   }
 
-  if (!params.resetOnExit) {
+  if (!params.resetOnExit && !clearPublishedOrigin) {
     return null;
   }
 
   return async () => {
+    clearPublishedOrigin?.();
+    if (!params.resetOnExit || preservedFunnel) {
+      return;
+    }
     try {
       if (params.tailscaleMode === "serve") {
         if (serviceName) {

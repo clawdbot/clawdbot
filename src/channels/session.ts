@@ -48,7 +48,13 @@ export async function recordInboundSession(params: {
       groupResolution,
       createIfMissing,
     })
-    .catch(params.onRecordError);
+    .catch(async (err: unknown) => {
+      try {
+        await Promise.resolve(params.onRecordError(err));
+      } catch {
+        // Error reporting must not reject the detached metadata task.
+      }
+    });
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 

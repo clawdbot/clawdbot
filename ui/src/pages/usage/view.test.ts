@@ -92,10 +92,12 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -143,6 +145,8 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
+        onRetryTimeSeries: noop,
+        onRetrySessionLogs: noop,
       },
     },
     ...overrides,
@@ -150,6 +154,60 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps pending sessions on their selected local or UTC activity day", () => {
+    const localOffsetMs = -7 * 60 * 60 * 1000;
+    const localYear = vi
+      .spyOn(Date.prototype, "getFullYear")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+      });
+    const localMonth = vi
+      .spyOn(Date.prototype, "getMonth")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+      });
+    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
+      return new Date(this.getTime() + localOffsetMs).getUTCDate();
+    });
+
+    try {
+      const pendingSession = {
+        key: "agent:main:pending-cache",
+        label: "Pending cache",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-14T00:30:00.000Z"),
+        usage: null,
+      } satisfies UsageSessionEntry;
+
+      for (const { timeZone, selectedDay, visible } of [
+        { timeZone: "utc", selectedDay: "2026-05-14", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-13", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-14", visible: false },
+      ] as const) {
+        const container = document.createElement("div");
+        render(
+          renderUsage(
+            createUsageProps({
+              data: { ...createUsageProps().data, sessions: [pendingSession] },
+              filters: {
+                ...createUsageProps().filters,
+                selectedDays: [selectedDay],
+                timeZone,
+              },
+            }),
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
+      }
+    } finally {
+      localYear.mockRestore();
+      localMonth.mockRestore();
+      localDay.mockRestore();
+    }
+  });
+
   it("keeps insight aggregates scoped to the selected agent", () => {
     const container = document.createElement("div");
     const sessions = [
@@ -283,6 +341,30 @@ describe("renderUsage", () => {
     );
 
     expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
+  });
+
+  it("keeps filter option values distinct from menu commands", () => {
+    const container = document.createElement("div");
+    const onQueryDraftChange = vi.fn();
+    const session = usageSession("agent:main:main", "main", "clear");
+    const props = createUsageProps({
+      data: {
+        ...createUsageProps().data,
+        sessions: [session],
+        aggregates: buildAggregatesFromSessions([session]),
+      },
+    });
+    props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
+
+    render(renderUsage(props), container);
+    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+      (item) => item.textContent?.trim() === "clear",
+    );
+    option
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
+
+    expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {

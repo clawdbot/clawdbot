@@ -1,14 +1,17 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeString,
   replaceCard,
   workboardCardRunId,
   workboardCardSessionKey,
 } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
-import { normalizeCardPayload, normalizeTaskSummary } from "./normalization.ts";
+import { formatError } from "./normalization-utils.ts";
+import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
   invalidateWorkboardLoads,
@@ -36,6 +39,14 @@ const WORKBOARD_ENGINE_MODELS = {
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
+
+function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
+  return engine === "codex"
+    ? WORKBOARD_ENGINE_MODELS.codex
+    : engine === "claude"
+      ? WORKBOARD_ENGINE_MODELS.claude
+      : undefined;
+}
 
 function buildCardPrompt(card: WorkboardCard): string {
   const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
@@ -86,11 +97,11 @@ function buildCardTaskSessionKey(card: WorkboardCard): string {
   const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
   const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  const sessionKey = card.agentId
-    ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}`
-    : suffix;
-  const existing = workboardCardSessionKey(card)?.trim();
-  return existing === sessionKey ? existing : sessionKey;
+  const agentId = card.agentId?.trim();
+  // Unassigned cards stay unscoped on purpose: the gateway canonicalizes a bare
+  // suffix onto the configured default agent, while normalizeAgentId maps an
+  // empty id to "main" and would target the wrong agent when the default differs.
+  return agentId ? `agent:${normalizeAgentId(agentId)}:${suffix}` : suffix;
 }
 
 function buildCardRunIdempotencyKey(card: WorkboardCard): string {
@@ -116,15 +127,16 @@ function buildWorkboardExecution(params: {
   status: WorkboardExecutionStatus;
 }): WorkboardExecution {
   const now = Date.now();
+  const model = engineModel(params.engine);
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:${params.engine}`,
+    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
     kind: "agent-session",
     engine: params.engine,
     mode: params.mode,
     status: params.status,
-    model: WORKBOARD_ENGINE_MODELS[params.engine],
     startedAt: now,
     updatedAt: now,
+    ...(model ? { model } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
   };
@@ -165,29 +177,31 @@ async function findTaskForStartedRun(params: {
   return null;
 }
 
+function workboardRunWasAborted(result: unknown): boolean {
+  return (
+    isRecord(result) &&
+    (result.aborted === true || (Array.isArray(result.runIds) && result.runIds.length > 0))
+  );
+}
+
 async function abortWorkboardSessionRun(params: {
   client: GatewayBrowserClient;
   sessionKey: string;
   runId?: string;
 }): Promise<boolean> {
-  let abortResult = await params.client.request("chat.abort", {
+  const targetedAbort = await params.client.request("chat.abort", {
     sessionKey: params.sessionKey,
     ...(params.runId ? { runId: params.runId } : {}),
   });
-  let aborted =
-    isRecord(abortResult) &&
-    (abortResult.aborted === true ||
-      (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
-  if (!aborted && params.runId) {
-    abortResult = await params.client.request("chat.abort", {
-      sessionKey: params.sessionKey,
-    });
-    aborted =
-      isRecord(abortResult) &&
-      (abortResult.aborted === true ||
-        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+  const aborted = workboardRunWasAborted(targetedAbort);
+  if (aborted || !params.runId) {
+    return aborted;
   }
-  return aborted;
+  // A card run id that no longer names the live run aborts nothing, so retry
+  // session-wide before reporting failure; otherwise Stop strands an active run.
+  return workboardRunWasAborted(
+    await params.client.request("chat.abort", { sessionKey: params.sessionKey }),
+  );
 }
 
 function taskIsActive(task: WorkboardTaskSummary | undefined): task is WorkboardTaskSummary {
@@ -228,6 +242,7 @@ export async function startWorkboardCard(params: {
   }
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
+  const model = engineModel(engine);
   state.error = null;
   if (mode === "autonomous" && isScheduledForLater(params.card)) {
     state.error = "Scheduled cards cannot start before their scheduled time.";
@@ -265,7 +280,7 @@ export async function startWorkboardCard(params: {
             sessionKey: buildCardTaskSessionKey(card),
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+            ...(model ? { model } : {}),
             message: buildCardPrompt(card),
             deliver: false,
             bootstrapContextMode: "lightweight",
@@ -274,7 +289,7 @@ export async function startWorkboardCard(params: {
         : await requestSessionCreate(params.client, {
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+            ...(model ? { model } : {}),
           });
     const sessionKey =
       isRecord(created) && typeof created.sessionKey === "string" && created.sessionKey.trim()

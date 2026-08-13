@@ -19,14 +19,13 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   calculateAuthProfileCooldownMs,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUsageId,
   setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";
 
@@ -168,30 +167,26 @@ describe("markAuthProfileFailure", () => {
       expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
     });
   });
-  it("honors per-provider billing backoff overrides", async () => {
+  it("records billing backoff for inline provider api keys without creating an auth profile", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
-      await markAuthProfileFailure({
+      await markInlineProviderApiKeyFailure({
         store,
-        profileId: "anthropic:default",
+        provider: "anthropic",
         reason: "billing",
         agentDir,
-        cfg: {
-          auth: {
-            cooldowns: {
-              billingBackoffHoursByProvider: { Anthropic: 1 },
-              billingMaxHours: 2,
-            },
-          },
-        } as never,
       });
 
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
-      expect(typeof disabledUntil).toBe("number");
-      const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 0.8 * 60 * 60 * 1000, 1.2 * 60 * 60 * 1000);
+      const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+      const stats = store.usageStats?.[usageId];
+      expect(store.profiles[usageId]).toBeUndefined();
+      expect(stats?.disabledReason).toBe("billing");
+      expect(typeof stats?.disabledUntil).toBe("number");
+      const remainingMs = (stats?.disabledUntil as number) - startedAt;
+      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
     });
   });
+
   it("keeps persisted cooldownUntil unchanged across mid-window retries", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({
@@ -275,30 +270,6 @@ describe("markAuthProfileFailure", () => {
     });
   });
 
-  it("honors auth_permanent backoff overrides", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const startedAt = Date.now();
-      await markAuthProfileFailure({
-        store,
-        profileId: "anthropic:default",
-        reason: "auth_permanent",
-        agentDir,
-        cfg: {
-          auth: {
-            cooldowns: {
-              authPermanentBackoffMinutes: 15,
-              authPermanentMaxMinutes: 45,
-            },
-          },
-        } as never,
-      });
-
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
-      expect(typeof disabledUntil).toBe("number");
-      const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 14 * 60 * 1000, 16 * 60 * 1000);
-    });
-  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = makeAgentDir("reset-window");
     const now = Date.now();
@@ -330,9 +301,6 @@ describe("markAuthProfileFailure", () => {
       profileId: "anthropic:default",
       reason: "billing",
       agentDir,
-      cfg: {
-        auth: { cooldowns: { failureWindowHours: 24 } },
-      } as never,
     });
 
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
@@ -418,6 +386,24 @@ describe("markAuthProfileFailure", () => {
           store,
           profileId: "anthropic:default",
           reason: "auth",
+          agentDir,
+        });
+        expect(hook).toHaveBeenCalledTimes(1);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
+
+  it("fires the auth profile failure hook for inline provider api key failures", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const hook = vi.fn();
+      setAuthProfileFailureHook(hook);
+      try {
+        await markInlineProviderApiKeyFailure({
+          store,
+          provider: "anthropic",
+          reason: "billing",
           agentDir,
         });
         expect(hook).toHaveBeenCalledTimes(1);

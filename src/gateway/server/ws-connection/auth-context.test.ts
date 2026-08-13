@@ -29,11 +29,17 @@ function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }
   const check = vi.fn(() => ({ allowed, retryAfterMs }));
   const reset = vi.fn();
   const recordFailure = vi.fn();
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   return {
     limiter: {
       check,
       reset,
       recordFailure,
+      recordFailureAndDelay,
     } as unknown as AuthRateLimiter,
     check,
     reset,
@@ -55,8 +61,13 @@ function createPerScopeRateLimiter(
   });
   const reset = vi.fn();
   const recordFailure = vi.fn();
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   return {
-    limiter: { check, reset, recordFailure } as unknown as AuthRateLimiter,
+    limiter: { check, reset, recordFailure, recordFailureAndDelay } as unknown as AuthRateLimiter,
     check,
     reset,
     recordFailure,

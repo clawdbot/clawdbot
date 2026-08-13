@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isWithinDir } from "./path-safety.js";
 import {
-  detectLegacyExecApprovalsMigration,
-  migrateLegacyExecApprovals,
-} from "./state-migrations.exec-approvals.js";
-import { migrateLegacyInstalledPluginIndex } from "./state-migrations.plugin-state.js";
+  migrateLegacyInstalledPluginIndex,
+  preflightLegacyInstalledPluginIndexMigration,
+} from "./state-migrations.plugin-state.js";
 import { migrateLegacyTaskStateSidecars } from "./state-migrations.storage.js";
 import type { MigrationLogger } from "./state-migrations.types.js";
 
@@ -30,6 +31,65 @@ type StateDirMigrationResult = {
   warnings: string[];
   notices?: string[];
 };
+
+function lstatIfPresent(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[] } {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return { changes: [], warnings: [] };
+  }
+
+  try {
+    const legacyDir = path.join(
+      resolveProfileStateDir("default", env, homedir),
+      `workspace-${profile}`,
+    );
+    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyStat = lstatIfPresent(legacyDir);
+    if (!legacyStat) {
+      return { changes: [], warnings: [] };
+    }
+    if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: legacy path is not a directory (${legacyDir}).`,
+        ],
+      };
+    }
+    if (lstatIfPresent(targetDir)) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: target already exists (${targetDir}). Kept legacy workspace at ${legacyDir}; merge manually.`,
+        ],
+      };
+    }
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    fs.renameSync(legacyDir, targetDir);
+    return { changes: [`Profile workspace: ${legacyDir} → ${targetDir}`], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Profile workspace migration failed: ${String(error)}`],
+    };
+  }
+}
 
 function resolveSymlinkTarget(linkPath: string): string | null {
   try {
@@ -123,20 +183,23 @@ export async function autoMigrateLegacyStateDir(params: {
   const env = params.env ?? process.env;
   const warnings: string[] = [];
   const changes: string[] = [];
+  const notices: string[] = [];
   const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
   const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
   const migratePluginInstallIndex = async () => {
     const result = await migrateLegacyInstalledPluginIndex({ stateDir: targetDir });
     changes.push(...result.changes);
     warnings.push(...result.warnings);
+    notices.push(...(result.notices ?? []));
   };
   if (hasCustomStateDir) {
     await migratePluginInstallIndex();
     return {
       migrated: changes.length > 0,
-      skipped: changes.length === 0 && warnings.length === 0,
+      skipped: changes.length === 0 && warnings.length === 0 && notices.length === 0,
       changes,
       warnings,
+      ...(notices.length > 0 ? { notices } : {}),
     };
   }
 
@@ -157,7 +220,13 @@ export async function autoMigrateLegacyStateDir(params: {
   }
   if (!legacyStat) {
     await migratePluginInstallIndex();
-    return { migrated: changes.length > 0, skipped: false, changes, warnings };
+    return {
+      migrated: changes.length > 0,
+      skipped: false,
+      changes,
+      warnings,
+      ...(notices.length > 0 ? { notices } : {}),
+    };
   }
   if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
     warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
@@ -175,7 +244,13 @@ export async function autoMigrateLegacyStateDir(params: {
     }
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
       await migratePluginInstallIndex();
-      return { migrated: changes.length > 0, skipped: false, changes, warnings };
+      return {
+        migrated: changes.length > 0,
+        skipped: false,
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     }
     if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
       legacyDir = legacyTarget;
@@ -208,13 +283,35 @@ export async function autoMigrateLegacyStateDir(params: {
   if (isDirPath(targetDir)) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
       await migratePluginInstallIndex();
-      return { migrated: changes.length > 0, skipped: false, changes, warnings };
+      return {
+        migrated: changes.length > 0,
+        skipped: false,
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     }
     await migratePluginInstallIndex();
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
-    return { migrated: changes.length > 0, skipped: false, changes, warnings };
+    return {
+      migrated: changes.length > 0,
+      skipped: false,
+      changes,
+      warnings,
+      ...(notices.length > 0 ? { notices } : {}),
+    };
+  }
+
+  if (legacyDir) {
+    const pluginInstallWarning = preflightLegacyInstalledPluginIndexMigration({
+      stateDir: legacyDir,
+    });
+    if (pluginInstallWarning) {
+      warnings.push(pluginInstallWarning);
+      return { migrated: false, skipped: false, changes, warnings };
+    }
   }
 
   try {
@@ -269,14 +366,19 @@ export async function autoMigrateLegacyStateDir(params: {
   }
 
   await migratePluginInstallIndex();
-  return { migrated: changes.length > 0, skipped: false, changes, warnings };
+  return {
+    migrated: changes.length > 0,
+    skipped: false,
+    changes,
+    warnings,
+    ...(notices.length > 0 ? { notices } : {}),
+  };
 }
 
 export async function autoMigrateLegacyTaskStateSidecars(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
-  crossStateDirImports?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -291,45 +393,21 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
 
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
   const result = await migrateLegacyTaskStateSidecars({ stateDir });
-  const detectedExecApprovals = detectLegacyExecApprovalsMigration({
-    env: params.env ?? process.env,
-    homedir: params.homedir ?? os.homedir,
-    stateDir,
-  });
-  // Cross-state-dir sources need the explicit doctor opt-in (see
-  // detectLegacyStateMigrations); the implicit preflight must not archive
-  // files that belong to the default state dir.
-  const crossStateDirImports = params.crossStateDirImports === true;
-  const execApprovals = migrateLegacyExecApprovals(
-    crossStateDirImports ? detectedExecApprovals : { ...detectedExecApprovals, hasLegacy: false },
-  );
-  const notices: string[] = [];
-  if (detectedExecApprovals.hasLegacy && !crossStateDirImports) {
-    notices.push(
-      `Exec approvals in the default state dir were not imported into OPENCLAW_STATE_DIR automatically (${detectedExecApprovals.sourcePath} -> ${detectedExecApprovals.targetPath}); run \`openclaw doctor --fix\` to import them.`,
-    );
-  }
-  const changes = [...result.changes, ...execApprovals.changes];
-  const warnings = [...result.warnings, ...execApprovals.warnings];
   const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (changes.length > 0) {
-    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
-  }
-  if (warnings.length > 0) {
-    logger.warn(
-      `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+  if (result.changes.length > 0) {
+    logger.info(
+      `Auto-migrated legacy state:\n${result.changes.map((entry) => `- ${entry}`).join("\n")}`,
     );
   }
-  if (notices.length > 0) {
-    logger.info(
-      `Legacy state migration notes:\n${notices.map((entry) => `- ${entry}`).join("\n")}`,
+  if (result.warnings.length > 0) {
+    logger.warn(
+      `Legacy state migration warnings:\n${result.warnings.map((entry) => `- ${entry}`).join("\n")}`,
     );
   }
   return {
-    migrated: changes.length > 0,
+    migrated: result.changes.length > 0,
     skipped: false,
-    changes,
-    warnings,
-    ...(notices.length > 0 ? { notices } : {}),
+    changes: result.changes,
+    warnings: result.warnings,
   };
 }

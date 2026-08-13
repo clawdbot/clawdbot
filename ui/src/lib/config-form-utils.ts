@@ -1,6 +1,5 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 
 export function cloneConfigObject<T>(value: T): T {
   return structuredClone(value);
@@ -17,10 +16,6 @@ const OMIT_VALUE: SanitizeResult = { omitted: true };
 
 function keepValue(value: unknown): SanitizeResult {
   return { omitted: false, value };
-}
-
-function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
-  return record != null && Object.hasOwn(record, key);
 }
 
 function sanitizeRedactedValue(params: {
@@ -71,7 +66,8 @@ function sanitizeRedactedValue(params: {
       originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
         ? originalFormRecord[key]
         : undefined;
-    const originalRawPathExists = hasOwnRecordValue(originalRawRecord, key);
+    const originalRawPathExists =
+      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
     const sanitized = sanitizeRedactedValue({
       value: item,
       originalFormValue,
@@ -93,19 +89,11 @@ function sanitizeRedactedValue(params: {
 export function sanitizeRedactedFormForSubmit(
   form: Record<string, unknown>,
   originalForm: Record<string, unknown> | null | undefined,
-  originalRaw: string,
+  parsedOriginalRaw: Record<string, unknown> | null,
 ): Record<string, unknown> {
-  if (!originalForm || !originalRaw) {
-    return form;
-  }
-
-  let parsedOriginalRaw: unknown;
-  try {
-    parsedOriginalRaw = JSON5.parse(originalRaw);
-  } catch {
-    return form;
-  }
-  if (!isRecord(parsedOriginalRaw)) {
+  // Callers parse the original raw once at snapshot ingestion so this submit
+  // path stays synchronous and never races the lazy JSON5 parser.
+  if (!originalForm || !parsedOriginalRaw) {
     return form;
   }
 

@@ -11,14 +11,10 @@ import {
 
 // Environment contract for debug proxy capture. These vars are passed to child
 // processes and provider transports so capture sessions share one store/proxy.
-export const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
+const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 const OPENCLAW_DEBUG_PROXY_URL = "OPENCLAW_DEBUG_PROXY_URL";
-/** @deprecated Capture storage now lives in the shared state database. */
-const OPENCLAW_DEBUG_PROXY_DB_PATH = "OPENCLAW_DEBUG_PROXY_DB_PATH";
-/** @deprecated Capture payloads now live in the shared state database. */
-const OPENCLAW_DEBUG_PROXY_BLOB_DIR = "OPENCLAW_DEBUG_PROXY_BLOB_DIR";
 const OPENCLAW_DEBUG_PROXY_CERT_DIR = "OPENCLAW_DEBUG_PROXY_CERT_DIR";
-export const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
+const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
 const OPENCLAW_DEBUG_PROXY_REQUIRE = "OPENCLAW_DEBUG_PROXY_REQUIRE";
 
 export type DebugProxySettings = {
@@ -52,8 +48,8 @@ export function resolveDebugProxySettings(
     enabled,
     required: isTruthy(env[OPENCLAW_DEBUG_PROXY_REQUIRE]),
     proxyUrl: env[OPENCLAW_DEBUG_PROXY_URL]?.trim() || undefined,
-    dbPath: env[OPENCLAW_DEBUG_PROXY_DB_PATH]?.trim() || resolveDebugProxyDbPath(env),
-    blobDir: env[OPENCLAW_DEBUG_PROXY_BLOB_DIR]?.trim() || resolveDebugProxyBlobDir(env),
+    dbPath: resolveDebugProxyDbPath(env),
+    blobDir: resolveDebugProxyBlobDir(env),
     certDir: env[OPENCLAW_DEBUG_PROXY_CERT_DIR]?.trim() || resolveDebugProxyCertDir(env),
     sessionId,
     sourceProcess: "openclaw",
@@ -70,11 +66,8 @@ export function applyDebugProxyEnv(
 ): NodeJS.ProcessEnv {
   // Child process env forces proxy capture and standard proxy variables while
   // preserving unrelated environment values.
-  const baseEnv = { ...env };
-  delete baseEnv.OPENCLAW_DEBUG_PROXY_DB_PATH;
-  delete baseEnv.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
   return {
-    ...baseEnv,
+    ...env,
     [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
     [OPENCLAW_DEBUG_PROXY_REQUIRE]: "1",
     [OPENCLAW_DEBUG_PROXY_URL]: params.proxyUrl,

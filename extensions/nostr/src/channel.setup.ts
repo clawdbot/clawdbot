@@ -3,55 +3,27 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createDelegatedSetupWizardProxy,
-  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { createNostrSetupAdapter } from "./setup-adapter.js";
-
-const t = createSetupTranslator();
+import { resolveNostrPrivateKey } from "./private-key.js";
+import {
+  createNostrSetupAdapter,
+  createNostrSetupContract,
+  createNostrSetupStatus,
+} from "./setup-adapter.js";
+import type { ResolvedNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;
 
-type NostrAccountConfig = {
-  enabled?: boolean;
-  name?: string;
-  defaultAccount?: string;
-  privateKey?: unknown;
-  relays?: string[];
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  profile?: unknown;
-};
-
-type ResolvedNostrSetupAccount = {
-  accountId: string;
-  name?: string;
-  enabled: boolean;
-  configured: boolean;
-  privateKey: string;
-  publicKey: string;
-  relays: string[];
-  profile?: unknown;
-  config: NostrAccountConfig;
-};
+type NostrAccountConfig = ResolvedNostrAccount["config"];
 
 function getNostrConfig(cfg: OpenClawConfig): NostrAccountConfig | undefined {
   return (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
-}
-
-function listSetupNostrAccountIds(cfg: OpenClawConfig): string[] {
-  const nostrCfg = getNostrConfig(cfg);
-  const privateKey = typeof nostrCfg?.privateKey === "string" ? nostrCfg.privateKey.trim() : "";
-  if (!privateKey) {
-    return [];
-  }
-  return [resolveDefaultSetupNostrAccountId(cfg)];
 }
 
 function resolveDefaultSetupNostrAccountId(cfg: OpenClawConfig): string {
@@ -64,10 +36,10 @@ function resolveDefaultSetupNostrAccountId(cfg: OpenClawConfig): string {
 function resolveSetupNostrAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): ResolvedNostrSetupAccount {
+}): ResolvedNostrAccount {
   const nostrCfg = getNostrConfig(params.cfg);
   const accountId = params.accountId?.trim() || resolveDefaultSetupNostrAccountId(params.cfg);
-  const privateKey = typeof nostrCfg?.privateKey === "string" ? nostrCfg.privateKey.trim() : "";
+  const privateKey = resolveNostrPrivateKey(nostrCfg?.privateKey);
   const configured = Boolean(privateKey);
   return {
     accountId,
@@ -90,42 +62,16 @@ function resolveSetupNostrAccount(params: {
   };
 }
 
-function looksLikeNostrPrivateKey(privateKey: string): boolean {
-  return privateKey.startsWith("nsec1") || /^[0-9a-fA-F]{64}$/.test(privateKey);
-}
-
-const nostrSetupAdapter = createNostrSetupAdapter({
-  resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultSetupNostrAccountId(cfg),
-  validatePrivateKey: looksLikeNostrPrivateKey,
-});
-
 const nostrSetupWizard = createDelegatedSetupWizardProxy({
   channel,
   loadWizard: async () => (await import("./setup-surface.js")).nostrSetupWizard,
-  status: {
-    ...createStandardChannelSetupStatus({
-      channelLabel: "Nostr",
-      configuredLabel: t("wizard.channels.statusConfigured"),
-      unconfiguredLabel: t("wizard.channels.statusNeedsPrivateKey"),
-      configuredHint: t("wizard.channels.statusConfigured"),
-      unconfiguredHint: t("wizard.channels.statusNeedsPrivateKey"),
-      configuredScore: 1,
-      unconfiguredScore: 0,
-      includeStatusLine: true,
-      resolveConfigured: ({ cfg, accountId }) =>
-        resolveSetupNostrAccount({ cfg, accountId }).configured,
-      resolveExtraStatusLines: ({ cfg }) => {
-        const account = resolveSetupNostrAccount({ cfg });
-        return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
-      },
-    }),
-  },
+  status: createNostrSetupStatus(resolveSetupNostrAccount),
   resolveShouldPromptAccountIds: () => false,
   delegatePrepare: true,
   delegateFinalize: true,
 });
 
-export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrSetupAccount> = {
+export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: channel,
   meta: {
     id: channel,
@@ -142,10 +88,17 @@ export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrSetupAccount> = {
   },
   reload: { configPrefixes: ["channels.nostr"] },
   configSchema: buildChannelConfigSchema(NostrConfigSchema),
-  setup: nostrSetupAdapter,
+  setupContract: createNostrSetupContract(
+    createNostrSetupAdapter({
+      resolveAccountId: (cfg, accountId) =>
+        accountId?.trim() || resolveDefaultSetupNostrAccountId(cfg),
+      validatePrivateKey: (privateKey) => /^(?:nsec1|NSEC1)|^[0-9a-fA-F]{64}$/u.test(privateKey),
+    }),
+  ),
   setupWizard: nostrSetupWizard,
   config: {
-    listAccountIds: listSetupNostrAccountIds,
+    listAccountIds: (cfg) =>
+      resolveSetupNostrAccount({ cfg }).configured ? [resolveDefaultSetupNostrAccountId(cfg)] : [],
     resolveAccount: (cfg, accountId) => resolveSetupNostrAccount({ cfg, accountId }),
     defaultAccountId: resolveDefaultSetupNostrAccountId,
     isConfigured: (account) => account.configured,

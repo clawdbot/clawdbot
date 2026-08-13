@@ -3,6 +3,7 @@
 
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
@@ -39,8 +40,8 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
     // Show a stable fingerprint and length so operators can compare tokens without leaking them.
     return `sha256:${sha256HexPrefix(t, 8)} · len ${t.length}`;
   }
-  const head = t.slice(0, 4);
-  const tail = t.slice(-4);
+  const head = sliceUtf16Safe(t, 0, 4);
+  const tail = sliceUtf16Safe(t, -4);
   if (t.length <= 10) {
     return `${t} · len ${t.length}`;
   }

@@ -7,10 +7,12 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
-} from "../../scripts/lib/local-heavy-check-runtime.mjs";
+} from "../../scripts/lib/local-heavy-check-runtime.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -40,6 +42,74 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
+  it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
+    const primaryRoot = createTempDir("openclaw-primary-checkout-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const localPath = path.resolve(cwd, "node_modules", ".bin", "oxlint");
+    const primaryPath = path.join(primaryRoot, "node_modules", ".bin", "oxlint");
+
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(primaryPath);
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === localPath || candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localPath);
+  });
+
+  it("links dependency-less worktrees to the selected checkout's modules", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const primaryNodeModules = path.join(primaryRoot, "node_modules");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+    expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+
+    // The stable link is idempotent for concurrent and later local runners.
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+  });
+
+  it("leaves existing worktree node_modules directories locally owned", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const cwd = path.join(primaryRoot, "worktree");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(localNodeModules, { recursive: true });
+
+    ensureRepoToolNodeModulesLink(primaryTsgo, {
+      cwd,
+      resolveCommonDir: () => commonDir,
+    });
+
+    expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
+    expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
+  });
+
   it("reenables local heavy-check policy for local wrapper entrypoints", () => {
     expect(resolveLocalHeavyCheckEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
@@ -78,6 +148,7 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
@@ -92,6 +163,7 @@ describe("local-heavy-check-runtime", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
       makeEnv({
+        GOMAXPROCS: "3",
         GOGC: "80",
         GOMEMLIMIT: "5GiB",
         OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
@@ -108,6 +180,7 @@ describe("local-heavy-check-runtime", () => {
       "--declaration",
       "false",
     ]);
+    expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
@@ -131,6 +204,7 @@ describe("local-heavy-check-runtime", () => {
       "--tsBuildInfoFile",
       ".artifacts/tsgo-cache/root.tsbuildinfo",
     ]);
+    expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
@@ -183,8 +257,18 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("does not oversubscribe a single-CPU host", () => {
+    const { env } = applyLocalTsgoPolicy([], makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "throttled" }), {
+      logicalCpuCount: 1,
+      totalMemoryBytes: 16 * 1024 ** 3,
+    });
+
+    expect(env.GOMAXPROCS).toBe("1");
   });
 
   it("allows forcing full-speed tsgo runs on roomy hosts", () => {
@@ -203,6 +287,7 @@ describe("local-heavy-check-runtime", () => {
       "--tsBuildInfoFile",
       ".artifacts/tsgo-cache/root.tsbuildinfo",
     ]);
+    expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });

@@ -14,7 +14,7 @@ type MockHttpHeaderMatcher =
 type MockHttpHeaders = Record<string, string | string[]>;
 type MockHttpBody = string | Buffer | Uint8Array | ArrayBuffer;
 
-export type MockHttpReply =
+type MockHttpReply =
   | {
       status?: number;
       body?: MockHttpBody;
@@ -28,7 +28,7 @@ export type MockHttpReply =
       headers?: MockHttpHeaders;
     };
 
-export type MockHttpInterceptor = {
+type MockHttpInterceptor = {
   url: string | URL;
   method?: string;
   requestBody?: MockHttpValueMatcher;
@@ -37,7 +37,7 @@ export type MockHttpInterceptor = {
   times?: number;
 };
 
-export type MockHttp = {
+type MockHttp = {
   setup: () => void;
   intercept: (params: MockHttpInterceptor) => void;
   requests: () => MockCallHistoryLog[];

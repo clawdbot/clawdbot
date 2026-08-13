@@ -322,7 +322,7 @@ export async function startWebLoginWithQr(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  const socketTiming = resolveWhatsAppSocketTiming();
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {

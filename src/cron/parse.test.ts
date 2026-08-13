@@ -55,6 +55,11 @@ describe("parseAbsoluteTimeMs", () => {
       expect(parseAbsoluteTimeMs("2024-01-15T10:30:00z")).toBe(expected);
     });
 
+    it("parses RFC 3339 lowercase t and z separators", () => {
+      const expected = Date.parse("2024-01-15T10:30:00Z");
+      expect(parseAbsoluteTimeMs("2024-01-15t10:30:00z")).toBe(expected);
+    });
+
     it("parses datetime with milliseconds and Z", () => {
       const expected = Date.parse("2024-01-15T10:30:45.123Z");
       expect(parseAbsoluteTimeMs("2024-01-15T10:30:45.123Z")).toBe(expected);
@@ -215,6 +220,8 @@ describe("parseAbsoluteTimeMs", () => {
       // JavaScript Date range ends at +100,000,000 days
       const maxValid = new Date(8640000000000000).getTime();
       expect(parseAbsoluteTimeMs(maxValid.toString())).toBe(maxValid);
+      expect(parseAbsoluteTimeMs(new Date(maxValid).toISOString())).toBe(maxValid);
+      expect(parseAbsoluteTimeMs("+275760-09-13T00:00:00.001Z")).toBeNull();
     });
   });
 
@@ -253,6 +260,32 @@ describe("parseAbsoluteTimeMs", () => {
     expect(parseAbsoluteTimeMs("2026-02-28T12:34:56+08:00")).toBe(
       Date.parse("2026-02-28T12:34:56+08:00"),
     );
+  });
+
+  it.each([
+    ["2027-02-28T24:00:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00Z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00.000", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00.0000Z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00+05:45", "2027-02-28T18:15:00.000Z"],
+    ["2027-02-28t24:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00+05:45", "2027-02-28T18:15:00.000Z"],
+  ])("preserves shipped ISO end-of-day timestamp %s", (input, expected) => {
+    expect(parseAbsoluteTimeMs(input)).toBe(Date.parse(expected));
+  });
+
+  it.each([
+    "2027-02-28T24:01:00Z",
+    "2027-02-28t24:01z",
+    "2027-02-28T24:00:01Z",
+    "2027-02-28T24:00:00.001Z",
+    "2027-02-28t24:00:00.001z",
+    "2027-02-28T24:00:00.0001Z",
+    "2027-02-29T24:00:00Z",
+  ])("rejects invalid end-of-day timestamp %s", (input) => {
+    expect(parseAbsoluteTimeMs(input)).toBeNull();
   });
 
   it.each([

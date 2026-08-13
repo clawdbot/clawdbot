@@ -1,7 +1,7 @@
 /**
  * Shared truncation notice text for context payloads capped by provider or tool limits.
  */
-export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
+const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 const CONTEXT_LIMIT_TRUNCATION_HINT = "rerun with narrower args if needed";
 
 /** Formats a compact notice that preserves the approximate number of omitted characters. */

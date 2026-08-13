@@ -118,6 +118,68 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+## Chrome extension relay
+
+```bash
+openclaw browser extension path
+openclaw browser extension install
+openclaw browser extension install --json --wait-ms 60000
+openclaw browser extension status
+openclaw browser extension status --json
+openclaw browser extension uninstall-host
+openclaw browser extension pair
+openclaw browser extension pair --gateway-url wss://gateway.example.com
+openclaw browser extension cdp
+openclaw browser extension cdp --json
+```
+
+- `extension install` copies the bundled runtime into a stable state-directory
+  path and pre-registers its deterministic, origin-locked native bootstrap host
+  in existing Chrome-family user-data roots. Launch Chrome, run this command,
+  and use **Load unpacked** only after it prints the stable path. The command
+  waits while Chrome records that exact path, then verifies the recorded ID
+  against Chromium's path-derived ID. **Load unpacked** is the only manual
+  action in normal setup.
+- `extension status` reports the installed copy, detected IDs/profiles,
+  owned-registration health, and whether manual setup is required. JSON output
+  never includes a pairing string or relay key.
+- `extension uninstall-host` removes only verified OpenClaw-owned native-host
+  manifests and launchers. It does not remove the extension from Chrome.
+- `extension path` is read-only. It prints the stable installed copy when
+  present and the bundled source directory otherwise.
+- `extension pair` remains the advanced manual flow. `--gateway-url` creates a
+  direct remote-Gateway pairing URL; non-loopback URLs must use `wss://`.
+- `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
+  the loopback browser/CDP endpoints, protocol version, key ID, and fixed
+  challenge/complete binding. It never prints the relay key or an authorization
+  header by default.
+
+Automatic local bootstrap connects through the local Gateway's exact
+`/browser/extension` route so the first authenticated extension connection
+starts the lazy browser-control service. Keep `openclaw gateway run` or the
+managed Gateway service running; no separate browser request or prewarm is
+needed. Local OpenClaw and mcporter calls still use the profile relay port
+reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
+pairings continue to use the relay on the browser-node host, while explicit
+`--gateway-url` pairings remain direct-remote and manual-only.
+
+The advanced manual `extension pair` command without `--gateway-url` retains
+the host-local `/extension` relay URL. It does not wake Browser control, so the
+selected profile relay must already be running before the extension connects.
+
+`extension cdp --legacy-bearer` is a temporary migration escape hatch. It
+prints the old Bearer header with a warning only while
+`browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
+without printing a credential. Use `--json` for machine output; warnings remain
+on stderr so stdout stays valid JSON.
+
+Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-extension).
+
+If the extension already attempted automatic setup before the native host
+existed, Chromium retains that miss for the running browser process. Restart
+Chrome once, then repeat the ordered install flow; popup retries alone cannot
+recover that existing process.
+
 ## Tabs
 
 ```bash
@@ -197,6 +259,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
+Batch actions:
+
+```bash
+openclaw browser batch --actions '[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]'
+openclaw browser batch --actions-file plan.json
+openclaw browser batch --actions-file - --continue
+```
+
+`openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
 ## State and storage
 
 Viewport + emulation:
@@ -255,7 +327,7 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.

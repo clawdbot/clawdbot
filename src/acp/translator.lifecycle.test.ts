@@ -164,28 +164,6 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("captures ACP client capabilities during initialize", async () => {
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway());
-
-    expect(agent.supportsClientReadTextFile()).toBe(false);
-    expect(agent.supportsClientWriteTextFile()).toBe(false);
-    expect(agent.supportsClientTerminal()).toBe(false);
-
-    await agent.initialize({
-      ...createInitializeRequest(),
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: false },
-        terminal: true,
-      },
-      clientInfo: { name: "test-client", version: "1.2.3" },
-    } as InitializeRequest);
-
-    expect(agent.supportsClientReadTextFile()).toBe(true);
-    expect(agent.supportsClientWriteTextFile()).toBe(false);
-    expect(agent.supportsClientTerminal()).toBe(true);
-    expect(agent.getClientInfo()).toEqual({ name: "test-client", version: "1.2.3" });
-  });
-
   it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
     const allRows = [
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
@@ -228,6 +206,11 @@ describe("acp translator stable lifecycle handlers", () => {
     ]);
     expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
+    await expect(
+      agent.listSessions(
+        createListSessionsRequest({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
+      ),
+    ).rejects.toThrow("Invalid ACP session list cursor.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       limit: 3,
       includeDerivedTitles: true,

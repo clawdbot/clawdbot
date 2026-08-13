@@ -6,6 +6,8 @@
 - GitHub secret presence was confused with key validity.
 - Repeated `gh run view` and log fetches exhausted REST quota.
 - Parent run state was less useful than child run evidence.
+- Replacement parent runs were dispatched while an existing parent was still
+  recoverable, multiplying polling, cancellation, and identity checks.
 - Live-cache failures needed structured classification: invalid key, empty provider output, timeout, or real cache regression.
 - Background watchers accumulated and made interruption recovery harder.
 
@@ -14,7 +16,18 @@
 - Run provider-secret preflight first. Require real `/models` or equivalent endpoint checks for release-blocking providers.
 - Keep one watcher open. Use child summaries every few minutes, not every few seconds.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
-- Prefer narrow `rerun_group` recovery after a focused fix.
+- Prefer same-parent failed-job reruns when the original inputs still select the
+  right work.
+- Keep one active parent per exact Validation SHA + Tooling SHA + rerun group. Create
+  a replacement only when the current evidence is invalid or cannot consume a
+  required workflow fix; record the invalidating event and do not widen
+  automatically to `rerun_group=all`.
+- Classify one failed surface, make one fix when needed, and retry the narrowest
+  failed group once. Then reassess whether to ship, explicitly waive, or block
+  instead of creating another verification loop.
+- Preserve successful exact-tuple evidence when the documented finalization
+  rules allow reuse. Narrow evidence does not become publish authorization by
+  itself, and there is no standalone rerunnable finalizer today.
 - Leave bad secrets unset. A 401 candidate from 1Password should not overwrite GitHub.
 - Make the final release evidence note durable: parent URL, child run URLs, SHA, command proof, and gaps.
 

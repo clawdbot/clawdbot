@@ -12,12 +12,12 @@ Adds Meta model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/meta-provider`
-- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/meta-provider`
+- Install route: npm; ClawHub: `clawhub:@openclaw/meta-provider`
 
 ## Surface
 
-providers: meta
+providers: `meta`
 
 ## Related docs
 
-- [meta](/providers/meta)
+- [Meta](/providers/meta)

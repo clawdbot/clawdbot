@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow has no full-page chat; Crestodian opens in its own sheet.
+    /// The inference-first flow hands off to the dashboard as soon as AI connects.
     var usesCompactHero: Bool {
         false
     }
@@ -12,7 +12,10 @@ extension OnboardingView {
             let contentHeight = self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
                 // Chat-heavy pages shrink the mascot so the content gets the room.
-                GlowingOpenClawIcon(size: self.heroSize, mood: self.mascotMood)
+                GlowingOpenClawIcon(
+                    size: self.heroSize,
+                    mood: self.mascotMood,
+                    accessory: self.mascotAccessory)
                     .offset(y: self.usesCompactHero ? 4 : 10)
                     .frame(height: self.heroFrameHeight)
                     .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
@@ -42,7 +45,7 @@ extension OnboardingView {
         .frame(
             minWidth: pageWidth,
             maxWidth: pageWidth,
-            minHeight: Self.windowHeight,
+            minHeight: Self.minimumWindowHeight,
             maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
@@ -58,11 +61,13 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: GatewayProcessManager.shared.status) { _, status in
+            self.reviseCLIActivationFailureIfGatewayReady(status)
+        }
         .onDisappear {
             self.onboardingDidDisappear()
         }
         .task {
-            await self.refreshPerms()
             await self.refreshCLIStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
@@ -90,8 +95,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        crestodianState.resetForGatewayChange()
-        stopPermissionMonitoring()
         stopDiscovery()
     }
 
@@ -136,9 +139,6 @@ extension OnboardingView {
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        // Crestodian sessions belong to one Gateway. Dismiss and replace the chat so
-        // changing routes cannot send an old session ID to the new endpoint.
-        crestodianState.resetForGatewayChange()
     }
 
     @discardableResult
@@ -158,12 +158,12 @@ extension OnboardingView {
         guard gatewaySelectionPersister() else { return nil }
         let expectedMode = state.connectionMode
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
-        let expectedPendingState = OnboardingCrestodianResumeStore.pendingState(
+        let expectedPendingState = OnboardingSystemAgentResumeStore.pendingState(
             for: expectedRouteIdentity,
-            defaults: crestodianDefaults)
-        let expectedActivationOwner = OnboardingCrestodianResumeStore.activationOwner(
+            defaults: systemAgentDefaults)
+        let expectedActivationOwner = OnboardingSystemAgentResumeStore.activationOwner(
             for: expectedRouteIdentity,
-            defaults: crestodianDefaults)
+            defaults: systemAgentDefaults)
         let probeAttempt = configuredGatewayProbe.beginProbe()
         return Task { @MainActor in
             let outcome = await self.configuredGatewayProbe.probe(
@@ -177,10 +177,10 @@ extension OnboardingView {
                 expectedRouteIdentity: expectedRouteIdentity,
                 knownVisible: knownVisible)
             else { return }
-            let pendingState = OnboardingCrestodianResumeStore.pendingState(
+            let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: expectedRouteIdentity,
-                defaults: self.crestodianDefaults)
-            let crestodianResumePending = pendingState != .none
+                defaults: self.systemAgentDefaults)
+            let systemAgentResumePending = pendingState != .none
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
@@ -191,7 +191,7 @@ extension OnboardingView {
                     // reconnect must not downgrade connected state or fork a
                     // second resume operation.
                     guard !self.aiSetup.connected else { return }
-                    self.resumePendingCrestodian(modelRef: modelRef)
+                    self.resumePendingSystemAgent(modelRef: modelRef)
                     return
                 case .verified:
                     // Inference was observed, but the dropped activation can
@@ -203,7 +203,7 @@ extension OnboardingView {
                     // the dispatched activation is still returning. Keep the
                     // setup-owned handoff, and prove inference on this route.
                     if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingCrestodian(modelRef: modelRef)
+                        self.resumePendingSystemAgent(modelRef: modelRef)
                         return
                     }
                 }
@@ -211,7 +211,7 @@ extension OnboardingView {
                     onboardingVisible: self.onboardingVisible,
                     expectedMode: expectedMode,
                     currentMode: self.state.connectionMode,
-                    crestodianResumePending: crestodianResumePending,
+                    systemAgentResumePending: systemAgentResumePending,
                     setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
                 else { return }
                 self.onboardingVisible = false
@@ -235,10 +235,10 @@ extension OnboardingView {
                     // at probe start. A replacement attempt owns its own retry.
                     guard expectedPendingState != .none,
                           let expectedRouteIdentity,
-                          OnboardingCrestodianResumeStore.clear(
+                          OnboardingSystemAgentResumeStore.clear(
                               ifOwnedBy: expectedRouteIdentity,
                               activationOwner: expectedActivationOwner,
-                              defaults: self.crestodianDefaults)
+                              defaults: self.systemAgentDefaults)
                     else { return }
                     self.resumePendingInferenceSetup()
                     return
@@ -250,13 +250,28 @@ extension OnboardingView {
                 {
                     self.aiSetup.startIfNeeded()
                 }
-            case .unavailable:
-                // Transport/protocol failure is not evidence that inference is
-                // absent. Preserve every lease and wait for reconnect/retry.
-                self.aiSetup.showConfiguredGatewayProbeUnavailable()
+            case .unavailable, .authIssue:
+                self.showConfiguredGatewayProbeBlocker(outcome)
             case .superseded:
                 break
             }
+        }
+    }
+
+    private func showConfiguredGatewayProbeBlocker(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome)
+    {
+        switch outcome {
+        case .unavailable:
+            // Transport/protocol failure is not evidence that inference is
+            // absent. Preserve every lease and wait for reconnect/retry.
+            self.aiSetup.showConfiguredGatewayProbeUnavailable()
+        case let .authIssue(issue):
+            // Authentication is actionable at the Gateway page and never
+            // evidence that Gateway-owned inference setup is missing.
+            self.aiSetup.showConfiguredGatewayAuthIssue(issue)
+        case .configured, .missing, .superseded:
+            assertionFailure("Expected a configured Gateway probe blocker")
         }
     }
 
@@ -282,7 +297,7 @@ extension OnboardingView {
     }
 
     private func schedulePendingActivationRecheckIfNeeded(
-        _ pendingState: OnboardingCrestodianResumeStore.PendingState)
+        _ pendingState: OnboardingSystemAgentResumeStore.PendingState)
     {
         switch pendingState {
         case let .activating(deadline), let .verified(deadline):
@@ -298,14 +313,14 @@ extension OnboardingView {
         onboardingVisible: Bool,
         expectedMode: AppState.ConnectionMode,
         currentMode: AppState.ConnectionMode,
-        crestodianResumePending: Bool,
+        systemAgentResumePending: Bool,
         setupOwnsInferenceTransition: Bool) -> Bool
     {
         self.isCurrentConfiguredGatewayProbe(
             onboardingVisible: onboardingVisible,
             expectedMode: expectedMode,
             currentMode: currentMode) &&
-            !crestodianResumePending &&
+            !systemAgentResumePending &&
             !setupOwnsInferenceTransition
     }
 
@@ -345,6 +360,13 @@ extension OnboardingView {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
+        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: self.activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -376,6 +398,8 @@ extension OnboardingView {
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
+                    let isRemoteGatewayLocked = !remoteGatewayDecision.canAdvance &&
+                        index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
                     // past the AI page before a candidate passed its live test.
@@ -383,7 +407,7 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
+                    let isLocked = isInstallLocked || isConnectionLocked || isRemoteGatewayLocked || isCLILocked ||
                         isAILocked
                     Button {
                         withAnimation { self.currentPage = index }

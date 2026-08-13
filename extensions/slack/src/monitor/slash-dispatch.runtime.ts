@@ -1,11 +1,11 @@
 // Slack plugin module implements slash dispatch behavior.
 import {
-  recordInboundSessionMetaSafe as recordInboundSessionMetaSafeImpl,
-  resolveConversationLabel as resolveConversationLabelImpl,
-} from "openclaw/plugin-sdk/conversation-runtime";
+  dispatchChannelInboundTurn as dispatchChannelInboundTurnImpl,
+  isChannelPartialDeliveryError as isChannelPartialDeliveryErrorImpl,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveConversationLabel as resolveConversationLabelImpl } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveMarkdownTableMode as resolveMarkdownTableModeImpl } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
-  dispatchReplyWithDispatcher as dispatchReplyWithDispatcherImpl,
   finalizeInboundContext as finalizeInboundContextImpl,
   resolveChunkMode as resolveChunkModeImpl,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -15,12 +15,12 @@ import { deliverSlackSlashReplies as deliverSlackSlashRepliesImpl } from "./repl
 type ResolveChunkMode = typeof import("openclaw/plugin-sdk/reply-runtime").resolveChunkMode;
 type FinalizeInboundContext =
   typeof import("openclaw/plugin-sdk/reply-runtime").finalizeInboundContext;
-type DispatchReplyWithDispatcher =
-  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher;
+type DispatchChannelInboundTurn =
+  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
+type IsChannelPartialDeliveryError =
+  typeof import("openclaw/plugin-sdk/channel-inbound").isChannelPartialDeliveryError;
 type ResolveConversationLabel =
   typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConversationLabel;
-type RecordInboundSessionMetaSafe =
-  typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSessionMetaSafe;
 type ResolveMarkdownTableMode =
   typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode;
 type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing").resolveAgentRoute;
@@ -38,22 +38,22 @@ export function finalizeInboundContext(
   return finalizeInboundContextImpl(...args);
 }
 
-export function dispatchReplyWithDispatcher(
-  ...args: Parameters<DispatchReplyWithDispatcher>
-): ReturnType<DispatchReplyWithDispatcher> {
-  return dispatchReplyWithDispatcherImpl(...args);
+export function dispatchChannelInboundTurn(
+  ...args: Parameters<DispatchChannelInboundTurn>
+): ReturnType<DispatchChannelInboundTurn> {
+  return dispatchChannelInboundTurnImpl(...args);
+}
+
+export function isChannelPartialDeliveryError(
+  ...args: Parameters<IsChannelPartialDeliveryError>
+): ReturnType<IsChannelPartialDeliveryError> {
+  return isChannelPartialDeliveryErrorImpl(...args);
 }
 
 export function resolveConversationLabel(
   ...args: Parameters<ResolveConversationLabel>
 ): ReturnType<ResolveConversationLabel> {
   return resolveConversationLabelImpl(...args);
-}
-
-export function recordInboundSessionMetaSafe(
-  ...args: Parameters<RecordInboundSessionMetaSafe>
-): ReturnType<RecordInboundSessionMetaSafe> {
-  return recordInboundSessionMetaSafeImpl(...args);
 }
 
 export function resolveMarkdownTableMode(

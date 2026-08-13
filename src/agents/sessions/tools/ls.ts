@@ -27,8 +27,6 @@ const lsSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Directory; default cwd." })),
   limit: Type.Optional(Type.Number({ description: "Max entries; default 500." })),
 });
-export type { LsToolDetails, LsToolInput } from "./tool-contracts.js";
-
 const DEFAULT_LIMIT = 500;
 
 /**
@@ -59,7 +57,7 @@ export interface LsToolOptions {
 
 function formatLsCall(
   args: { path?: string; limit?: number } | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const rawPath = str(args?.path);
   const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
@@ -78,7 +76,7 @@ function formatLsResult(
     details?: LsToolDetails;
   },
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
 ): string {
   const entryLimit = result.details?.entryLimitReached;

@@ -14,10 +14,12 @@ export async function writeQrDataUrlToTempFile(
     return null;
   }
   const safeProfile = profile.replace(/[^a-zA-Z0-9_-]+/g, "-") || "default";
+  // The stable private-root name lets QR refreshes overwrite instead of accumulating temp files.
   const filePath = path.join(
     resolvePreferredOpenClawTmpDir(),
     `openclaw-zalouser-qr-${safeProfile}.png`,
   );
-  await fsp.writeFile(filePath, Buffer.from(base64, "base64"));
+  await fsp.writeFile(filePath, Buffer.from(base64, "base64"), { mode: 0o600 });
+  await fsp.chmod(filePath, 0o600);
   return filePath;
 }

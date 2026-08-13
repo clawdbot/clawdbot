@@ -2,6 +2,18 @@
  * Chat message types for the UI layer.
  */
 
+import type { MediaKind } from "@openclaw/media-core/constants";
+import type { toolIcons } from "../../components/icons-tools.ts";
+import type { SenderIdentity } from "./sender-label.ts";
+
+export type BrowserAnnotationAttachment = {
+  modelContext: string;
+  title: string;
+  displayUrl: string;
+  markedRegionCount: number;
+  inspectedElement: boolean;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -9,23 +21,50 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+  /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
 };
 
-export type ChatQueueSkillWorkshopRevision = { proposalId: string; agentId?: string };
+export type ChatComposerDraftRetry = {
+  expectedDraftRevision: number;
+  draftRevision: number;
+};
+
+export type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
+};
+
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+  /** Process-local owner; revision requests must never replay after reconnect. */
+  connectionClient?: object;
+  connectionEpoch?: number;
+};
 
 export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  orderKey?: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  /** Transcript id of the replied-to message; Gateway hydrates reply context. */
+  replyToId?: string;
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -39,6 +78,7 @@ export type ChatQueueItem = {
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
+  sender?: SenderIdentity;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
@@ -46,22 +86,33 @@ export type ChatQueueItem = {
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
   | {
+      kind: "notice";
+      key: string;
+      text: string;
+      timestamp: number;
+      icon?: keyof typeof toolIcons;
+      label?: string;
+      startsTurn?: true;
+    }
+  | {
       kind: "divider";
       key: string;
       label: string;
+      icon?: keyof typeof toolIcons;
+      metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string };
-
-export const CHAT_HISTORY_RENDER_LIMIT = 100;
-export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
+  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | { kind: "question"; key: string; questionId: string; startedAt: number }
+  | { kind: "plan"; key: string };
 
 export type ChatStreamSegment = {
   text: string;
   ts: number;
+  runId?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -87,10 +138,11 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
+  replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
-  turnSucceeded?: boolean;
 };
 
 /** Content item types in a normalized message */
@@ -105,10 +157,16 @@ export type MessageContentItem =
       type: "attachment";
       attachment: {
         url: string;
-        kind: "image" | "audio" | "video" | "document";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
+        artifactId?: string;
+        playback?: "native" | "transcode";
+        sizeBytes?: number;
+        durationMs?: number;
+        width?: number;
+        height?: number;
       };
     }
   | {
@@ -124,7 +182,9 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
   audioAsVoice?: boolean;
+  replyPreview?: { text: string; senderLabel?: string | null };
   replyTarget?:
     | {
         kind: "current";
@@ -146,6 +206,8 @@ export type ToolCard = {
   outputText?: string;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
+  /** Monotonic edit counts while a live tool call is still receiving input. */
+  liveDiffStat?: { added: number; removed: number };
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;
@@ -163,12 +225,14 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
+    boardWidgetName?: string;
     mcpApp?: {
       viewId: string;
       serverName?: string;
       toolName?: string;
       uiResourceUri?: string;
       toolCallId?: string;
+      originSessionKey?: string;
     };
   };
 };

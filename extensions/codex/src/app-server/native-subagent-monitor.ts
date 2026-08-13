@@ -2,7 +2,11 @@
  * Mirrors Codex native subagent lifecycle and completion into OpenClaw task
  * runtime records, with app-server history as the recovery source.
  */
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  emitAgentEvent,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
@@ -11,8 +15,21 @@ import {
   type AgentHarnessTaskRuntime,
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import {
+  asFiniteNumber,
+  normalizeOptionalString,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  claimCodexAppServerLiveThread,
+  releaseCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+  type CodexAppServerLiveThreadOwnership,
+} from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { projectNormalizedToolItem } from "./event-projector-events.js";
+import { readItem } from "./event-projector-values.js";
 import {
   codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
@@ -94,6 +111,7 @@ type ThreadStatusRevision = {
 };
 
 type TaskRecoveryCandidate = {
+  parentState: ParentState;
   childThreadId: string;
   recoveryAttempt: number;
   requesterSessionKey: string;
@@ -108,6 +126,10 @@ type MonitorOptions = {
   completionDeliveryMaxRetries?: number;
   now?: () => number;
   retainClient?: () => (() => void) | undefined;
+  retainParentThread?: (threadId: string) => (() => void) | undefined;
+  claimChildThread?: (threadId: string) => Promise<unknown>;
+  retainChildThread?: (threadId: string) => Promise<unknown>;
+  releaseChildThread?: (threadId: string) => Promise<unknown>;
 };
 
 const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
@@ -124,6 +146,7 @@ const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   "turn/started",
   "turn/completed",
   "item/agentMessage/delta",
+  "item/reasoning/summaryTextDelta",
   "item/started",
   "item/completed",
   // App-server exposes no typed terminal subagent result. Keep this one raw
@@ -153,11 +176,62 @@ function registerMonitor(params: {
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
   retainClient?: () => (() => void) | undefined;
+  retainParentThread?: (threadId: string) => (() => void) | undefined;
 }): { unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
+    // Native start/completion can race; serialize each child so only its
+    // original claim handle may publish or release the same subscription.
+    const childThreadOwnership = new Map<string, CodexAppServerLiveThreadOwnership>();
+    const childThreadTransitions = new KeyedAsyncQueue();
     monitor = new Monitor(params.client, params.runtime ?? defaultRuntime, {
       retainClient: params.retainClient,
+      retainParentThread: params.retainParentThread,
+      claimChildThread: (threadId) =>
+        childThreadTransitions.enqueue(threadId, async () => {
+          // Codex subscribes fresh children before thread/started; they have
+          // no idle entry yet but must already be fenced from manual adoption.
+          const ownership = await claimCodexAppServerLiveThread(params.client, threadId);
+          if (ownership) {
+            childThreadOwnership.set(threadId, ownership);
+          }
+          return ownership;
+        }),
+      retainChildThread: (threadId) =>
+        childThreadTransitions.enqueue(threadId, async () => {
+          const ownership = childThreadOwnership.get(threadId);
+          let retained = false;
+          try {
+            retained = await retainCodexAppServerLiveThread(
+              params.client,
+              threadId,
+              ownership?.release,
+            );
+            return retained;
+          } finally {
+            // A full idle pool can reject terminal child ownership. Release
+            // its exact branded claim before the monitor forgets that child.
+            if (!retained && ownership) {
+              await ownership.release(threadId);
+            }
+            if (childThreadOwnership.get(threadId) === ownership) {
+              childThreadOwnership.delete(threadId);
+            }
+          }
+        }),
+      releaseChildThread: (threadId) =>
+        childThreadTransitions.enqueue(threadId, async () => {
+          const ownership = childThreadOwnership.get(threadId);
+          if (ownership) {
+            await ownership.release(threadId);
+            if (childThreadOwnership.get(threadId) === ownership) {
+              childThreadOwnership.delete(threadId);
+            }
+          } else {
+            // A bare closeAgent thread id cannot authorize a successor's subscription.
+            await releaseCodexAppServerLiveThread(params.client, threadId);
+          }
+        }),
     });
     monitors.set(params.client, monitor);
   }
@@ -171,6 +245,7 @@ function registerMonitor(params: {
 
 class Monitor {
   private readonly parentStates = new Map<string, ParentState>();
+  private readonly retiredParentStates = new WeakSet<ParentState>();
   private readonly childStates = new Map<string, ChildState>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
   private readonly taskReconciliations = new Map<string, Promise<void>>();
@@ -183,6 +258,11 @@ class Monitor {
   private readonly removeNotificationHandler: () => void;
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
+  private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
+  private readonly claimChildThread?: (threadId: string) => Promise<unknown>;
+  private readonly retainChildThread?: (threadId: string) => Promise<unknown>;
+  private readonly releaseChildThread?: (threadId: string) => Promise<unknown>;
+  private readonly parentThreadRetentions = new Map<string, () => void>();
   private releaseClientRetention?: () => void;
   private disposed = false;
 
@@ -198,6 +278,10 @@ class Monitor {
       options.completionDeliveryMaxRetries ?? this.completionDeliveryRetryDelaysMs.length;
     this.now = options.now ?? Date.now;
     this.retainClient = options.retainClient;
+    this.retainParentThread = options.retainParentThread;
+    this.claimChildThread = options.claimChildThread;
+    this.retainChildThread = options.retainChildThread;
+    this.releaseChildThread = options.releaseChildThread;
     this.removeNotificationHandler = client.addNotificationHandler(async (notification) => {
       if (!NATIVE_SUBAGENT_NOTIFICATION_METHODS.has(notification.method)) {
         return;
@@ -228,6 +312,10 @@ class Monitor {
       this.unregisterChild(childState);
     }
     this.releaseRetainedClient();
+    for (const release of this.parentThreadRetentions.values()) {
+      release();
+    }
+    this.parentThreadRetentions.clear();
     for (const state of this.parentStates.values()) {
       state.ownerCount = 0;
     }
@@ -294,12 +382,32 @@ class Monitor {
         }
         registered = false;
         const current = this.parentStates.get(parentThreadId);
-        if (current) {
+        if (current === registeredState) {
           current.ownerCount -= 1;
           this.pruneParentIfUnused(current);
         }
       },
     };
+  }
+
+  retireParent(parentThreadIdInput: string): void {
+    const parentThreadId = parentThreadIdInput.trim();
+    const state = this.parentStates.get(parentThreadId);
+    if (!state) {
+      return;
+    }
+    // Reset invalidates this exact registration generation. Pending recovery
+    // must not recreate its parent or deliver old children into a replacement.
+    this.retiredParentStates.add(state);
+    state.ownerCount = 0;
+    for (const childState of Array.from(this.childStates.values())) {
+      if (childState.parentThreadId === parentThreadId) {
+        this.retireChild(state, childState, "Codex native subagent parent session ended.");
+      }
+    }
+    if (this.parentStates.get(parentThreadId) === state) {
+      this.parentStates.delete(parentThreadId);
+    }
   }
 
   private prepareParentTaskRuntime(state: ParentState): void {
@@ -362,9 +470,15 @@ class Monitor {
         });
       }
     }
+    if (state) {
+      this.handleClosedChild(notification, state);
+    }
     const childState = threadId ? this.childStates.get(threadId) : undefined;
     if (notification.method === "turn/started" && childState) {
       this.resumeChild(childState);
+    }
+    if (childState && !childState.terminal) {
+      this.emitChildTaskActivity(notification, childState.childThreadId);
     }
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
@@ -395,6 +509,45 @@ class Monitor {
       }
     }
     await this.handleCompletionNotification(notification);
+  }
+
+  private emitChildTaskActivity(
+    notification: CodexServerNotification,
+    childThreadId: string,
+  ): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (!params) {
+      return;
+    }
+    const runId = codexNativeSubagentRunId(childThreadId);
+    if (notification.method === "item/agentMessage/delta") {
+      const delta = readString(params, "delta");
+      if (delta) {
+        emitAgentEvent({ runId, stream: "assistant", data: { delta } });
+      }
+      return;
+    }
+    if (notification.method === "item/reasoning/summaryTextDelta") {
+      const delta = readString(params, "delta");
+      if (delta) {
+        emitAgentEvent({ runId, stream: "thinking", data: { delta } });
+      }
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const item = readItem(params.item);
+    if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
+      emitAgentEvent({ runId, stream: "assistant", data: { text: item.text } });
+    }
+    const projection = projectNormalizedToolItem({
+      phase: notification.method === "item/started" ? "start" : "result",
+      item,
+    });
+    if (projection?.event) {
+      emitAgentEvent({ runId, ...projection.event });
+    }
   }
 
   private resumeChild(childState: ChildState, options: { scheduleRecovery?: boolean } = {}): void {
@@ -629,6 +782,11 @@ class Monitor {
           return state;
         }
         const isSpawnAgentTool = normalizeIdentifier(readString(item, "tool")) === "spawnagent";
+        if (normalizeIdentifier(readString(item, "tool")) === "closeagent") {
+          // closeAgent names an existing child before shutdown; treating its
+          // receiver as discovery resurrects completed tasks and repins parents.
+          return state;
+        }
         const childThreadIds = isSpawnAgentTool
           ? new Set([
               ...readStringArray(item?.receiverThreadIds),
@@ -646,6 +804,63 @@ class Monitor {
       return state;
     }
     return undefined;
+  }
+
+  private handleClosedChild(notification: CodexServerNotification, state: ParentState): void {
+    if (notification.method !== "item/completed") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    if (
+      readString(item, "type") !== "collabAgentToolCall" ||
+      normalizeIdentifier(readString(item, "tool")) !== "closeagent" ||
+      normalizeIdentifier(readString(item, "status")) !== "completed"
+    ) {
+      return;
+    }
+    const childThreadIds = new Set([
+      ...readStringArray(item?.receiverThreadIds),
+      ...readObjectStringKeys(item?.agentsStates),
+    ]);
+    for (const childThreadId of childThreadIds) {
+      const childState = this.childStates.get(childThreadId);
+      if (childState && childState.parentThreadId !== state.parentThreadId) {
+        continue;
+      }
+      if (childState) {
+        this.retireChild(state, childState, "Codex native subagent was closed.");
+      } else {
+        this.updateChildThreadOwnership("release", childThreadId, this.releaseChildThread);
+      }
+    }
+  }
+
+  private retireChild(state: ParentState, childState: ChildState, summary: string): void {
+    if (!childState.terminal) {
+      childState.terminal = true;
+      const eventAt = this.now();
+      state.mirror?.markAuthoritativeCompletion(childState.childThreadId);
+      state.taskRuntime?.finalizeTaskRunByRunId({
+        runId: codexNativeSubagentRunId(childState.childThreadId),
+        status: "cancelled",
+        endedAt: eventAt,
+        lastEventAt: eventAt,
+        error: summary,
+        progressSummary: summary,
+        terminalSummary: summary,
+      });
+    }
+    if (childState.pendingCompletion) {
+      childState.pendingCompletion = undefined;
+      state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
+        runId: codexNativeSubagentRunId(childState.childThreadId),
+        deliveryStatus: "failed",
+        error: summary,
+      });
+    }
+    this.unregisterChild(childState, { retainSubscription: false });
+    this.updateChildThreadOwnership("release", childState.childThreadId, this.releaseChildThread);
   }
 
   private async handleCompletionNotification(notification: CodexServerNotification): Promise<void> {
@@ -810,8 +1025,8 @@ class Monitor {
             ? "other"
             : "unavailable";
     if (threadStatus === "systemerror") {
-      // The 0.142 protocol floor guarantees the paged history API, whose live
-      // snapshot distinguishes the failed current turn from older persisted results.
+      // The pinned protocol's paged history distinguishes the failed current
+      // turn from earlier persisted results.
       const turnsResponse = await this.requestLatestThreadTurn(childThreadId).catch(
         () => undefined,
       );
@@ -908,6 +1123,12 @@ class Monitor {
         replyInstruction:
           "Use the Codex native subagent result to continue or wrap up the parent task. If this is a Discord/channel session, send the visible response with the message tool instead of only writing a transcript final answer. Reply in your normal assistant voice and do not expose internal notification markup.",
       });
+      if (
+        this.childStates.get(childState.childThreadId) !== childState ||
+        this.parentStates.get(state.parentThreadId) !== state
+      ) {
+        return;
+      }
       if (isDurableAgentHarnessCompletionDelivery(delivery)) {
         childState.pendingCompletion = undefined;
         childState.completionDeliveryAttempt = 0;
@@ -926,6 +1147,12 @@ class Monitor {
       });
       this.scheduleCompletionDeliveryRetry(childState, error);
     } catch (error) {
+      if (
+        this.childStates.get(childState.childThreadId) !== childState ||
+        this.parentStates.get(state.parentThreadId) !== state
+      ) {
+        return;
+      }
       const message = formatErrorMessage(error);
       state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
         runId: codexNativeSubagentRunId(completion.childThreadId),
@@ -998,7 +1225,16 @@ class Monitor {
       return undefined;
     }
     if (!childState) {
+      this.updateChildThreadOwnership("claim", childThreadId, this.claimChildThread);
       this.releaseClientRetention ??= this.retainClient?.();
+      if (!this.parentThreadRetentions.has(parentThreadId)) {
+        const releaseParentThread = this.retainParentThread?.(parentThreadId);
+        if (releaseParentThread) {
+          // Child completion can be announced on its parent's subscription
+          // after the foreground parent turn has already released ownership.
+          this.parentThreadRetentions.set(parentThreadId, releaseParentThread);
+        }
+      }
       childState = {
         childThreadId,
         parentThreadId,
@@ -1044,7 +1280,15 @@ class Monitor {
     childState.agentPathKeys.add(key);
   }
 
-  private unregisterChild(childState: ChildState): void {
+  private unregisterChild(
+    childState: ChildState,
+    options: { retainSubscription?: boolean } = {},
+  ): void {
+    if (childState.terminal && options.retainSubscription !== false && !this.disposed) {
+      // Completed Codex children intentionally remain reusable. Transfer their
+      // auto-subscription into the shared bounded warm-thread owner, not oblivion.
+      this.updateChildThreadOwnership("retain", childState.childThreadId, this.retainChildThread);
+    }
     this.clearRecoveryTimers(childState);
     if (childState.completionDeliveryTimer) {
       clearTimeout(childState.completionDeliveryTimer);
@@ -1062,6 +1306,15 @@ class Monitor {
     if (this.childStates.get(childState.childThreadId) === childState) {
       this.childStates.delete(childState.childThreadId);
     }
+    if (
+      ![...this.childStates.values()].some(
+        (remainingChild) => remainingChild.parentThreadId === childState.parentThreadId,
+      )
+    ) {
+      const releaseParentThread = this.parentThreadRetentions.get(childState.parentThreadId);
+      this.parentThreadRetentions.delete(childState.parentThreadId);
+      releaseParentThread?.();
+    }
     const statusRevision = this.threadStatusRevisions.get(childState.childThreadId);
     if (statusRevision?.readers === 0) {
       this.threadStatusRevisions.delete(childState.childThreadId);
@@ -1071,6 +1324,23 @@ class Monitor {
     if (state) {
       this.pruneParentIfUnused(state);
     }
+  }
+
+  private updateChildThreadOwnership(
+    operation: "claim" | "retain" | "release",
+    childThreadId: string,
+    update: ((threadId: string) => Promise<unknown>) | undefined,
+  ): void {
+    if (!update) {
+      return;
+    }
+    void update(childThreadId).catch((error: unknown) => {
+      embeddedAgentLog.warn("Failed to update Codex native subagent thread ownership", {
+        operation,
+        childThreadId,
+        error: formatErrorMessage(error),
+      });
+    });
   }
 
   private releaseClientRetentionIfIdle(): void {
@@ -1260,6 +1530,7 @@ class Monitor {
       }
       const childThreadId = task.runId!.slice(CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX.length).trim();
       candidates.set(childThreadId, {
+        parentState: state,
         requesterSessionKey: state.requesterSessionKey,
         childThreadId,
         recoveryAttempt: 0,
@@ -1302,6 +1573,7 @@ class Monitor {
     const key = `${candidate.requesterSessionKey}\0${candidate.childThreadId}`;
     if (
       this.disposed ||
+      this.retiredParentStates.has(candidate.parentState) ||
       this.recoveryPollDelaysMs.length === 0 ||
       this.taskReconciliationTimers.has(key)
     ) {
@@ -1320,6 +1592,9 @@ class Monitor {
   }
 
   private async reconcileTaskCandidateOnce(candidate: TaskRecoveryCandidate): Promise<void> {
+    if (this.retiredParentStates.has(candidate.parentState)) {
+      return;
+    }
     const runId = codexNativeSubagentRunId(candidate.childThreadId);
     const task = candidate.taskRuntime.listTaskRecords().find((record) => record.runId === runId);
     if (
@@ -1338,6 +1613,9 @@ class Monitor {
       } catch (error) {
         this.logRecoveryFailure(candidate.childThreadId, error);
         this.scheduleTaskCandidateReconciliation(candidate);
+        return;
+      }
+      if (this.retiredParentStates.has(candidate.parentState)) {
         return;
       }
       if (
@@ -1430,7 +1708,13 @@ class Monitor {
   }
 }
 
-export const codexNativeSubagentMonitorRuntime = { Monitor, register: registerMonitor };
+export const codexNativeSubagentMonitorRuntime = {
+  Monitor,
+  register: registerMonitor,
+  retireParent: (client: CodexAppServerClient, parentThreadId: string): void => {
+    monitors.get(client)?.retireParent(parentThreadId);
+  },
+};
 
 function readThreadTurnRecovery(
   thread: JsonObject,
@@ -1604,11 +1888,6 @@ function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | und
   return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
 }
 
-function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1629,3 +1908,4 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
     (timer as { unref: () => void }).unref();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,11 +4,6 @@ import type { Locale, TranslationMap } from "./types.ts";
 type LazyLocale = Exclude<Locale, "en">;
 type LocaleModule = Record<string, TranslationMap>;
 
-type LazyLocaleRegistration = {
-  exportName: string;
-  loader: () => Promise<LocaleModule>;
-};
-
 export const DEFAULT_LOCALE: Locale = "en";
 
 const LAZY_LOCALES: readonly LazyLocale[] = [
@@ -34,87 +29,27 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "ru",
 ];
 
-const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
-  "zh-CN": {
-    exportName: "zh_CN",
-    loader: () => import("../locales/zh-CN.ts"),
-  },
-  "zh-TW": {
-    exportName: "zh_TW",
-    loader: () => import("../locales/zh-TW.ts"),
-  },
-  "pt-BR": {
-    exportName: "pt_BR",
-    loader: () => import("../locales/pt-BR.ts"),
-  },
-  de: {
-    exportName: "de",
-    loader: () => import("../locales/de.ts"),
-  },
-  es: {
-    exportName: "es",
-    loader: () => import("../locales/es.ts"),
-  },
-  "ja-JP": {
-    exportName: "ja_JP",
-    loader: () => import("../locales/ja-JP.ts"),
-  },
-  ko: {
-    exportName: "ko",
-    loader: () => import("../locales/ko.ts"),
-  },
-  fr: {
-    exportName: "fr",
-    loader: () => import("../locales/fr.ts"),
-  },
-  hi: {
-    exportName: "hi",
-    loader: () => import("../locales/hi.ts"),
-  },
-  ar: {
-    exportName: "ar",
-    loader: () => import("../locales/ar.ts"),
-  },
-  it: {
-    exportName: "it",
-    loader: () => import("../locales/it.ts"),
-  },
-  tr: {
-    exportName: "tr",
-    loader: () => import("../locales/tr.ts"),
-  },
-  uk: {
-    exportName: "uk",
-    loader: () => import("../locales/uk.ts"),
-  },
-  id: {
-    exportName: "id",
-    loader: () => import("../locales/id.ts"),
-  },
-  pl: {
-    exportName: "pl",
-    loader: () => import("../locales/pl.ts"),
-  },
-  th: {
-    exportName: "th",
-    loader: () => import("../locales/th.ts"),
-  },
-  vi: {
-    exportName: "vi",
-    loader: () => import("../locales/vi.ts"),
-  },
-  nl: {
-    exportName: "nl",
-    loader: () => import("../locales/nl.ts"),
-  },
-  fa: {
-    exportName: "fa",
-    loader: () => import("../locales/fa.ts"),
-  },
-  ru: {
-    exportName: "ru",
-    loader: () => import("../locales/ru.ts"),
-  },
+const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
+  "zh-CN": () => import("../locales/zh-CN.ts"),
+  "zh-TW": () => import("../locales/zh-TW.ts"),
+  "pt-BR": () => import("../locales/pt-BR.ts"),
+  de: () => import("../locales/de.ts"),
+  es: () => import("../locales/es.ts"),
+  "ja-JP": () => import("../locales/ja-JP.ts"),
+  ko: () => import("../locales/ko.ts"),
+  fr: () => import("../locales/fr.ts"),
+  hi: () => import("../locales/hi.ts"),
+  ar: () => import("../locales/ar.ts"),
+  it: () => import("../locales/it.ts"),
+  tr: () => import("../locales/tr.ts"),
+  uk: () => import("../locales/uk.ts"),
+  id: () => import("../locales/id.ts"),
+  pl: () => import("../locales/pl.ts"),
+  th: () => import("../locales/th.ts"),
+  vi: () => import("../locales/vi.ts"),
+  nl: () => import("../locales/nl.ts"),
+  fa: () => import("../locales/fa.ts"),
+  ru: () => import("../locales/ru.ts"),
 };
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
@@ -127,72 +62,30 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
   return LAZY_LOCALES.includes(locale as LazyLocale);
 }
 
-export function resolveNavigatorLocale(navLang: string): Locale {
+export function resolveNavigatorLocale(browserLanguage: string): Locale {
+  const navLang = browserLanguage.toLowerCase();
   if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
+    const [, ...subtags] = navLang.split("-");
+    if (subtags.includes("hant")) {
+      return "zh-TW";
+    }
+    if (subtags.includes("hans")) {
+      return "zh-CN";
+    }
+    return subtags.some((subtag) => subtag === "tw" || subtag === "hk" || subtag === "mo")
+      ? "zh-TW"
+      : "zh-CN";
   }
-  if (navLang.startsWith("pt")) {
-    return "pt-BR";
-  }
-  if (navLang.startsWith("de")) {
-    return "de";
-  }
-  if (navLang.startsWith("es")) {
-    return "es";
-  }
-  if (navLang.startsWith("ja")) {
-    return "ja-JP";
-  }
-  if (navLang.startsWith("ko")) {
-    return "ko";
-  }
-  if (navLang.startsWith("fr")) {
-    return "fr";
-  }
-  if (navLang.startsWith("hi")) {
-    return "hi";
-  }
-  if (navLang.startsWith("ar")) {
-    return "ar";
-  }
-  if (navLang.startsWith("it")) {
-    return "it";
-  }
-  if (navLang.startsWith("tr")) {
-    return "tr";
-  }
-  if (navLang.startsWith("uk")) {
-    return "uk";
-  }
-  if (navLang.startsWith("id")) {
-    return "id";
-  }
-  if (navLang.startsWith("pl")) {
-    return "pl";
-  }
-  if (navLang.startsWith("th")) {
-    return "th";
-  }
-  if (navLang.startsWith("vi")) {
-    return "vi";
-  }
-  if (navLang.startsWith("nl")) {
-    return "nl";
-  }
-  if (navLang.startsWith("fa")) {
-    return "fa";
-  }
-  if (navLang.startsWith("ru")) {
-    return "ru";
-  }
-  return DEFAULT_LOCALE;
+  return (
+    LAZY_LOCALES.find((locale) => navLang.startsWith(locale.split("-")[0]!.toLowerCase())) ??
+    DEFAULT_LOCALE
+  );
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
   if (!isLazyLocale(locale)) {
     return null;
   }
-  const registration = LAZY_LOCALE_REGISTRY[locale];
-  const module = await registration.loader();
-  return module[registration.exportName] ?? null;
+  const module = await LAZY_LOCALE_REGISTRY[locale]();
+  return module[locale.replaceAll("-", "_")] ?? null;
 }

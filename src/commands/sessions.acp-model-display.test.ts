@@ -79,7 +79,7 @@ function useTempStateDir(): string {
 function writeAcpRuntimeMeta(sessionKey: string): void {
   writeAcpSessionMetaForMigration({
     sessionKey,
-    sessionId: "acp-bridge-session-id",
+    lifecycleRevision: undefined,
     meta: {
       backend: "copilot",
       agent: "copilot",
@@ -258,19 +258,18 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     expect(row?.modelProvider).toBe("acpx");
   });
 
-  it("canonicalizes raw ACP store keys before reading SQLite metadata", async () => {
+  it("reads canonical ACP store keys before reading SQLite metadata", async () => {
     useTempStateDir();
-    const rawStoreKey = "acp:binding:discord:default:feedface";
     const canonicalAcpKey = "agent:copilot:acp:binding:discord:default:feedface";
     const store = await writeStore(
-      { [rawStoreKey]: buildAcpBridgeSessionEntry() },
+      { [canonicalAcpKey]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-canonical",
       { agentId: "copilot" },
     );
     writeAcpRuntimeMeta(canonicalAcpKey);
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-    const row = payload.sessions?.find((entry) => entry.key === rawStoreKey);
+    const row = payload.sessions?.find((entry) => entry.key === canonicalAcpKey);
 
     expect(row).toBeDefined();
     expect(row?.model).toBe("copilot-acp");

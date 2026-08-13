@@ -1,10 +1,12 @@
 // OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
+import { emitAgentEvent } from "../../../src/infra/agent-events.js";
+import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -31,19 +33,6 @@ function sendJson(socket: WebSocket, payload: JsonObject): void {
   socket.send(JSON.stringify(payload));
 }
 
-function readRawMessage(raw: RawData): string {
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Buffer.isBuffer(raw)) {
-    return raw.toString("utf8");
-  }
-  if (raw instanceof ArrayBuffer) {
-    return Buffer.from(raw).toString("utf8");
-  }
-  return Buffer.concat(raw).toString("utf8");
-}
-
 async function reservePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve) => {
@@ -64,20 +53,17 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
   });
   let seq = 1;
   const requests: FakeGatewayRequest[] = [];
-  const sockets = new Set<WebSocket>();
-
   server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
+    socket.binaryType = "nodebuffer";
     sendJson(socket, {
       type: "event",
       event: "connect.challenge",
       seq: seq++,
-      payload: { nonce: "sdk-e2e-nonce" },
+      payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
     });
 
     socket.on("message", (raw) => {
-      const frame = JSON.parse(readRawMessage(raw)) as FakeGatewayRequest;
+      const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
       requests.push(frame);
       const reply = (payload: JsonObject): void => {
         sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
@@ -340,10 +326,9 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       if (index >= 0) {
         servers.splice(index, 1);
       }
-      for (const socket of sockets) {
+      for (const socket of server.clients) {
         socket.terminate();
       }
-      sockets.clear();
       return new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
@@ -441,6 +426,10 @@ describe("OpenClaw SDK websocket e2e", () => {
       );
       expect(updateAgent.method).toBe("agents.update");
       expect(updateAgent.params).toEqual({ agentId: "sdk-agent", name: "Renamed SDK Agent" });
+      const clearAgentModel = expectJsonObject(
+        await oc.agents.update({ agentId: "sdk-agent", model: null }),
+      );
+      expect(clearAgentModel.params).toEqual({ agentId: "sdk-agent", model: null });
       const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
       expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });
@@ -508,6 +497,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "agents.list",
         "agent.identity.get",
         "agents.create",
+        "agents.update",
         "agents.update",
         "agents.delete",
         "sessions.list",

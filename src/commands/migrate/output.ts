@@ -16,10 +16,9 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   if (plan.target) {
     lines.push(`Target: ${plan.target}`);
   }
-  const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
   lines.push(
     [
-      formatCount(visible.length, "item"),
+      formatCount(plan.items.length, "item"),
       formatCount(plan.summary.conflicts, "conflict"),
       formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
@@ -36,13 +35,13 @@ const ITEM_GROUPS: ItemGroup[] = [
   { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
+  { kind: "config", heading: "Config:" },
   { kind: "memory", heading: "Memory:" },
   { kind: "secret", heading: "Secrets:" },
   { kind: "archive", heading: "Archive:" },
   { kind: "manual", heading: "Manual review:" },
 ];
 
-const HIDDEN_KINDS = new Set(["config"]);
 const KNOWN_KINDS = new Set(ITEM_GROUPS.map((group) => group.kind));
 
 type FormatMode = "preview" | "result";
@@ -52,9 +51,6 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   const buckets = new Map<string, MigrationItem[]>();
   const other: MigrationItem[] = [];
   for (const item of plan.items) {
-    if (HIDDEN_KINDS.has(item.kind)) {
-      continue;
-    }
     if (KNOWN_KINDS.has(item.kind)) {
       const list = buckets.get(item.kind) ?? [];
       list.push(item);
@@ -97,21 +93,26 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
 
 /** Formats a redaction-safe migration preview for terminal output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
+  const safePlan = redactMigrationPlan(plan);
   return [
-    ...formatPlanHeader(plan, "Migration preview:"),
-    ...formatPlanItems(plan, "preview"),
-    ...formatPlanWarnings(plan),
+    ...formatPlanHeader(safePlan, "Migration preview:"),
+    ...formatPlanItems(safePlan, "preview"),
+    ...formatPlanWarnings(safePlan),
   ];
 }
 
-/** Formats migration apply results for terminal output. */
+/** Formats redaction-safe migration apply results for terminal output. */
 export function formatMigrationResult(plan: MigrationPlan): string[] {
-  const lines = [...formatPlanHeader(plan, "Migration plan:"), ...formatPlanItems(plan, "result")];
-  if (plan.nextSteps && plan.nextSteps.length > 0) {
+  const safePlan = redactMigrationPlan(plan);
+  const lines = [
+    ...formatPlanHeader(safePlan, "Migration plan:"),
+    ...formatPlanItems(safePlan, "result"),
+  ];
+  if (safePlan.nextSteps && safePlan.nextSteps.length > 0) {
     lines.push("");
     lines.push(theme.heading("Next:"));
-    for (const step of plan.nextSteps) {
-      const prefix = plan.warnings?.includes(step) ? "⚠️ " : "•";
+    for (const step of safePlan.nextSteps) {
+      const prefix = safePlan.warnings?.includes(step) ? "⚠️ " : "•";
       lines.push(`${prefix} ${step}`);
     }
   }

@@ -1,21 +1,6 @@
 // Discord plugin module implements security doctor behavior.
-export function isDiscordMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
+import { buildMutableAllowEntryDetector } from "openclaw/plugin-sdk/channel-policy";
 
-  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
-  if (/^\d+$/.test(maybeMentionId)) {
-    return false;
-  }
-
-  for (const prefix of ["discord:", "user:", "pk:"]) {
-    if (!text.startsWith(prefix)) {
-      continue;
-    }
-    return text.slice(prefix.length).trim().length === 0;
-  }
-
-  return true;
-}
+export const isDiscordMutableAllowEntry = buildMutableAllowEntryDetector({
+  stableIdPattern: /^(?:\d+|<@!?\d+>|(?:discord|user|pk):.+)$/,
+});

@@ -5,7 +5,7 @@ import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-export const AuditActivityStatusV1Schema: TSchema = Type.Union([
+const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("started"),
   Type.Literal("succeeded"),
   Type.Literal("failed"),
@@ -15,13 +15,13 @@ export const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-export const AuditActivityKindV1Schema: TSchema = Type.Union([
+const AuditActivityKindV1Schema: TSchema = Type.Union([
   Type.Literal("agent_run"),
   Type.Literal("tool_action"),
   Type.Literal("message"),
 ]);
 
-export const AuditActivityDirectionV1Schema: TSchema = Type.Union([
+const AuditActivityDirectionV1Schema: TSchema = Type.Union([
   Type.Literal("inbound"),
   Type.Literal("outbound"),
 ]);
@@ -259,6 +259,7 @@ const inboundCompletedReasonSchema = Type.Union([
   Type.Literal("before_dispatch_handled"),
   Type.Literal("acp_dispatch_completed"),
   Type.Literal("acp_dispatch_empty"),
+  Type.Literal("active_run_injected"),
 ]);
 
 const inboundSkippedReasonSchema = Type.Union([
@@ -524,7 +525,8 @@ type AuditActivityInboundMessageV1Terminal =
         | "plugin_bound_declined"
         | "before_dispatch_handled"
         | "acp_dispatch_completed"
-        | "acp_dispatch_empty";
+        | "acp_dispatch_empty"
+        | "active_run_injected";
     }
   | {
       status: "blocked";

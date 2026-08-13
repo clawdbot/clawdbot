@@ -20,6 +20,7 @@ export function createConfiguredSkillWorkshopTool(params: {
   return createSkillWorkshopTool({
     workspaceDir: params.workspaceDir,
     config: params.config,
+    env: params.run?.env,
     agentId: params.agentId,
     origin:
       params.run?.origin ??
@@ -30,8 +31,12 @@ export function createConfiguredSkillWorkshopTool(params: {
         ...(messageId ? { messageId } : {}),
       } satisfies SkillProposalOrigin),
     proposalOnly: params.run?.proposalOnly,
+    ...(params.run?.updateProposals ? { updateProposals: true } : {}),
+    ...(params.run?.autonomousCapture ? { autonomousCapture: true } : {}),
     proposalMutationBudget:
       params.run?.proposalMutationBudget ??
       (params.run?.proposalOnly ? { remaining: 1 } : undefined),
+    proposalReviewCompletion: params.run?.proposalReviewCompletion,
+    collectionReconcile: params.run?.collectionReconcile,
   });
 }

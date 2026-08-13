@@ -1,7 +1,6 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,10 +68,6 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("exits with code 0 after successful doctor run", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
@@ -85,6 +80,25 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.yes).toBe(true);
     expect(options.allowExec).toBe(true);
     expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("enables workspace suggestions by default and allows disabling them", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, defaultOptions] = commandCall(doctorCommand);
+    expect(defaultOptions.workspaceSuggestions).toBe(true);
+
+    vi.clearAllMocks();
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--no-workspace-suggestions"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, disabledOptions] = commandCall(doctorCommand);
+    expect(disabledOptions.workspaceSuggestions).toBe(false);
   });
 
   it("exits with code 1 when doctor fails", async () => {
@@ -106,28 +120,6 @@ describe("registerMaintenanceCommands doctor action", () => {
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(true);
-  });
-
-  it("denies cross-state imports when an automation parent disables them", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv(DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV, "1");
-
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
-
-    const [, options] = commandCall(doctorCommand);
-    expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(false);
-  });
-
-  it("denies cross-state imports for older update parents", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
-
-    const [, options] = commandCall(doctorCommand);
-    expect(options.crossStateDirImports).toBe(false);
   });
 
   it("passes session sqlite options to doctor command", async () => {
@@ -239,10 +231,14 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("rejects session sqlite selectors without session sqlite mode", async () => {
-    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+  it.each([
+    ["without JSON", ["--session-sqlite-agent", "main"]],
+    ["with JSON", ["--json", "--session-sqlite-agent", "main"]],
+  ])("rejects session sqlite selectors without session sqlite mode %s", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
     );
@@ -277,6 +273,54 @@ describe("registerMaintenanceCommands doctor action", () => {
       deep: false,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("treats bare --json as lint mode and emits machine-readable output", async () => {
+    const output: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    runDoctorLintCli.mockImplementationOnce(async () => {
+      process.stdout.write('{"ok":true,"checksRun":1,"checksSkipped":0,"findings":[]}\n');
+      return 0;
+    });
+
+    try {
+      await runMaintenanceCli(["doctor", "--json"]);
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+        json: true,
+        severityMin: undefined,
+        includeAllChecks: false,
+        skipIds: [],
+        onlyIds: [],
+        allowExec: false,
+        deep: false,
+      });
+      expect(JSON.parse(output.join(""))).toEqual({
+        ok: true,
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    } finally {
+      writeSpy.mockRestore();
+      runDoctorLintCli.mockReset();
+    }
+  });
+
+  it("rejects JSON repair mode before running doctor", async () => {
+    await runMaintenanceCli(["doctor", "--json", "--repair"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("rejects lint selectors outside doctor lint mode", async () => {

@@ -57,7 +57,7 @@ type UnsupportedWebSearchFilterName =
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
-export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);

@@ -541,7 +541,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         let gatewayConnected = Self.boolValue(payload["gatewayConnected"])
         let agentName = (payload["agentName"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let agentAvatarURL = (payload["agentAvatarURL"] as? String)?
+        let agentAvatarURL = (payload["agentAvatarUrl"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let agentAvatarText = (payload["agentAvatarText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)

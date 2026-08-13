@@ -64,3 +64,11 @@ export {
   type SignalSendResult,
 } from "./src/send.js";
 export { normalizeSignalAccountInput } from "./src/setup-core.js";
+export {
+  detectSignalTransport,
+  prepareSignalManagedNativeTransport,
+  probeSignalTransport,
+  type SignalManagedNativeTransport,
+  type SignalTransportProbeResult,
+  writeSignalAccountTransport,
+} from "./src/setup-transport.js";

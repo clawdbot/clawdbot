@@ -5,6 +5,7 @@ import {
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { attachChannelToResults } from "openclaw/plugin-sdk/channel-send-result";
 import type { DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -13,6 +14,27 @@ export type DiscordReceiptResultSource = {
   channel_id?: string | null;
   platformMessageIds?: readonly string[];
 };
+
+export function createDiscordSendReceiptFromResults(params: {
+  results: readonly DiscordSendResult[];
+  threadId?: string;
+}): MessageReceipt {
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: attachChannelToResults("discord", params.results),
+    threadId: params.threadId,
+  });
+  return {
+    ...receipt,
+    parts: receipt.parts.map(({ platformMessageId, kind, threadId, replyToId, raw }, index) => ({
+      platformMessageId,
+      kind,
+      index,
+      threadId,
+      replyToId,
+      raw,
+    })),
+  };
+}
 
 export function createDiscordSendReceipt(params: {
   platformMessageIds: readonly string[];

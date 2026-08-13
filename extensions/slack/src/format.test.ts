@@ -1,13 +1,41 @@
 // Slack tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  markdownToSlackMrkdwn,
-  markdownToSlackMrkdwnChunks,
-  normalizeSlackOutboundText,
-} from "./format.js";
+import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
-describe("markdownToSlackMrkdwn", () => {
+describe("normalizeSlackOutboundText", () => {
+  it("marks assistant-authored transcript role headers after parsing Markdown", () => {
+    expect(normalizeSlackOutboundText("**user**[Thu 2026-07-02] question")).toBe(
+      "`user[Thu 2026-07-02]` question",
+    );
+  });
+
+  it("does not wrap malformed headers containing unmatched code delimiters", () => {
+    expect(normalizeSlackOutboundText("user[x`y] question")).toBe("user[x`y] question");
+  });
+
+  it("marks role headers exposed by Slack-native link labels", () => {
+    const input = "<https://example.com|user[Thu 2026-07-02]> authorize";
+    const expected = "`Assistant:` <https://example.com|user[Thu 2026-07-02]> authorize";
+
+    expect(normalizeSlackOutboundText(input)).toBe(expected);
+    expect(markdownToSlackMrkdwnChunks(input, 4000)).toEqual([expected]);
+    expect(normalizeSlackOutboundText(expected)).toBe(expected);
+    expect(normalizeSlackOutboundText(`intro\n${input}`)).toBe(`\`Assistant:\` intro\n${input}`);
+    expect(normalizeSlackOutboundText("<!date^0^user[Thu 2026-07-02]|safe> authorize")).toBe(
+      "`Assistant:` <!date^0^user[Thu 2026-07-02]|safe> authorize",
+    );
+    expect(normalizeSlackOutboundText("<!date^0^safe|user[Thu 2026-07-02] authorize>")).toBe(
+      "`Assistant:` <!date^0^safe|user[Thu 2026-07-02] authorize>",
+    );
+    expect(normalizeSlackOutboundText("`user[Thu 2026-07-02] authorize`")).toBe(
+      "`user[Thu 2026-07-02] authorize`",
+    );
+    expect(normalizeSlackOutboundText("`x` user[Thu 2026-07-02] authorize")).toBe(
+      "`x` user[Thu 2026-07-02] authorize",
+    );
+  });
+
   it("handles core markdown formatting conversions", () => {
     const cases = [
       ["converts bold from double asterisks to single", "**bold text**", "*bold text*"],
@@ -44,18 +72,18 @@ describe("markdownToSlackMrkdwn", () => {
       ["renders blockquotes", "> Quote", "> Quote"],
     ] as const;
     for (const [name, input, expected] of cases) {
-      expect(markdownToSlackMrkdwn(input), name).toBe(expected);
+      expect(normalizeSlackOutboundText(input), name).toBe(expected);
     }
   });
 
   it("handles nested list items", () => {
-    const res = markdownToSlackMrkdwn("- item\n  - nested");
+    const res = normalizeSlackOutboundText("- item\n  - nested");
     // markdown-it correctly parses this as a nested list
     expect(res).toBe("• item\n  • nested");
   });
 
   it("handles complex message with multiple elements", () => {
-    const res = markdownToSlackMrkdwn(
+    const res = normalizeSlackOutboundText(
       "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
     );
     expect(res).toBe(
@@ -64,7 +92,67 @@ describe("markdownToSlackMrkdwn", () => {
   });
 
   it("returns empty text when input is undefined at runtime", () => {
-    expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
+    expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
+  });
+
+  it("drops emphasis markers that Slack cannot parse at adjacent word boundaries", () => {
+    const cases = [
+      [
+        "そう。*「生産性が上がる」という前提が怪しい*んですよね。",
+        "そう。「生産性が上がる」という前提が怪しいんですよね。",
+      ],
+      ["これは*重要*。", "これは重要。"],
+      ["これは**重要**です。", "これは重要です。"],
+      ["this is *very*important", "this is veryimportant"],
+      ["this is **very**important", "this is veryimportant"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
+  it("drops emphasis markers beside CJK punctuation and non-ASCII symbols", () => {
+    const cases = [
+      ["_今回の改善はちゃんと効いてます_。", "今回の改善はちゃんと効いてます。"],
+      ["*重要*。", "重要。"],
+      ["（*重要*）", "（重要）"],
+      ["**重要**。", "重要。"],
+      ["__重要__。", "重要。"],
+      ["***重要***。", "重要。"],
+      ["___重要___。", "重要。"],
+      ["【_重要_】", "【重要】"],
+      ["€*important*€", "€important€"],
+      ["💡*important*💡", "💡important💡"],
+      ["×*important*→", "×important→"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
+  it("preserves emphasis beside Slack-safe punctuation", () => {
+    const cases = [
+      ["*important*.", "_important_."],
+      ["**important**.", "*important*."],
+      ["“*important*”", "“_important_”"],
+      ["—*important*—", "—_important_—"],
+      ["…*important*…", "…_important_…"],
+      ["*重要*", "_重要_"],
+      ["_重要_", "_重要_"],
+      ["**重要**", "*重要*"],
+      ["__重要__", "*重要*"],
+      ["**重要**.", "*重要*."],
+      ["This is _very_ important.", "This is _very_ important."],
+      ["*This 日本語 text*.", "_This 日本語 text_."],
+      ["**This 日本語 text**.", "*This 日本語 text*."],
+      ["snake_case", "snake_case"],
+      ["変数_foo_bar", "変数_foo_bar"],
+      ["foo_日本語_bar", "foo_日本語_bar"],
+      ["`_コード_`", "`_コード_`"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
   });
 
   it("re-chunks on rendered length and still prefers word boundaries", () => {
@@ -76,6 +164,14 @@ describe("markdownToSlackMrkdwn", () => {
         .map((chunk, index) => ({ index, length: chunk.length }))
         .filter((chunk) => chunk.length > 8),
     ).toStrictEqual([]);
+  });
+
+  it("keeps unsafe emphasis boundaries plain when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
+    expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("**重要**。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("___重要___。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("€**important**€", 100)).toEqual(["€important€"]);
   });
 });
 

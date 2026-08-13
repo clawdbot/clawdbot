@@ -348,11 +348,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: PIXVERSE_PROVIDER_ID,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

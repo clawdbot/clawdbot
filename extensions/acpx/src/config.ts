@@ -101,8 +101,6 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
-const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
-const DEFAULT_STRICT_WINDOWS_CMD_WRAPPER = true;
 
 type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
@@ -270,14 +268,7 @@ export function resolveAcpxPluginConfig(params: {
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
     openClawToolsMcpBridge,
-    strictWindowsCmdWrapper:
-      normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
-    queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
-    legacyCompatibilityConfig: {
-      strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
-      queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
-    },
     mcpServers,
     agents,
   };

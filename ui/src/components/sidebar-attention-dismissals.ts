@@ -1,14 +1,14 @@
 // Per-gateway, per-browser snooze state for the sidebar attention chips.
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
-import { normalizeGatewayTokenScope } from "../app/gateway-scope.ts";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
-  "modelAuthExpiring",
+  "pendingApproval",
 ] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
@@ -21,7 +21,7 @@ type DismissableChip = { kind: SidebarAttentionKind; signature: string };
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
 export function dismissalStoreKey(gatewayUrl: string): string {
-  return `${DISMISSED_STORE_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${DISMISSED_STORE_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {

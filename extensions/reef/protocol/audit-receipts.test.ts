@@ -140,8 +140,19 @@ describe("receipts", () => {
       "accepted",
       "rejected",
     ]);
+    expect(entries[0]!.event.payload).not.toHaveProperty("category");
+    expect(entries[1]!.event.payload).toHaveProperty("category", "guard_deny");
     await expect(
       confirmDelivery({ ...accepted, bodyHash: "e".repeat(64) }, identity.signing.publicKey, audit),
+    ).rejects.toThrow("invalid delivery receipt");
+    await expect(
+      confirmDelivery(accepted, identity.signing.publicKey, audit, {
+        id: accepted.id,
+        bodyHash: "e".repeat(64),
+      }),
+    ).rejects.toThrow("invalid delivery receipt");
+    await expect(
+      confirmDelivery(accepted, identity.signing.publicKey, audit, { status: "rejected" }),
     ).rejects.toThrow("invalid delivery receipt");
   });
 

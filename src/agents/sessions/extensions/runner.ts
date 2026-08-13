@@ -3,8 +3,9 @@
  */
 
 import type { KeyId } from "@earendil-works/pi-tui";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
-import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
@@ -162,13 +163,13 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends {
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
-export type NewSessionHandler = (options?: {
+type NewSessionHandler = (options?: {
   parentSession?: string;
   setup?: (sessionManager: SessionManager) => Promise<void>;
   withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 
-export type ForkHandler = (
+type ForkHandler = (
   entryId: string,
   options?: {
     position?: "before" | "at";
@@ -176,7 +177,7 @@ export type ForkHandler = (
   },
 ) => Promise<{ cancelled: boolean }>;
 
-export type NavigateTreeHandler = (
+type NavigateTreeHandler = (
   targetId: string,
   options?: {
     summarize?: boolean;
@@ -186,7 +187,7 @@ export type NavigateTreeHandler = (
   },
 ) => Promise<{ cancelled: boolean }>;
 
-export type SwitchSessionHandler = (
+type SwitchSessionHandler = (
   sessionPath: string,
   options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 ) => Promise<{ cancelled: boolean }>;
@@ -335,7 +336,7 @@ export class ExtensionRunner {
         this.emitError({
           extensionPath,
           event: "register_provider",
-          error: err instanceof Error ? err.message : String(err),
+          error: coerceErrorMessage(err),
           stack: err instanceof Error ? err.stack : undefined,
         });
       }
@@ -734,7 +735,7 @@ export class ExtensionRunner {
             }
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -782,7 +783,7 @@ export class ExtensionRunner {
           currentMessage = handlerResult.message;
           modified = true;
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -830,7 +831,7 @@ export class ExtensionRunner {
             modified = true;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -894,7 +895,7 @@ export class ExtensionRunner {
             return handlerResult as UserBashEventResult;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -910,6 +911,12 @@ export class ExtensionRunner {
   }
 
   async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+    // Cloning the full session history is expensive (it can carry image
+    // payloads) and runs every turn, so skip it unless a context handler
+    // is actually registered. Handlers still receive an isolated clone.
+    if (!this.hasHandlers("context")) {
+      return messages;
+    }
     const ctx = this.createContext();
     let currentMessages = structuredClone(messages);
 
@@ -928,7 +935,7 @@ export class ExtensionRunner {
             currentMessages = (handlerResult as ContextEventResult).messages!;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -964,7 +971,7 @@ export class ExtensionRunner {
             currentPayload = handlerResult;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1025,7 +1032,7 @@ export class ExtensionRunner {
             }
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1088,7 +1095,7 @@ export class ExtensionRunner {
             );
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1134,7 +1141,7 @@ export class ExtensionRunner {
           this.emitError({
             extensionPath: ext.path,
             event: "input",
-            error: err instanceof Error ? err.message : String(err),
+            error: coerceErrorMessage(err),
             stack: err instanceof Error ? err.stack : undefined,
           });
         }
@@ -1145,3 +1152,4 @@ export class ExtensionRunner {
       : { action: "continue" };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

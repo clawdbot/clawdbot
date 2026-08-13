@@ -2,15 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { readRegularFileSync } from "./regular-file.js";
 
 // Global dotenv loading imports operator-level gateway env files without
 // overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
+
+/** Maximum bytes to read from any dotenv file. */
+const MAX_DOTENV_FILE_BYTES = 1024 * 1024;
 
 type DotEnvEntry = {
   key: string;
@@ -25,6 +29,8 @@ type LoadedDotEnvFile = {
 type GlobalRuntimeDotEnvOptions = {
   additionalEnvPaths?: string[];
   entryFilter?: (key: string, value: string) => boolean;
+  /** Keys whose service-managed inherited values may be replaced by trusted dotenv files. */
+  overrideKeys?: Iterable<string>;
   quiet?: boolean;
   stateEnvPath?: string;
 };
@@ -34,9 +40,16 @@ export function readDotEnvFile(params: {
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
-  let content: string;
+  let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath, "utf8");
+    // Resolve symlinks so a symlinked .env file works while the bounded
+    // read still rejects oversized targets.
+    const resolved = fs.realpathSync(params.filePath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_DOTENV_FILE_BYTES,
+    });
+    content = buffer;
   } catch (error) {
     if (!params.quiet) {
       const code =
@@ -44,21 +57,19 @@ export function readDotEnvFile(params: {
       if (code !== "ENOENT") {
         logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
+      // Surface oversized files so operators know a configured file was
+      // skipped rather than leaving them silently ignored.
+      if (error instanceof Error && error.message?.startsWith("File exceeds")) {
+        logger.warn(
+          `skipping oversized .env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
+        );
+      }
     }
     return null;
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
   const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });
@@ -67,18 +78,32 @@ export function readDotEnvFile(params: {
   return { filePath: params.filePath, entries };
 }
 
-function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]> {
+function loadParsedDotEnvFiles(
+  files: LoadedDotEnvFile[],
+  overrideKeys?: Iterable<string>,
+): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
+  const canonicalizeKey = (key: string): string | null =>
+    normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+  const normalizedOverrideKeys = new Set(
+    [...(overrideKeys ?? [])].flatMap((key) => {
+      const normalized = canonicalizeKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
   const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
   const firstSeen = new Map<string, { value: string; filePath: string }>();
   const appliedKeysByFile = new Map<string, string[]>();
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
-      if (preExistingKeys.has(key)) {
+      const canonicalKey = canonicalizeKey(key);
+      const mayOverride = canonicalKey !== null && normalizedOverrideKeys.has(canonicalKey);
+      const precedenceKey = mayOverride && canonicalKey ? canonicalKey : key;
+      if (preExistingKeys.has(key) && !mayOverride) {
         continue;
       }
-      const previous = firstSeen.get(key);
+      const previous = firstSeen.get(precedenceKey);
       if (previous) {
         if (previous.value !== value) {
           // First file wins for deterministic startup; conflicts are logged once
@@ -97,8 +122,17 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]>
         }
         continue;
       }
-      firstSeen.set(key, { value, filePath: file.filePath });
-      if (process.env[key] === undefined) {
+      firstSeen.set(precedenceKey, { value, filePath: file.filePath });
+      if (process.env[key] === undefined || mayOverride) {
+        if (mayOverride) {
+          // Service ownership is case-insensitive. Refresh every inherited alias so Linux cannot
+          // retain a stale uppercase value beside a newly parsed lowercase dotenv key.
+          for (const inheritedKey of preExistingKeys) {
+            if (canonicalizeKey(inheritedKey) === canonicalKey) {
+              process.env[inheritedKey] = value;
+            }
+          }
+        }
         process.env[key] = value;
         const appliedKeys = appliedKeysByFile.get(file.filePath);
         if (appliedKeys) {
@@ -155,8 +189,9 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     parsedFiles.push(gatewayEnv);
   }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  const appliedKeysByFile = loadParsedDotEnvFiles(parsed);
+  const appliedKeysByFile = loadParsedDotEnvFiles(parsed, opts?.overrideKeys);
   return {
+    dotenvPresentKeys: [...new Set(parsed.flatMap((file) => file.entries.map(({ key }) => key)))],
     stateEnvAppliedKeys: globalEnvs.flatMap((file) =>
       file ? (appliedKeysByFile.get(file.filePath) ?? []) : [],
     ),

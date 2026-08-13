@@ -77,6 +77,25 @@ class CameraHandlerTest {
   }
 
   @Test
+  fun clipWithAudioFailsBeforeCameraStartsWhenMicrophoneIsBusy() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val handler =
+        CameraHandler(
+          appContext = app,
+          camera = CameraCaptureManager(app),
+          setCameraAudioCaptureActive = { false },
+          showCameraHud = { _, _, _ -> },
+          invokeErrorFromThrowable = { "UNAVAILABLE" to (it.message ?: "camera failed") },
+        )
+
+      val result = handler.handleClip("""{"includeAudio":true}""")
+
+      assertFalse(result.ok)
+      assertEquals("MIC_BUSY", result.error?.code)
+    }
+
+  @Test
   fun isCameraClipWithinPayloadLimit_allowsZeroAndLimit() {
     assertTrue(isCameraClipWithinPayloadLimit(0L))
     assertTrue(isCameraClipWithinPayloadLimit(CAMERA_CLIP_MAX_RAW_BYTES))

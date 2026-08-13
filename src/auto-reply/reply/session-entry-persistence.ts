@@ -1,7 +1,7 @@
 // Atomic persistence for broad auto-reply session snapshots.
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   mergeSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
@@ -12,14 +12,16 @@ type PersistReplySessionEntryParams = {
   entry: SessionEntry;
   initialEntry: SessionEntry;
   reassertLiveModelSwitchPending?: boolean;
+  requireModelSelectionUnlocked?: boolean;
   sessionKey: string;
   skipMaintenance?: boolean;
   storePath: string;
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
 };
 
-export type PersistReplySessionEntryResult =
+type PersistReplySessionEntryResult =
   | { status: "current"; entry: SessionEntry }
+  | { status: "model-selection-locked"; entry: SessionEntry }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
 
 /** Persists reply-owned state without reverting concurrent session management. */
@@ -28,7 +30,8 @@ export async function persistReplySessionEntry(
 ): Promise<PersistReplySessionEntryResult> {
   let lifecycleError: string | undefined;
   let lifecycleEntry: SessionEntry | undefined;
-  const persisted = await patchSessionEntry(
+  let lockedEntry: SessionEntry | undefined;
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       if (!context.existingEntry) {
@@ -45,6 +48,13 @@ export async function persistReplySessionEntry(
       });
       if (lifecycleError) {
         lifecycleEntry = context.existingEntry;
+        return null;
+      }
+      if (
+        params.requireModelSelectionUnlocked === true &&
+        context.existingEntry.modelSelectionLocked === true
+      ) {
+        lockedEntry = context.existingEntry;
         return null;
       }
       if (
@@ -78,6 +88,9 @@ export async function persistReplySessionEntry(
       error: lifecycleError,
       ...(lifecycleEntry ? { entry: lifecycleEntry } : {}),
     };
+  }
+  if (lockedEntry) {
+    return { status: "model-selection-locked", entry: lockedEntry };
   }
   if (!persisted) {
     return {

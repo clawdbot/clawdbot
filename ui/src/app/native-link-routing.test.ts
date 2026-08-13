@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/github-link-hovercard-registration.ts";
-import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.ts";
+import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
 import "../components/modal-dialog.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
@@ -125,7 +125,7 @@ describe("native link routing", () => {
     anchor.textContent = "#102691";
     provider.append(anchor);
     document.body.append(provider);
-    anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    anchor.focus();
     await vi.waitFor(() => expect(document.querySelector(".github-link-hovercard")).not.toBeNull());
 
     click(anchor);
@@ -192,6 +192,32 @@ describe("native link routing", () => {
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://example.com/report?q=1"),
     );
+  });
+
+  it("ignores a stale hide event after replacing the context menu", async () => {
+    installBridge();
+    routing = startNativeLinkRouting();
+    const firstAnchor = appendLink("https://example.com/first");
+    const secondAnchor = appendLink("https://example.com/second");
+
+    contextMenu(firstAnchor);
+    const firstMenu = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-native-link-menu",
+    );
+    expect(firstMenu).not.toBeNull();
+    await firstMenu?.updateComplete;
+    const firstDropdown = firstMenu?.querySelector("wa-dropdown");
+    expect(firstDropdown).not.toBeNull();
+
+    contextMenu(secondAnchor);
+    const secondMenu = document.querySelector("openclaw-native-link-menu");
+    expect(secondMenu).not.toBe(firstMenu);
+
+    firstDropdown?.dispatchEvent(
+      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+    );
+
+    expect(document.querySelector("openclaw-native-link-menu")).toBe(secondMenu);
   });
 
   it("mounts a fallback menu inside an active dialog", async () => {

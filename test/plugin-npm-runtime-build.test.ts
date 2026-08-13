@@ -1,14 +1,33 @@
 // Plugin npm runtime build tests validate plugin runtime package builds.
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolvePluginNpmCommand,
+  withAugmentedPluginNpmManifestForPackage,
+} from "../scripts/lib/plugin-npm-package-manifest.mts";
 import {
   buildPluginNpmRuntime,
+  listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginSourceModuleLoader,
+} from "../src/plugins/plugin-module-loader-cache.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type PluginNpmRuntimeBuildPlan = NonNullable<ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>>;
 
@@ -26,6 +45,43 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("rejects a symlinked package dist root before building", async () => {
+    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-output-root-");
+    const packageDir = path.join(syntheticRepoRoot, "extensions", "demo");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(syntheticRepoRoot, "package.json"),
+      JSON.stringify({ version: "1.0.0" }),
+    );
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        version: "1.0.0",
+        openclaw: {
+          compat: { pluginApi: "1.0.0" },
+          extensions: ["./index.ts"],
+          release: { publishToNpm: true },
+        },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "index.ts"), "export default {};\n");
+    const targetDir = path.join(syntheticRepoRoot, "live-gateway-dist");
+    mkdirSync(targetDir);
+    writeFileSync(path.join(targetDir, "sentinel.js"), "keep\n");
+    symlinkSync(targetDir, path.join(packageDir, "dist"), "dir");
+
+    await expect(
+      buildPluginNpmRuntime({
+        repoRoot: syntheticRepoRoot,
+        packageDir,
+        logLevel: "silent",
+      }),
+    ).rejects.toThrow(/symbolic link/u);
+    expect(readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
+    expect(readlinkSync(path.join(packageDir, "dist"))).toBe(targetDir);
+  });
+
   it("plans package-local runtime entries for every publishable plugin package", () => {
     const packageDirs = listPublishablePluginPackageDirs({ repoRoot });
     expect(packageDirs.length).toBeGreaterThan(0);
@@ -46,33 +102,13 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
   });
 
-  it("includes top-level public runtime surfaces and root-build-excluded plugins", () => {
-    const qqbotPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "qqbot"),
-    });
-    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
-    expect(qqbotRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
-      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
-      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
-      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
-      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
-      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
-    });
-    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-
+  it("includes top-level public runtime surfaces", () => {
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),
@@ -86,7 +122,6 @@ describe("plugin npm runtime build planning", () => {
     expect(diffsRuntimePlan.packageFiles).toEqual([
       "dist/**",
       "openclaw.plugin.json",
-      "npm-shrinkwrap.json",
       "README.md",
       "skills/**",
     ]);
@@ -192,5 +227,124 @@ describe("plugin npm runtime build planning", () => {
     );
     expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+  });
+
+  it("packs the Zalo public setup API with its lazy runtime surface", async () => {
+    const packageDir = path.join(repoRoot, "extensions", "zalo");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({
+        repoRoot,
+        packageDir,
+        logLevel: "silent",
+      }),
+    );
+    const consumerDir = tempDirs.make("openclaw-zalo-packed-setup-");
+    let packedFiles: string[] = [];
+    let setupApiPath = "";
+
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot, packageDir, bundleDependencies: false },
+      () => {
+        const invocation = resolvePluginNpmCommand([
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--pack-destination",
+          consumerDir,
+        ]);
+        const pack = spawnSync(invocation.command, invocation.args, {
+          cwd: packageDir,
+          encoding: "utf8",
+          ...(invocation.env ? { env: invocation.env } : {}),
+          ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+          stdio: ["ignore", "pipe", "pipe"],
+          ...(invocation.windowsVerbatimArguments !== undefined
+            ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+            : {}),
+        });
+        expect(pack.status, pack.stderr).toBe(0);
+        const [packedPackage] = JSON.parse(pack.stdout) as [
+          { filename: string; files: Array<{ path: string }> },
+        ];
+        packedFiles = packedPackage.files.map((file) => file.path);
+        const extract = spawnSync(
+          "tar",
+          ["-xzf", path.join(consumerDir, packedPackage.filename), "-C", consumerDir],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        expect(extract.status, extract.stderr).toBe(0);
+        setupApiPath = path.join(consumerDir, "package", "dist", "setup-api.js");
+      },
+    );
+
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+    const loadSetupApi = getCachedPluginSourceModuleLoader({
+      cache: createPluginModuleLoaderCache(),
+      modulePath: setupApiPath,
+      importerUrl: import.meta.url,
+      devSourceRoot: repoRoot,
+    });
+    const setupApi = loadSetupApi(setupApiPath) as {
+      zaloSetupWizard: { channel: string };
+    };
+    expect(setupApi.zaloSetupWizard.channel).toBe("zalo");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
+    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+    expect(packedFiles).toContain("dist/setup-surface.js");
+    expect(packedFiles).not.toContain("dist/src/setup-surface.js");
+  });
+
+  it("keeps published Codex runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("detects unresolved side-effect host imports in built plugin runtimes", () => {
+    const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
+    writeFileSync(
+      path.join(outDir, "index.js"),
+      [
+        'import "openclaw/plugin-sdk/not-exported";',
+        'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
+        "void runtime;",
+        "",
+      ].join("\n"),
+    );
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "codex"),
+      }),
+    );
+
+    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
+      "openclaw/plugin-sdk/not-exported",
+      "openclaw/plugin-sdk/not-exported-from-require",
+    ]);
+  });
+
+  it("does not require host metadata when the runtime has no host imports", () => {
+    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-synthetic-repo-");
+    const outDir = tempDirs.make("openclaw-plugin-runtime-no-host-import-");
+    writeFileSync(path.join(outDir, "index.js"), "export default {};\n");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "codex"),
+      }),
+    );
+
+    expect(
+      listMissingPluginNpmRuntimeHostExports({ ...plan, repoRoot: syntheticRepoRoot, outDir }),
+    ).toEqual([]);
   });
 });

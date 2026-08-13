@@ -5,11 +5,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  testing,
-  listAllChannelSupportedActions,
-  listChannelSupportedActions,
-} from "./channel-tools.js";
+import { listAllChannelSupportedActions, listChannelSupportedActions } from "./channel-tools.js";
+
+const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
+  version: 0,
+  channels: [],
+  getChannel: () => undefined,
+} as const;
 
 describe("channel tools", () => {
   const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -38,13 +40,22 @@ describe("channel tools", () => {
       },
     };
 
-    testing.resetLoggedListActionErrors();
     errorSpy.mockClear();
     setActivePluginRegistry(createTestRegistry([{ pluginId: "test", source: "test", plugin }]));
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("keeps an explicitly empty prepared catalog authoritative", () => {
+    expect(
+      listAllChannelSupportedActions({
+        cfg: {} as OpenClawConfig,
+        preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      }),
+    ).toEqual([]);
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("skips crashing plugins and logs once", () => {

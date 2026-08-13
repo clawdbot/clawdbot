@@ -1,20 +1,13 @@
-// Lobster tests cover lobster runner plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Lobster tests cover lobster runner plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createEmbeddedLobsterRunner,
-  loadEmbeddedToolRuntimeFromPackage,
-  resolveLobsterCwd,
-} from "./lobster-runner.js";
+import { createEmbeddedLobsterRunner, resolveLobsterCwd } from "./lobster-runner.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
   const call = calls[0];
@@ -495,58 +488,16 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(loadRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the installed package core file when the core export is unavailable", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-package-"));
-    const packageRoot = path.join(tempDir, "node_modules", "@clawdbot", "lobster");
-    const packageEntryPath = path.join(packageRoot, "dist", "src", "sdk", "index.js");
-    const packageCorePath = path.join(packageRoot, "dist", "src", "core", "index.js");
-
-    try {
-      await fs.mkdir(path.dirname(packageEntryPath), { recursive: true });
-      await fs.mkdir(path.dirname(packageCorePath), { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({
-          name: "@clawdbot/lobster",
-          type: "module",
-          main: "./dist/src/sdk/index.js",
-        }),
-        "utf8",
-      );
-      await fs.writeFile(packageEntryPath, "export {};\n", "utf8");
-      await fs.writeFile(
-        packageCorePath,
-        [
-          "export async function runToolRequest() {",
-          "  return { ok: true, status: 'ok', output: [{ source: 'fallback' }], requiresApproval: null };",
-          "}",
-          "export async function resumeToolRequest() {",
-          "  return { ok: true, status: 'cancelled', output: [], requiresApproval: null };",
-          "}",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const runtime = await loadEmbeddedToolRuntimeFromPackage({
-        importModule: async (specifier) => {
-          if (specifier === "@clawdbot/lobster/core") {
-            throw new Error("package export missing");
-          }
-          return (await import(`${specifier}?t=${Date.now()}`)) as object;
-        },
-        resolvePackageEntry: () => packageEntryPath,
-      });
-
-      await expect(runtime.runToolRequest({ pipeline: "commands.list" })).resolves.toEqual({
-        ok: true,
-        status: "ok",
-        output: [{ source: "fallback" }],
-        requiresApproval: null,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+  it("loads the published package core runtime", async () => {
+    await expect(
+      createEmbeddedLobsterRunner().run({
+        action: "run",
+        pipeline: "commands.list",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: "ok" });
   });
 
   it("requires a pipeline for run", async () => {
@@ -634,17 +585,3 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/timed out|aborted/);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

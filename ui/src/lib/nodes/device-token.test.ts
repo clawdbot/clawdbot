@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  clearDeviceAuthToken,
   loadDeviceAuthToken,
   revokeDeviceToken,
   rotateDeviceToken,
@@ -56,6 +57,16 @@ const tokenParams = {
   role: "operator",
 };
 
+function storedTokenKey(): string {
+  const key = Array.from({ length: localStorage.length }, (_, index) =>
+    localStorage.key(index),
+  ).find((candidate) => candidate?.startsWith("openclaw.device.auth.v1:"));
+  if (!key) {
+    throw new Error("missing device-auth test storage key");
+  }
+  return key;
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
@@ -67,33 +78,31 @@ afterEach(() => {
 });
 
 describe("device token request lifecycle", () => {
-  it("does not reveal or persist a rotate response from a retired request epoch", async () => {
+  // A retired epoch is a reconnect, not a reason to destroy the credential: the previous
+  // token is already dead on the server, so the caller still needs this one to recover.
+  it("returns a rotate response from a retired request epoch without persisting it", async () => {
     const response = deferred<unknown>();
     const state = createState(() => response.promise);
-    const prompt = vi.spyOn(window, "prompt").mockImplementation(() => null);
 
     const operation = rotateDeviceToken(state, tokenParams);
     state.requestGeneration += 1;
-    response.resolve({ token: "stale-token", ...tokenParams });
-    await operation;
+    response.resolve({ token: "rotated-token", ...tokenParams });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(await operation).toBe("rotated-token");
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
   it("rechecks rotate ownership after loading the local identity", async () => {
     storeIdentity();
     const { digest, digestMock } = deferIdentityFingerprint();
-    const state = createState(async () => ({ token: "stale-token", ...tokenParams }));
-    const prompt = vi.spyOn(window, "prompt").mockImplementation(() => null);
+    const state = createState(async () => ({ token: "rotated-token", ...tokenParams }));
 
     const operation = rotateDeviceToken(state, tokenParams);
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
     state.requestGeneration += 1;
     digest.resolve(new Uint8Array([0]).buffer);
-    await operation;
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(await operation).toBe("rotated-token");
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
@@ -102,7 +111,6 @@ describe("device token request lifecycle", () => {
     storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: ["operator.read"] });
     const { digest, digestMock } = deferIdentityFingerprint();
     const state = createState(async () => ({}));
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     const operation = revokeDeviceToken(state, tokenParams);
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
@@ -111,5 +119,47 @@ describe("device token request lifecycle", () => {
     await operation;
 
     expect(loadDeviceAuthToken(tokenParams)?.token).toBe("current-token");
+  });
+
+  it("normalizes malformed persisted scopes without breaking token loading", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens.operator.scopes = "not-an-array";
+    localStorage.setItem(key, JSON.stringify(store));
+
+    expect(loadDeviceAuthToken(tokenParams)).toMatchObject({
+      token: "current-token",
+      scopes: [],
+    });
+  });
+
+  it("canonicalizes persisted role aliases before storing another token", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens = { " operator ": store.tokens.operator };
+    localStorage.setItem(key, JSON.stringify(store));
+
+    storeDeviceAuthToken({
+      ...tokenParams,
+      role: "node",
+      token: "node-token",
+      scopes: ["node.invoke"],
+    });
+
+    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("operator-token");
+  });
+
+  it("removes persisted role aliases when clearing a token", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens[" operator "] = store.tokens.operator;
+    localStorage.setItem(key, JSON.stringify(store));
+
+    clearDeviceAuthToken(tokenParams);
+
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 });

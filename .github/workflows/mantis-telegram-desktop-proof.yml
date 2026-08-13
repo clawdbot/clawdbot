@@ -1,10 +1,6 @@
 name: Mantis Telegram Desktop Proof
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned Mantis label trigger; trusted base workflow validates refs before checkout/use
-    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -53,63 +49,8 @@ env:
   MANTIS_OUTPUT_DIR: .artifacts/qa-e2e/mantis/telegram-desktop-proof
 
 jobs:
-  authorize_actor:
-    name: Authorize workflow actor
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'pull_request_target' &&
-          github.event.action == 'labeled' &&
-          github.event.label.name == 'mantis: telegram-visible-proof'
-        ) ||
-        (
-          github.event_name == 'issue_comment' &&
-          github.event.issue.pull_request &&
-          contains(github.event.issue.labels.*.name, 'mantis: telegram-visible-proof') &&
-          (
-            contains(github.event.comment.body, '@openclaw-mantis') ||
-            contains(github.event.comment.body, '/openclaw-mantis')
-          )
-        )
-      }}
-    runs-on: ubuntu-24.04
-    outputs:
-      authorized: ${{ steps.permission.outputs.authorized }}
-    steps:
-      - name: Require maintainer-level repository access
-        id: permission
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            if (context.eventName === "pull_request_target") {
-              core.info(`Accepted Mantis label trigger from ${context.actor}.`);
-              core.setOutput("authorized", "true");
-              return;
-            }
-
-            const allowed = new Set(["admin", "maintain", "write"]);
-            const { owner, repo } = context.repo;
-            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: context.actor,
-            });
-            const permission = data.permission;
-            core.info(`Actor ${context.actor} permission: ${permission}`);
-            if (!allowed.has(permission)) {
-              core.notice(
-                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
-              );
-              core.setOutput("authorized", "false");
-              return;
-            }
-            core.setOutput("authorized", "true");
-
   resolve_request:
     name: Resolve Mantis request
-    needs: authorize_actor
-    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
@@ -128,57 +69,19 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const eventName = context.eventName;
-
             function setOutput(name, value) {
               core.setOutput(name, value ?? "");
               core.info(`${name}=${value ?? ""}`);
             }
 
             const inputs = context.payload.inputs ?? {};
-            const prNumber =
-              eventName === "workflow_dispatch"
-                ? inputs.pr_number
-                : eventName === "pull_request_target"
-                  ? String(context.payload.pull_request?.number ?? "")
-                  : String(context.payload.issue?.number ?? "");
+            const prNumber = inputs.pr_number;
             if (!prNumber) {
               core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
             }
 
-            const body =
-              eventName === "workflow_dispatch"
-                ? inputs.instructions || ""
-                : eventName === "issue_comment"
-                  ? context.payload.comment?.body || ""
-                  : "";
-            if (eventName === "issue_comment") {
-              const normalized = body.toLowerCase();
-              const requestedDesktopProof =
-                (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
-                (normalized.includes("desktop proof") ||
-                  normalized.includes("desktop-proof") ||
-                  normalized.includes("telegram desktop") ||
-                  normalized.includes("native telegram") ||
-                  normalized.includes("visible proof") ||
-                  normalized.includes("visible-proof") ||
-                  normalized.includes("telegram-visible-proof"));
-              if (!requestedDesktopProof) {
-                core.notice("Comment mentioned Mantis but did not request Telegram desktop proof.");
-                setOutput("should_run", "false");
-                setOutput("baseline_ref", "");
-                setOutput("candidate_ref", "");
-                setOutput("pr_number", "");
-                setOutput("instructions", "");
-                setOutput("crabbox_provider", "");
-                setOutput("lease_id", "");
-                setOutput("publish_artifact_name", "");
-                setOutput("publish_run_id", "");
-                setOutput("request_source", "unsupported_issue_comment");
-                return;
-              }
-            }
+            const body = inputs.instructions || "";
 
             const { owner, repo } = context.repo;
             const { data: pr } = await github.rest.pulls.get({
@@ -201,16 +104,7 @@ jobs:
             setOutput("lease_id", inputs.crabbox_lease_id || "");
             setOutput("publish_artifact_name", inputs.publish_artifact_name || "");
             setOutput("publish_run_id", inputs.publish_run_id || "");
-            setOutput("request_source", eventName);
-
-            if (eventName === "issue_comment") {
-              await github.rest.reactions.createForIssueComment({
-                owner,
-                repo,
-                comment_id: context.payload.comment.id,
-                content: "eyes",
-              }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
-            }
+            setOutput("request_source", "workflow_dispatch");
 
   validate_refs:
     name: Validate selected refs
@@ -223,12 +117,14 @@ jobs:
       candidate_trust: ${{ steps.validate.outputs.candidate_trust }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
 
+      # Intentionally separate: the candidate is the selected open PR head SHA, with fork
+      # heads allowed as fork-pr-head, while only the baseline uses main-ancestor trust.
       - name: Validate refs are trusted
         id: validate
         env:
@@ -350,8 +246,9 @@ jobs:
           done
 
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -362,7 +259,7 @@ jobs:
           install-bun: "true"
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -375,7 +272,7 @@ jobs:
           mkdir -p "$install_dir/src"
           git init "$install_dir/src"
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$install_dir/crabbox" ./cmd/crabbox
           sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox
@@ -383,17 +280,49 @@ jobs:
           crabbox media preview --help >/dev/null
 
       - name: Install local proof tools
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
           test -f scripts/e2e/telegram-user-driver.py
-          cat >"${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" <<'EOF'
+          node_bin="$(command -v node)"
+          corepack_bin="$(command -v corepack)"
+          "$node_bin" "$corepack_bin" pnpm --version >/dev/null
+          cat >"${RUNNER_TEMP}/mantis-node" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "$@"
+          exec "$node_bin" "\$@"
           EOF
+          cat >"${RUNNER_TEMP}/mantis-pnpm" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec "$node_bin" "$corepack_bin" pnpm "\$@"
+          EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "\$@"
+          EOF
+          chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm"
           chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof"
+          sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
+          sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
+          sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
+          printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            | sudo tee /etc/openclaw-mantis-sut-worktrees >/dev/null
+          printf 'baseline\t%s\ncandidate\t%s\n' "$BASELINE_SHA" "$CANDIDATE_SHA" \
+            | sudo tee /etc/openclaw-mantis-sut-revisions >/dev/null
+          runtime_parent="/tmp/openclaw-mantis-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 0711 -o root -g root "$runtime_parent"
+          sudo install -d -m 0700 -o root -g root "$runtime_parent/attestations"
+          printf '%s\n' "$runtime_parent" | sudo tee /etc/openclaw-mantis-sut-runtime-root >/dev/null
+          sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-revisions /etc/openclaw-mantis-sut-runtime-root
+          /usr/local/lib/mantis-toolchain/node --version
+          /usr/local/lib/mantis-toolchain/pnpm --version
           /usr/local/bin/openclaw-telegram-user-crabbox-proof --help >/dev/null
           media_tools="${RUNNER_TEMP}/mantis-media-tools"
           install -d "$media_tools"
@@ -407,6 +336,64 @@ jobs:
           sudo install -m 0755 "$bin_dir/ffprobe" /usr/local/bin/ffprobe
           ffmpeg -version >/dev/null
           ffprobe -version >/dev/null
+
+      - name: Prepare proof worktrees with pinned toolchain
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          baseline_root="$worktree_root/baseline"
+          candidate_root="$worktree_root/candidate"
+          toolchain_dir=/usr/local/lib/mantis-toolchain
+          corepack_home="${RUNNER_TEMP}/mantis-corepack"
+          mkdir -p "$worktree_root" "$corepack_home"
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          if ! git cat-file -e "${CANDIDATE_SHA}^{commit}"; then
+            git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"
+          fi
+          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          git worktree add --detach "$baseline_root" "$BASELINE_SHA"
+          git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"
+          candidate_git_link="$(cat "$candidate_root/.git")"
+
+          prepare_worktree() {
+            local repo_root="$1"
+            local safe_home="$2"
+            mkdir -p "$safe_home"
+            (
+              cd "$repo_root"
+              env -i \
+                CI=1 \
+                COREPACK_HOME="$corepack_home" \
+                HOME="$safe_home" \
+                OPENCLAW_BUILD_PRIVATE_QA=1 \
+                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                PATH="$toolchain_dir:/usr/bin:/bin" \
+                "$toolchain_dir/pnpm" install --frozen-lockfile
+              env -i \
+                CI=1 \
+                COREPACK_HOME="$corepack_home" \
+                HOME="$safe_home" \
+                OPENCLAW_BUILD_PRIVATE_QA=1 \
+                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                PATH="$toolchain_dir:/usr/bin:/bin" \
+                "$toolchain_dir/pnpm" build
+            )
+          }
+
+          prepare_worktree "$baseline_root" "${RUNNER_TEMP}/mantis-baseline-home"
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
+          sudo chown -R mantis-builder:mantis-builder "$candidate_root"
+          sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"
+          test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
+          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
+          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
+          test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
+          test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Ensure agent key exists
         env:
@@ -427,9 +414,11 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_AWS_REGION CRABBOX_CAPACITY_REGIONS CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
-            printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
+            printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -443,9 +432,13 @@ jobs:
             workspace_parent="$(dirname "$workspace_parent")"
           done
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
+          proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo chown -R root:root "$proof_worktree_root"
+          sudo chmod -R a-w "$proof_worktree_root"
+          sudo chmod 0700 "$proof_worktree_root"
 
       - name: Run Codex Mantis Telegram agent
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
@@ -461,8 +454,12 @@ jobs:
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
           MANTIS_CANDIDATE_TRUST: ${{ needs.validate_refs.outputs.candidate_trust }}
+          MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
+          MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
+          MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
+          MANTIS_PNPM_BIN: /usr/local/lib/mantis-toolchain/pnpm
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -483,12 +480,13 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
-          allow-bot-users: clawsweeper[bot]
+          allow-bot-users: github-actions[bot]
 
       - name: Release leaked Telegram proof leases
         if: ${{ always() }}
         env:
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
+          MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
         shell: bash
@@ -500,7 +498,7 @@ jobs:
           status=0
           mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -name session.json -type f -print0)
           for session_file in "${session_files[@]}"; do
-            if ! sudo -u codex node -e 'const fs = require("fs"); const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(session.command === "telegram-user-crabbox-session" ? 0 : 1);' "$session_file"; then
+            if ! sudo -u codex "$MANTIS_NODE_BIN" -e 'const fs = require("fs"); const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(session.command === "telegram-user-crabbox-session" ? 0 : 1);' "$session_file"; then
               continue
             fi
             lease_file="${session_file%/session.json}/.session/lease.json"
@@ -512,25 +510,62 @@ jobs:
               OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
               OPENCLAW_TELEGRAM_USER_CRABBOX_BIN=/usr/local/bin/crabbox \
               OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER="$CRABBOX_PROVIDER" \
-              node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-crabbox-proof.ts" \
+              "$MANTIS_NODE_BIN" --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-crabbox-proof.ts" \
                 finish --session "$session_file" --preview-crop telegram-window; then
               status=1
             fi
           done
           mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print0)
           for lease_file in "${lease_files[@]}"; do
-            if ! sudo -u codex node -e 'const fs = require("fs"); const lease = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(lease.kind === "telegram-user" ? 0 : 1);' "$lease_file"; then
+            if ! sudo -u codex "$MANTIS_NODE_BIN" -e 'const fs = require("fs"); const lease = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(lease.kind === "telegram-user" ? 0 : 1);' "$lease_file"; then
               continue
             fi
             if ! sudo -u codex env \
               OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
               OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
-              node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
+              "$MANTIS_NODE_BIN" --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
                 release --lease-file "$lease_file"; then
               status=1
             fi
           done
           exit "$status"
+
+      - name: Validate root-owned SUT attestations
+        if: ${{ always() }}
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_parent="$(</etc/openclaw-mantis-sut-runtime-root)"
+          manifest="$MANTIS_OUTPUT_DIR/mantis-evidence.json"
+          test -f "$manifest"
+          for lane in baseline candidate; do
+            lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$manifest")"
+            if [[ "$lane" == "baseline" ]]; then
+              expected_sha="$BASELINE_SHA"
+            else
+              expected_sha="$CANDIDATE_SHA"
+            fi
+            jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+              '.comparison[$lane].sha == $sha' "$manifest" >/dev/null
+            if [[ "$lane_status" == "skipped" ]]; then
+              continue
+            fi
+            sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+              '.lane == $lane and .sha == $sha' \
+              "$runtime_parent/attestations/$lane.json" >/dev/null
+          done
+
+      - name: Return proof artifacts to the runner
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d "$MANTIS_OUTPUT_DIR" ]]; then
+            sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"
+          fi
 
       - name: Inspect Mantis evidence manifest
         id: inspect
@@ -554,7 +589,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.inspect.outputs.output_dir }}
+          path: |
+            ${{ steps.inspect.outputs.output_dir }}/mantis-evidence.json
+            ${{ steps.inspect.outputs.output_dir }}/baseline
+            ${{ steps.inspect.outputs.output_dir }}/candidate
           retention-days: 14
           if-no-files-found: error
 
@@ -620,8 +658,9 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Setup Node environment
@@ -699,44 +738,3 @@ jobs:
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
-
-  clear_issue_comment_reaction:
-    name: Clear Mantis command reaction
-    needs: [resolve_request, validate_refs, run_telegram_desktop_proof]
-    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      issues: write
-    steps:
-      - name: Remove workflow eyes reaction
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const commentId = context.payload.comment?.id;
-            if (!commentId) {
-              core.info("No issue comment id found; skipping reaction cleanup.");
-              return;
-            }
-
-            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
-              owner,
-              repo,
-              comment_id: commentId,
-              per_page: 100,
-            });
-            const eyes = reactions.filter(
-              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
-            );
-            for (const reaction of eyes) {
-              await github.rest.reactions.deleteForIssueComment({
-                owner,
-                repo,
-                comment_id: commentId,
-                reaction_id: reaction.id,
-              });
-              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
-            }
-            if (eyes.length === 0) {
-              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
-            }

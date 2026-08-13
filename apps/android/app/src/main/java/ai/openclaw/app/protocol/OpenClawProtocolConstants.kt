@@ -17,6 +17,8 @@ enum class OpenClawCapability(
   Calendar("calendar"),
   Motion("motion"),
   CallLog("callLog"),
+  VoiceWake("voiceWake"),
+  MobileUI("mobileUI"),
 }
 
 enum class OpenClawCanvasCommand(
@@ -190,5 +192,17 @@ enum class OpenClawCallLogCommand(
 
   companion object {
     const val NamespacePrefix: String = "callLog."
+  }
+}
+
+enum class OpenClawMobileUiCommand(
+  val rawValue: String,
+) {
+  Observe("mobile.ui.observe"),
+  Act("mobile.ui.act"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "mobile.ui."
   }
 }

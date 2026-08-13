@@ -4,7 +4,6 @@ import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalTargetRecipient,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { doesApprovalRequestMatchChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
@@ -51,7 +50,7 @@ export function getSlackExecApprovalApprovers(params: {
   });
 }
 
-export function isSlackExecApprovalTargetRecipient(params: {
+function isSlackExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
   accountId?: string | null;
@@ -70,19 +69,10 @@ const slackExecApprovalProfile = createChannelExecApprovalProfile({
   resolveApprovers: getSlackExecApprovalApprovers,
   normalizeSenderId: normalizeSlackApproverId,
   isTargetRecipient: isSlackExecApprovalTargetRecipient,
-  matchesRequestAccount: (params) =>
-    doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "slack",
-      accountId: params.accountId,
-    }),
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;
-export const isSlackExecApprovalApprover = slackExecApprovalProfile.isApprover;
 export const isSlackExecApprovalAuthorizedSender = slackExecApprovalProfile.isAuthorizedSender;
 export const resolveSlackExecApprovalTarget = slackExecApprovalProfile.resolveTarget;
-export const shouldHandleSlackExecApprovalRequest = slackExecApprovalProfile.shouldHandleRequest;
 export const shouldSuppressLocalSlackExecApprovalPrompt =
   slackExecApprovalProfile.shouldSuppressLocalPrompt;

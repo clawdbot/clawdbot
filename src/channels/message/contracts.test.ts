@@ -1,18 +1,11 @@
 // Message contract tests cover shared channel message shape and runtime invariants.
 import { describe, expect, it, vi } from "vitest";
 import {
-  listDeclaredChannelMessageLiveCapabilities,
-  listDeclaredDurableFinalCapabilities,
-  listDeclaredLivePreviewFinalizerCapabilities,
-  listDeclaredReceiveAckPolicies,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
-  verifyChannelMessageLiveCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
-  verifyChannelMessageReceiveAckPolicyProofs,
   verifyDurableFinalCapabilityProofs,
-  verifyLivePreviewFinalizerCapabilityProofs,
 } from "./contracts.js";
 import { durableFinalDeliveryCapabilities } from "./types.js";
 
@@ -27,19 +20,6 @@ function expectOnlyVerifiedOrNotDeclared(results: readonly { status: string }[])
 }
 
 describe("durable final capability contracts", () => {
-  it("lists declared durable-final capabilities in stable order", () => {
-    expect(
-      listDeclaredDurableFinalCapabilities({
-        batch: true,
-        afterCommit: true,
-        reconcileUnknownSend: true,
-        text: true,
-        silent: false,
-        thread: true,
-      }),
-    ).toEqual(["text", "thread", "batch", "reconcileUnknownSend", "afterCommit"]);
-  });
-
   it("runs proofs for every declared durable-final capability", async () => {
     const text = vi.fn();
     const silent = vi.fn(async () => {});
@@ -115,14 +95,6 @@ describe("durable final capability contracts", () => {
     const finalEdit = vi.fn();
     const normalFallback = vi.fn();
 
-    expect(
-      listDeclaredLivePreviewFinalizerCapabilities({
-        previewReceipt: false,
-        normalFallback: true,
-        finalEdit: true,
-      }),
-    ).toEqual(["finalEdit", "normalFallback"]);
-
     const results = await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "demo",
       adapter: {
@@ -154,14 +126,6 @@ describe("durable final capability contracts", () => {
     const draftPreview = vi.fn();
     const previewFinalization = vi.fn();
 
-    expect(
-      listDeclaredChannelMessageLiveCapabilities({
-        nativeStreaming: false,
-        previewFinalization: true,
-        draftPreview: true,
-      }),
-    ).toEqual(["draftPreview", "previewFinalization"]);
-
     const results = await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "demo",
       adapter: {
@@ -187,48 +151,9 @@ describe("durable final capability contracts", () => {
     expect(previewFinalization).toHaveBeenCalledTimes(1);
   });
 
-  it("fails when a declared live preview finalizer capability has no proof", async () => {
-    await expect(
-      verifyLivePreviewFinalizerCapabilityProofs({
-        adapterName: "demo",
-        capabilities: {
-          finalEdit: true,
-          previewReceipt: true,
-        },
-        proofs: {
-          finalEdit: () => {},
-        },
-      }),
-    ).rejects.toThrow(
-      'demo declares live preview finalizer capability "previewReceipt" without a contract proof',
-    );
-  });
-
-  it("fails when a declared live capability has no proof", async () => {
-    await expect(
-      verifyChannelMessageLiveCapabilityProofs({
-        adapterName: "demo",
-        capabilities: {
-          draftPreview: true,
-          progressUpdates: true,
-        },
-        proofs: {
-          draftPreview: () => {},
-        },
-      }),
-    ).rejects.toThrow('demo declares live capability "progressUpdates" without a contract proof');
-  });
-
   it("runs receive ack policy proofs from channel message adapter declarations", async () => {
     const afterReceiveRecord = vi.fn();
     const afterAgentDispatch = vi.fn();
-
-    expect(
-      listDeclaredReceiveAckPolicies({
-        defaultAckPolicy: "after_agent_dispatch",
-        supportedAckPolicies: ["after_agent_dispatch", "after_receive_record"],
-      }),
-    ).toEqual(["after_receive_record", "after_agent_dispatch"]);
 
     const results = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
       adapterName: "demo",
@@ -251,51 +176,5 @@ describe("durable final capability contracts", () => {
     expectOnlyVerifiedOrNotDeclared(results);
     expect(afterReceiveRecord).toHaveBeenCalledTimes(1);
     expect(afterAgentDispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to the default receive ack policy when supported policies are omitted", () => {
-    expect(
-      listDeclaredReceiveAckPolicies({
-        defaultAckPolicy: "after_durable_send",
-      }),
-    ).toEqual(["after_durable_send"]);
-  });
-
-  it("treats manual receive acknowledgement as an explicit plugin-owned policy", async () => {
-    const manual = vi.fn();
-
-    expect(
-      listDeclaredReceiveAckPolicies({
-        defaultAckPolicy: "manual",
-        supportedAckPolicies: ["manual"],
-      }),
-    ).toEqual(["manual"]);
-
-    const results = await verifyChannelMessageReceiveAckPolicyProofs({
-      adapterName: "demo",
-      receive: {
-        defaultAckPolicy: "manual",
-        supportedAckPolicies: ["manual"],
-      },
-      proofs: { manual },
-    });
-    expect(verifiedEntries(results)).toEqual([{ policy: "manual", status: "verified" }]);
-    expect(results).toHaveLength(4);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(manual).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails when a declared receive ack policy has no proof", async () => {
-    await expect(
-      verifyChannelMessageReceiveAckPolicyProofs({
-        adapterName: "demo",
-        receive: {
-          supportedAckPolicies: ["after_receive_record", "manual"],
-        },
-        proofs: {
-          after_receive_record: () => {},
-        },
-      }),
-    ).rejects.toThrow('demo declares receive ack policy "manual" without a contract proof');
   });
 });

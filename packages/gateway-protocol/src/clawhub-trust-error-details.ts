@@ -5,8 +5,7 @@ export const ClawHubTrustErrorCodes = {
   DOWNLOAD_BLOCKED: "clawhub_download_blocked",
 } as const;
 
-export type ClawHubTrustErrorCode =
-  (typeof ClawHubTrustErrorCodes)[keyof typeof ClawHubTrustErrorCodes];
+type ClawHubTrustErrorCode = (typeof ClawHubTrustErrorCodes)[keyof typeof ClawHubTrustErrorCodes];
 
 export type ClawHubTrustErrorDetails = {
   clawhubTrustCode?: ClawHubTrustErrorCode;

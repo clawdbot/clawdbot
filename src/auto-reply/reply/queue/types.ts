@@ -1,15 +1,19 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
-import type { SessionEntry } from "../../../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -17,14 +21,14 @@ import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-tra
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
-  QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
+  TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
-
-export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
+import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -35,13 +39,25 @@ export type QueueSettings = {
   dropPolicy?: QueueDropPolicy;
 };
 
+export type ResolveQueueSettingsParams = {
+  cfg: OpenClawConfig;
+  channel?: string;
+  sessionEntry?: SessionEntry;
+  inlineMode?: QueueMode;
+  inlineOptions?: Partial<QueueSettings>;
+  pluginDebounceMs?: number;
+};
+
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
+  steerCandidate?: boolean;
 };
+
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -72,14 +88,25 @@ export type FollowupRun = {
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
   queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
-  queuedLifecycle?: QueuedReplyLifecycle;
+  /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
+  onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
+  /** The current-turn hook already ran before this steer became a fallback. */
+  /** Pending same-turn acceptance while this item remains parked in FIFO order. */
+  steerPending?: {
+    predecessor: Promise<boolean>;
+    settle: (accepted: boolean) => void;
+  };
+  /** Preserves this candidate's position ahead of overflow summaries. */
+  steerAnchor?: true;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
@@ -87,6 +114,8 @@ export type FollowupRun = {
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
@@ -118,8 +147,10 @@ export type FollowupRun = {
     runtimePolicySessionKey?: string;
     messageProvider?: string;
     clientCaps?: string[];
+    toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
+    conversationToolPolicy?: GroupToolPolicyConfig;
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
@@ -138,9 +169,11 @@ export type FollowupRun = {
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
     config: OpenClawConfig;
+    toolOverrides?: SessionToolOverrides;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    requestedRouteResolution?: ModelFallbackRouteResolution;
     /** Prevents the queued run from selecting configured fallback models. */
     modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;
@@ -149,6 +182,8 @@ export type FollowupRun = {
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
+    /** Prepared model metadata reused when fallbacks revalidate the immutable thinking request. */
+    thinkingCatalog?: ThinkingCatalogEntry[];
     thinkLevel?: ThinkLevel;
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
@@ -189,76 +224,102 @@ export function isFollowupRunAborted(
   return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
-const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
-const admittedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
-const admittingFollowupLifecycles = new WeakMap<QueuedReplyLifecycle, Promise<void>>();
-const retiredFollowupCancellationLifecycles = new WeakSet<QueuedReplyLifecycle>();
-const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
-const completedFollowupLifecycleCallbacks = new WeakSet<QueuedReplyLifecycle>();
+export function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
 
-export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): boolean {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
-    return true;
+const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promise<void>>();
+const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
+
+type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+
+export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (lifecycle && !enqueuedTurnAdoptionLifecycles.has(lifecycle)) {
+    if (lifecycle.onDeferred?.() === false) {
+      return false;
+    }
+    enqueuedTurnAdoptionLifecycles.add(lifecycle);
   }
-  if (lifecycle.onEnqueued?.() === false) {
-    return false;
-  }
-  enqueuedFollowupLifecycles.add(lifecycle);
   return true;
 }
 
-export function retireFollowupRunCancellation(run: Pick<FollowupRun, "queuedLifecycle">): void {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || retiredFollowupCancellationLifecycles.has(lifecycle)) {
+export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle || retiredTurnAdoptionCancellationLifecycles.has(lifecycle)) {
     return;
   }
-  retiredFollowupCancellationLifecycles.add(lifecycle);
+  retiredTurnAdoptionCancellationLifecycles.add(lifecycle);
   lifecycle.onCancellationRetired?.();
 }
 
-export async function admitFollowupRunLifecycle(
-  run: Pick<FollowupRun, "queuedLifecycle">,
-): Promise<void> {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || admittedFollowupLifecycles.has(lifecycle)) {
+export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Promise<void> {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle || admittedTurnAdoptionLifecycles.has(lifecycle)) {
     return;
   }
-  const existing = admittingFollowupLifecycles.get(lifecycle);
+  const existing = admittingTurnAdoptionLifecycles.get(lifecycle);
   if (existing) {
     await existing;
     return;
   }
-  if (completedFollowupLifecycles.has(lifecycle)) {
+  if (completedTurnAdoptionLifecycles.has(lifecycle)) {
     throw new Error("followup run lifecycle completed before admission");
   }
-  const admission = Promise.resolve()
-    .then(async () => await lifecycle.onAdmitted?.())
-    .then(() => {
-      admittedFollowupLifecycles.add(lifecycle);
-    });
-  admittingFollowupLifecycles.set(lifecycle, admission);
+
+  const admission = Promise.resolve().then(async () => {
+    if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      await lifecycle.onAdopted();
+      admittedTurnAdoptionLifecycles.add(lifecycle);
+    }
+  });
+
+  admittingTurnAdoptionLifecycles.set(lifecycle, admission);
   try {
     await admission;
   } finally {
-    admittingFollowupLifecycles.delete(lifecycle);
+    admittingTurnAdoptionLifecycles.delete(lifecycle);
   }
 }
 
-export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || completedFollowupLifecycles.has(lifecycle)) {
-    return;
-  }
-  completedFollowupLifecycles.add(lifecycle);
+export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  run.steerPending?.settle(false);
+  const lifecycle = run.turnAdoptionLifecycle;
+
   const finish = () => {
-    if (completedFollowupLifecycleCallbacks.has(lifecycle)) {
+    if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
       return;
     }
-    completedFollowupLifecycleCallbacks.add(lifecycle);
-    lifecycle.onComplete?.();
+    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
+    // Async onAbandoned work must contain its own rejections; core guarantees a
+    // non-rejecting promise. onSettled must still run after a synchronous throw.
+    try {
+      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        // The queue is relinquishing an un-admitted message: free its dedupe
+        // identity so the abandonment-triggered ingress retry can re-enqueue
+        // instead of being rejected as a recent duplicate and falsely completed.
+        releaseRecentQueueMessageId(run);
+        lifecycle.onAbandoned?.();
+      }
+    } finally {
+      lifecycle.onSettled?.();
+    }
   };
-  const admission = admittingFollowupLifecycles.get(lifecycle);
+
+  if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
+    completedTurnAdoptionLifecycles.add(lifecycle);
+  }
+
+  const admission = lifecycle ? admittingTurnAdoptionLifecycles.get(lifecycle) : undefined;
   if (!admission) {
     finish();
     return;
@@ -267,12 +328,3 @@ export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifec
   // the in-flight admission attempt so adoption and abandonment cannot race.
   void admission.then(finish, finish).catch(() => {});
 }
-
-export type ResolveQueueSettingsParams = {
-  cfg: OpenClawConfig;
-  channel?: string;
-  sessionEntry?: SessionEntry;
-  inlineMode?: QueueMode;
-  inlineOptions?: Partial<QueueSettings>;
-  pluginDebounceMs?: number;
-};

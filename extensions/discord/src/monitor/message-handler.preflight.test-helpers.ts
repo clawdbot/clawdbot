@@ -105,7 +105,7 @@ export function createDiscordPreflightArgs(params: {
     replyToMode: "all",
     dmEnabled: true,
     groupDmEnabled: true,
-    dmPolicy: params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing",
+    dmPolicy: params.discordConfig?.dmPolicy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
     threadBindings: createNoopThreadBindingManager("default"),

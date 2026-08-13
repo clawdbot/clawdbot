@@ -139,7 +139,6 @@ async function ensureRuntimePluginForModelSelection(params: {
         defaultChoice: "npm",
       },
       trustedSourceLinkedOfficialInstall: true,
-      preferRemoteInstall: true,
     },
     prompter: params.prompter,
     runtime: params.runtime,

@@ -113,13 +113,13 @@ export default definePluginEntry({
       handle: async (ctx) => {
         // Honor the operator's screen-capture kill switch: a screen.snapshot
         // deny must block this capture command too, not just the app node's.
-        const denied = ctx.config.gateway?.nodes?.denyCommands ?? [];
+        const denied = ctx.config.gateway?.nodes?.commands?.deny ?? [];
         if (denied.includes("screen.snapshot")) {
           return {
             ok: false,
             code: "SCREEN_CAPTURE_DENIED",
             message:
-              "screen capture is denied by gateway.nodes.denyCommands (screen.snapshot); Logbook capture stays blocked until it is removed",
+              "screen capture is denied by gateway.nodes.commands.deny (screen.snapshot); Logbook capture stays blocked until it is removed",
           };
         }
         return await ctx.invokeNode();

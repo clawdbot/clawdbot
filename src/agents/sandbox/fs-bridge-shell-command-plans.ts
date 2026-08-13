@@ -22,7 +22,7 @@ export function buildStatPlan(
 ): SandboxFsCommandPlan {
   return {
     checks: [{ target, options: { action: "stat files" } }],
-    script: 'set -eu\ncd -- "$1"\nstat -c "%F|%s|%y" -- "$2"',
+    script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
     args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
     allowFailure: true,
   };

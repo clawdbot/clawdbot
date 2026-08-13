@@ -2,8 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveReplyDeliveryAccountId, resolveReplyToMode } from "./reply-threading.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
+  createReplyToModeFilterForChannel,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 
 const emptyCfg = {} as OpenClawConfig;
 
@@ -39,15 +46,6 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    const legacyDmCfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as OpenClawConfig;
-
     const cases: Array<{
       cfg: OpenClawConfig;
       channel?: "telegram" | "discord" | "slack";
@@ -67,8 +65,6 @@ describe("resolveReplyToMode", () => {
       { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
     ];
     for (const testCase of cases) {
       expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
@@ -137,5 +133,86 @@ describe("resolveReplyToMode", () => {
 
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
+  });
+});
+
+describe("createReplyToModeFilterForChannel", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("strips explicit Slack reply tags upstream when replyToMode is off", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            threading: { allowExplicitReplyTagsWhenOff: false },
+          },
+        },
+      ]),
+    );
+
+    const filter = createReplyToModeFilterForChannel("off", "slack");
+
+    expect(filter({ text: "hello", replyToId: "message-1", replyToTag: true }).replyToId).toBe(
+      undefined,
+    );
+  });
+
+  it("keeps other known-channel defaults and fails closed without a channel", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "telegram" }),
+        },
+      ]),
+    );
+    const explicitReply = { text: "hello", replyToId: "message-1", replyToTag: true };
+
+    expect(createReplyToModeFilterForChannel("off", "telegram")(explicitReply).replyToId).toBe(
+      "message-1",
+    );
+    expect(createReplyToModeFilterForChannel("off")(explicitReply).replyToId).toBeUndefined();
+  });
+
+  it("allows explicit tags for named channels without a loaded plugin", () => {
+    // The filter also runs where plugins are not loaded; stripping for unrecognized
+    // ids would break real channels there. Accepted tradeoff pinned on purpose.
+    setActivePluginRegistry(createTestRegistry([]));
+    const explicitReply = { text: "hello", replyToId: "message-1", replyToTag: true };
+
+    expect(
+      createReplyToModeFilterForChannel("off", "unloaded-channel")(explicitReply).replyToId,
+    ).toBe("message-1");
+  });
+
+  it("honors the deprecated allowTagsWhenOff adapter alias", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "legacy-threading",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "legacy-threading" }),
+            threading: { allowTagsWhenOff: false },
+          },
+        },
+      ]),
+    );
+
+    const filter = createReplyToModeFilterForChannel("off", "legacy-threading");
+
+    expect(filter({ text: "hello", replyToId: "message-1", replyToTag: true }).replyToId).toBe(
+      undefined,
+    );
   });
 });

@@ -87,20 +87,12 @@ export async function dispatchRaftWake(params: {
             bodyForAgent: input.textForAgent,
           },
         });
-        const storePath = channelRuntime.session.resolveStorePath(ctx.cfg.session?.store, {
-          agentId: route.agentId,
-        });
         return {
           cfg: ctx.cfg,
           channel: RAFT_CHANNEL_ID,
           accountId: ctx.accountId,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
-          recordInboundSession: channelRuntime.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher,
           // Raft's bridge only transports wake hints. The agent owns CLI delivery
           // after it reads the pending Raft messages, so OpenClaw must not emit a
           // duplicate synthetic reply through the channel dispatcher.

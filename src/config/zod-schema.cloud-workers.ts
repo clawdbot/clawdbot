@@ -3,23 +3,13 @@ import { z } from "zod";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type {
-  CloudWorkerLifetimePolicyConfig,
-  CloudWorkerProfileConfig,
-  CloudWorkersConfig,
-} from "./types.cloud-workers.js";
+import type { CloudWorkerProfileConfig, CloudWorkersConfig } from "./types.cloud-workers.js";
 import { isSecretRef } from "./types.secrets.js";
+import { configUiMetadata } from "./zod-schema.sensitive.js";
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
-
-const CloudWorkerLifetimePolicyShape = {
-  idleTimeoutMinutes: z.number().int().positive().optional(),
-  maxLifetimeMinutes: z.number().int().positive().optional(),
-} satisfies ConfigSchemaShape<CloudWorkerLifetimePolicyConfig>;
-
-const CloudWorkerLifetimePolicySchema = z.object(CloudWorkerLifetimePolicyShape).strict();
 
 export function validateCloudWorkerProfileSettings(value: unknown): string | undefined {
   if (
@@ -67,13 +57,27 @@ const CloudWorkerSettingsSchema = z.record(z.string(), z.unknown()).superRefine(
 });
 
 const CloudWorkerProfileShape = {
-  provider: z.string().trim().min(1),
-  install: z.enum(["bundle", "npm"]).optional().default("bundle"),
-  settings: CloudWorkerSettingsSchema.optional(),
-  lifetime: CloudWorkerLifetimePolicySchema.optional(),
+  provider: z.string().trim().min(1).register(configUiMetadata, {
+    label: "Cloud Worker Provider",
+    help: "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
+  }),
+  install: z.enum(["bundle", "npm"]).optional().default("bundle").register(configUiMetadata, {
+    label: "Cloud Worker Install Method",
+    help: 'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
+  }),
+  settings: CloudWorkerSettingsSchema.optional().register(configUiMetadata, {
+    label: "Cloud Worker Provider Settings",
+    help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
+  }),
 } satisfies ConfigSchemaShape<CloudWorkerProfileConfig>;
 
-const CloudWorkerProfileSchema = z.object(CloudWorkerProfileShape).strict();
+const CloudWorkerProfileSchema = z
+  .object(CloudWorkerProfileShape)
+  .strict()
+  .register(configUiMetadata, {
+    label: "Cloud Worker Profile",
+    help: "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
+  });
 const CloudWorkerProfileIdSchema = z
   .string()
   .min(1)
@@ -83,7 +87,38 @@ const CloudWorkerProfileIdSchema = z
   );
 
 const CloudWorkersConfigShape = {
-  profiles: z.record(CloudWorkerProfileIdSchema, CloudWorkerProfileSchema).optional(),
+  desktop: z.boolean().optional().register(configUiMetadata, {
+    label: "Cloud Worker Desktop (Labs)",
+    help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
+  }),
+  profiles: z
+    .record(CloudWorkerProfileIdSchema, CloudWorkerProfileSchema)
+    .optional()
+    .register(configUiMetadata, {
+      label: "Cloud Worker Profiles",
+      help: "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
+    }),
 } satisfies ConfigSchemaShape<CloudWorkersConfig>;
 
 export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict().optional();
+
+const CLOUD_WORKER_FIELD_SCHEMAS = {
+  "cloudWorkers.desktop": CloudWorkersConfigShape.desktop,
+  "cloudWorkers.profiles": CloudWorkersConfigShape.profiles,
+  "cloudWorkers.profiles.*": CloudWorkerProfileSchema,
+  "cloudWorkers.profiles.*.provider": CloudWorkerProfileShape.provider,
+  "cloudWorkers.profiles.*.install": CloudWorkerProfileShape.install,
+  "cloudWorkers.profiles.*.settings": CloudWorkerProfileShape.settings,
+};
+
+function projectCloudWorkerFieldMetadata(field: "label" | "help"): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(CLOUD_WORKER_FIELD_SCHEMAS).flatMap(([path, schema]) => {
+      const value = configUiMetadata.get(schema)?.[field];
+      return typeof value === "string" ? [[path, value]] : [];
+    }),
+  );
+}
+
+export const CLOUD_WORKER_FIELD_LABELS = projectCloudWorkerFieldMetadata("label");
+export const CLOUD_WORKER_FIELD_HELP = projectCloudWorkerFieldMetadata("help");

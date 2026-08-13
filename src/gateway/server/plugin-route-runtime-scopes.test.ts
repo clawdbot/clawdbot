@@ -63,6 +63,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -80,6 +81,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);

@@ -50,7 +50,7 @@ const runtime = vi.hoisted(() => ({
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
   enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
-  loadCombinedSessionStoreForGateway: vi.fn(() => ({
+  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
   })),
@@ -75,7 +75,7 @@ describe("embedded gateway stub", () => {
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
-    runtime.loadCombinedSessionStoreForGateway.mockClear();
+    runtime.loadCombinedSessionStoreForGatewayCore.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
   });
 
@@ -86,9 +86,9 @@ describe("embedded gateway stub", () => {
       params: { agentId: "work", includeGlobal: true, search: "global" },
     });
 
-    expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
+    expect(runtime.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledWith(
       { agents: { list: [{ id: "main", default: true }] } },
-      { agentId: "work" },
+      { agentId: "work", projection: "list" },
     );
     expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
@@ -113,8 +113,26 @@ describe("embedded gateway stub", () => {
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
+      client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
     });
+  });
+
+  it("preserves short-id ambiguity as a successful embedded response", async () => {
+    const candidates = [
+      { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
+      { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
+    ];
+    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+      ok: true,
+      ambiguous: true,
+      candidates,
+    });
+
+    const callGateway = createEmbeddedCallGateway();
+    await expect(
+      callGateway({ method: "sessions.resolve", params: { shortId: "12345678" } }),
+    ).resolves.toEqual({ ok: false, candidates });
   });
 
   it("throws resolver errors for unresolved sessions", async () => {
@@ -181,6 +199,26 @@ describe("embedded gateway stub", () => {
     await expect(
       callGateway({ method: "sessions.search", params: { query: "x".repeat(4097) } }),
     ).rejects.toThrow("query must not exceed 4096 characters");
+    expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit agent that conflicts with an unscoped store owner", async () => {
+    runtime.resolveSessionAgentId.mockImplementationOnce(() => {
+      throw new Error('The shared fixed-store row belongs to "ops", not "research".');
+    });
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "sessions.search",
+        params: { agentId: "research", query: "needle", sessionKeys: ["global"] },
+      }),
+    ).rejects.toThrow('belongs to "ops", not "research"');
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      agentId: "research",
+    });
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 

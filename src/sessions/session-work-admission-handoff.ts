@@ -5,6 +5,7 @@ import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 export type SessionWorkAdmissionLease = {
   createHandoff: () => string;
   release: () => void;
+  released: Promise<void>;
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 

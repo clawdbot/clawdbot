@@ -1,22 +1,6 @@
 // File Transfer tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
-import { err, throwFromNodePayload } from "./errors.js";
-
-describe("err", () => {
-  it("returns an error envelope without canonicalPath when omitted", () => {
-    const e = err("INVALID_PATH", "path required");
-    expect(e).toEqual({ ok: false, code: "INVALID_PATH", message: "path required" });
-    expect("canonicalPath" in e).toBe(false);
-  });
-
-  it("includes canonicalPath only when provided non-empty", () => {
-    const withPath = err("NOT_FOUND", "missing", "/tmp/x");
-    expect(withPath.canonicalPath).toBe("/tmp/x");
-
-    const blankPath = err("NOT_FOUND", "missing", "");
-    expect("canonicalPath" in blankPath).toBe(false);
-  });
-});
+import { throwFromNodePayload } from "./errors.js";
 
 describe("throwFromNodePayload", () => {
   it("preserves code and message in the thrown Error", () => {

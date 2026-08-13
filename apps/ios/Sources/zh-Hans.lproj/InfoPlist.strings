@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
@@ -19,8 +18,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw 使用麦克风进行实时聊天、语音唤醒、按键说话和语音备忘。";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw 可能会使用运动数据来支持设备感知的交互和自动化。";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "启用健康摘要后，OpenClaw 会读取步数、睡眠、静息心率和体能训练，以便与您配置的 AI 提供商共享请求的汇总数据。";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw 会从 Apple 健康 App 中读取您的步数、睡眠、静息心率和体能训练数据，以创建您请求的摘要，并通过您的 Gateway 将其发送至您配置的 AI 提供商。";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw 不会向 Apple 健康 App 写入数据。它使用只读数据创建您请求的摘要，并通过您的 Gateway 将其发送至您配置的 AI 提供商。";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw 允许你的助手读取你允许的照片，并允许你选择要分享的照片。";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

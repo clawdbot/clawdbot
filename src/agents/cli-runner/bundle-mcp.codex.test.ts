@@ -3,6 +3,42 @@ import { describe, expect, it } from "vitest";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 describe("prepareCliBundleMcpConfig codex", () => {
+  it("disables Codex native web search without bundle MCP", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: false,
+      mode: "codex-config-overrides",
+      backend: { command: "codex", args: ["exec"] },
+      workspaceDir: "/tmp/openclaw-cli-codex-web-search-disabled",
+      toolOverrides: { webSearch: false },
+    });
+
+    expect(prepared.backend.args).toEqual(["exec", "-c", 'web_search="disabled"']);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("projects session MCP tool denials into Codex disabled_tools", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "codex-config-overrides",
+      backend: { command: "codex", args: ["exec"] },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-codex-deny",
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            docs: { transport: "streamable-http", url: "https://docs.example.com/mcp" },
+          },
+        },
+      },
+      toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] }, webSearch: false },
+    });
+
+    expect(prepared.backend.args?.find((arg) => arg.startsWith("mcp_servers="))).toContain(
+      'disabled_tools = ["delete_docs"]',
+    );
+    expect(prepared.backend.args).toContain('web_search="disabled"');
+  });
+
   it("injects codex MCP config overrides with env-backed loopback headers", async () => {
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,

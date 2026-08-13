@@ -14,8 +14,3 @@ export function saveStoredGroupBy(mode: SessionsGroupBy): void {
     // Storage may be unavailable or full; the in-memory selection still applies.
   }
 }
-
-export function parseFilterInteger(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}

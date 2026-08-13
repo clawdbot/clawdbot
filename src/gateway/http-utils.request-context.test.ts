@@ -161,6 +161,17 @@ describe("resolveGatewayRequestContext", () => {
       }),
     ).toThrow("Unknown agent '!!!'.");
   });
+
+  it("rejects invalid model syntax before accepting an explicit agent header", () => {
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "main" }),
+        model: "gpt-4o",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+  });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {
@@ -250,6 +261,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);

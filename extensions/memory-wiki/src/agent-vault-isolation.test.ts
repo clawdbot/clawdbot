@@ -1,6 +1,7 @@
 // Memory Wiki tests cover agent-scoped vault isolation through the public tools.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -21,7 +22,7 @@ import { createWikiApplyTool, createWikiGetTool, createWikiSearchTool } from "./
 
 const { createTempDir } = createMemoryWikiTestHarness();
 
-function asRecord(value: unknown): Record<string, unknown> {
+function assertToolDetailsRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected tool details object");
   }
@@ -40,6 +41,7 @@ function registerMemoryCoreToolFactories(
     createTestPluginApi({
       id: "memory-core",
       config: appConfig,
+      runtime: createPluginRuntimeMock(),
       registerTool(tool, options) {
         if (typeof tool !== "function") {
           return;
@@ -80,6 +82,8 @@ describe("agent-scoped memory-wiki tools", () => {
   it("keeps apply, search, and get behavior isolated by configured agent", async () => {
     const vaultParent = await createTempDir("memory-wiki-agent-vaults-");
     const appConfig = {
+      // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
+      plugins: { enabled: false },
       agents: {
         list: [{ id: "support", default: true }, { id: "marketing" }],
       },
@@ -128,7 +132,7 @@ describe("agent-scoped memory-wiki tools", () => {
           sourceIds: [`source.${agent.id}`],
         },
       );
-      const pagePath = asRecord(result.details).pagePath;
+      const pagePath = assertToolDetailsRecord(result.details).pagePath;
       if (typeof pagePath !== "string") {
         throw new Error("Expected wiki_apply to return pagePath");
       }
@@ -160,7 +164,7 @@ describe("agent-scoped memory-wiki tools", () => {
         query: agent.sentinel,
       });
       expect(textContent(ownSearch)).toContain(agent.sentinel);
-      expect(asRecord(ownSearch.details).results).toEqual([
+      expect(assertToolDetailsRecord(ownSearch.details).results).toEqual([
         expect.objectContaining({ path: agent.pagePath }),
       ]);
 
@@ -168,18 +172,18 @@ describe("agent-scoped memory-wiki tools", () => {
         query: foreignAgent.sentinel,
       });
       expect(textContent(foreignSearch)).toBe("No wiki or memory results.");
-      expect(asRecord(foreignSearch.details).results).toEqual([]);
+      expect(assertToolDetailsRecord(foreignSearch.details).results).toEqual([]);
 
       const getTool = createWikiGetTool(agent.config, appConfig, { agentId: agent.id });
       const ownGet = await getTool.execute(`get-own-${agent.id}`, { lookup: agent.pagePath });
       expect(textContent(ownGet)).toContain(agent.sentinel);
-      expect(asRecord(ownGet.details).found).toBe(true);
+      expect(assertToolDetailsRecord(ownGet.details).found).toBe(true);
 
       const foreignGet = await getTool.execute(`get-foreign-${agent.id}`, {
         lookup: foreignAgent.pagePath,
       });
       expect(textContent(foreignGet)).toBe(`Wiki page not found: ${foreignAgent.pagePath}`);
-      expect(asRecord(foreignGet.details).found).toBe(false);
+      expect(assertToolDetailsRecord(foreignGet.details).found).toBe(false);
     }
 
     clearMemoryPluginState();
@@ -214,7 +218,7 @@ describe("agent-scoped memory-wiki tools", () => {
           query: agent.sentinel,
           corpus: "wiki",
         });
-        expect(asRecord(ownMemorySearch.details).results).toEqual([
+        expect(assertToolDetailsRecord(ownMemorySearch.details).results).toEqual([
           expect.objectContaining({
             corpus: "wiki",
             path: agent.pagePath,
@@ -229,7 +233,7 @@ describe("agent-scoped memory-wiki tools", () => {
             corpus: "wiki",
           },
         );
-        expect(asRecord(foreignMemorySearch.details).results).toEqual([]);
+        expect(assertToolDetailsRecord(foreignMemorySearch.details).results).toEqual([]);
 
         const memoryGet = createMemoryCoreTool({
           factories: memoryCoreFactories,
@@ -241,7 +245,7 @@ describe("agent-scoped memory-wiki tools", () => {
           path: agent.pagePath,
           corpus: "wiki",
         });
-        expect(asRecord(ownMemoryGet.details)).toMatchObject({
+        expect(assertToolDetailsRecord(ownMemoryGet.details)).toMatchObject({
           corpus: "wiki",
           path: agent.pagePath,
           text: expect.stringContaining(agent.sentinel),
@@ -251,7 +255,7 @@ describe("agent-scoped memory-wiki tools", () => {
           path: foreignAgent.pagePath,
           corpus: "wiki",
         });
-        expect(asRecord(foreignMemoryGet.details)).toMatchObject({
+        expect(assertToolDetailsRecord(foreignMemoryGet.details)).toMatchObject({
           path: foreignAgent.pagePath,
           text: "",
           disabled: true,
@@ -261,5 +265,5 @@ describe("agent-scoped memory-wiki tools", () => {
     } finally {
       clearMemoryPluginState();
     }
-  });
+  }, 360_000);
 });

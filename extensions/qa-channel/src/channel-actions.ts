@@ -11,8 +11,10 @@ import {
   parseQaTarget,
   reactToQaBusMessage,
   readQaBusMessage,
+  resolveQaTargetThread,
   searchQaBusMessages,
   sendQaBusMessage,
+  type QaBusMessage,
 } from "./bus-client.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
@@ -54,22 +56,59 @@ function readQaSendText(params: Record<string, unknown>) {
 }
 
 function readQaSendTarget(params: Record<string, unknown>) {
+  const target = readStringParam(params, "target");
+  if (target) {
+    return buildQaTarget(parseQaTarget(target, { defaultChatType: "channel" }));
+  }
   const explicitTo = readStringParam(params, "to");
   if (explicitTo) {
-    return explicitTo;
+    return buildQaTarget(parseQaTarget(explicitTo));
   }
   const channelId = readStringParam(params, "channelId");
   if (channelId) {
-    return buildQaTarget({ chatType: "channel", conversationId: channelId });
+    return buildQaTarget(parseQaTarget(channelId, { defaultChatType: "channel" }));
   }
-  const target = readStringParam(params, "target");
-  if (!target) {
-    return undefined;
+  return undefined;
+}
+
+type QaMessageTarget = {
+  conversationId: string;
+  conversationKind: QaBusMessage["conversation"]["kind"];
+  threadId: string | null;
+};
+
+function readQaMessageTarget(
+  params: Record<string, unknown>,
+  action: ChannelMessageActionName,
+): QaMessageTarget {
+  const rawTarget = readQaSendTarget(params);
+  if (!rawTarget) {
+    throw new Error(`qa-channel ${action} requires a target`);
   }
-  if (/^(dm|channel|group):|^thread:[^/]+\/.+/i.test(target)) {
-    return target;
+  const parsed = parseQaTarget(rawTarget);
+  const explicitThreadId = readStringParam(params, "threadId");
+  if (parsed.threadId && explicitThreadId && parsed.threadId !== explicitThreadId) {
+    throw new Error(`qa-channel ${action} received conflicting thread targets`);
   }
-  return buildQaTarget({ chatType: "channel", conversationId: target });
+  return {
+    conversationId: parsed.conversationId,
+    conversationKind: parsed.chatType,
+    threadId: explicitThreadId ?? parsed.threadId ?? null,
+  };
+}
+
+function qaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): boolean {
+  return (
+    message.conversation.id === target.conversationId &&
+    message.conversation.kind === target.conversationKind &&
+    (message.threadId ?? null) === target.threadId
+  );
+}
+
+function assertQaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): void {
+  if (!qaMessageMatchesTarget(message, target)) {
+    throw new Error("qa-channel message is not in the selected conversation");
+  }
 }
 
 export const qaChannelMessageActions: ChannelMessageActionAdapter = {
@@ -82,11 +121,17 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         threadId: Type.Optional(Type.String()),
         messageId: Type.Optional(Type.String()),
         emoji: Type.Optional(Type.String()),
-        title: Type.Optional(Type.String()),
+        title: Type.Optional(Type.String({ description: "Deprecated alias for threadName." })),
         query: Type.Optional(Type.String()),
       },
     },
   }),
+  messageActionTargetAliases: {
+    edit: {
+      aliases: ["messageId"],
+      deliveryTargetAliases: [],
+    },
+  },
   extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "send") {
@@ -108,6 +153,23 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
     const { action, cfg, accountId, params } = context;
     const account = resolveQaChannelAccount({ cfg: cfg as CoreConfig, accountId });
     const baseUrl = account.baseUrl;
+    // These aliases shipped before QA adopted the shared message-action fields.
+    // Canonical fields win while direct API consumers retain compatibility.
+    const readBoundMessage = async () => {
+      const target = readQaMessageTarget(params, action);
+      const { message } = await readQaBusMessage({
+        baseUrl,
+        accountId: account.accountId,
+        messageId: readStringParam(params, "messageId", { required: true }),
+      });
+      // QA evidence must not validate a host target while the bus acts on a
+      // foreign immutable message owner.
+      assertQaMessageMatchesTarget(message, target);
+      if (message.deleted) {
+        throw new Error(`qa-channel message was deleted: ${message.id}`);
+      }
+      return message;
+    };
 
     switch (action) {
       case "send": {
@@ -116,62 +178,66 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         if (!to || text === undefined) {
           throw new Error("qa-channel send requires to/target and message/text");
         }
-        const parsed = parseQaTarget(to);
-        const threadId = readStringParam(params, "threadId") ?? parsed.threadId;
+        const resolved = resolveQaTargetThread({
+          target: to,
+          threadId: readStringParam(params, "threadId"),
+        });
+        const parsed = resolved.target;
         const { message } = await sendQaBusMessage({
           baseUrl,
           accountId: account.accountId,
           to: buildQaTarget({
             chatType: parsed.chatType,
             conversationId: parsed.conversationId,
-            threadId,
+            threadId: resolved.threadId,
           }),
           text,
           senderId: account.botUserId,
           senderName: account.botDisplayName,
-          threadId,
+          threadId: resolved.threadId,
           replyToId: readStringParam(params, "replyTo") ?? readStringParam(params, "replyToId"),
         });
         return jsonResult({ message });
       }
       case "thread-create": {
-        const channelId =
-          readStringParam(params, "channelId") ??
-          (() => {
-            const to = readStringParam(params, "to");
-            return to ? parseQaTarget(to).conversationId : undefined;
-          })();
-        const title = readStringParam(params, "title") ?? "QA thread";
-        if (!channelId) {
-          throw new Error("qa-channel thread-create requires channelId");
+        const target = readQaMessageTarget(params, action);
+        const title =
+          readStringParam(params, "threadName") ?? readStringParam(params, "title") ?? "QA thread";
+        if (target.conversationKind !== "channel") {
+          throw new Error("qa-channel thread-create requires a channel target");
         }
         const { thread } = await createQaBusThread({
           baseUrl,
           accountId: account.accountId,
-          conversationId: channelId,
+          conversationId: target.conversationId,
           title,
           createdBy: account.botUserId,
         });
         return jsonResult({
           thread,
-          target: `thread:${channelId}/${thread.id}`,
+          target: `thread:${target.conversationId}/${thread.id}`,
         });
       }
       case "thread-reply": {
-        const channelId = readStringParam(params, "channelId");
-        const threadId = readStringParam(params, "threadId");
-        const text = readStringParam(params, "text");
-        if (!channelId || !threadId || !text) {
-          throw new Error("qa-channel thread-reply requires channelId, threadId, and text");
+        const target = readQaMessageTarget(params, action);
+        const text = readStringParam(params, "message") ?? readStringParam(params, "text");
+        if (target.conversationKind !== "channel" || !target.threadId || !text) {
+          throw new Error(
+            "qa-channel thread-reply requires a channel thread target and message/text",
+          );
         }
         const { message } = await sendQaBusMessage({
           baseUrl,
           accountId: account.accountId,
-          to: `thread:${channelId}/${threadId}`,
+          to: buildQaTarget({
+            chatType: target.conversationKind,
+            conversationId: target.conversationId,
+            threadId: target.threadId,
+          }),
           text,
           senderId: account.botUserId,
           senderName: account.botDisplayName,
-          threadId,
+          threadId: target.threadId,
         });
         return jsonResult({ message });
       }
@@ -181,6 +247,7 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         if (!messageId || !emoji) {
           throw new Error("qa-channel react requires messageId and emoji");
         }
+        await readBoundMessage();
         const { message } = await reactToQaBusMessage({
           baseUrl,
           accountId: account.accountId,
@@ -196,19 +263,16 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         if (!messageId) {
           throw new Error(`qa-channel ${action} requires messageId`);
         }
-        const { message } = await readQaBusMessage({
-          baseUrl,
-          accountId: account.accountId,
-          messageId,
-        });
+        const message = await readBoundMessage();
         return jsonResult({ message });
       }
       case "edit": {
         const messageId = readStringParam(params, "messageId");
-        const text = readStringParam(params, "text");
+        const text = readStringParam(params, "message") ?? readStringParam(params, "text");
         if (!messageId || !text) {
-          throw new Error("qa-channel edit requires messageId and text");
+          throw new Error("qa-channel edit requires messageId and message/text");
         }
+        await readBoundMessage();
         const { message } = await editQaBusMessage({
           baseUrl,
           accountId: account.accountId,
@@ -222,6 +286,7 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         if (!messageId) {
           throw new Error("qa-channel delete requires messageId");
         }
+        await readBoundMessage();
         const { message } = await deleteQaBusMessage({
           baseUrl,
           accountId: account.accountId,
@@ -231,15 +296,20 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
       }
       case "search": {
         const query = readStringParam(params, "query");
-        const channelId = readStringParam(params, "channelId");
+        const rawTarget = readQaSendTarget(params);
+        const target = rawTarget ? readQaMessageTarget(params, action) : undefined;
         const threadId = readStringParam(params, "threadId");
+        if (!target && threadId) {
+          throw new Error("qa-channel search requires channelId when threadId is provided");
+        }
         const { messages } = await searchQaBusMessages({
           baseUrl,
           input: {
             accountId: account.accountId,
             query,
-            conversationId: channelId,
-            threadId,
+            conversationId: target?.conversationId,
+            conversationKind: target?.conversationKind,
+            threadId: target ? target.threadId : undefined,
           },
         });
         return jsonResult({ messages });

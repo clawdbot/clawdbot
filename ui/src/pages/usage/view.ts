@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/usage.css";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
@@ -12,9 +13,9 @@ import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
-  formatCost,
+  formatUsageCost,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
@@ -30,7 +31,8 @@ import {
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+import { renderSessionDetailPanel, usageDateKey } from "./view-details.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
   renderCostWindowComparison,
@@ -176,21 +178,6 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
   );
 }
 
-function closeDetailsOnOutsideClick(e: Event) {
-  const el = e.currentTarget as HTMLDetailsElement;
-  if (!el.open) {
-    return;
-  }
-  const onClick = (ev: MouseEvent) => {
-    const path = ev.composedPath();
-    if (!path.includes(el)) {
-      el.open = false;
-      window.removeEventListener("click", onClick, true);
-    }
-  };
-  window.addEventListener("click", onClick, true);
-}
-
 export function renderUsage(props: UsageProps) {
   const { data, filters, display, detail, callbacks } = props;
   const filterActions = callbacks.filters;
@@ -233,9 +220,7 @@ export function renderUsage(props: UsageProps) {
           if (!s.updatedAt) {
             return false;
           }
-          const d = new Date(s.updatedAt);
-          const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return selectedDaySet.has(sessionDate);
+          return selectedDaySet.has(usageDateKey(s.updatedAt, filters.timeZone));
         })
       : agentScopedSessions;
 
@@ -425,65 +410,61 @@ export function renderUsage(props: UsageProps) {
       options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
     const selectedCount = selected.length;
     return html`
-      <details class="usage-filter-select" @toggle=${closeDetailsOnOutsideClick}>
-        <summary>
+      <wa-dropdown
+        class="usage-filter-select"
+        placement="bottom-start"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          event.preventDefault();
+          const value = event.detail.item.value;
+          if (value === "command:select-all") {
+            filterActions.onQueryDraftChange(
+              setQueryTokensForKey(filters.queryDraft, key, options),
+            );
+            return;
+          }
+          if (value === "command:clear") {
+            filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
+            return;
+          }
+          if (value?.startsWith("option:")) {
+            const optionValue = decodeURIComponent(value.slice("option:".length));
+            const token = `${key}:${optionValue}`;
+            const checked = selectedSet.has(normalizeQueryText(optionValue));
+            filterActions.onQueryDraftChange(
+              checked
+                ? removeQueryToken(filters.queryDraft, token)
+                : addQueryToken(filters.queryDraft, token),
+            );
+          }
+        }}
+      >
+        <button slot="trigger" type="button" class="usage-filter-trigger">
           <span>${label}</span>
           ${selectedCount > 0
             ? html`<span class="settings-count">${selectedCount}</span>`
             : html` <span class="settings-count">${t("usage.filters.all")}</span> `}
-        </summary>
-        <div class="usage-filter-popover">
-          <div class="usage-filter-actions">
-            <button
-              class="btn btn--sm"
-              @click=${(e: Event) => {
-                e.preventDefault();
-                e.stopPropagation();
-                filterActions.onQueryDraftChange(
-                  setQueryTokensForKey(filters.queryDraft, key, options),
-                );
-              }}
-              ?disabled=${allSelected}
+        </button>
+        <wa-dropdown-item value="command:select-all" ?disabled=${allSelected}>
+          ${t("usage.filters.selectAll")}
+        </wa-dropdown-item>
+        <wa-dropdown-item value="command:clear" ?disabled=${selectedCount === 0}>
+          ${t("usage.filters.clear")}
+        </wa-dropdown-item>
+        <div class="session-menu__separator" role="separator"></div>
+        ${options.map((value) => {
+          const checked = selectedSet.has(normalizeQueryText(value));
+          return html`
+            <wa-dropdown-item
+              class="usage-filter-option"
+              type="checkbox"
+              value=${`option:${encodeURIComponent(value)}`}
+              .checked=${checked}
             >
-              ${t("usage.filters.selectAll")}
-            </button>
-            <button
-              class="btn btn--sm"
-              @click=${(e: Event) => {
-                e.preventDefault();
-                e.stopPropagation();
-                filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
-              }}
-              ?disabled=${selectedCount === 0}
-            >
-              ${t("usage.filters.clear")}
-            </button>
-          </div>
-          <div class="usage-filter-options">
-            ${options.map((value) => {
-              const checked = selectedSet.has(normalizeQueryText(value));
-              return html`
-                <label class="usage-filter-option">
-                  <input
-                    type="checkbox"
-                    .checked=${checked}
-                    @change=${(e: Event) => {
-                      const target = e.target as HTMLInputElement;
-                      const token = `${key}:${value}`;
-                      filterActions.onQueryDraftChange(
-                        target.checked
-                          ? addQueryToken(filters.queryDraft, token)
-                          : removeQueryToken(filters.queryDraft, token),
-                      );
-                    }}
-                  />
-                  <span>${value}</span>
-                </label>
-              `;
-            })}
-          </div>
-        </div>
-      </details>
+              ${value}
+            </wa-dropdown-item>
+          `;
+        })}
+      </wa-dropdown>
     `;
   };
   const exportStamp = formatIsoDate(new Date());
@@ -511,11 +492,11 @@ export function renderUsage(props: UsageProps) {
                 ${displayTotals
                   ? html`
                       <span class="usage-metric-badge">
-                        <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                        <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
                         ${t("usage.metrics.tokens")}
                       </span>
                       <span class="usage-metric-badge">
-                        <strong>${formatCost(displayTotals.totalCost)}</strong>
+                        <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
                         ${t("usage.metrics.cost")}
                       </span>
                       <span class="usage-metric-badge">
@@ -532,58 +513,62 @@ export function renderUsage(props: UsageProps) {
                 >
                   ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
                 </button>
-                <details class="usage-export-menu" @toggle=${closeDetailsOnOutsideClick}>
-                  <summary class="btn btn--sm">${t("usage.export.label")} ▾</summary>
-                  <div class="usage-export-popover">
-                    <div class="usage-export-list">
-                      <button
-                        class="usage-export-item"
-                        @click=${() =>
-                          downloadTextFile(
-                            `openclaw-usage-sessions-${exportStamp}.csv`,
-                            buildSessionsCsv(filteredSessions),
-                            "text/csv",
-                          )}
-                        ?disabled=${filteredSessions.length === 0}
-                      >
-                        ${t("usage.export.sessionsCsv")}
-                      </button>
-                      <button
-                        class="usage-export-item"
-                        @click=${() =>
-                          downloadTextFile(
-                            `openclaw-usage-daily-${exportStamp}.csv`,
-                            buildDailyCsv(filteredDaily),
-                            "text/csv",
-                          )}
-                        ?disabled=${filteredDaily.length === 0}
-                      >
-                        ${t("usage.export.dailyCsv")}
-                      </button>
-                      <button
-                        class="usage-export-item"
-                        @click=${() =>
-                          downloadTextFile(
-                            `openclaw-usage-${exportStamp}.json`,
-                            JSON.stringify(
-                              {
-                                totals: displayTotals,
-                                sessions: filteredSessions,
-                                daily: filteredDaily,
-                                aggregates: activeAggregates,
-                              },
-                              null,
-                              2,
-                            ),
-                            "application/json",
-                          )}
-                        ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
-                      >
-                        ${t("usage.export.json")}
-                      </button>
-                    </div>
-                  </div>
-                </details>
+                <wa-dropdown
+                  class="usage-export-menu"
+                  placement="bottom-end"
+                  @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                    switch (event.detail.item.value) {
+                      case "sessions-csv":
+                        downloadTextFile(
+                          `openclaw-usage-sessions-${exportStamp}.csv`,
+                          buildSessionsCsv(filteredSessions),
+                          "text/csv",
+                        );
+                        break;
+                      case "daily-csv":
+                        downloadTextFile(
+                          `openclaw-usage-daily-${exportStamp}.csv`,
+                          buildDailyCsv(filteredDaily),
+                          "text/csv",
+                        );
+                        break;
+                      case "json":
+                        downloadTextFile(
+                          `openclaw-usage-${exportStamp}.json`,
+                          JSON.stringify(
+                            {
+                              totals: displayTotals,
+                              sessions: filteredSessions,
+                              daily: filteredDaily,
+                              aggregates: activeAggregates,
+                            },
+                            null,
+                            2,
+                          ),
+                          "application/json",
+                        );
+                        break;
+                      case undefined:
+                        break;
+                    }
+                  }}
+                >
+                  <button slot="trigger" type="button" class="btn btn--sm">
+                    ${t("usage.export.label")} ▾
+                  </button>
+                  <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
+                    ${t("usage.export.sessionsCsv")}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item value="daily-csv" ?disabled=${filteredDaily.length === 0}>
+                    ${t("usage.export.dailyCsv")}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item
+                    value="json"
+                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                  >
+                    ${t("usage.export.json")}
+                  </wa-dropdown-item>
+                </wa-dropdown>
               </div>
             </div>
 
@@ -822,6 +807,7 @@ export function renderUsage(props: UsageProps) {
                 displaySessionCount,
                 totalSessions,
               )}
+              ${renderUsageHeatmap(filteredDaily, filters.startDate, filters.endDate)}
               ${renderUsageMosaic(
                 aggregateSessions,
                 filters.timeZone,
@@ -869,6 +855,8 @@ export function renderUsage(props: UsageProps) {
                         primarySelectedEntry,
                         detail.timeSeries,
                         detail.timeSeriesLoading,
+                        detail.timeSeriesStatus,
+                        detailActions.onRetryTimeSeries,
                         detail.timeSeriesMode,
                         detailActions.onTimeSeriesModeChange,
                         detail.timeSeriesBreakdownMode,
@@ -879,8 +867,11 @@ export function renderUsage(props: UsageProps) {
                         filters.startDate,
                         filters.endDate,
                         filters.selectedDays,
+                        filters.timeZone,
                         detail.sessionLogs,
                         detail.sessionLogsLoading,
+                        detail.sessionLogsStatus,
+                        detailActions.onRetrySessionLogs,
                         detail.sessionLogsExpanded,
                         detailActions.onToggleSessionLogsExpanded,
                         detail.logFilters,
@@ -904,3 +895,4 @@ export function renderUsage(props: UsageProps) {
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

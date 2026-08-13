@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exportGoogleDriveDocumentText } from "./drive.js";
 import { fetchGoogleMeetSpace } from "./meet.js";
-import { refreshGoogleMeetAccessToken } from "./oauth.js";
+import { resolveGoogleMeetAccessToken } from "./oauth.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -22,7 +22,7 @@ const requests = [
   {
     name: "OAuth token",
     run: () =>
-      refreshGoogleMeetAccessToken({
+      resolveGoogleMeetAccessToken({
         clientId: "client-id",
         refreshToken: "refresh-token",
       }),

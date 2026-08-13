@@ -16,4 +16,4 @@ Extract readable article content from local HTML web fetch responses.
 
 ## Surface
 
-contracts: webContentExtractors
+contracts: `webContentExtractors`

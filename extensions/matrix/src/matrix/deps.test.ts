@@ -3,12 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  ensureMatrixCryptoRuntime,
-  ensureMatrixSdkInstalled,
-  MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
-  runFixedCommandWithTimeout,
-} from "./deps.js";
+import { ensureMatrixCryptoRuntime, ensureMatrixSdkInstalled } from "./deps.js";
 
 const logStub = vi.fn();
 
@@ -161,73 +156,6 @@ describe("ensureMatrixCryptoRuntime", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("runFixedCommandWithTimeout", () => {
-  it("retains bounded tails from noisy bootstrap commands", async () => {
-    const result = await runFixedCommandWithTimeout({
-      argv: [
-        process.execPath,
-        "-e",
-        [
-          `process.stdout.write("a".repeat(${MATRIX_COMMAND_OUTPUT_TAIL_BYTES + 1}));`,
-          `process.stderr.write("b".repeat(${MATRIX_COMMAND_OUTPUT_TAIL_BYTES + 1}));`,
-        ].join(""),
-      ],
-      cwd: process.cwd(),
-      timeoutMs: 10_000,
-    });
-
-    expect(result.code).toBe(0);
-    expect(Buffer.byteLength(result.stdout, "utf8")).toBe(MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
-    expect(Buffer.byteLength(result.stderr, "utf8")).toBe(MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
-    expect(result.stdout).toBe("a".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
-    expect(result.stderr).toBe("b".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
-  });
-
-  it("keeps bounded stdout and stderr tails on UTF-8 character boundaries", async () => {
-    const suffix = "z".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES - 2);
-    const result = await runFixedCommandWithTimeout({
-      argv: [
-        process.execPath,
-        "-e",
-        [
-          'const prefix = "a".repeat(10);',
-          `const suffix = "z".repeat(${MATRIX_COMMAND_OUTPUT_TAIL_BYTES - 2});`,
-          "const payload = `${prefix}🙂${suffix}`;",
-          "process.stdout.write(payload);",
-          "process.stderr.write(payload);",
-        ].join(""),
-      ],
-      cwd: process.cwd(),
-      timeoutMs: 10_000,
-    });
-
-    expect(result.code).toBe(0);
-    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(
-      MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
-    );
-    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(
-      MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
-    );
-    expect(result.stdout).toBe(suffix);
-    expect(result.stderr).toBe(suffix);
-    expect(result.stdout).not.toContain("\uFFFD");
-    expect(result.stderr).not.toContain("\uFFFD");
-  });
-
-  it("returns the documented timeout exit code", async () => {
-    const result = await runFixedCommandWithTimeout({
-      argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-      cwd: process.cwd(),
-      timeoutMs: 25,
-    });
-
-    expect(result).toMatchObject({
-      code: 124,
-      stderr: "command timed out after 25ms",
-    });
   });
 });
 

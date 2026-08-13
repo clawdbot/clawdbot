@@ -22,9 +22,9 @@ type RecoverySessionMeta = {
 
 const THINKING_BLOCK_ERROR_PATTERN =
   /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
-export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
-export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
+function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
   return (
     Boolean(message) &&
     typeof message === "object" &&
@@ -95,16 +95,7 @@ function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
 }
 
 function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 function stripSignatureFieldsFromThinkingBlock(
@@ -135,7 +126,7 @@ function stripSignatureFieldsFromThinkingBlock(
  *
  * Returns the original reference when nothing was stripped.
  */
-export function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
+function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
   if (!isAssistantMessageWithContent(message)) {
     return message;
   }
@@ -765,3 +756,4 @@ export function wrapAnthropicStreamWithRecovery(
     return createRecoveryStream(stream, requestMeta, retry, notify);
   };
 }
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

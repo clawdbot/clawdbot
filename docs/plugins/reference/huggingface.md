@@ -16,7 +16,7 @@ Adds Hugging Face model provider support to OpenClaw.
 
 ## Surface
 
-providers: huggingface
+providers: `huggingface`
 
 ## Related docs
 

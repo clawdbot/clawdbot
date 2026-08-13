@@ -62,6 +62,9 @@ describe("resolveSlackThreadContextData", () => {
     allowFromLower: string[];
     allowNameMatching: boolean;
     sessionState?: "missing" | "fresh" | "stale";
+    sessionLastInteractionAt?: number;
+    sessionUpdatedAt?: number;
+    isGroupDm?: boolean;
   }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
@@ -73,7 +76,20 @@ describe("resolveSlackThreadContextData", () => {
       ctx.channelRuntime = {
         ...ctx.channelRuntime!,
         session: {
-          resolveEntryResetFreshness: () => ({ state: params.sessionState }),
+          resolveEntryResetFreshness: () =>
+            params.sessionState === "missing"
+              ? { state: "missing", entry: undefined }
+              : {
+                  state: params.sessionState,
+                  entry: {
+                    ...(params.sessionLastInteractionAt !== undefined
+                      ? { lastInteractionAt: params.sessionLastInteractionAt }
+                      : {}),
+                    ...(params.sessionUpdatedAt !== undefined
+                      ? { updatedAt: params.sessionUpdatedAt }
+                      : {}),
+                  },
+                },
         },
       };
     }
@@ -87,6 +103,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx,
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
+      isGroupDm: params.isGroupDm ?? false,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: params.threadStarter,
@@ -128,14 +145,20 @@ describe("resolveSlackThreadContextData", () => {
     {
       title: "does not hydrate starter media for an existing thread session",
       sessionState: "fresh" as const,
+      sessionLastInteractionAt: 100,
       hydrates: false,
+    },
+    {
+      title: "hydrates starter media for an outbound-only thread session",
+      sessionState: "fresh" as const,
+      hydrates: true,
     },
     {
       title: "hydrates starter media after a thread session reset",
       sessionState: "stale" as const,
       hydrates: true,
     },
-  ])("$title", async ({ sessionState, hydrates }) => {
+  ])("$title", async ({ sessionState, sessionLastInteractionAt, hydrates }) => {
     const resolveSlackMedia = vi
       .spyOn(mediaModule, "resolveSlackMedia")
       .mockResolvedValue(starterMedia);
@@ -145,6 +168,7 @@ describe("resolveSlackThreadContextData", () => {
       allowFromLower: ["u1"],
       allowNameMatching: false,
       sessionState,
+      sessionLastInteractionAt,
     });
 
     expect(result.threadStarterMedia).toEqual(hydrates ? starterMedia : null);
@@ -179,28 +203,120 @@ describe("resolveSlackThreadContextData", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
-  it("filters prior current-bot replies from user-started threads on new sessions", async () => {
+  it.each([
+    {
+      title: "filters them from missing channel threads",
+      isGroupDm: false,
+      sessionState: "missing" as const,
+      retained: false,
+    },
+    {
+      title: "filters them from fresh outbound-only channel threads",
+      isGroupDm: false,
+      sessionState: "fresh" as const,
+      retained: false,
+    },
+    {
+      title: "filters them from stale outbound-only channel threads",
+      isGroupDm: false,
+      sessionState: "stale" as const,
+      retained: false,
+    },
+    {
+      title: "retains them for missing MPIM threads",
+      isGroupDm: true,
+      sessionState: "missing" as const,
+      retained: true,
+    },
+    {
+      title: "retains them for fresh outbound-only MPIM threads",
+      isGroupDm: true,
+      sessionState: "fresh" as const,
+      retained: true,
+    },
+    {
+      title: "retains them for stale outbound-only MPIM threads",
+      isGroupDm: true,
+      sessionState: "stale" as const,
+      retained: true,
+    },
+    {
+      title: "filters them after an inbound MPIM interaction",
+      isGroupDm: true,
+      sessionState: "stale" as const,
+      sessionLastInteractionAt: 100,
+      retained: false,
+    },
+    {
+      title: "filters them after an explicit MPIM reset",
+      isGroupDm: true,
+      sessionState: "stale" as const,
+      sessionUpdatedAt: 0,
+      retained: false,
+    },
+  ])(
+    "$title",
+    async ({ isGroupDm, sessionState, sessionLastInteractionAt, sessionUpdatedAt, retained }) => {
+      const { result } = await resolveAllowlistedThreadContext({
+        repliesMessages: [
+          { text: "starter from Alice", user: "U1", ts: "100.000" },
+          { text: "assistant progress update", bot_id: "B1", ts: "100.200" },
+          { text: "allowed follow-up", user: "U1", ts: "100.800" },
+          { text: "current message", user: "U1", ts: "101.000" },
+        ],
+        threadStarter: {
+          text: "starter from Alice",
+          userId: "U1",
+          ts: "100.000",
+        },
+        allowFromLower: ["u1"],
+        allowNameMatching: false,
+        sessionState,
+        sessionLastInteractionAt,
+        sessionUpdatedAt,
+        isGroupDm,
+      });
+
+      expect(result.threadStarterBody).toBe("starter from Alice");
+      expect(result.threadHistoryBody).toContain("starter from Alice");
+      expect(result.threadHistoryBody).toContain("allowed follow-up");
+      if (retained) {
+        expect(result.threadHistoryBody).toContain("assistant progress update");
+        expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
+      } else {
+        expect(result.threadHistoryBody).not.toContain("assistant progress update");
+      }
+      expect(result.threadHistoryBody).not.toContain("current message");
+    },
+  );
+
+  it("keeps the 20-message cap and excludes the current MPIM message", async () => {
+    const priorMessages = Array.from({ length: 22 }, (_, index) => ({
+      text: index === 20 ? "assistant answer to retain" : `prior user message ${index}`,
+      ...(index === 20 ? { bot_id: "B1" } : { user: "U1" }),
+      ts: `100.${String(index).padStart(3, "0")}`,
+    }));
     const { result } = await resolveAllowlistedThreadContext({
-      repliesMessages: [
-        { text: "starter from Alice", user: "U1", ts: "100.000" },
-        { text: "assistant progress update", bot_id: "B1", ts: "100.200" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
+      repliesMessages: [...priorMessages, { text: "current message", user: "U1", ts: "101.000" }],
       threadStarter: {
-        text: "starter from Alice",
+        text: "prior user message 0",
         userId: "U1",
         ts: "100.000",
       },
       allowFromLower: ["u1"],
       allowNameMatching: false,
+      sessionState: "fresh",
+      isGroupDm: true,
     });
 
-    expect(result.threadStarterBody).toBe("starter from Alice");
-    expect(result.threadHistoryBody).toContain("starter from Alice");
-    expect(result.threadHistoryBody).toContain("allowed follow-up");
-    expect(result.threadHistoryBody).not.toContain("assistant progress update");
-    expect(result.threadHistoryBody).not.toContain("current message");
+    const history = result.threadHistoryBody ?? "";
+    expect(history.match(/\[slack message id:/g)).toHaveLength(20);
+    expect(history).not.toContain("[slack message id: 100.000 channel: C123]");
+    expect(history).not.toContain("[slack message id: 100.001 channel: C123]");
+    expect(history).toContain("prior user message 21");
+    expect(history).toContain("assistant answer to retain");
+    expect(history).toContain("Bot (this assistant) (assistant)");
+    expect(history).not.toContain("current message");
   });
 
   it("keeps starter text and history when allowNameMatching authorizes the sender", async () => {
@@ -285,6 +401,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx,
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
+      isGroupDm: false,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: {
@@ -331,6 +448,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx,
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 1 } }),
       message: createThreadMessage(),
+      isGroupDm: false,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: {
@@ -455,6 +573,7 @@ describe("resolveSlackThreadContextData", () => {
         text: "actually it's Sunday 12:30 pm - apologize and correct",
         ts: "101.000",
       }),
+      isGroupDm: false,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: {

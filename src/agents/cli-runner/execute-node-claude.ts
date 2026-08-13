@@ -14,7 +14,7 @@ const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
-export function resolveNodeClaudePlacement(
+export function resolveNodeClaudeTarget(
   context: PreparedCliRunContext,
 ): NodeClaudePlacement | null {
   const entry = context.params.sessionEntry;
@@ -170,6 +170,8 @@ export async function executeNodeClaudeRun(params: {
   executionArgs: string[];
   stdinPayload: string;
   nodeSystemPrompt?: string;
+  nodeEnv?: Record<string, string>;
+  nodeClearEnv?: string[];
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   consumeStderr: (chunk: string) => void;
@@ -195,12 +197,11 @@ export async function executeNodeClaudeRun(params: {
   if (contextParams.abortSignal?.aborted) {
     abortNodeRun();
   }
-  let replyBackendCompleted = false;
   const replyBackendHandle = contextParams.replyOperation
     ? {
         kind: "cli" as const,
+        runId: contextParams.runId,
         cancel: abortNodeRun,
-        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   if (replyBackendHandle) {
@@ -230,6 +231,8 @@ export async function executeNodeClaudeRun(params: {
         stdin: params.stdinPayload,
         ...(params.nodePlacement.cwd ? { cwd: params.nodePlacement.cwd } : {}),
         ...(params.nodeSystemPrompt !== undefined ? { systemPrompt: params.nodeSystemPrompt } : {}),
+        ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
+        ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
         ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
         ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
         ...(approval
@@ -303,7 +306,6 @@ export async function executeNodeClaudeRun(params: {
     };
   } finally {
     clearTimeout(hardDeadlineTimer);
-    replyBackendCompleted = true;
     if (replyBackendHandle) {
       contextParams.replyOperation?.detachBackend(replyBackendHandle);
     }

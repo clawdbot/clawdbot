@@ -5,6 +5,7 @@ import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import { formatErrorMessage } from "./error-utils.js";
 import {
   attachLocalEmbeddingRuntimeFacts,
   type LocalEmbeddingRuntimeFacts,
@@ -83,10 +84,6 @@ async function readLlamaRuntimeFacts(llama: Llama): Promise<LocalEmbeddingRuntim
     // Some backends cannot report memory state; keep the other runtime facts.
   }
   return facts;
-}
-
-function formatRuntimeLoadError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export async function createLocalEmbeddingProvider(
@@ -216,7 +213,7 @@ export async function createLocalEmbeddingProviderInProcess(
           engine: "llama.cpp",
           state: "failed",
           context: { requestedSize: contextSize },
-          loadError: formatRuntimeLoadError(err),
+          loadError: formatErrorMessage(err),
         };
         initPromise = null;
         throw err;

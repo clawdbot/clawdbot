@@ -1,48 +1,86 @@
 // Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { projectUpdateAvailable } from "../events.js";
+import { collectGatewayHealthSnapshot } from "../health/collector.js";
+import type { HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
-let healthRefresh: Promise<HealthSummary> | null = null;
-let sensitiveHealthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
-export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
+type HealthAudience = "public" | "admin";
+type HealthRefreshStrength = "passive" | "probe";
+type HealthRefreshOperation = {
+  generation: number;
+  promise: Promise<HealthSummary>;
+};
+type HealthRefreshState = {
+  nextGeneration: number;
+  committedGeneration: number;
+  inFlight: Record<HealthRefreshStrength, HealthRefreshOperation | null>;
+};
+
+const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
+  public: {
+    nextGeneration: 0,
+    committedGeneration: 0,
+    inFlight: { passive: null, probe: null },
+  },
+  admin: {
+    nextGeneration: 0,
+    committedGeneration: 0,
+    inFlight: { passive: null, probe: null },
+  },
+};
+
+export function buildGatewaySnapshot(opts?: {
+  includeSensitive?: boolean;
+  includeUpdateDetails?: boolean;
+}): Snapshot {
   const cfg = getRuntimeConfig();
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const selection = resolveGatewayAgentSelectionState(cfg);
+  const defaultAgentId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  const mainSessionKey = resolveMainSessionKey(cfg);
   const scope = cfg.session?.scope ?? "per-sender";
+  const mainSessionKey =
+    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const updateAvailable = getUpdateAvailable() ?? undefined;
-  // Health is async; caller should await getHealthSnapshot and replace later if needed.
-  const emptyHealth: unknown = {};
+  const includeUpdateDetails = opts?.includeUpdateDetails === true;
+  const updateAvailable =
+    projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
+  const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
+  // Health is async; the caller replaces this with the collected snapshot.
+  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
+    appliedConfigHash: getRuntimeConfigAppliedHash(),
     sessionDefaults: {
       defaultAgentId,
+      ownership: selection.ownership,
+      selectionRequired: selection.selectionRequired,
       mainKey,
       mainSessionKey,
       scope,
     },
     updateAvailable,
+    updateSchedule,
   };
   if (opts?.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
@@ -83,44 +121,62 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
-  let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
-  if (!refresh) {
-    refresh = (async () => {
-      let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
-      try {
-        runtimeSnapshot = opts?.getRuntimeSnapshot?.();
-      } catch {
-        runtimeSnapshot = undefined;
-      }
-      const eventLoop = opts?.getEventLoopHealth?.();
-      const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
-      const snap = await getHealthSnapshot({
-        probe: opts?.probe,
-        includeSensitive,
-        runtimeSnapshot,
-        ...(eventLoop ? { eventLoop } : {}),
-        ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
-      });
-      if (!includeSensitive) {
-        healthCache = snap;
-        healthVersion += 1;
-        if (broadcastHealthUpdate) {
-          broadcastHealthUpdate(snap);
-        }
-      }
-      return snap;
-    })().finally(() => {
-      if (includeSensitive) {
-        sensitiveHealthRefresh = null;
-      } else {
-        healthRefresh = null;
-      }
-    });
-    if (includeSensitive) {
-      sensitiveHealthRefresh = refresh;
-    } else {
-      healthRefresh = refresh;
-    }
+  const audience: HealthAudience = includeSensitive ? "admin" : "public";
+  const state = healthRefreshStates[audience];
+  const strength: HealthRefreshStrength = opts?.probe === false ? "passive" : "probe";
+  // Passive callers can reuse a stronger probe, but an explicit probe must not
+  // inherit a passive refresh that deliberately skipped live channel checks.
+  const existing =
+    strength === "passive"
+      ? (state.inFlight.probe ?? state.inFlight.passive)
+      : state.inFlight.probe;
+  if (existing) {
+    return existing.promise;
   }
-  return refresh;
+
+  const generation = state.nextGeneration + 1;
+  state.nextGeneration = generation;
+  const promise = (async () => {
+    let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
+    try {
+      runtimeSnapshot = opts?.getRuntimeSnapshot?.();
+    } catch {
+      runtimeSnapshot = undefined;
+    }
+    const eventLoop = opts?.getEventLoopHealth?.();
+    const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
+    const snap = await collectGatewayHealthSnapshot({
+      audience,
+      probe: strength === "probe",
+      runtimeSnapshot,
+      ...(eventLoop ? { eventLoop } : {}),
+      ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+    });
+    if (
+      strength === "probe" &&
+      state.inFlight.passive &&
+      state.inFlight.passive.generation < generation
+    ) {
+      // Existing passive waiters may finish, but new callers must not join
+      // weaker work after this newer live probe has succeeded.
+      state.inFlight.passive = null;
+    }
+    // Concurrent passive/probe refreshes can finish out of order. Only a
+    // generation newer than the published cache may advance version/broadcast.
+    if (!includeSensitive && generation > state.committedGeneration) {
+      state.committedGeneration = generation;
+      healthCache = snap;
+      healthVersion += 1;
+      if (broadcastHealthUpdate) {
+        broadcastHealthUpdate(snap);
+      }
+    }
+    return snap;
+  })().finally(() => {
+    if (state.inFlight[strength]?.generation === generation) {
+      state.inFlight[strength] = null;
+    }
+  });
+  state.inFlight[strength] = { generation, promise };
+  return promise;
 }

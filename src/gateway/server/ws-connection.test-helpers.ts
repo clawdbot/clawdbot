@@ -106,7 +106,7 @@ export function attachGatewayWsForTest(params: {
     clients: clients as never,
     preauthConnectionBudget: { release: vi.fn() } as never,
     port: 19001,
-    resolvedAuth: createResolvedGatewayTokenAuth("token"),
+    getResolvedAuth: () => createResolvedGatewayTokenAuth("token"),
     preauthHandshakeTimeoutMs: 60_000,
     gatewayMethods: [],
     events: [],

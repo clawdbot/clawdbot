@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
@@ -10,9 +11,14 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { removePluginFromConfig } from "./uninstall-config.js";
+import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
+import {
+  prepareConfigForPendingPluginDirectoryRemovalSet,
+  recordPluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
-  removePluginFromConfig,
   planPluginUninstall,
   resolveUninstallChannelConfigKeys,
 } from "./uninstall.js";
@@ -26,8 +32,19 @@ vi.mock("../process/exec.js", () => ({
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
-async function uninstallPlugin(params: Parameters<typeof planPluginUninstall>[0]) {
-  const plan = planPluginUninstall(params);
+async function uninstallPlugin(
+  params: Parameters<typeof planPluginUninstall>[0] & {
+    runtimePluginIds?: readonly string[];
+    runtimeLoadPaths?: readonly string[];
+  },
+) {
+  const { runtimePluginIds, runtimeLoadPaths, ...planParams } = params;
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(planParams, {
+      runtimePluginIds: runtimePluginIds ?? [params.pluginId],
+      ...(runtimeLoadPaths ? { runtimeLoadPaths } : {}),
+    }),
+  );
   if (!plan.ok) {
     return plan;
   }
@@ -146,6 +163,15 @@ function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): P
   };
 }
 
+function createMarketplaceInstallRecord(installPath: string): PluginInstallRecord {
+  return {
+    source: "marketplace",
+    installPath,
+    marketplaceSource: "release-fixtures",
+    marketplacePlugin: "my-plugin",
+  };
+}
+
 function createPathInstallRecord(
   installPath = "/path/to/plugin",
   sourcePath = installPath,
@@ -238,6 +264,26 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
+it("stages only runtime child entries while a package directory removal is pending", () => {
+  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+    {
+      plugins: {
+        entries: {
+          "pack/one": { enabled: true },
+          "pack/two": { enabled: true },
+        },
+      },
+    },
+    ["pack/one", "pack/two"],
+  );
+
+  expect(staged.plugins?.entries).toEqual({
+    "pack/one": { enabled: false },
+    "pack/two": { enabled: false },
+  });
+  expect(staged.plugins?.entries).not.toHaveProperty("pack");
+});
+
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -301,6 +347,53 @@ describe("resolveUninstallChannelConfigKeys", () => {
         channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
       }),
     ).toEqual(["discord", "slack"]);
+  });
+});
+
+describe("planPluginUninstall package ownership", () => {
+  it("removes every owned child policy while planning one owner install removal", () => {
+    const result = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: {
+            plugins: {
+              allow: ["pack/one", "pack/two", "other"],
+              deny: ["pack/two"],
+              entries: {
+                "pack/one": { enabled: true },
+                "pack/two": { enabled: false },
+                other: { enabled: true },
+              },
+              installs: {
+                pack: { source: "path", installPath: "/managed/pack" },
+              },
+              slots: { memory: "pack/two" },
+            },
+          },
+          pluginId: "pack",
+          deleteFiles: false,
+        },
+        { runtimePluginIds: ["pack/one", "pack/two"] },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.directoryRemoval).toBeNull();
+    expect(result.config.plugins).toEqual({
+      allow: ["other"],
+      entries: { other: { enabled: true } },
+      slots: { memory: "memory-core" },
+    });
+    expect(result.actions).toMatchObject({
+      entry: true,
+      install: true,
+      allowlist: true,
+      denylist: true,
+      memorySlot: true,
+    });
   });
 });
 
@@ -380,6 +473,76 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.load?.paths).toEqual(expectedPaths);
     expect(actions.loadPath).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "marketplace install path",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "npm install path",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "absent load paths",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: undefined,
+      expectedPaths: undefined,
+      expectedChanged: false,
+    },
+    {
+      name: "mismatched and child paths",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedChanged: false,
+    },
+  ])(
+    "cleans only the exact $name from load.paths",
+    ({ installRecord, loadPaths, expectedPaths, expectedChanged }) => {
+      const config = createPluginConfig({
+        installs: { "my-plugin": installRecord },
+        loadPaths,
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual(expectedPaths);
+      expect(actions.loadPath).toBe(expectedChanged);
+    },
+  );
+
+  it("removes a canonical marketplace install path without removing siblings", async () => {
+    const tempRoot = path.join(process.cwd(), ".tmp");
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-uninstall-marketplace-path-"));
+    try {
+      const installPath = path.join(tempDir, "managed", "my-plugin");
+      const linkedPath = path.join(tempDir, "my-plugin-link");
+      const siblingPath = path.join(tempDir, "managed", "my-plugin-other");
+      await fs.mkdir(installPath, { recursive: true });
+      await fs.symlink(installPath, linkedPath, "dir");
+      const config = createPluginConfig({
+        installs: {
+          "my-plugin": createMarketplaceInstallRecord(installPath),
+        },
+        loadPaths: [linkedPath, siblingPath],
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual([siblingPath]);
+      expect(actions.loadPath).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("removes absolute load path for a workspace-relative install source path", async () => {
@@ -987,12 +1150,12 @@ describe("uninstallPlugin", () => {
       baseDir: tempDir,
     });
 
-    const plan = planPluginUninstall({
-      config,
-      pluginId,
-      deleteFiles: true,
-      extensionsDir,
-    });
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        { config, pluginId, deleteFiles: true, extensionsDir },
+        { runtimePluginIds: [pluginId] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1032,21 +1195,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1097,21 +1265,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1314,6 +1487,199 @@ describe("uninstallPlugin", () => {
     expect(rootManifest.dependencies?.["runtime-peer"]).toBeUndefined();
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain("runtime-peer");
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries managed peer cleanup without npm-incompatible override kinds", async () => {
+    const npmRoot = path.join(tempDir, "npm-override-cleanup");
+    await fs.mkdir(npmRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: { "stale-peer": "1.0.0" },
+          overrides: {
+            axios: "1.18.1",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+            "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+          },
+          openclaw: {
+            managedOverrides: ["axios", "node-domexception", "werift-ice@0.2.2>ip"],
+            managedPeerDependencies: ["stale-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    let cleanupAttempts = 0;
+    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      if (argv.includes("--package-lock-only")) {
+        expect(cwd).toBeTruthy();
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
+        ) as { overrides?: Record<string, unknown> };
+        if (manifest.overrides?.["werift-ice@0.2.2>ip"]) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr:
+              'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
+        if (manifest.overrides?.["node-domexception"]) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
+        await fs.writeFile(
+          path.join(cwd as string, "package-lock.json"),
+          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      cleanupAttempts += 1;
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+      ) as { overrides?: Record<string, unknown> };
+      if (cleanupAttempts === 1) {
+        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
+        return {
+          code: 1,
+          stdout: "",
+          stderr:
+            'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      if (cleanupAttempts === 2) {
+        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBeUndefined();
+        expect(manifest.overrides?.["node-domexception"]).toBe("npm:@nolyfill/domexception@1.0.28");
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    await expect(
+      pruneManagedNpmPeerDependenciesAfterUninstall({
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+        managedOverrides: {
+          axios: "1.18.1",
+          hono: "4.12.32",
+          "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+          "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+        },
+        runCommand,
+      }),
+    ).resolves.toBeUndefined();
+    expect(cleanupAttempts).toBe(3);
+    const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+      overrides?: Record<string, unknown>;
+      openclaw?: {
+        managedOverrides?: string[];
+        managedPeerDependencies?: string[];
+      };
+    };
+    expect(manifest.dependencies).toEqual({});
+    expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
+    expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "hono"]);
+    expect(manifest.openclaw?.managedPeerDependencies).toBeUndefined();
+  });
+
+  it("stops retrying when an incompatible unmanaged override remains", async () => {
+    const npmRoot = path.join(tempDir, "npm-unmanaged-override-cleanup");
+    await fs.mkdir(npmRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          overrides: {
+            "unmanaged-parent@1.0.0>child": "2.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    let cleanupAttempts = 0;
+    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      if (argv.includes("--package-lock-only")) {
+        expect(cwd).toBeTruthy();
+        await fs.writeFile(
+          path.join(cwd as string, "package-lock.json"),
+          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      cleanupAttempts += 1;
+      return {
+        code: 1,
+        stdout: "",
+        stderr:
+          'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "1.0.0>child" of package "unmanaged-parent@1.0.0>child"',
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    await expect(
+      pruneManagedNpmPeerDependenciesAfterUninstall({
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+        managedOverrides: { axios: "1.18.1" },
+        runCommand,
+      }),
+    ).resolves.toContain(
+      "Failed to prune managed peer dependencies after uninstalling @openclaw/kitchen-sink: npm error code EINVALIDTAGNAME",
+    );
+    expect(cleanupAttempts).toBe(2);
   });
 
   it("runs npm cleanup when the managed package directory is already absent", async () => {
@@ -1741,3 +2107,4 @@ describe("uninstallPlugin", () => {
     expect(linkStat.isSymbolicLink()).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

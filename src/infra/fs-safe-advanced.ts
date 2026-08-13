@@ -5,8 +5,9 @@ import "./fs-safe-defaults.js";
 export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
+  readFileHandleBounded,
+  type FileIdentityStat,
   sameFileIdentity,
   sanitizeUntrustedFileName,
-  writeViaSiblingTempPath,
-  type AssertNoSymlinkParentsOptions,
 } from "@openclaw/fs-safe/advanced";
+export { readSecretFile } from "@openclaw/fs-safe/secret";

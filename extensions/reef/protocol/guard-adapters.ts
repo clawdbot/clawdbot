@@ -1,3 +1,5 @@
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   admitGuardAdapter,
   assertPinnedModel,
@@ -57,6 +59,7 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);
@@ -112,6 +115,7 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);
@@ -151,10 +155,9 @@ function attachProviderModel(value: unknown, model: string): unknown {
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (text.length > 256 * 1024) {
-    throw new Error("guard response too large");
-  }
+  const text = await readProviderTextResponse(response, "Reef guard response", {
+    maxBytes: 256 * 1024,
+  });
   return parseStrictJson(text);
 }
 
@@ -197,8 +200,4 @@ function hasDuplicateKeys(text: string): boolean {
     keys.add(key);
   }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

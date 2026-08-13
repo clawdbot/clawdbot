@@ -1,68 +1,104 @@
-// Inbound reply dispatch tests cover plugin reply routing from inbound channel messages.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { RecordInboundSession } from "../channels/session.types.js";
+import type {
+  AssembledChannelTurn,
+  ChannelTurnResult,
+  PreparedChannelTurn,
+} from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-const deliverInboundReplyWithMessageSendContext = vi.hoisted(() => vi.fn());
-
-vi.mock("../channels/turn/kernel.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/turn/kernel.js")>();
-  return {
-    ...actual,
-    deliverInboundReplyWithMessageSendContext,
-  };
-});
-
 import {
-  createChannelMessageReplyPipeline,
-  createReplyPrefixOptions as createChannelMessageReplyPrefixOptions,
-  createReplyPrefixContext as createChannelMessageReplyPrefixContext,
-  createTypingCallbacks as createChannelMessageTypingCallbacks,
-  dispatchChannelMessageReplyWithBase,
-  hasFinalChannelMessageReplyDispatch,
-  recordChannelMessageReplyDispatch,
-  resolveChannelMessageSourceReplyDeliveryMode,
-} from "./channel-message.js";
+  dispatchChannelInboundReply,
+  dispatchChannelInboundTurn,
+  runPreparedInboundReply,
+} from "./channel-inbound.js";
 import {
-  createChannelReplyPipeline,
-  createReplyPrefixContext,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  resolveChannelSourceReplyDeliveryMode,
-} from "./channel-reply-pipeline.js";
-import {
+  deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundReply as dispatchChannelInboundReplyFromLegacySubpath,
+  dispatchInboundReplyWithBase,
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
-  recordInboundSessionAndDispatchReply,
+  recordChannelBotPairLoopAndCheckSuppression,
+  recordDroppedChannelInboundHistory,
+  recordDroppedChannelTurnHistory,
   resolveInboundReplyDispatchCounts,
+  runChannelInboundEvent,
+  runPreparedInboundReply as runPreparedInboundReplyFromLegacySubpath,
+  type AssembledInboundReply,
+  type ChannelBotLoopProtectionFacts,
+  type ChannelInboundDroppedHistoryOptions,
+  type ChannelInboundEventRunnerParams,
+  type ChannelTurnDroppedHistoryOptions,
+  type ChannelTurnRecordOptions,
+  type DurableInboundReplyDeliveryParams,
+  type InboundReplyDispatchResult,
+  type InboundReplyRecordOptions,
+  type PreparedInboundReply,
 } from "./inbound-reply-dispatch.js";
 
-function readFirstMockArg(fn: unknown): unknown {
-  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
-}
+describe("inbound reply dispatch compatibility", () => {
+  it("keeps the deprecated package subpath compatibility exports", () => {
+    const callableExports = [
+      ["hasFinalInboundReplyDispatch", hasFinalInboundReplyDispatch],
+      ["hasVisibleInboundReplyDispatch", hasVisibleInboundReplyDispatch],
+      ["resolveInboundReplyDispatchCounts", resolveInboundReplyDispatchCounts],
+      ["recordDroppedChannelTurnHistory", recordDroppedChannelTurnHistory],
+      ["recordDroppedChannelInboundHistory", recordDroppedChannelInboundHistory],
+      ["recordChannelBotPairLoopAndCheckSuppression", recordChannelBotPairLoopAndCheckSuppression],
+      ["deliverInboundReplyWithMessageSendContext", deliverInboundReplyWithMessageSendContext],
+      ["dispatchInboundReplyWithBase", dispatchInboundReplyWithBase],
+      ["runPreparedInboundReply", runPreparedInboundReplyFromLegacySubpath],
+      ["runChannelInboundEvent", runChannelInboundEvent],
+      ["dispatchChannelInboundReply", dispatchChannelInboundReplyFromLegacySubpath],
+    ] as const;
 
-describe("recordInboundSessionAndDispatchReply", () => {
-  beforeEach(() => {
-    deliverInboundReplyWithMessageSendContext.mockReset();
+    for (const [exportName, exportedValue] of callableExports) {
+      expect(exportedValue, exportName).toBeTypeOf("function");
+    }
+
+    type LegacyTypeExports = [
+      AssembledInboundReply,
+      ChannelBotLoopProtectionFacts,
+      ChannelInboundDroppedHistoryOptions,
+      ChannelInboundEventRunnerParams<unknown>,
+      ChannelTurnDroppedHistoryOptions,
+      ChannelTurnRecordOptions,
+      DurableInboundReplyDeliveryParams,
+      InboundReplyDispatchResult<unknown>,
+      InboundReplyRecordOptions,
+      PreparedInboundReply<unknown>,
+    ];
+    expectTypeOf<LegacyTypeExports>().not.toBeNever();
   });
 
-  it("delegates record and dispatch through the channel turn kernel once", async () => {
+  it("keeps public channel-inbound entry points drop-capable", () => {
+    type DispatchResult = { queuedFinal: true };
+    const prepared = {} as PreparedChannelTurn<DispatchResult>;
+    const assembled = {} as AssembledChannelTurn;
+
+    if (Date.now() < 0) {
+      expectTypeOf(runPreparedInboundReply(prepared)).toEqualTypeOf<
+        Promise<ChannelTurnResult<DispatchResult>>
+      >();
+      expectTypeOf(dispatchChannelInboundReply(assembled)).toEqualTypeOf<
+        Promise<ChannelTurnResult>
+      >();
+      expectTypeOf(dispatchChannelInboundTurn({} as never)).toEqualTypeOf<
+        Promise<ChannelTurnResult>
+      >();
+    }
+  });
+
+  it("records and dispatches through dispatchInboundReplyWithBase", async () => {
     const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
     const deliver = vi.fn(async () => undefined);
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       await params.dispatcherOptions.deliver(
-        {
-          text: "hello",
-          mediaUrls: ["https://example.com/a.png"],
-        },
+        { text: "hello", mediaUrls: ["https://example.com/a.png"] },
         { kind: "final" },
       );
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
     const ctxPayload = {
       Body: "body",
@@ -75,119 +111,11 @@ describe("recordInboundSessionAndDispatchReply", () => {
       Surface: "test",
     } as FinalizedMsgContext;
 
-    await recordChannelMessageReplyDispatch({
+    await dispatchInboundReplyWithBase({
       cfg: {} as OpenClawConfig,
       channel: "test",
       accountId: "default",
-      agentId: "main",
-      routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload,
-      recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher,
-      deliver,
-      onRecordError: vi.fn(),
-      onDispatchError: vi.fn(),
-    });
-
-    expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    const recordParams = readFirstMockArg(recordInboundSession) as
-      | { ctx?: unknown; sessionKey?: string }
-      | undefined;
-    expect(recordParams?.sessionKey).toBe("agent:main:test:peer");
-    expect(recordParams?.ctx).toBe(ctxPayload);
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith({
-      text: "hello",
-      mediaUrls: ["https://example.com/a.png"],
-      mediaUrl: undefined,
-      sensitiveMedia: undefined,
-      replyToId: undefined,
-    });
-  });
-
-  it("keeps public compatibility delivery channel-owned when durable is omitted", async () => {
-    const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
-    const deliver = vi.fn(async () => undefined);
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "hello" }, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
-
-    await recordInboundSessionAndDispatchReply({
-      cfg: {} as OpenClawConfig,
-      channel: "telegram",
-      accountId: "default",
-      agentId: "main",
-      routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: {
-        Body: "body",
-        RawBody: "body",
-        CommandBody: "body",
-        From: "sender",
-        To: "123",
-        OriginatingTo: "123",
-        SessionKey: "agent:main:telegram:peer",
-        Provider: "telegram",
-        Surface: "telegram",
-      } as FinalizedMsgContext,
-      recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher,
-      deliver,
-      onRecordError: vi.fn(),
-      onDispatchError: vi.fn(),
-    });
-
-    expect(deliver).toHaveBeenCalledWith({
-      text: "hello",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      sensitiveMedia: undefined,
-      replyToId: undefined,
-    });
-  });
-
-  it("forwards durable delivery options through the SDK convenience wrapper", async () => {
-    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-      status: "handled_visible",
-      delivery: {
-        messageIds: ["queued-1"],
-        visibleReplySent: true,
-      },
-    });
-    const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
-    const deliver = vi.fn(async () => undefined);
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "hello durable" }, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
-    const ctxPayload = {
-      Body: "body",
-      RawBody: "body",
-      CommandBody: "body",
-      From: "sender",
-      To: "123",
-      OriginatingTo: "123",
-      SessionKey: "agent:main:telegram:peer",
-      Provider: "telegram",
-      Surface: "telegram",
-    } as FinalizedMsgContext;
-
-    await dispatchChannelMessageReplyWithBase({
-      cfg: {} as OpenClawConfig,
-      channel: "telegram",
-      accountId: "default",
-      route: {
-        agentId: "main",
-        sessionKey: "agent:main:telegram:peer",
-      },
+      route: { agentId: "main", sessionKey: "agent:main:test:peer" },
       storePath: "/tmp/sessions.json",
       ctxPayload,
       core: {
@@ -197,126 +125,18 @@ describe("recordInboundSessionAndDispatchReply", () => {
         },
       },
       deliver,
-      durable: { replyToMode: "first" },
       onRecordError: vi.fn(),
       onDispatchError: vi.fn(),
     });
 
-    const durableParams = readFirstMockArg(deliverInboundReplyWithMessageSendContext) as
-      | {
-          accountId?: string;
-          agentId?: string;
-          channel?: string;
-          ctxPayload?: unknown;
-          info?: unknown;
-          payload?: { text?: string };
-          replyToMode?: string;
-        }
-      | undefined;
-    expect(durableParams?.channel).toBe("telegram");
-    expect(durableParams?.accountId).toBe("default");
-    expect(durableParams?.agentId).toBe("main");
-    expect(durableParams?.ctxPayload).toBe(ctxPayload);
-    expect(durableParams?.payload?.text).toBe("hello durable");
-    expect(durableParams?.info).toEqual({ kind: "final" });
-    expect(durableParams?.replyToMode).toBe("first");
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("returns durable no-send results through the SDK compatibility deliverer", async () => {
-    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-      status: "handled_no_send",
-      reason: "no_visible_result",
-      delivery: {
-        messageIds: [],
-        visibleReplySent: false,
-      },
+    expect(recordInboundSession).toHaveBeenCalledOnce();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith({
+      text: "hello",
+      mediaUrls: ["https://example.com/a.png"],
+      mediaUrl: undefined,
+      sensitiveMedia: undefined,
+      replyToId: undefined,
     });
-    const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
-    const deliver = vi.fn(async () => undefined);
-    let deliveryResult: unknown;
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-      deliveryResult = await params.dispatcherOptions.deliver(
-        { text: "cancelled durable" },
-        { kind: "final" },
-      );
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
-
-    await recordInboundSessionAndDispatchReply({
-      cfg: {} as OpenClawConfig,
-      channel: "telegram",
-      accountId: "default",
-      agentId: "main",
-      routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: {
-        Body: "body",
-        RawBody: "body",
-        CommandBody: "body",
-        From: "sender",
-        To: "123",
-        OriginatingTo: "123",
-        SessionKey: "agent:main:telegram:peer",
-        Provider: "telegram",
-        Surface: "telegram",
-      } as FinalizedMsgContext,
-      recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher,
-      deliver,
-      durable: { replyToMode: "first" },
-      onRecordError: vi.fn(),
-      onDispatchError: vi.fn(),
-    });
-
-    expect(deliveryResult).toMatchObject({ visibleReplySent: false });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("exports shared visible reply dispatch helpers", () => {
-    expect(hasVisibleInboundReplyDispatch(undefined)).toBe(false);
-    expect(
-      hasVisibleInboundReplyDispatch({
-        queuedFinal: false,
-        counts: { tool: 0, block: 1, final: 0 },
-      }),
-    ).toBe(true);
-    expect(
-      hasVisibleInboundReplyDispatch({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-        observedReplyDelivery: true,
-      }),
-    ).toBe(true);
-    expect(
-      hasFinalInboundReplyDispatch({
-        queuedFinal: false,
-        counts: { tool: 0, block: 1, final: 0 },
-      }),
-    ).toBe(false);
-    expect(
-      hasFinalInboundReplyDispatch(undefined, {
-        fallbackDelivered: true,
-      }),
-    ).toBe(true);
-    expect(resolveInboundReplyDispatchCounts(undefined)).toEqual({
-      tool: 0,
-      block: 0,
-      final: 0,
-    });
-  });
-
-  it("keeps deprecated channel-message dispatch names as aliases for focused helpers", () => {
-    expect(createChannelMessageReplyPipeline).toBe(createChannelReplyPipeline);
-    expect(resolveChannelMessageSourceReplyDeliveryMode).toBe(
-      resolveChannelSourceReplyDeliveryMode,
-    );
-    expect(createChannelMessageReplyPrefixContext).toBe(createReplyPrefixContext);
-    expect(createChannelMessageReplyPrefixOptions).toBe(createReplyPrefixOptions);
-    expect(createChannelMessageTypingCallbacks).toBe(createTypingCallbacks);
-    expect(hasFinalChannelMessageReplyDispatch).toBe(hasFinalInboundReplyDispatch);
   });
 });

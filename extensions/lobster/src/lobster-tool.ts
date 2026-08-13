@@ -17,24 +17,12 @@ import {
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
 import {
+  type BoundTaskFlow,
+  type JsonLike,
   type ManagedLobsterFlowResult,
   resumeManagedLobsterFlow,
   runManagedLobsterFlow,
 } from "./lobster-taskflow.js";
-
-type BoundTaskFlow = ReturnType<
-  NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
->;
-
-type JsonLike =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonLike[]
-  | {
-      [key: string]: JsonLike;
-    };
 
 type LobsterToolOptions = {
   runner?: LobsterRunner;
@@ -54,13 +42,6 @@ type ManagedFlowResumeParams = {
   expectedRevision: number;
   currentStep?: string;
   waitingStep?: string;
-};
-
-type ManagedFlowSuccessResult = {
-  ok: true;
-  envelope: unknown;
-  flow: unknown;
-  mutation: unknown;
 };
 
 function readOptionalTrimmedString(value: unknown, fieldName: string): string | undefined {
@@ -203,17 +184,15 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   };
 }
 
-function formatManagedFlowResult(result: ManagedFlowSuccessResult) {
-  const envelope =
-    result.envelope && typeof result.envelope === "object" && !Array.isArray(result.envelope)
-      ? result.envelope
-      : { envelope: result.envelope };
-  const details = {
-    ...envelope,
+function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return jsonResult({
+    ...result.envelope,
     flow: result.flow,
     mutation: result.mutation,
-  };
-  return jsonResult(details);
+  });
 }
 
 function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "run" | "resume") {
@@ -221,13 +200,6 @@ function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "ru
     throw new Error(`Managed TaskFlow ${action} mode requires a bound taskFlow runtime`);
   }
   return taskFlow;
-}
-
-function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
-  if (!result.ok) {
-    throw result.error;
-  }
-  return formatManagedFlowResult(result);
 }
 
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
@@ -238,8 +210,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
     description:
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
-      // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
-      action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
+      action: Type.Enum(["run", "resume"], { type: "string" }),
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),

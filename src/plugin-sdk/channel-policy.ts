@@ -1,4 +1,5 @@
 // Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -49,19 +50,116 @@ export {
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
+  buildChannelGroupsScopeTree,
+  encodeScopeSegment,
+  resolveScopeIntroHint,
+  resolveScopeKeyCaseInsensitive,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  scopeKey,
+  type ScopeNode,
+  type ScopePath,
+  type ScopeTree,
+} from "../config/group-scope-tree.js";
+export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
   resolveOpenDmAllowlistAccess,
 } from "./channel-access-compat.js";
-export {
-  evaluateGroupRouteAccessForPolicy,
-  evaluateSenderGroupAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "./group-access.js";
 export { createAllowlistProviderRestrictSendersWarningCollector };
+
+type GroupRouteAccessDecision = {
+  allowed: boolean;
+  groupPolicy: GroupPolicy;
+  reason: "allowed" | "disabled" | "empty_allowlist" | "route_not_allowlisted" | "route_disabled";
+};
+
+type SenderGroupAccessDecision = {
+  allowed: boolean;
+  groupPolicy: GroupPolicy;
+  providerMissingFallbackApplied: boolean;
+  reason: "allowed" | "disabled" | "empty_allowlist" | "sender_not_allowlisted";
+};
+
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+export function resolveSenderScopedGroupPolicy(params: {
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: string[];
+}): GroupPolicy {
+  if (params.groupPolicy === "disabled") {
+    return "disabled";
+  }
+  return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
+}
+
+/** @deprecated Use route descriptors with `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+export function evaluateGroupRouteAccessForPolicy(params: {
+  groupPolicy: GroupPolicy;
+  routeAllowlistConfigured: boolean;
+  routeMatched: boolean;
+  routeEnabled?: boolean;
+}): GroupRouteAccessDecision {
+  if (params.groupPolicy === "disabled") {
+    return { allowed: false, groupPolicy: params.groupPolicy, reason: "disabled" };
+  }
+  if (params.routeMatched && params.routeEnabled === false) {
+    return { allowed: false, groupPolicy: params.groupPolicy, reason: "route_disabled" };
+  }
+  if (params.groupPolicy === "allowlist") {
+    if (!params.routeAllowlistConfigured) {
+      return { allowed: false, groupPolicy: params.groupPolicy, reason: "empty_allowlist" };
+    }
+    if (!params.routeMatched) {
+      return { allowed: false, groupPolicy: params.groupPolicy, reason: "route_not_allowlisted" };
+    }
+  }
+  return { allowed: true, groupPolicy: params.groupPolicy, reason: "allowed" };
+}
+
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+export function evaluateSenderGroupAccessForPolicy(params: {
+  groupPolicy: GroupPolicy;
+  providerMissingFallbackApplied?: boolean;
+  groupAllowFrom: string[];
+  senderId: string;
+  isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
+}): SenderGroupAccessDecision {
+  const providerMissingFallbackApplied = Boolean(params.providerMissingFallbackApplied);
+  if (params.groupPolicy === "disabled") {
+    return {
+      allowed: false,
+      groupPolicy: params.groupPolicy,
+      providerMissingFallbackApplied,
+      reason: "disabled",
+    };
+  }
+  if (params.groupPolicy === "allowlist") {
+    if (params.groupAllowFrom.length === 0) {
+      return {
+        allowed: false,
+        groupPolicy: params.groupPolicy,
+        providerMissingFallbackApplied,
+        reason: "empty_allowlist",
+      };
+    }
+    if (!params.isSenderAllowed(params.senderId, params.groupAllowFrom)) {
+      return {
+        allowed: false,
+        groupPolicy: params.groupPolicy,
+        providerMissingFallbackApplied,
+        reason: "sender_not_allowlisted",
+      };
+    }
+  }
+  return {
+    allowed: true,
+    groupPolicy: params.groupPolicy,
+    providerMissingFallbackApplied,
+    reason: "allowed",
+  };
+}
 
 /** Normalizes allowFrom entries into trimmed unique string identifiers. */
 export function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
@@ -87,6 +185,96 @@ export type ChannelMutableAllowlistCandidate = {
   pathLabel: string;
   list: unknown;
 };
+
+type StandardAllowlistScope = {
+  prefix: string;
+  account: Record<string, unknown>;
+};
+
+/** Collect the common account, nested-DM, and group/room allowlist paths for doctor warnings. */
+export function collectStandardAllowlistLists(
+  scope: StandardAllowlistScope,
+  options: {
+    includeAllowFrom?: boolean;
+    includeGroupAllowFrom?: boolean;
+    includeDm?: boolean;
+    includeGroups?: boolean;
+    groupsKey?: string;
+    groupField?: string;
+  } = {},
+): ChannelMutableAllowlistCandidate[] {
+  const lists: ChannelMutableAllowlistCandidate[] = [];
+  if (options.includeAllowFrom !== false) {
+    lists.push({ pathLabel: `${scope.prefix}.allowFrom`, list: scope.account.allowFrom });
+  }
+  if (options.includeGroupAllowFrom !== false) {
+    lists.push({
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+    });
+  }
+  if (options.includeDm) {
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      lists.push({ pathLabel: `${scope.prefix}.dm.allowFrom`, list: dm.allowFrom });
+    }
+  }
+  if (options.includeGroups) {
+    const groupsKey = options.groupsKey ?? "groups";
+    const groupField = options.groupField ?? "allowFrom";
+    const groups = asObjectRecord(scope.account[groupsKey]);
+    if (groups) {
+      for (const [groupKey, groupRaw] of Object.entries(groups)) {
+        const group = asObjectRecord(groupRaw);
+        if (!group) {
+          continue;
+        }
+        lists.push({
+          pathLabel: `${scope.prefix}.${groupsKey}.${groupKey}.${groupField}`,
+          list: group[groupField],
+        });
+      }
+    }
+  }
+  return lists;
+}
+
+function stripMutableAllowEntryPrefixes(value: string, prefixes: readonly string[]): string {
+  let current = value;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of prefixes) {
+      if (current.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) {
+        continue;
+      }
+      current = current.slice(prefix.length).trim();
+      changed = true;
+      break;
+    }
+  }
+  return current;
+}
+
+/** Build a mutable-name detector by stripping channel prefixes and recognizing stable IDs. */
+export function buildMutableAllowEntryDetector(params: {
+  prefixes?: readonly string[];
+  stableIdPattern: RegExp;
+}): (entry: string) => boolean {
+  const prefixes = (params.prefixes ?? []).filter((prefix) => prefix.length > 0);
+  return (entry) => {
+    const text = entry.trim();
+    if (!text || text === "*") {
+      return false;
+    }
+    const normalized = stripMutableAllowEntryPrefixes(text, prefixes);
+    if (!normalized) {
+      return false;
+    }
+    params.stableIdPattern.lastIndex = 0;
+    return !params.stableIdPattern.test(normalized);
+  };
+}
 
 type ChannelMutableAllowlistHit = {
   path: string;
@@ -204,6 +392,7 @@ export function createRestrictSendersChannelSecurity<
   normalizeDmEntry?: (raw: string) => string;
   /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
+  dmRouting?: ChannelSecurityAdapter<ResolvedAccount>["dmRouting"];
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
@@ -219,6 +408,7 @@ export function createRestrictSendersChannelSecurity<
       normalizeEntry: params.normalizeDmEntry,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
+    ...(params.dmRouting ? { dmRouting: params.dmRouting } : {}),
     collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
       providerConfigPresent:
         params.providerConfigPresent ?? ((cfg) => cfg.channels?.[params.channelKey] !== undefined),

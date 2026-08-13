@@ -43,7 +43,7 @@ export class SsrFBlockedError extends Error {
   }
 }
 
-export type LookupFn = typeof dnsLookup;
+export type LookupFn = (hostname: string, options: { all: true }) => Promise<LookupAddress[]>;
 
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
@@ -529,8 +529,12 @@ export function createPinnedLookup(params: {
         ? records.filter((entry) => entry.family === requestedFamily)
         : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
+    // Match dns.lookup's asynchronous callback contract so connection errors
+    // cannot fire before the socket owner attaches its error listener.
     if (opts.all) {
-      cb(null, usable as LookupAddress[]);
+      process.nextTick(() => {
+        cb(null, usable as LookupAddress[]);
+      });
       return;
     }
     const chosen = expectDefined(
@@ -538,7 +542,9 @@ export function createPinnedLookup(params: {
       "usable entry at index % usable.length",
     );
     index += 1;
-    cb(null, chosen.address, chosen.family);
+    process.nextTick(() => {
+      cb(null, chosen.address, chosen.family);
+    });
   }) as typeof dnsLookupCb;
 }
 
@@ -601,9 +607,7 @@ export async function resolvePinnedHostnameWithPolicy(
   );
 
   const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = normalizeLookupResults(
-    (await lookupFn(normalized, { all: true })) as LookupResult,
-  );
+  const results = normalizeLookupResults(await lookupFn(normalized, { all: true }));
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

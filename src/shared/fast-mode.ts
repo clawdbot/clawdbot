@@ -1,6 +1,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+
 export const DEFAULT_FAST_MODE_AUTO_ON_SECONDS = 60;
 
 export type FastModeSource = "session" | "agent" | "config" | "default";
@@ -38,16 +40,6 @@ function modelConfigKey(provider?: string, model?: string): string {
     : `${providerId}/${modelId}`;
 }
 
-function modelConfigKeys(provider?: string, model?: string): string[] {
-  const key = modelConfigKey(provider, model);
-  const providerId = normalizeLowercaseStringOrEmpty(provider?.trim() ?? "");
-  if (providerId !== "openai-codex") {
-    return [key];
-  }
-  const openAiKey = modelConfigKey("openai", model);
-  return openAiKey === key ? [key] : [key, openAiKey];
-}
-
 export function resolveFastModeModelParams(params: {
   cfg: FastModeConfig | undefined;
   provider?: string;
@@ -57,16 +49,10 @@ export function resolveFastModeModelParams(params: {
   if (!models) {
     return undefined;
   }
-  for (const key of modelConfigKeys(params.provider, params.model)) {
-    const modelConfig = models[key];
-    if (modelConfig?.params) {
-      return modelConfig.params;
-    }
-  }
-  return undefined;
+  return models[modelConfigKey(params.provider, params.model)]?.params;
 }
 
-export function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
+function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -148,12 +134,6 @@ export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: numb
   return `on, off, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
-}
-
-export function normalizeFastModeSource(value: unknown): FastModeSource | undefined {
-  return value === "session" || value === "agent" || value === "config" || value === "default"
-    ? value
-    : undefined;
 }
 
 export function formatFastModeSourceSuffix(source: FastModeSource | undefined): string {

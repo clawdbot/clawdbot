@@ -8,6 +8,12 @@ private final class ContinuationBox {
 }
 
 @MainActor
+private final class BrowserImportEligibilityGate {
+    var isOnboarded = false
+    var isLocalMode = false
+}
+
+@MainActor
 private final class BrowserImportTransportStub {
     struct StubError: Error, LocalizedError {
         var errorDescription: String? {
@@ -130,16 +136,15 @@ struct BrowserProfileImportModelTests {
 
     @Test func `automatic offer request waits for onboarding and local mode`() async {
         let stub = BrowserImportTransportStub()
-        var isOnboarded = false
-        var isLocalMode = false
+        let eligibility = BrowserImportEligibilityGate()
         let model = stub.makeModel(
-            isOnboarded: { isOnboarded },
-            isLocalMode: { isLocalMode })
+            isOnboarded: { eligibility.isOnboarded },
+            isLocalMode: { eligibility.isLocalMode })
 
         #expect(await !model.requestAutomaticOfferIfEligible())
-        isOnboarded = true
+        eligibility.isOnboarded = true
         #expect(await !model.requestAutomaticOfferIfEligible())
-        isLocalMode = true
+        eligibility.isLocalMode = true
         #expect(await model.requestAutomaticOfferIfEligible())
         #expect(stub.requests(for: "/system-profile-import/status").count == 1)
     }

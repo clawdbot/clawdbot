@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat model select state behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
@@ -169,7 +170,7 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
   });
 
-  it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
+  it("keeps the active model value but does not synthesize a picker option when the catalog is empty", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({
         model: "openai/gpt-5-mini",
@@ -179,10 +180,22 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.options).toEqual([
-      { value: "openai/gpt-5-mini", label: "gpt-5-mini · openai" },
-      { value: "openai/gpt-5", label: "gpt-5 · openai" },
-    ]);
+    expect(resolved.defaultSelectable).toBe(false);
+    expect(resolved.options).toEqual([]);
+  });
+
+  it("does not synthesize configured models outside catalog results", () => {
+    const state = createChatModelState({
+      sessionsResult: createSessionsListResult({
+        model: "openai/gpt-5-mini",
+        modelProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.defaultSelectable).toBe(false);
+    expect(resolved.options).toEqual([]);
   });
 
   it("builds picker options without introducing a bare duplicate", () => {
@@ -557,6 +570,49 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("keeps versioned catalog names visible for configured family aliases", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "claude-opus-4-8",
+          alias: "opus",
+          name: "Opus 4.8",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-sonnet-5",
+          alias: "sonnet",
+          name: "Sonnet 5",
+          provider: "anthropic",
+        },
+        {
+          id: "moonshotai/kimi-k2.5",
+          alias: "Kimi K2.5 (NVIDIA)",
+          name: "Kimi K2.5",
+          provider: "nvidia",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-opus-4-8",
+        modelProvider: "anthropic",
+        defaultsModel: "claude-opus-4-8",
+        defaultsProvider: "anthropic",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (Opus 4.8 · opus)");
+    expect(resolved.options).toEqual([
+      { value: "anthropic/claude-opus-4-8", label: "Opus 4.8 · opus" },
+      { value: "anthropic/claude-sonnet-5", label: "Sonnet 5 · sonnet" },
+      {
+        value: "nvidia/moonshotai/kimi-k2.5",
+        label: "Kimi K2.5 (NVIDIA)",
+      },
+    ]);
+  });
+
   it("uses the active agent model for the default label", () => {
     const state = createChatModelState({
       agentDefaultModel: "anthropic/claude-opus-4-5",
@@ -583,6 +639,22 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.defaultModel).toBe("anthropic/claude-opus-4-5");
     expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
+  });
+
+  it("keeps a canonical agent default as one named picker option", () => {
+    const state = createChatModelState({
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      chatModelCatalog: createModelCatalog({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol" }]);
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {

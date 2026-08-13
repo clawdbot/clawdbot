@@ -10,10 +10,6 @@ export type MemoryCoreAcquireLocalService = (
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
 
-export type MemoryCoreLocalServiceHost = {
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
-
 const MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY = Symbol.for(
   "openclaw.memoryLocalServiceHostIdentities",
 );

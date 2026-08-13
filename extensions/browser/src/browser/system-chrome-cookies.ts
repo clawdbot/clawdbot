@@ -1,7 +1,7 @@
 /** macOS Chrome-family cookie database decryption and Playwright mapping. */
 import crypto from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
@@ -265,7 +265,7 @@ export async function readChromeCookiesDatabase(params: {
   readSecret?: KeychainSecretReader;
   signal?: AbortSignal;
 }) {
-  const database = new DatabaseSync(params.databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(params.databasePath, { readOnly: true });
   try {
     const statement = database.prepare(COOKIE_QUERY);
     statement.setReadBigInts(true);

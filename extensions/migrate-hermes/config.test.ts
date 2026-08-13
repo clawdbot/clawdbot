@@ -1,15 +1,16 @@
 // Migrate Hermes tests cover config plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildHermesMigrationProvider } from "./provider.js";
 import {
-  cleanupTempRoots,
-  makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
-  writeFile,
-} from "./test/provider-helpers.js";
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildHermesMigrationProvider } from "./provider.js";
+import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
   return items.find((item) => item.id === id);
@@ -26,17 +27,31 @@ function modelProviderValues(
   );
 }
 
+async function makeHermesPaths(sourceName = "hermes") {
+  const root = testWorkspace.dir;
+  return {
+    root,
+    source: path.join(root, sourceName),
+    workspaceDir: path.join(root, "workspace"),
+    stateDir: path.join(root, "state"),
+  };
+}
+
 describe("Hermes migration config mapping", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -115,8 +130,8 @@ describe("Hermes migration config mapping", () => {
         enabled: false,
         command: "npx",
         args: ["-y", "mcp-server-time"],
-        timeout: 45,
-        connectTimeout: 10,
+        connectionTimeoutMs: 10_000,
+        requestTimeoutMs: 45_000,
         supportsParallelToolCalls: true,
       },
     });
@@ -135,10 +150,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     const config = {
       agents: { defaults: { workspace: workspaceDir } },
     } as OpenClawConfig;
@@ -187,11 +199,57 @@ describe("Hermes migration config mapping", () => {
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
   });
 
+  it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const config = {
+      agents: { defaults: { workspace: workspaceDir } },
+    } as OpenClawConfig;
+    await writeFile(
+      path.join(source, "config.yaml"),
+      [
+        "providers:",
+        '  "__proto__":',
+        "    base_url: https://untrusted.example/v1",
+        "    models: [untrusted-model]",
+        "mcp_servers:",
+        "  constructor:",
+        "    command: untrusted-command",
+        "  safe-server:",
+        "    command: safe-command",
+        "skills:",
+        "  config:",
+        "    prototype:",
+        "      mode: untrusted",
+        "    safe-skill:",
+        "      mode: safe",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await buildHermesMigrationProvider().apply(
+      makeContext({
+        source,
+        stateDir,
+        workspaceDir,
+        runtime: makeConfigRuntime(config),
+      }),
+    );
+
+    expect(result.summary.errors).toBe(0);
+    const providers = config.models?.providers as Record<string, unknown>;
+    const servers = config.mcp?.servers as Record<string, unknown>;
+    const skills = config.skills?.entries as Record<string, unknown>;
+    expect(Object.hasOwn(providers, "__proto__")).toBe(false);
+    expect(Object.hasOwn(servers, "constructor")).toBe(false);
+    expect(Object.hasOwn(skills, "prototype")).toBe(false);
+    expect(Object.getPrototypeOf(providers)).toBe(Object.prototype);
+    expect((servers["safe-server"] as { command?: string }).command).toBe("safe-command");
+    expect((skills["safe-skill"] as { config?: { mode?: string } }).config?.mode).toBe("safe");
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("uses the provider runtime for CLI-applied config items", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     const config: Record<string, unknown> = {
       agents: { defaults: { workspace: workspaceDir } },
     };
@@ -221,10 +279,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("omits MCP credentials without explicit secret consent", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     const config: Record<string, unknown> = {};
     const envKey = ["TO", "KEN"].join("");
     await writeFile(
@@ -243,10 +298,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("translates current Hermes model-scoped providers and MCP semantics", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     const tlsFieldName = ["client", "cert"].join("_");
     const tlsPaths = ["placeholder", "placeholder"];
     const oauthConfig = {
@@ -371,8 +423,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("resolves provider endpoint refs and preserves supported request options", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     const endpointEnv = ["ACME", "BASE", "URL"].join("_");
     const headerEnv = ["ACME", "HEADER"].join("_");
     await writeFile(
@@ -452,8 +503,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("reports unresolved provider endpoint environment references", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       "providers:\n  acme:\n    api: ${MISSING_ACME_URL}\n    models: [acme-one]\n",
@@ -472,8 +522,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("infers Hermes provider protocols from provider and endpoint contracts", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -522,8 +571,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("matches Hermes transport precedence for named and plain custom providers", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -556,8 +604,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("keeps built-in Hermes provider overrides on OpenClaw's canonical provider IDs", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -608,9 +655,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("isolates model provider conflicts", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
+    const { root, source, workspaceDir } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -686,11 +731,18 @@ describe("Hermes migration config mapping", () => {
       expectedApi: "openai-completions",
       expectedBaseUrl: "https://dashscope-proxy.example.test/compatible-mode/v1",
     },
+    {
+      sourceProvider: "qwen-oauth",
+      envName: "HERMES_QWEN_BASE_URL",
+      envValue: "https://qwen-proxy.example.test/v1",
+      targetProvider: "qwen",
+      expectedApi: "openai-completions",
+      expectedBaseUrl: "https://qwen-proxy.example.test/v1",
+    },
   ])(
     "imports $envName as the selected $sourceProvider endpoint",
     async ({ sourceProvider, envName, envValue, targetProvider, expectedApi, expectedBaseUrl }) => {
-      const root = await makeTempRoot();
-      const source = path.join(root, "hermes");
+      const { root, source } = await makeHermesPaths();
       await writeFile(
         path.join(source, "config.yaml"),
         ["model:", `  provider: ${sourceProvider}`, "  default: imported-model", ""].join("\n"),
@@ -719,8 +771,7 @@ describe("Hermes migration config mapping", () => {
   );
 
   it("preserves the standard Alibaba endpoint instead of the coding-plan default", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: alibaba\n  default: qwen-plus\n",
@@ -741,8 +792,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("resolves MCP environment references with source dotenv precedence and secret consent", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     const mcpEnvName = ["MCP", "VALUE"].join("_");
     const mcpUrlName = ["MCP", "URL"].join("_");
     const dottedEnvName = ["mcp", "value"].join(".");
@@ -825,8 +875,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("imports a model-scoped endpoint even when Hermes names a built-in provider", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -864,8 +913,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("preserves an explicit Hermes provider name before applying built-in aliases", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -896,8 +944,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("keeps current providers entries ahead of matching legacy custom providers", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     const envVar = ["CURRENT", "ACME", "TOKEN"].join("_");
     const legacyEnvVar = ["LEGACY", "ACME", "TOKEN"].join("_");
     await writeFile(
@@ -951,8 +998,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("does not let a custom entry shadow a canonical Hermes provider", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -985,8 +1031,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("preserves the Hermes Moonshot China endpoint while aligning provider auth", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: kimi-coding-cn\n  default: kimi-k2.5\n",
@@ -1007,8 +1052,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("maps the Hermes MiniMax China route to OpenClaw's canonical provider", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: minimax-cn\n  default: MiniMax-M2.7\n",
@@ -1036,8 +1080,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("maps the native Kimi Coding endpoint to Anthropic Messages", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { root, source } = await makeHermesPaths();
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -1077,10 +1120,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("continues independent items after one late config conflict", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = await makeHermesPaths();
     const config: Record<string, unknown> = {};
     await writeFile(
       path.join(source, "config.yaml"),
@@ -1102,3 +1142,4 @@ describe("Hermes migration config mapping", () => {
     ).toBe("beta");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

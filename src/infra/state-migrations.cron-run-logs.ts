@@ -1,5 +1,6 @@
 /** One-shot import of legacy cron run history into the authoritative task ledger. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
@@ -59,17 +60,7 @@ function tableExists(db: DatabaseSync, name: string): boolean {
 }
 
 function parseDetail(raw: string | null): Record<string, unknown> | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return raw ? safeParseJsonRecord(raw) : undefined;
 }
 
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {

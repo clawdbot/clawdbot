@@ -6,17 +6,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createXaiDeviceCodeAuthMethod,
-  createXaiOAuthAuthMethod,
-  fetchXaiOAuthDiscovery,
-  isTrustedXaiOAuthEndpoint,
-  loginXaiDeviceCode,
-  refreshXaiOAuthCredential,
-  XAI_OAUTH_CLIENT_ID,
-  XAI_OAUTH_DISCOVERY_URL,
-  XAI_OAUTH_SCOPE,
-} from "./xai-oauth.js";
+import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
+import { refreshXaiOAuthCredential } from "./xai-oauth.js";
+
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration";
 
 function jsonResponse(value: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(value), {
@@ -49,19 +44,24 @@ function requestUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+function createXaiOAuthCredential(
+  tokenEndpoint = "https://auth.x.ai/oauth2/token",
+): OAuthCredential & { tokenEndpoint: string } {
+  return {
+    type: "oauth",
+    provider: "xai",
+    access: "access-1",
+    refresh: "refresh-1",
+    expires: 100,
+    tokenEndpoint,
+  };
+}
+
 describe("xAI OAuth", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
-  });
-
-  it("accepts only trusted xAI OAuth endpoints", () => {
-    expect(isTrustedXaiOAuthEndpoint("https://auth.x.ai/oauth2/token")).toBe(true);
-    expect(isTrustedXaiOAuthEndpoint("https://accounts.x.ai/oauth2/token")).toBe(true);
-    expect(isTrustedXaiOAuthEndpoint("http://auth.x.ai/oauth2/token")).toBe(false);
-    expect(isTrustedXaiOAuthEndpoint("https://x.ai.evil.test/oauth2/token")).toBe(false);
-    expect(isTrustedXaiOAuthEndpoint("not a url")).toBe(false);
   });
 
   it("keeps the public auth method named OAuth while using device code", () => {
@@ -83,34 +83,18 @@ describe("xAI OAuth", () => {
     expect(method.wizard?.assistantVisibility).toBe("manual-only");
   });
 
-  it("validates discovered endpoints before using them", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
-        token_endpoint: "https://auth.x.ai/oauth2/token",
-      }),
-    );
-
-    await expect(fetchXaiOAuthDiscovery({ fetchImpl })).resolves.toEqual({
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    });
-
-    const discoveryInit = fetchImpl.mock.calls.at(0)?.[1];
-    const discoveryHeaders = new Headers(discoveryInit?.headers ?? {});
-    expect(discoveryHeaders.get("user-agent")).toBe("openclaw/2026.3.22");
-    vi.unstubAllEnvs();
-
+  it("rejects untrusted discovered endpoints through credential refresh", async () => {
     const poisonedFetch = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
         token_endpoint: "https://evil.test/oauth2/token",
       }),
     );
+    const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
-    await expect(fetchXaiOAuthDiscovery({ fetchImpl: poisonedFetch })).rejects.toThrow(
-      "untrusted token endpoint",
-    );
+    await expect(
+      refreshXaiOAuthCredential(credential, { fetchImpl: poisonedFetch }),
+    ).rejects.toThrow("untrusted token endpoint");
   });
 
   it("refreshes with the cached token endpoint and preserves refresh fallback", async () => {
@@ -130,14 +114,7 @@ describe("xAI OAuth", () => {
       });
     });
 
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
     const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
 
     expect(fetchImpl).toHaveBeenCalledWith("https://auth.x.ai/oauth2/token", expect.any(Object));
@@ -164,14 +141,7 @@ describe("xAI OAuth", () => {
         expires_in: 120,
       });
     });
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
     const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
 
@@ -192,14 +162,7 @@ describe("xAI OAuth", () => {
       expect(requestUrl(url)).toBe(XAI_OAUTH_DISCOVERY_URL);
       throw new Error("discovery unavailable");
     });
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
     await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
       "discovery unavailable",
@@ -234,14 +197,7 @@ describe("xAI OAuth", () => {
           expires_in: 120,
         }),
       );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     const refresh = refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
     await vi.advanceTimersByTimeAsync(250);
@@ -268,14 +224,7 @@ describe("xAI OAuth", () => {
           },
         ),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     const refresh = refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
     const expectation = expect(refresh).rejects.toThrow(
@@ -298,14 +247,7 @@ describe("xAI OAuth", () => {
         { status: 400 },
       ),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
       "invalid_grant (Invalid or unknown refresh token)",
@@ -323,14 +265,7 @@ describe("xAI OAuth", () => {
         { status: 503 },
       ),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
       "server_error (try again later)",
@@ -342,14 +277,7 @@ describe("xAI OAuth", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error("socket hang up");
     });
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
       "socket hang up",
@@ -364,14 +292,7 @@ describe("xAI OAuth", () => {
         expires_in: "120s",
       }),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
 
@@ -385,14 +306,7 @@ describe("xAI OAuth", () => {
         expires_in: Number.MAX_SAFE_INTEGER,
       }),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
 
@@ -405,14 +319,7 @@ describe("xAI OAuth", () => {
         access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
       }),
     );
-    const credential = {
-      type: "oauth",
-      provider: "xai",
-      access: "access-1",
-      refresh: "refresh-1",
-      expires: 100,
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    } satisfies OAuthCredential & { tokenEndpoint: string };
+    const credential = createXaiOAuthCredential();
 
     const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
 
@@ -477,7 +384,7 @@ describe("xAI OAuth", () => {
       },
     };
 
-    const result = await loginXaiDeviceCode(ctx);
+    const result = await createXaiOAuthAuthMethod().run(ctx);
 
     expect(openUrl).toHaveBeenCalledWith("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
     expect(deviceCode).toHaveBeenCalledWith({
@@ -519,6 +426,11 @@ describe("xAI OAuth", () => {
       accountId: "acct-1",
       access: expect.any(String),
     });
+    expect(result.defaultModel).toBe("xai/auto");
+    expect(result.configPatch?.agents?.defaults?.model).toEqual({
+      primary: "xai/auto",
+    });
+    expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });
@@ -571,7 +483,7 @@ describe("xAI OAuth", () => {
       },
     };
 
-    await loginXaiDeviceCode(ctx);
+    await createXaiOAuthAuthMethod().run(ctx);
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Code expires in 5 minutes."),

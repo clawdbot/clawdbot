@@ -12,13 +12,15 @@ const externalDependencies = [
 
 const config = {
   clean: true,
-  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1" ? false : true,
+  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
   entry: {
     index: "packages/ai/src/index.ts",
     providers: "packages/ai/src/providers.ts",
+    transports: "packages/ai/src/transports.ts",
     diagnostics: "packages/ai/src/utils/diagnostics.ts",
     "event-stream": "packages/ai/src/utils/event-stream.ts",
     types: "packages/ai/src/types.ts",
+    "provider-types": "packages/ai/src/provider-types.ts",
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",

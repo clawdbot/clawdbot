@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { parseSessionDiffPatch } from "./session-diff.ts";
 
@@ -25,13 +26,21 @@ describe("parseSessionDiffPatch", () => {
     const { lines, truncated } = parseSessionDiffPatch(PATCH, gap);
     expect(truncated).toBe(false);
     // Leading gap: first hunk starts at old line 3.
-    expect(lines[0]).toEqual({ kind: "skip", text: "2 unmodified lines" });
+    expect(lines[0]).toEqual({
+      kind: "skip",
+      text: "2 unmodified lines",
+      gap: { oldStart: 1, newStart: 1, count: 2 },
+    });
     expect(lines[1]).toEqual({ kind: "ctx", lineNo: 3, text: "context" });
     expect(lines[2]).toEqual({ kind: "del", lineNo: 4, text: "old line" });
     expect(lines[3]).toEqual({ kind: "add", lineNo: 4, text: "new line" });
     expect(lines[4]).toEqual({ kind: "add", lineNo: 5, text: "added line" });
     // Gap between hunk 1 (old lines 3-4 consumed) and hunk 2 (old line 160).
-    expect(lines[5]).toEqual({ kind: "skip", text: "155 unmodified lines" });
+    expect(lines[5]).toEqual({
+      kind: "skip",
+      text: "155 unmodified lines",
+      gap: { oldStart: 5, newStart: 6, count: 155 },
+    });
     expect(lines[6]).toEqual({ kind: "ctx", lineNo: 161, text: "more context" });
     expect(lines[7]).toEqual({ kind: "del", lineNo: 161, text: "tail old" });
     expect(lines).toHaveLength(8);

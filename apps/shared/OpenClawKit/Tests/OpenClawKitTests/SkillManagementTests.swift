@@ -19,7 +19,17 @@ struct SkillManagementTests {
         #expect(review.slug == "@molly/weather")
         #expect(review.displayName == "Weather")
         #expect(review.version == "2.0.0")
-        #expect(review.author == "Molly (@molly)")
+        #expect(review.author == "Molly")
+    }
+
+    @Test func `same-slug results keep separate publisher references`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"},{"slug":"email","installRef":"@bob/email","displayName":"Email"},{"slug":"orphan","displayName":"Orphan"}]}"#
+                .utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+
+        #expect(search.results.map(\.reference) == ["@alice/email", "@bob/email", "orphan"])
+        #expect(search.results.map(\.id) == ["@alice/email", "@bob/email", "orphan"])
     }
 
     @Test func `risk acknowledgement stays bound to reviewed version`() {
@@ -40,6 +50,30 @@ struct SkillManagementTests {
         #expect(!stale.requiresAcknowledgement)
         #expect(stale.acknowledgeVersion == nil)
         #expect(stale.message.contains("different ClawHub release"))
+    }
+
+    @Test func `missing requirements preserve alternatives and platforms`() throws {
+        let data = Data(#"{"bins":[],"anyBins":["rg","grep"],"env":[],"config":[],"os":["darwin"]}"#.utf8)
+        let missing = try JSONDecoder().decode(SkillMissing.self, from: data)
+
+        #expect(missing.anyBins == ["rg", "grep"])
+        #expect(missing.os == ["darwin"])
+    }
+
+    @Test func `legacy requirements default new fields to empty`() throws {
+        let data = Data(#"{"bins":["rg"],"env":[],"config":[]}"#.utf8)
+        let requirements = try JSONDecoder().decode(SkillRequirements.self, from: data)
+        let missing = try JSONDecoder().decode(SkillMissing.self, from: data)
+
+        #expect(requirements.anyBins.isEmpty)
+        #expect(requirements.os.isEmpty)
+        #expect(missing.anyBins.isEmpty)
+        #expect(missing.os.isEmpty)
+    }
+
+    @Test func `qualified install remains busy for unqualified browse row`() {
+        #expect(SkillManagementContract.sameClawHubSkill("@molly/weather", "weather"))
+        #expect(!SkillManagementContract.sameClawHubSkill("@molly/weather", "@alice/weather"))
     }
 
     @Test func `installed readback requires valid provenance and exact version`() {

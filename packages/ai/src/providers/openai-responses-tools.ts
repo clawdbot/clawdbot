@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import type { Model, Tool } from "../types.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
@@ -45,7 +46,7 @@ export function convertResponsesToolPayload(
   const strictSetting = resolveResponsesStrictToolSetting(options);
   const strict = resolveResponsesStrictToolFlag(projection, strictSetting, options?.model);
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  const convertedTools = sortResponsesToolsByName(projection.tools).map((tool) => {
+  const convertedTools = sortPromptCacheToolsByName(projection.tools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
@@ -138,26 +139,4 @@ function shouldLogStrictToolDowngradeDiagnostic(
   }
   loggedStrictToolDowngradeDiagnosticKeys.add(key);
   return true;
-}
-
-function compareToolText(left: string | undefined, right: string | undefined): number {
-  const leftText = left ?? "";
-  const rightText = right ?? "";
-  if (leftText < rightText) {
-    return -1;
-  }
-  if (leftText > rightText) {
-    return 1;
-  }
-  return 0;
-}
-
-function sortResponsesToolsByName<T extends { name?: string; description?: string }>(
-  tools: readonly T[],
-): T[] {
-  return tools.toSorted(
-    (left, right) =>
-      compareToolText(left.name, right.name) ||
-      compareToolText(left.description, right.description),
-  );
 }

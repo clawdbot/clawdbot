@@ -2,7 +2,7 @@
 set -euo pipefail
 
 node_version="24.15.0"
-pnpm_spec="pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f"
+pnpm_spec="pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -13,12 +13,12 @@ shift
 unset NODE_OPTIONS
 
 imds_token="$(
-  /usr/bin/curl -fsS -X PUT \
+  /usr/bin/curl -fsS --connect-timeout 2 --max-time 5 -X PUT \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 60" \
     http://169.254.169.254/latest/api/token
 )"
 iam_status="$(
-  /usr/bin/curl -sS -o /dev/null -w "%{http_code}" \
+  /usr/bin/curl -sS --connect-timeout 2 --max-time 5 -o /dev/null -w "%{http_code}" \
     -H "X-aws-ec2-metadata-token: ${imds_token}" \
     http://169.254.169.254/latest/meta-data/iam/security-credentials/
 )"

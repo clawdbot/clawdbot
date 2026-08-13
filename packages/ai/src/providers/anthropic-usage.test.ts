@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { readLastAnthropicIterationUsage } from "./anthropic-usage.js";
+import {
+  readAnthropicCacheWriteUsage,
+  readLastAnthropicIterationUsage,
+} from "./anthropic-usage.js";
+
+describe("readAnthropicCacheWriteUsage", () => {
+  it("reads independent 5-minute and 1-hour cache-write buckets", () => {
+    expect(
+      readAnthropicCacheWriteUsage({
+        cache_creation: {
+          ephemeral_5m_input_tokens: 600_000,
+          ephemeral_1h_input_tokens: 400_000,
+        },
+      }),
+    ).toEqual({ cacheWrite5m: 600_000, cacheWrite1h: 400_000 });
+  });
+
+  it("keeps a valid bucket when its sibling is absent or malformed", () => {
+    expect(
+      readAnthropicCacheWriteUsage({
+        cache_creation: {
+          ephemeral_5m_input_tokens: "malformed",
+          ephemeral_1h_input_tokens: 12,
+        },
+      }),
+    ).toEqual({ cacheWrite1h: 12 });
+    expect(readAnthropicCacheWriteUsage({})).toEqual({});
+  });
+});
 
 describe("readLastAnthropicIterationUsage", () => {
   it.each(["message", "compaction", "advisor_message"])(

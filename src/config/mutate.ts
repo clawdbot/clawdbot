@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -18,7 +18,12 @@ import {
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
 } from "./config-env-vars.js";
+import {
+  applyUnsetPathsForWrite,
+  resolveManagedUnsetPathsForWrite,
+} from "./config-path-mutation.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
@@ -37,11 +42,7 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import {
-  applyUnsetPathsForWrite,
-  resolveManagedUnsetPathsForWrite,
-  resolveWriteEnvSnapshotForPath,
-} from "./io.write-prepare.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
@@ -313,6 +314,19 @@ async function withConfigMutationSnapshotLock<T>(
   });
 }
 
+/**
+ * Run a multi-phase operation under the canonical cross-process write lock.
+ * Nested mutation helpers are reentrant through activeConfigMutationLocks.
+ */
+export async function withConfigMutationExclusive<T>(
+  fn: (config: OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withConfigMutationSnapshotLock(
+    {},
+    async (prepared) => await fn(prepared.snapshot.sourceConfig),
+  );
+}
+
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
   if (!isRecord(base) || !isRecord(next)) {
     return isDeepStrictEqual(base, next) ? [] : ["<root>"];
@@ -325,6 +339,29 @@ function getSingleTopLevelIncludeTarget(params: {
   snapshot: ConfigFileSnapshot;
   key: string;
 }): string | null {
+  const targetPath = [params.key];
+  // Include callbacks are depth-first, so the last event at a path is the
+  // outer directive that decides whether writing through is unambiguous.
+  // Ancestor ownership also wins: a root include can override a nested target.
+  const ownership = params.snapshot.includeProvenance?.findLast(
+    (entry) =>
+      entry.path.length <= targetPath.length &&
+      entry.path.every((segment, index) => segment === targetPath[index]),
+  );
+  if (
+    ownership?.path.length === targetPath.length &&
+    ownership.kind === "single" &&
+    !ownership.hasSiblingOverrides &&
+    ownership.targetPath
+  ) {
+    return path.normalize(ownership.targetPath);
+  }
+  if (params.snapshot.includeProvenance !== undefined) {
+    return null;
+  }
+
+  // Synthetic/legacy snapshots and invalid include repair have no completed
+  // provenance event, so retain the parsed-directive fallback at this boundary.
   if (!isRecord(params.snapshot.parsed)) {
     return null;
   }
@@ -377,11 +414,6 @@ type RootBoundIncludeFile = {
   relativePath: string;
   root: FsSafeRoot;
 };
-
-function isMissingFileError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === "ENOENT" || code === "not-found";
-}
 
 function resolveRootBoundRelativePath(target: RootBoundIncludeFile, absolutePath: string): string {
   const relativePath = path.relative(target.root.rootReal, path.resolve(absolutePath));
@@ -459,7 +491,7 @@ async function readRootBoundFileRawIfExists(target: RootBoundIncludeFile): Promi
   try {
     return await target.root.readText(target.relativePath);
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return null;
     }
     throw error;
@@ -471,7 +503,7 @@ async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot
   try {
     currentRaw = await fs.readFile(snapshot.path, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+    if (!isMissingPathError(error)) {
       throw error;
     }
   }
@@ -504,7 +536,7 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
   try {
     await params.target.root.remove(params.target.relativePath);
   } catch (error) {
-    if (!isMissingFileError(error)) {
+    if (!isMissingPathError(error)) {
       throw error;
     }
   }
@@ -529,8 +561,6 @@ function createRootBoundBackupFs(target: RootBoundIncludeFile) {
         overwrite: true,
       });
     },
-    readdir: async (dir: string) =>
-      await target.root.list(resolveRootBoundRelativePath(target, dir)),
     rename: async (from: string, to: string) => {
       await target.root.move(
         resolveRootBoundRelativePath(target, from),
@@ -554,6 +584,7 @@ async function writeRootBoundJsonFile(params: {
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
+  skipOutputLogs?: boolean;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -585,9 +616,15 @@ async function writeRootBoundJsonFile(params: {
   }
   const content = formatJsonFileValue(params.value);
   // The include fast path bypasses writeConfigFile(); keep its authority guard
-  // on the final conflict-checked target with no later await before the write.
+  // and comment warning on the final conflict-checked target. No later await may
+  // run before the write.
   await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
+  warnIfJSON5CommentsWillBeStripped({
+    raw: currentRaw,
+    filePath: targetAtCommit.absolutePath,
+    skipOutputLogs: params.skipOutputLogs,
+  });
   await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
     mkdir: true,
     mode: 0o600,
@@ -792,6 +829,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
+    skipOutputLogs: params.writeOptions?.skipOutputLogs,
     preCommitRuntimePreflight:
       runtimeEnvBaseline || callerPreCommit
         ? async () => {
@@ -1236,3 +1274,4 @@ export async function mutateConfigFileWithRetry<T = void>(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

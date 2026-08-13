@@ -1,14 +1,7 @@
 // Discord plugin module implements tts behavior.
-import {
-  getTtsProvider,
-  resolveAgentDir,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-  type ResolvedTtsConfig,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
@@ -34,58 +27,6 @@ type VoiceReplyAudioResult =
       error?: string;
     };
 
-function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
-  if (!override) {
-    return base;
-  }
-  const baseProviders = base.providers ?? {};
-  const overrideProviders = override.providers ?? {};
-  const mergedProviders = Object.fromEntries(
-    uniqueStrings([...Object.keys(baseProviders), ...Object.keys(overrideProviders)]).map(
-      (providerId) => {
-        const baseProvider = baseProviders[providerId] ?? {};
-        const overrideProvider = overrideProviders[providerId] ?? {};
-        return [
-          providerId,
-          {
-            ...baseProvider,
-            ...overrideProvider,
-          },
-        ];
-      },
-    ),
-  );
-  return {
-    ...base,
-    ...override,
-    modelOverrides: {
-      ...base.modelOverrides,
-      ...override.modelOverrides,
-    },
-    ...(Object.keys(mergedProviders).length === 0 ? {} : { providers: mergedProviders }),
-  };
-}
-
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
-  cfg: OpenClawConfig;
-  resolved: ResolvedTtsConfig;
-} {
-  if (!params.override) {
-    return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg) };
-  }
-  const base = params.cfg.messages?.tts ?? {};
-  const merged = mergeTtsConfig(base, params.override);
-  const messages = params.cfg.messages ?? {};
-  const cfg = {
-    ...params.cfg,
-    messages: {
-      ...messages,
-      tts: merged,
-    },
-  };
-  return { cfg, resolved: resolveTtsConfig(cfg) };
-}
-
 export async function transcribeVoiceAudio(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -106,25 +47,21 @@ export async function synthesizeVoiceReplyAudio(params: {
   replyText: string;
   speakerLabel: string;
 }): Promise<VoiceReplyAudioResult> {
-  const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
+  const runtime = getDiscordRuntime();
+  const prepared = await runtime.tts.prepareTtsRequest({
     cfg: params.cfg,
     override: params.override,
+    text: params.replyText,
   });
-  const directive = parseTtsDirectives(params.replyText, ttsConfig.modelOverrides, {
-    cfg: ttsCfg,
-    providerConfigs: ttsConfig.providerConfigs,
-    preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
-  });
+  const directive = prepared.directives;
   const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
   const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
   if (!speakText) {
     return { status: "empty" };
   }
-
-  const runtime = getDiscordRuntime();
   const streamResult = await runtime.tts.textToSpeechStream?.({
     text: speakText,
-    cfg: ttsCfg,
+    cfg: prepared.cfg,
     channel: "discord",
     overrides: directive.overrides,
     disableFallback: true,
@@ -141,7 +78,7 @@ export async function synthesizeVoiceReplyAudio(params: {
 
   const result = await runtime.tts.textToSpeech({
     text: speakText,
-    cfg: ttsCfg,
+    cfg: prepared.cfg,
     channel: "discord",
     overrides: directive.overrides,
   });

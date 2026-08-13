@@ -74,11 +74,113 @@ describe("scanOpenRouterModels", () => {
     if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
+    expect(byPricing.contextLength).toBe(16_384);
+    expect(byPricing.maxCompletionTokens).toBe(1024);
     expect(byPricing.supportsToolsMeta).toBe(true);
     expect(byPricing.supportedParametersCount).toBe(3);
     expect(byPricing.isFree).toBe(true);
     expect(byPricing.tool.skipped).toBe(true);
     expect(byPricing.image.skipped).toBe(true);
+  });
+
+  it("uses OpenRouter top-provider limits for scan metadata", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/provider-limited:free",
+          name: "Provider Limited",
+          context_length: 32_768,
+          top_provider: {
+            context_length: 16_384,
+            max_completion_tokens: 4096,
+          },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.contextLength).toBe(16_384);
+    expect(result?.maxCompletionTokens).toBe(4096);
+  });
+
+  it("falls back when top-provider limits are malformed", async () => {
+    for (const topProvider of [
+      { context_length: 0, max_completion_tokens: 0 },
+      { context_length: -1, max_completion_tokens: -1 },
+      { context_length: 8192.5, max_completion_tokens: 8192.5 },
+      {
+        context_length: Number.MAX_SAFE_INTEGER + 1,
+        max_completion_tokens: Number.MAX_SAFE_INTEGER + 1,
+      },
+      { context_length: "8192", max_completion_tokens: "1024" },
+      { context_length: null, max_completion_tokens: null },
+    ]) {
+      const fetchImpl = createFetchFixture({
+        data: [
+          {
+            id: "acme/provider-limited:free",
+            name: "Provider Limited",
+            context_length: 32_768,
+            max_completion_tokens: 4096,
+            top_provider: topProvider,
+            supported_parameters: [],
+            pricing: { prompt: "0", completion: "0" },
+          },
+        ],
+      });
+
+      const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+      expect(result?.contextLength).toBe(32_768);
+      expect(result?.maxCompletionTokens).toBe(4096);
+    }
+  });
+
+  it("mixes provider context length with a top-level completion cap", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/provider-limited:free",
+          name: "Provider Limited",
+          context_length: 32_768,
+          max_completion_tokens: 4096,
+          top_provider: { context_length: 16_384, max_completion_tokens: 0 },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+    expect(result?.contextLength).toBe(16_384);
+    expect(result?.maxCompletionTokens).toBe(4096);
+  });
+
+  it("falls back to top-level max_output_tokens", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/output-limited:free",
+          name: "Output Limited",
+          context_length: 32_768,
+          max_output_tokens: 2048,
+          top_provider: { max_completion_tokens: 0 },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+    expect(result?.maxCompletionTokens).toBe(2048);
   });
 
   it("drops out-of-range OpenRouter created_at timestamps", async () => {
@@ -177,18 +279,11 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
-  it("applies the scan timeout to the OpenRouter catalog request", async () => {
+  it("applies the scan timeout before the OpenRouter catalog responds", async () => {
     vi.useFakeTimers();
-    const fetchImpl: typeof fetch = async (_input, init) =>
-      await new Promise<Response>((_resolve, reject) => {
-        const signal = typeof init === "object" && init ? init.signal : undefined;
-        if (signal?.aborted) {
-          reject(new Error("catalog aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", () => reject(new Error("catalog aborted")), {
-          once: true,
-        });
+    const fetchImpl: typeof fetch = async () =>
+      await new Promise<Response>(() => {
+        // Deliberately ignore cancellation to prove the timeout race settles independently.
       });
 
     const scan = expect(
@@ -197,10 +292,72 @@ describe("scanOpenRouterModels", () => {
         probe: false,
         timeoutMs: 1,
       }),
-    ).rejects.toThrow(/catalog aborted/);
+    ).rejects.toThrow(/OpenRouter model scan timed out/);
 
     await vi.advanceTimersByTimeAsync(1);
     await scan;
+  });
+
+  it("keeps the catalog timeout active while reading a streaming body", async () => {
+    vi.useFakeTimers();
+    const timeoutMs = 20;
+    const chunkIntervalMs = 5;
+    const encoder = new TextEncoder();
+    let chunkCount = 0;
+    let abortCount = 0;
+
+    const fetchImpl = withFetchPreconnect(async (_input, init) => {
+      const signal = typeof init === "object" && init ? init.signal : undefined;
+      if (!signal) {
+        throw new Error("Expected catalog request signal");
+      }
+      let interval: ReturnType<typeof setInterval> | undefined;
+      let completionTimer: ReturnType<typeof setTimeout> | undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"data":['));
+            interval = setInterval(() => {
+              chunkCount += 1;
+              controller.enqueue(encoder.encode(" "));
+            }, chunkIntervalMs);
+            completionTimer = setTimeout(() => {
+              clearInterval(interval);
+              controller.enqueue(encoder.encode("]}"));
+              controller.close();
+            }, timeoutMs + chunkIntervalMs);
+            signal.addEventListener(
+              "abort",
+              () => {
+                abortCount += 1;
+                clearInterval(interval);
+                clearTimeout(completionTimer);
+                controller.error(signal.reason);
+              },
+              { once: true },
+            );
+          },
+          cancel() {
+            clearInterval(interval);
+            clearTimeout(completionTimer);
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const scan = expect(
+      scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs }),
+    ).rejects.toThrow(/timed out/i);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(chunkCount).toBe(3);
+    expect(abortCount).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
+    await scan;
+    expect(abortCount).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {

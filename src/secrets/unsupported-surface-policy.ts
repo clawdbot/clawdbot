@@ -3,7 +3,6 @@ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-cha
 import { isRecord } from "../utils.js";
 
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
@@ -11,7 +10,6 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
 ] as const;
 
 const CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS = [
-  "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
@@ -158,7 +156,7 @@ function collectPatternCandidates(params: {
 /**
  * Returns canonical config/auth-profile path patterns that do not support SecretRef values.
  */
-export function getUnsupportedSecretRefSurfacePatterns(): string[] {
+function listUnsupportedSecretRefSurfacePatterns(): string[] {
   return [...unsupportedSecretRefSurfacePatterns];
 }
 
@@ -173,7 +171,7 @@ type UnsupportedSecretRefConfigCandidate = {
 /**
  * Finds configured openclaw.json values whose surfaces currently reject SecretRef objects.
  */
-export function collectUnsupportedSecretRefConfigCandidates(
+function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
   if (!isRecord(raw)) {
@@ -192,3 +190,8 @@ export function collectUnsupportedSecretRefConfigCandidates(
   }
   return candidates;
 }
+
+export const unsupportedSecretRefSurfacePolicy = {
+  listPatterns: listUnsupportedSecretRefSurfacePatterns,
+  collectConfigCandidates: collectUnsupportedSecretRefConfigCandidates,
+};

@@ -7,6 +7,9 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
+import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
+import "../../components/modal-dialog.ts";
+import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -15,6 +18,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
 import "../../styles/plugins.css";
 import {
@@ -46,19 +50,6 @@ export type PluginRowMessage = {
   acknowledge?: { packageName: string; version?: string };
 };
 
-export type McpServerSummary = {
-  name: string;
-  enabled: boolean;
-  transport: "stdio" | "http" | "invalid";
-  target: string;
-  auth: string | null;
-};
-
-export type McpServerForm = {
-  name: string;
-  target: string;
-};
-
 type PluginsViewProps = {
   connected: boolean;
   loading: boolean;
@@ -74,6 +65,7 @@ type PluginsViewProps = {
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
+  iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   pageNotice: PluginRowMessage | null;
@@ -85,6 +77,7 @@ type PluginsViewProps = {
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
+  onIconError: (pluginId: string) => void;
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
@@ -155,6 +148,7 @@ function matchesPlugin(plugin: PluginCatalogItem, query: string): boolean {
   return [
     plugin.name,
     plugin.id,
+    plugin.packageName,
     plugin.description,
     plugin.origin,
     plugin.category,
@@ -173,11 +167,31 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
 }
 
 function sortCatalogPlugins(plugins: readonly PluginCatalogItem[]): PluginCatalogItem[] {
-  return plugins.toSorted(
-    (left, right) =>
+  return plugins.toSorted((left, right) => {
+    const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
+    if (featured !== 0) {
+      return featured;
+    }
+    if (left.featured && right.featured) {
+      const leftFeaturedAt = left.featuredAt;
+      const rightFeaturedAt = right.featuredAt;
+      if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
+        if (leftFeaturedAt === undefined) {
+          return 1;
+        }
+        if (rightFeaturedAt === undefined) {
+          return -1;
+        }
+        if (leftFeaturedAt !== rightFeaturedAt) {
+          return rightFeaturedAt - leftFeaturedAt;
+        }
+      }
+    }
+    return (
       (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) ||
-      left.name.localeCompare(right.name),
-  );
+      left.name.localeCompare(right.name)
+    );
+  });
 }
 
 function installedPlugins(
@@ -262,17 +276,35 @@ const compactNumber = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-function renderArtTile(slug: string, name: string): TemplateResult {
+function renderArtTile(
+  slug: string,
+  name: string,
+  iconUrl?: string,
+  onIconError?: () => void,
+  className = "plugins-tile",
+): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
-    return html`<span class="plugins-tile">
+    return html`<span class=${className}>
       <img src=${art} alt="" loading="lazy" decoding="async" />
+    </span>`;
+  }
+  if (iconUrl) {
+    return html`<span class=${className}>
+      <img
+        class="plugins-icon"
+        src=${iconUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @error=${onIconError}
+      />
     </span>`;
   }
   const [from, to] = pluginFallbackGradient(slug);
   const monogram = pluginMonogram(name);
   return html`<span
-    class="plugins-tile plugins-tile--fallback"
+    class=${`${className} ${className}--fallback`}
     style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
     aria-hidden="true"
   >
@@ -298,6 +330,12 @@ function stateLabel(plugin: PluginCatalogItem): string {
 function stateStatus(plugin: PluginCatalogItem) {
   const kind = plugin.state === "enabled" ? "ok" : plugin.state === "error" ? "danger" : "muted";
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
+}
+
+/** Rows pair the status with an Enable/Disable button that already implies the
+ * healthy states, so only the error status earns a pill next to the actions. */
+function rowStateStatus(plugin: PluginCatalogItem) {
+  return plugin.state === "error" ? stateStatus(plugin) : nothing;
 }
 
 function originLabel(origin: string): string {
@@ -536,7 +574,37 @@ function renderInstalledFilter(props: PluginsViewProps) {
   });
 }
 
-function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
+function renderPluginHeading(params: {
+  name: string;
+  content: TemplateResult;
+  onShowDetails?: () => void;
+}): TemplateResult {
+  return html`
+    <h3 class="settings-row__title">
+      ${params.onShowDetails
+        ? html`
+            <button
+              type="button"
+              class="plugins-item__detail-button"
+              aria-label=${params.name}
+              @click=${(event: Event) => {
+                event.stopPropagation();
+                params.onShowDetails?.();
+              }}
+            >
+              ${params.content}
+            </button>
+          `
+        : params.content}
+    </h3>
+  `;
+}
+
+function renderPluginRow(
+  plugin: PluginCatalogItem,
+  props: PluginsViewProps,
+  includePackageName = false,
+): TemplateResult {
   const key = pluginRowKey(plugin.id);
   const busy = props.busy[key] ?? false;
   return html`
@@ -552,26 +620,35 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         }
       }}
     >
-      ${renderArtTile(plugin.id, plugin.name)}
+      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+        props.onIconError(plugin.id),
+      )}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${plugin.name}
-          ${plugin.version
-            ? html`<span class="plugins-version">v${plugin.version}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: plugin.name,
+          content: html`
+            ${plugin.name}
+            ${plugin.version
+              ? includePackageName
+                ? html`<span class="plugins-version">v${plugin.version}</span>`
+                : html`<span class="plugins-version">v${plugin.version}</span>`
+              : nothing}
+          `,
+          onShowDetails: () => props.onShowDetails(plugin.id),
+        })}
         <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
         ${renderMetaLine([
           plugin.origin ? originLabel(plugin.origin) : nothing,
-          plugin.packageName
+          includePackageName && plugin.packageName
             ? html`<span class="plugins-meta__mono">${plugin.packageName}</span>`
             : nothing,
         ])}
       </div>
       <div class="settings-row__control">
-        ${stateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
+        ${plugin.installed ? rowStateStatus(plugin) : nothing}
+        ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -620,12 +697,20 @@ function renderMcpSection(props: PluginsViewProps) {
           @click=${() => props.onMcpFormToggle(!props.mcpFormOpen)}
         >
           <span aria-hidden="true">${icons.plus}</span>
-          ${t("pluginsPage.mcpAdd")}
+          ${t("mcpServers.add")}
         </button>
       `,
     },
     html`
-      ${props.mcpFormOpen ? renderMcpForm(props) : nothing}
+      ${props.mcpFormOpen
+        ? renderMcpServerForm({
+            busy: props.mcpBusy,
+            disabled: !props.canMutate,
+            blockedReason: props.mutationBlockedReason,
+            onSubmit: props.onMcpAdd,
+            onCancel: () => props.onMcpFormToggle(false),
+          })
+        : nothing}
       ${props.mcpMessage
         ? html`<div
             class="plugins-row-message plugins-row-message--${props.mcpMessage
@@ -646,7 +731,9 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       ${renderArtTile(server.name, server.name)}
       <div class="settings-row__text">
         <h3 class="settings-row__title">${server.name}</h3>
-        <span class="settings-row__desc plugins-meta__mono">${server.target}</span>
+        <span class="settings-row__desc plugins-meta__mono">
+          ${server.target || t("mcpServers.missingTransport")}
+        </span>
         ${renderMetaLine([
           t("pluginsPage.mcp"),
           server.transport,
@@ -654,10 +741,6 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
         ])}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus({
-          kind: server.enabled ? "ok" : "muted",
-          label: server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled"),
-        })}
         ${renderToggleButton(props, props.mcpBusy, {
           enabled: server.enabled,
           onToggle: (enabled) => props.onMcpToggle(server.name, enabled),
@@ -670,67 +753,16 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
   `;
 }
 
-function renderMcpForm(props: PluginsViewProps) {
-  const submit = (event: Event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const name = data.get("mcp-name");
-    const target = data.get("mcp-target");
-    props.onMcpAdd({
-      name: typeof name === "string" ? name.trim() : "",
-      target: typeof target === "string" ? target.trim() : "",
-    });
-  };
-  return html`
-    <form class="plugins-mcp-form" @submit=${submit}>
-      <label>
-        <span>${t("pluginsPage.mcpNameLabel")}</span>
-        <input
-          name="mcp-name"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="context7"
-          autocomplete="off"
-        />
-      </label>
-      <label class="plugins-mcp-form__target">
-        <span>${t("pluginsPage.mcpTargetLabel")}</span>
-        <input
-          name="mcp-target"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="https://mcp.example.com/mcp  ·  npx some-mcp-server"
-          autocomplete="off"
-        />
-      </label>
-      <div class="plugins-mcp-form__actions">
-        <button type="submit" class="btn btn--sm" ?disabled=${props.mcpBusy}>
-          ${props.mcpBusy ? t("pluginsPage.mcpAdding") : t("pluginsPage.mcpAdd")}
-        </button>
-        <button type="button" class="btn btn--sm" @click=${() => props.onMcpFormToggle(false)}>
-          ${t("pluginsPage.cancel")}
-        </button>
-      </div>
-    </form>
-  `;
-}
-
 function renderInstalled(props: PluginsViewProps) {
   const plugins = installedPlugins(props.result?.plugins ?? [], props.query, props.installedFilter);
   const groups = groupInstalledByCategory(plugins);
+  const filtered = Boolean(props.query || props.installedFilter !== "all");
   return html`
-    ${renderInstalledFilter(props)}
     ${groups.length === 0
       ? renderEmpty(
-          props.query || props.installedFilter !== "all"
-            ? t("pluginsPage.noInstalledMatchTitle")
-            : t("pluginsPage.noInstalledTitle"),
-          props.query || props.installedFilter !== "all"
-            ? t("pluginsPage.noMatchBody")
-            : t("pluginsPage.noInstalledBody"),
+          filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
+          filtered ? t("pluginsPage.noMatchBody") : t("pluginsPage.noInstalledBody"),
+          filtered ? "curious" : "sleepy",
         )
       : groups.map((group) =>
           renderSettingsSection(
@@ -738,7 +770,7 @@ function renderInstalled(props: PluginsViewProps) {
             repeat(
               group.plugins,
               (plugin) => plugin.id,
-              (plugin) => renderInstalledRow(plugin, props),
+              (plugin) => renderPluginRow(plugin, props, true),
             ),
           ),
         )}
@@ -747,49 +779,6 @@ function renderInstalled(props: PluginsViewProps) {
 }
 
 /* ---------------------------------- discover tab ---------------------------------- */
-
-function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
-  const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key] ?? false;
-  return html`
-    <article
-      class="settings-row plugins-item plugins-item--clickable"
-      data-plugin-id=${plugin.id}
-      data-plugin-source=${plugin.origin ?? "unknown"}
-      data-plugin-status=${plugin.state}
-      aria-busy=${busy ? "true" : "false"}
-      @click=${(event: Event) => {
-        if (!fromInteractiveChild(event)) {
-          props.onShowDetails(plugin.id);
-        }
-      }}
-    >
-      ${renderArtTile(plugin.id, plugin.name)}
-      <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${plugin.name}
-          ${plugin.version
-            ? html`<span class="plugins-version">v${plugin.version}</span>`
-            : nothing}
-        </h3>
-        <span class="settings-row__desc">
-          ${plugin.description || t("pluginsPage.optionalCapability")}
-        </span>
-        ${renderMetaLine([plugin.origin ? originLabel(plugin.origin) : nothing])}
-      </div>
-      <div class="settings-row__control">
-        ${plugin.installed ? stateStatus(plugin) : nothing}
-        ${renderCatalogActions(plugin, props, busy, key)}
-      </div>
-      ${plugin.error
-        ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-            ${plugin.error}
-          </div>`
-        : nothing}
-      ${renderRowMessage(key, props.messages[key], busy, props)}
-    </article>
-  `;
-}
 
 function renderConnectorRow(
   connector: ConnectorSuggestion,
@@ -834,7 +823,7 @@ function renderConnectorRow(
                   ?disabled=${!props.canMutate || busy}
                   @click=${() => props.onAddConnector(connector)}
                 >
-                  ${busy ? t("pluginsPage.mcpAdding") : t("pluginsPage.connectorAdd")}
+                  ${busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd")}
                 </button>
               `
           : html`
@@ -900,12 +889,16 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
     >
       ${renderArtTile(artSlug, pkg.displayName)}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${pkg.displayName}
-          ${pkg.latestVersion
-            ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: pkg.displayName,
+          content: html`
+            ${pkg.displayName}
+            ${pkg.latestVersion
+              ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
+              : nothing}
+          `,
+          onShowDetails: installed ? () => props.onShowDetails(installed.id) : undefined,
+        })}
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,
@@ -923,7 +916,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="settings-row__control">
         ${installed
-          ? html`${stateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
+          ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,
@@ -982,13 +975,17 @@ function renderClawHubGroup(props: PluginsViewProps) {
 
 function renderDiscover(props: PluginsViewProps) {
   const shelves = discoverShelves(props.result?.plugins ?? [], props.query);
-  const featuredRows = shelves.featured.map((plugin) => renderCatalogRow(plugin, props));
-  const officialRows = shelves.official.map((plugin) => renderCatalogRow(plugin, props));
+  const featuredRows = shelves.featured.map((plugin) => renderPluginRow(plugin, props));
+  const officialRows = shelves.official.map((plugin) => renderPluginRow(plugin, props));
   const clawHub = renderClawHubGroup(props);
   if (!featuredRows.length && !officialRows.length && !shelves.connectors.length) {
     return html`
       ${clawHub === nothing
-        ? renderEmpty(t("pluginsPage.noDiscoverMatchTitle"), t("pluginsPage.noMatchBody"))
+        ? renderEmpty(
+            t("pluginsPage.noDiscoverMatchTitle"),
+            t("pluginsPage.noMatchBody"),
+            "curious",
+          )
         : nothing}
       ${clawHub}
     `;
@@ -1050,21 +1047,12 @@ function renderDetailOverlay(props: PluginsViewProps) {
   const key = pluginRowKey(plugin.id);
   const busy = props.busy[key] ?? false;
   return html`
-    <div
-      class="plugins-detail-backdrop"
-      @click=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          props.onShowDetails(null);
-        }
-      }}
+    <openclaw-modal-dialog
+      label=${plugin.name}
+      style="--openclaw-modal-width: min(580px, calc(100vw - 32px));"
+      @modal-cancel=${() => props.onShowDetails(null)}
     >
-      <section
-        class="plugins-detail"
-        role="dialog"
-        aria-modal="true"
-        aria-label=${plugin.name}
-        data-detail-plugin-id=${plugin.id}
-      >
+      <section class="plugins-detail" data-detail-plugin-id=${plugin.id}>
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-detail__close"
@@ -1073,7 +1061,13 @@ function renderDetailOverlay(props: PluginsViewProps) {
         >
           ${icons.x}
         </button>
-        ${renderDetailCover(plugin.id, plugin.name)}
+        ${renderArtTile(
+          plugin.id,
+          plugin.name,
+          props.iconUrls[plugin.id],
+          () => props.onIconError(plugin.id),
+          "plugins-cover",
+        )}
         <div class="plugins-detail__body">
           <div class="plugins-detail__title">
             <h2>${plugin.name}</h2>
@@ -1147,34 +1141,23 @@ function renderDetailOverlay(props: PluginsViewProps) {
           </div>
         </div>
       </section>
-    </div>
+    </openclaw-modal-dialog>
   `;
-}
-
-function renderDetailCover(slug: string, name: string): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class="plugins-cover">
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class="plugins-cover plugins-cover--fallback"
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
 }
 
 /* ---------------------------------- page shell ---------------------------------- */
 
-function renderEmpty(title: string, body: string) {
+function renderEmpty(title: string, body: string, mood?: "sleepy" | "curious") {
   return html`
     <div class="plugins-empty">
-      <span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>
+      <!-- Sleepy marks truly empty inventory; curious marks a filter/search miss. -->
+      ${mood
+        ? html`<openclaw-mascot
+            class="plugins-empty__mascot"
+            .mood=${mood}
+            .size=${84}
+          ></openclaw-mascot>`
+        : html`<span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>`}
       <h2>${title}</h2>
       <p>${body}</p>
     </div>
@@ -1194,6 +1177,14 @@ function renderActivePanel(props: PluginsViewProps) {
 
 export function renderPlugins(props: PluginsViewProps) {
   const canShowCatalog = Boolean(props.result);
+  const panelState =
+    props.loading && !canShowCatalog
+      ? "loading"
+      : props.error && !canShowCatalog
+        ? "error"
+        : !props.connected && !canShowCatalog
+          ? "offline"
+          : "content";
   return renderSettingsPage(
     html`
       <div class="plugins-toolbar">
@@ -1209,6 +1200,9 @@ export function renderPlugins(props: PluginsViewProps) {
           @input=${(event: Event) =>
             props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
+        ${props.activeTab === "installed" && panelState === "content"
+          ? renderInstalledFilter(props)
+          : nothing}
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-refresh"
@@ -1245,22 +1239,24 @@ export function renderPlugins(props: PluginsViewProps) {
           </div>`
         : nothing}
 
-      <div
+      <wa-tab-panel
         id="plugins-hub-panel"
         class="plugins-panel"
-        role="tabpanel"
+        name=${props.activeTab}
+        active
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
-        ${props.loading && !canShowCatalog
+        ${panelState === "loading"
           ? html`<div class="plugins-search-state" role="status">${t("pluginsPage.loading")}</div>`
-          : props.error && !canShowCatalog
+          : panelState === "error"
             ? nothing
-            : !props.connected && !canShowCatalog
+            : panelState === "offline"
               ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
               : renderActivePanel(props)}
-      </div>
+      </wa-tab-panel>
       ${renderDetailOverlay(props)}
     `,
     { wide: true },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

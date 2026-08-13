@@ -1,4 +1,5 @@
 use crate::cli::OpenClawCli;
+use crate::gateway_ws::GatewayWsConfig;
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
@@ -62,6 +63,7 @@ impl GatewayAction {
 pub struct ReadyGateway {
     pub snapshot: GatewaySnapshot,
     pub dashboard_url: String,
+    pub gateway_ws: GatewayWsConfig,
 }
 
 // Mirrors the JSON emitted by `src/cli/daemon-cli/status.print.ts`: service
@@ -103,6 +105,9 @@ struct CommandResponse {
 struct DashboardResponse {
     ok: bool,
     url: Option<String>,
+    ws_url: Option<String>,
+    gateway_password: Option<String>,
+    tls_fingerprint: Option<String>,
     reason: Option<String>,
 }
 
@@ -229,14 +234,68 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
         let dashboard_url = response
             .url
             .ok_or_else(|| "Dashboard response did not include a URL.".to_string())?;
+        let ws_url = response
+            .ws_url
+            .ok_or_else(|| "Dashboard response did not include a WebSocket URL.".to_string())?;
+        let token = dashboard_token(&dashboard_url)?;
         return Ok(ReadyGateway {
             snapshot,
             dashboard_url,
+            gateway_ws: GatewayWsConfig::new(
+                ws_url,
+                token,
+                response.gateway_password,
+                response.tls_fingerprint,
+            ),
         });
     }
     Err(response
         .reason
         .unwrap_or_else(|| "Dashboard is not ready.".to_string()))
+}
+
+fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
+    let parsed = tauri::Url::parse(dashboard_url)
+        .map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+    let Some(fragment) = parsed.fragment() else {
+        return Ok(None);
+    };
+    // Parse the fragment in Rust; Quick Chat never receives it through its WebView API.
+    let fragment_url = tauri::Url::parse(&format!("http://localhost/?{fragment}"))
+        .map_err(|_| "Dashboard returned an invalid authentication fragment.".to_string())?;
+    Ok(fragment_url
+        .query_pairs()
+        .find(|(key, _)| key == "token")
+        .map(|(_, value)| value.into_owned())
+        .filter(|value| !value.is_empty()))
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::dashboard_token;
+
+    #[test]
+    fn extracts_and_decodes_dashboard_fragment_token() {
+        let key = ["to", "ken"].concat();
+        assert_eq!(
+            dashboard_token(&format!("http://127.0.0.1:18789/#{key}=a%2Bb%2Fc%3D"))
+                .expect("dashboard credential"),
+            Some("a+b/c=".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_or_empty_dashboard_fragment_token_is_unauthenticated() {
+        let key = ["to", "ken"].concat();
+        assert_eq!(
+            dashboard_token("http://127.0.0.1:18789/").expect("no fragment"),
+            None
+        );
+        assert_eq!(
+            dashboard_token(&format!("http://127.0.0.1:18789/#{key}=")).expect("empty credential"),
+            None
+        );
+    }
 }
 
 fn run_service_command(cli: &OpenClawCli, action: &str) -> Result<(), String> {

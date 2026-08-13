@@ -17,8 +17,11 @@ type StoryInline =
   | { code: string }
   | { ship: string }
   | { link: { href: string; content: string } }
+  | { task: { checked: boolean; content: StoryInline[] } }
   | { break: null }
   | { tag: string };
+
+type StoryListType = "ordered" | "unordered" | "tasklist";
 
 // Block content types
 type StoryBlock =
@@ -31,7 +34,7 @@ type StoryBlock =
 type StoryListing =
   | {
       list: {
-        type: "ordered" | "unordered" | "tasklist";
+        type: StoryListType;
         items: StoryListing[];
         contents: StoryInline[];
       };
@@ -206,8 +209,14 @@ export function createImageBlock(src: string, alt = "", height = 0, width = 0): 
  * Check if URL looks like an image
  */
 export function isImageUrl(url: string): boolean {
-  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(\?.*)?$/i;
-  return imageExtensions.test(url);
+  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i;
+  let path = url.split(/[?#]/, 1)[0] ?? url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    // Keep existing non-URL path handling.
+  }
+  return imageExtensions.test(path);
 }
 
 /**
@@ -232,6 +241,298 @@ function processInlinesForImages(inlines: StoryInline[]): {
   return { inlines: cleanInlines, imageBlocks };
 }
 
+function parseInlinesWithBreaks(text: string): {
+  inlines: StoryInline[];
+  imageBlocks: StoryVerse[];
+} {
+  const withBreaks: StoryInline[] = [];
+  for (const inline of parseInlineMarkdown(text)) {
+    if (typeof inline !== "string" || !inline.includes("\n")) {
+      withBreaks.push(inline);
+      continue;
+    }
+    const parts = inline.split("\n");
+    for (const [index, part] of parts.entries()) {
+      if (part) {
+        withBreaks.push(part);
+      }
+      if (index < parts.length - 1) {
+        withBreaks.push({ break: null });
+      }
+    }
+  }
+  return processInlinesForImages(withBreaks);
+}
+
+type MarkdownListItem = {
+  indent: number;
+  contentIndent: number;
+  markerType: Exclude<StoryListType, "tasklist">;
+  markerKey: string;
+  orderedStart?: number;
+  hasSourceBody: boolean;
+  hasBlockBody: boolean;
+  hasImages: boolean;
+  content: StoryInline[];
+  checked?: boolean;
+};
+
+const MARKDOWN_LIST_ITEM_PATTERN = /^([ \t]*)([-+*]|\d{1,9}[.)])(?:([ \t]+)(.*))?$/;
+
+function isMarkdownThematicBreak(text: string): boolean {
+  return /^(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(text);
+}
+
+function startsListBlockSyntax(text: string): boolean {
+  return (
+    /^(`{3,}|~{3,})/.test(text) ||
+    text.startsWith(">") ||
+    /^#{1,6}(?:\s|$)/.test(text) ||
+    isMarkdownThematicBreak(text) ||
+    /^(?:[-+*]|\d{1,9}[.)])(?:\s|$)/.test(text)
+  );
+}
+
+function whitespaceColumns(text: string, startColumn = 0): number {
+  let column = startColumn;
+  for (const char of text) {
+    column += char === "\t" ? 4 - (column % 4) : 1;
+  }
+  return column;
+}
+
+function parseMarkdownListItem(line: string): MarkdownListItem | undefined {
+  const match = line.match(MARKDOWN_LIST_ITEM_PATTERN);
+  if (!match || isMarkdownThematicBreak(line.trim())) {
+    return undefined;
+  }
+
+  const marker = expectDefined(match[2], "list marker capture");
+  const markerType = /^\d/.test(marker) ? "ordered" : "unordered";
+  const padding = match[3] ?? " ";
+  const sourceBody = match[4] ?? "";
+  let body = sourceBody;
+  const task = body.match(/^\[([\t xX])\](?:\s+(.*))?$/);
+  let checked: boolean | undefined;
+  if (task) {
+    checked = expectDefined(task[1], "task state capture").toLowerCase() === "x";
+    body = task[2] ?? "";
+  }
+
+  const { inlines, imageBlocks } = parseInlinesWithBreaks(body);
+  const indent = whitespaceColumns(expectDefined(match[1], "list indent capture"));
+  const markerEnd = indent + marker.length;
+  const contentIndent = whitespaceColumns(padding, markerEnd);
+  return {
+    indent,
+    contentIndent,
+    markerType,
+    markerKey: markerType === "ordered" ? marker.slice(-1) : marker,
+    ...(markerType === "ordered" ? { orderedStart: Number.parseInt(marker, 10) } : {}),
+    hasSourceBody: sourceBody.length > 0,
+    hasBlockBody:
+      sourceBody.length > 0 &&
+      (contentIndent - markerEnd >= 5 || startsListBlockSyntax(sourceBody)),
+    hasImages: imageBlocks.length > 0,
+    content: inlines,
+    ...(checked === undefined ? {} : { checked }),
+  };
+}
+
+function lineIndent(line: string): number {
+  return whitespaceColumns(line.match(/^[ \t]*/)?.[0] ?? "");
+}
+
+function startsTopLevelStoryBlock(line: string): boolean {
+  return (
+    /^(#{1,6})\s+(.+)$/.test(line) ||
+    line.startsWith("```") ||
+    line.startsWith("> ") ||
+    /^(-{3,}|\*{3,})$/.test(line.trim())
+  );
+}
+
+function listItemContent(item: MarkdownListItem): StoryInline[] {
+  return item.checked === undefined
+    ? item.content
+    : [{ task: { checked: item.checked, content: item.content } }];
+}
+
+function canInterruptWithListItem(item: MarkdownListItem): boolean {
+  return item.hasSourceBody && (item.markerType === "unordered" || item.orderedStart === 1);
+}
+
+function parseListingBlock(
+  lines: string[],
+  startIndex: number,
+): { verses: StoryVerse[]; nextIndex: number } | undefined {
+  const first = parseMarkdownListItem(expectDefined(lines[startIndex], "list start line"));
+  if (!first) {
+    return undefined;
+  }
+  if (first.indent >= 4 || (first.markerType === "ordered" && first.orderedStart !== 1)) {
+    return undefined;
+  }
+
+  function parseLevel(
+    index: number,
+    minIndent: number,
+    markerKey: string,
+  ): { type: StoryListType; items: StoryListing[]; nextIndex: number } | undefined {
+    const firstItem = parseMarkdownListItem(expectDefined(lines[index], "list level start"));
+    if (
+      !firstItem ||
+      firstItem.indent < minIndent ||
+      firstItem.indent > minIndent + 3 ||
+      (firstItem.markerType === "ordered" && firstItem.orderedStart !== 1)
+    ) {
+      return undefined;
+    }
+
+    const items: StoryListing[] = [];
+    const markerType = firstItem.markerType;
+    let allTasks = true;
+    let cursor = index;
+    while (cursor < lines.length) {
+      const item = parseMarkdownListItem(expectDefined(lines[cursor], "list line index"));
+      if (
+        !item ||
+        item.indent < minIndent ||
+        item.indent > minIndent + 3 ||
+        item.markerKey !== markerKey
+      ) {
+        break;
+      }
+      if (item.hasBlockBody || item.hasImages) {
+        return undefined;
+      }
+
+      allTasks &&= item.checked !== undefined;
+      cursor++;
+
+      while (cursor < lines.length) {
+        const continuationLine = expectDefined(lines[cursor], "continuation line index");
+        if (continuationLine.trim() === "") {
+          let nextContentIndex = cursor + 1;
+          while (lines[nextContentIndex]?.trim() === "") {
+            nextContentIndex++;
+          }
+          const nextContent = lines.at(nextContentIndex);
+          if (nextContent === undefined) {
+            break;
+          }
+          const nextListItem = parseMarkdownListItem(nextContent);
+          if (nextListItem) {
+            cursor = nextContentIndex;
+            continue;
+          }
+          if (lineIndent(nextContent) > item.indent) {
+            return undefined;
+          }
+          break;
+        }
+
+        if (parseMarkdownListItem(continuationLine)) {
+          break;
+        }
+        if (
+          lineIndent(continuationLine) <= item.indent &&
+          startsTopLevelStoryBlock(continuationLine)
+        ) {
+          break;
+        }
+        return undefined;
+      }
+
+      const childLine = lines.at(cursor);
+      const child = childLine === undefined ? undefined : parseMarkdownListItem(childLine);
+      const childIsSibling =
+        child !== undefined &&
+        child.markerKey === markerKey &&
+        child.indent >= minIndent &&
+        child.indent <= minIndent + 3 &&
+        child.indent < item.contentIndent;
+      if (childIsSibling) {
+        items.push({ item: listItemContent(item) });
+        continue;
+      }
+      if (child && child.markerKey !== markerKey && !canInterruptWithListItem(child)) {
+        return undefined;
+      }
+      if (child && child.indent >= item.contentIndent && !canInterruptWithListItem(child)) {
+        return undefined;
+      }
+      if (child && child.indent > item.indent) {
+        if (child.indent < item.contentIndent || child.indent >= item.contentIndent + 4) {
+          return undefined;
+        }
+        const nested = parseLevel(cursor, item.contentIndent, child.markerKey);
+        if (!nested) {
+          return undefined;
+        }
+        // A nested node stores its parent item's contents, while its type controls
+        // the child markers. Preserve that type when list styles change by depth.
+        items.push({
+          list: {
+            type: nested.type,
+            contents: listItemContent(item),
+            items: nested.items,
+          },
+        });
+        cursor = nested.nextIndex;
+        const strandedChildLine = lines.at(cursor);
+        const strandedChild =
+          strandedChildLine === undefined ? undefined : parseMarkdownListItem(strandedChildLine);
+        const strandedIsSibling =
+          strandedChild !== undefined &&
+          strandedChild.markerKey === markerKey &&
+          strandedChild.indent >= minIndent &&
+          strandedChild.indent <= minIndent + 3 &&
+          strandedChild.indent < item.contentIndent;
+        if (!strandedIsSibling && strandedChild && strandedChild.indent > item.indent) {
+          return undefined;
+        }
+        let trailingIndex = cursor;
+        while (lines[trailingIndex]?.trim() === "") {
+          trailingIndex++;
+        }
+        const trailingLine = lines.at(trailingIndex);
+        if (
+          trailingLine !== undefined &&
+          !parseMarkdownListItem(trailingLine) &&
+          lineIndent(trailingLine) > item.indent
+        ) {
+          return undefined;
+        }
+      } else {
+        items.push({ item: listItemContent(item) });
+      }
+    }
+    return {
+      type: markerType === "unordered" && allTasks && items.length > 0 ? "tasklist" : markerType,
+      items,
+      nextIndex: cursor,
+    };
+  }
+
+  const parsed = parseLevel(startIndex, 0, first.markerKey);
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    verses: [
+      {
+        block: {
+          listing: {
+            list: { type: parsed.type, contents: [], items: parsed.items },
+          },
+        },
+      },
+    ],
+    nextIndex: parsed.nextIndex,
+  };
+}
+
 /**
  * Convert markdown text to Tlon story format
  */
@@ -239,9 +540,20 @@ export function markdownToStory(markdown: string): Story {
   const story: Story = [];
   const lines = markdown.split("\n");
   let i = 0;
+  let preservedListMarkerKey: string | undefined;
 
   while (i < lines.length) {
     const line = expectDefined(lines[i], "Markdown line index is in bounds");
+    const lineListItem = parseMarkdownListItem(line);
+    if (
+      line.trim() !== "" &&
+      preservedListMarkerKey !== undefined &&
+      (lineListItem !== undefined
+        ? lineListItem.markerKey !== preservedListMarkerKey
+        : lineIndent(line) === 0)
+    ) {
+      preservedListMarkerKey = undefined;
+    }
 
     // Code block: ```lang\ncode\n```
     if (line.startsWith("```")) {
@@ -315,6 +627,23 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
+    const preservesLooseList =
+      preservedListMarkerKey !== undefined && lineListItem?.markerKey === preservedListMarkerKey;
+    const listing = preservesLooseList ? undefined : parseListingBlock(lines, i);
+    if (listing) {
+      story.push(...listing.verses);
+      i = listing.nextIndex;
+      preservedListMarkerKey = undefined;
+      continue;
+    }
+    if (lineListItem) {
+      preservedListMarkerKey = lineListItem.markerKey;
+    }
+
+    // If a list-like block cannot be represented without losing Markdown semantics,
+    // preserve the whole block in the existing plain paragraph path.
+    let preserveListText = preservesLooseList || MARKDOWN_LIST_ITEM_PATTERN.test(line);
+
     // Regular paragraph - collect consecutive non-empty lines
     const paragraphLines: string[] = [];
     while (true) {
@@ -329,37 +658,29 @@ export function markdownToStory(markdown: string): Story {
       ) {
         break;
       }
+
+      if (!preserveListText && MARKDOWN_LIST_ITEM_PATTERN.test(paragraphLine)) {
+        const item = parseMarkdownListItem(paragraphLine);
+        const candidate = parseListingBlock(lines, i);
+        if (item?.hasSourceBody === true && candidate) {
+          break;
+        }
+        // Once one candidate is not safely representable, keep the remaining
+        // paragraph byte-compatible instead of repeatedly reparsing its suffixes.
+        preserveListText = true;
+        if (item) {
+          preservedListMarkerKey = item.markerKey;
+        }
+      }
       paragraphLines.push(paragraphLine);
       i++;
     }
 
     if (paragraphLines.length > 0) {
-      const paragraphText = paragraphLines.join("\n");
-      // Convert newlines within paragraph to break elements
-      const inlines = parseInlineMarkdown(paragraphText);
-      // Replace \n in strings with break elements
-      const withBreaks: StoryInline[] = [];
-      for (const inline of inlines) {
-        if (typeof inline === "string" && inline.includes("\n")) {
-          const parts = inline.split("\n");
-          for (const [j, part] of parts.entries()) {
-            if (part) {
-              withBreaks.push(part);
-            }
-            if (j < parts.length - 1) {
-              withBreaks.push({ break: null });
-            }
-          }
-        } else {
-          withBreaks.push(inline);
-        }
-      }
+      const { inlines, imageBlocks } = parseInlinesWithBreaks(paragraphLines.join("\n"));
 
-      // Extract any images from inlines and add as separate blocks
-      const { inlines: cleanInlines, imageBlocks } = processInlinesForImages(withBreaks);
-
-      if (cleanInlines.length > 0) {
-        story.push({ inline: cleanInlines });
+      if (inlines.length > 0) {
+        story.push({ inline: inlines });
       }
       story.push(...imageBlocks);
     }

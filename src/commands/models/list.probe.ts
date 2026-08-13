@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -25,6 +25,11 @@ import {
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
+import {
+  prepareInternalSessionEffectsSession,
+  removeInternalSessionEffectsSession,
+} from "../../agents/internal-session-effects.js";
 import {
   hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
@@ -32,34 +37,35 @@ import {
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-  parseModelRef,
-} from "../../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions/paths.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../../config/types.secrets.js";
+import type {
+  EmbeddedStateLockHandle,
+  EmbeddedStateSignalProcess,
+} from "../../infra/embedded-state-lock.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import { redactSecrets } from "../status-all/format.js";
-import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
+import { redactStatusSecrets } from "../status-all/format.js";
+import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
+import { formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 /** Scrubs credential-shaped text before probe failures cross a UI or CLI boundary. */
 export function redactAuthProbeError(error: string): string {
-  return redactSecrets(error);
+  return redactStatusSecrets(error);
 }
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(
@@ -142,99 +148,30 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
+const PROBE_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, AuthProbeStatus>;
+
 /** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  if (!reason) {
-    return "unknown";
-  }
-  if (reason === "auth" || reason === "auth_permanent") {
-    // Keep probe output backward-compatible: permanent auth failures still
-    // surface in the auth bucket instead of showing as unknown.
-    return "auth";
-  }
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "billing") {
-    return "billing";
-  }
-  if (reason === "timeout") {
-    return "timeout";
-  }
-  if (reason === "model_not_found") {
-    return "format";
-  }
-  if (reason === "format") {
-    return "format";
-  }
-  return "unknown";
-}
-
-function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const raw of modelCandidates) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    const list = map.get(parsed.provider) ?? [];
-    if (!list.includes(parsed.model)) {
-      list.push(parsed.model);
-    }
-    map.set(parsed.provider, list);
-  }
-  return map;
-}
-
-function catalogProbePriority(provider: string, modelId: string): number {
-  const id = modelId.trim().toLowerCase();
-  if (provider !== "anthropic") {
-    return 50;
-  }
-  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
-    return 0;
-  }
-  if (id === "claude-haiku-4-5") {
-    return 1;
-  }
-  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
-    return 2;
-  }
-  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
-    return 3;
-  }
-  if (id.startsWith("claude-sonnet-4-")) {
-    return 4;
-  }
-  if (id.startsWith("claude-3-")) {
-    return 100;
-  }
-  return 50;
-}
-
-function selectProbeModel(params: {
-  provider: string;
-  candidates: Map<string, string[]>;
-  catalog: Array<{ provider: string; id: string }>;
-}): { provider: string; model: string } | null {
-  const { provider, candidates, catalog } = params;
-  const direct = candidates.get(provider);
-  if (direct && direct.length > 0) {
-    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
-  }
-  const fromCatalog = catalog
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
-    .toSorted((left, right) => {
-      const priority =
-        catalogProbePriority(provider, left.entry.id) -
-        catalogProbePriority(provider, right.entry.id);
-      return priority || left.index - right.index;
-    })[0]?.entry;
-  if (fromCatalog) {
-    return { provider, model: fromCatalog.id };
-  }
-  return null;
+  return reason
+    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
+    : "unknown";
 }
 
 function mapEligibilityReasonToProbeReasonCode(
@@ -398,6 +335,7 @@ async function maybeResolveUnresolvedRefIssue(params: {
 /** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providers: string[];
@@ -405,11 +343,14 @@ export async function buildProbeTargets(params: {
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
+  const authAliasLookupParams = { config: cfg, workspaceDir };
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryScoped({
       config: cfg,
       allowKeychainPrompt: false,
-      providerIds: providers,
+      providerIds: providers.map((provider) =>
+        resolveProviderIdForAuth(provider, authAliasLookupParams),
+      ),
       profileIds: options.profileIds,
     }),
   });
@@ -417,13 +358,19 @@ export async function buildProbeTargets(params: {
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
-  const catalog = await loadModelCatalog({ config: cfg });
-  const candidates = buildCandidateMap(modelCandidates);
+  const catalog = await loadPreparedModelCatalog({
+    config: cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(agentDir ? { agentDir } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+  const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
 
   for (const provider of providers) {
     const providerKey = normalizeProviderId(provider);
+    const authProviderKey = resolveProviderIdForAuth(providerKey, authAliasLookupParams);
     if (providerFilterKey && providerKey !== providerFilterKey) {
       continue;
     }
@@ -439,9 +386,20 @@ export async function buildProbeTargets(params: {
       includeDirectKeys &&
       profileFilter.size === 0 &&
       hasConfiguredSecretInput(configuredProvider?.apiKey, cfg.secrets?.defaults);
-    const profileIds = listProfilesForProvider(store, providerKey);
+    // Keep profiles saved under either surface. The production profile helper
+    // is alias-aware, but scoped plugin metadata can differ between lookups.
+    const profileIds = [
+      ...new Set([
+        ...listProfilesForProvider(store, authProviderKey),
+        ...(authProviderKey === providerKey ? [] : listProfilesForProvider(store, providerKey)),
+      ]),
+    ];
     const configuredReference = includeConfigKey
-      ? resolveProviderEntryApiKeyProfileReference({ cfg, provider: providerKey, store })
+      ? resolveProviderEntryApiKeyProfileReference({
+          cfg,
+          provider: providerKey,
+          store,
+        })
       : ({ kind: "none" } as const);
     const configuredBinding =
       configuredReference.kind === "profile" && !profileIds.includes(configuredReference.profileId)
@@ -473,7 +431,7 @@ export async function buildProbeTargets(params: {
         ? configuredProvider.auth
         : "api_key";
     const resolvedEnvironmentValue = includeDirectKeys
-      ? resolveEnvApiKey(providerKey, process.env, {
+      ? resolveEnvApiKey(authProviderKey, process.env, {
           config: cfg,
           workspaceDir,
         })
@@ -596,12 +554,11 @@ export async function buildProbeTargets(params: {
         }
       }
     };
-    const explicitOrder = (() => {
-      return (
-        findNormalizedProviderValue(store.order, providerKey) ??
-        findNormalizedProviderValue(cfg?.auth?.order, providerKey)
-      );
-    })();
+    const explicitOrder =
+      findNormalizedProviderValue(store.order, authProviderKey) ??
+      findNormalizedProviderValue(store.order, providerKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, authProviderKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, providerKey);
     const orderResolution = resolveAuthProfileOrderWithMetadata({
       cfg,
       store,
@@ -725,7 +682,7 @@ export async function buildProbeTargets(params: {
 
     const envKey = orderResolution.hasExplicitOrder
       ? null
-      : resolveEnvApiKey(providerKey, process.env, {
+      : resolveEnvApiKey(authProviderKey, process.env, {
           config: cfg,
           workspaceDir,
         });
@@ -768,12 +725,13 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  sessionDir: string;
+  storePath: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
+  abortSignal?: AbortSignal;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, storePath, target, timeoutMs, maxTokens } = params;
   // Marker credentials must be resolved by the runtime from config, but the
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
@@ -798,11 +756,11 @@ async function probeTarget(params: {
   }
   const model = target.model;
 
-  const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
-  const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
+  const runId = `probe-${target.provider}-${crypto.randomUUID()}`;
   let isolatedAgentDir: string | null = null;
   let isolatedProfileId: string | undefined;
+  let sessionTarget: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -817,6 +775,12 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
+    sessionTarget = await prepareInternalSessionEffectsSession({
+      agentId,
+      cwd: workspaceDir,
+      runId,
+      storePath,
+    });
     // Any bound-value target runs in an empty agent dir so stored profiles are
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
@@ -855,9 +819,17 @@ async function probeTarget(params: {
       }
     }
     const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      probeConfig,
+      runId,
+      agentId,
+      "models.auth-probe",
+    );
     await runEmbeddedAgent({
-      sessionId,
-      sessionFile,
+      preparedRunAdmission,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      sessionTarget,
       agentId,
       workspaceDir,
       agentDir: isolatedAgentDir ?? agentDir,
@@ -868,15 +840,17 @@ async function probeTarget(params: {
       authProfileId: isolatedProfileId ?? target.profileId,
       authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
       timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
+      runId,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
       thinkLevel: "off",
       reasoningLevel: "off",
       verboseLevel: "off",
       streamParams: { maxTokens },
+      agentHarnessRuntimeOverride: "openclaw",
       disableTools: true,
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
+      abortSignal: params.abortSignal,
     });
     return buildResult("ok");
   } catch (err) {
@@ -886,6 +860,8 @@ async function probeTarget(params: {
       redactAuthProbeError(described.message),
     );
   } finally {
+    preparedRunAdmission?.close();
+    await removeInternalSessionEffectsSession(sessionTarget);
     if (isolatedAgentDir) {
       clearRuntimeAuthProfileStoreSnapshot(isolatedAgentDir);
       disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(isolatedAgentDir));
@@ -904,6 +880,7 @@ async function runTargetsWithConcurrency(params: {
   maxTokens: number;
   concurrency: number;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  abortSignal?: AbortSignal;
 }): Promise<AuthProbeResult[]> {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
@@ -914,7 +891,7 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -932,17 +909,57 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        sessionDir,
+        storePath,
         target,
         timeoutMs,
         maxTokens,
+        abortSignal: params.abortSignal,
       });
       completed += 1;
       onProgress?.({ completed, total: targets.length });
       return result;
     },
-    { concurrency, stopOnError: true },
+    {
+      concurrency,
+      stopOnError: true,
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+    },
   );
+}
+
+function formatActiveGatewayModelsProbeRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then rerun models status --probe.`;
+}
+
+type AuthProbeStateOwnership = {
+  mode: "exclusive";
+  gatewayLockOptions?: GatewayLockOptions;
+  process?: EmbeddedStateSignalProcess;
+};
+
+/** Own canonical state only for direct CLI probes; Gateway RPC probes already run under its lock. */
+export async function withAuthProbeStateOwnership<T>(
+  ownership: AuthProbeStateOwnership | undefined,
+  run: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!ownership) {
+    return await run();
+  }
+  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+    await import("../../infra/embedded-state-lock.js");
+  const signalBridge = createEmbeddedStateSignalBridge(ownership.process ?? process);
+  let stateLock: EmbeddedStateLockHandle | null | undefined;
+  try {
+    stateLock = await acquireEmbeddedStateLock({
+      options: ownership.gatewayLockOptions,
+      signal: signalBridge.signal,
+      formatActiveGatewayRefusal: formatActiveGatewayModelsProbeRefusal,
+    });
+    return await run(signalBridge.signal);
+  } finally {
+    await stateLock?.release();
+    signalBridge.dispose();
+  }
 }
 
 /** Runs all auth probes with bounded concurrency and returns a summary. */
@@ -955,44 +972,49 @@ export async function runAuthProbes(params: {
   modelCandidates: string[];
   options: AuthProbeOptions;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  stateOwnership?: AuthProbeStateOwnership;
 }): Promise<AuthProbeSummary> {
-  const startedAt = Date.now();
-  const plan = await buildProbeTargets({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providers: params.providers,
-    modelCandidates: params.modelCandidates,
-    options: params.options,
+  return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
+    const startedAt = Date.now();
+    const plan = await buildProbeTargets({
+      cfg: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      providers: params.providers,
+      modelCandidates: params.modelCandidates,
+      options: params.options,
+    });
+
+    const totalTargets = plan.targets.length;
+    params.onProgress?.({ completed: 0, total: totalTargets });
+
+    const results = totalTargets
+      ? await runTargetsWithConcurrency({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          targets: plan.targets,
+          timeoutMs: params.options.timeoutMs,
+          maxTokens: params.options.maxTokens,
+          concurrency: params.options.concurrency,
+          onProgress: params.onProgress,
+          abortSignal,
+        })
+      : [];
+
+    const finishedAt = Date.now();
+
+    return {
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt - startedAt,
+      totalTargets,
+      options: params.options,
+      results: [...plan.results, ...results],
+    };
   });
-
-  const totalTargets = plan.targets.length;
-  params.onProgress?.({ completed: 0, total: totalTargets });
-
-  const results = totalTargets
-    ? await runTargetsWithConcurrency({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        targets: plan.targets,
-        timeoutMs: params.options.timeoutMs,
-        maxTokens: params.options.maxTokens,
-        concurrency: params.options.concurrency,
-        onProgress: params.onProgress,
-      })
-    : [];
-
-  const finishedAt = Date.now();
-
-  return {
-    startedAt,
-    finishedAt,
-    durationMs: finishedAt - startedAt,
-    totalTargets,
-    options: params.options,
-    results: [...plan.results, ...results],
-  };
 }
 
 /** Formats probe latency for table output. */
@@ -1023,3 +1045,4 @@ export function describeProbeSummary(summary: AuthProbeSummary): string {
   }
   return `Probed ${summary.totalTargets} target${summary.totalTargets === 1 ? "" : "s"} in ${formatMs(summary.durationMs)}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

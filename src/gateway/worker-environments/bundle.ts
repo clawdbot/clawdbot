@@ -5,9 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
-import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
+import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_MANIFEST_VERSION,
+} from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
 import {
   collectWorkerBundleManifest,
@@ -15,7 +19,7 @@ import {
   type WorkerBundleManifestEntry,
 } from "./bundle-staging.js";
 
-export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
+export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
@@ -83,7 +87,6 @@ function resolvePackageRoot(packageRoot: string | undefined): string {
 async function isReleasedPackageInstall(packageRoot: string): Promise<boolean> {
   const entries = new Set(await fs.readdir(packageRoot));
   return (
-    entries.has("npm-shrinkwrap.json") &&
     !entries.has(".git") &&
     !entries.has("pnpm-lock.yaml") &&
     !entries.has("bun.lock") &&
@@ -114,6 +117,12 @@ function parseNpmPackageIdentity(value: unknown): NpmPackageIdentity | undefined
     readNonEmptyString(record, "integrity") ?? readNonEmptyString(record, "dist.integrity");
   const filename = readNonEmptyString(record, "filename");
   return name && version && integrity ? { name, version, integrity, filename } : undefined;
+}
+
+// Single-spec view/pack proofs return exactly one entry; npm 12 shape drift is
+// normalized by the shared resolver so identity verification survives upgrades.
+function unwrapNpmJsonEntry(value: unknown): unknown {
+  return resolveNpmJsonEntries(value)[0];
 }
 
 async function runNpmProofCommand(params: {
@@ -175,21 +184,23 @@ async function verifyPublishedNpmRelease(params: {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-npm-proof-"));
   try {
     const published = parseNpmPackageIdentity(
-      await runNpmProofCommand({
-        argv: [
-          "npm",
-          "view",
-          `openclaw@${params.version}`,
-          "name",
-          "version",
-          "dist.integrity",
-          "--json",
-          `--registry=${OPENCLAW_NPM_REGISTRY}`,
-        ],
-        cwd: temporaryRoot,
-        failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
-        runCommand,
-      }),
+      unwrapNpmJsonEntry(
+        await runNpmProofCommand({
+          argv: [
+            "npm",
+            "view",
+            `openclaw@${params.version}`,
+            "name",
+            "version",
+            "dist.integrity",
+            "--json",
+            `--registry=${OPENCLAW_NPM_REGISTRY}`,
+          ],
+          cwd: temporaryRoot,
+          failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
+          runCommand,
+        }),
+      ),
     );
     if (
       published?.name !== "openclaw" ||
@@ -216,7 +227,7 @@ async function verifyPublishedNpmRelease(params: {
         "Unable to verify the installed OpenClaw package; use the worker bundle install",
       runCommand,
     });
-    const packed = Array.isArray(packedValue) ? parseNpmPackageIdentity(packedValue[0]) : undefined;
+    const packed = parseNpmPackageIdentity(unwrapNpmJsonEntry(packedValue));
     if (!packed?.filename || path.basename(packed.filename) !== packed.filename) {
       throw new Error("npm pack returned incomplete worker package metadata");
     }
@@ -262,15 +273,6 @@ async function verifyPublishedNpmRelease(params: {
   } finally {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
-}
-
-function hashWorkerBundleManifest(entries: readonly WorkerBundleManifestEntry[]): string {
-  const hash = createHash("sha256");
-  hash.update(`${WORKER_BUNDLE_MANIFEST_VERSION}\0`);
-  for (const entry of entries) {
-    hash.update(`${entry.path}\0${entry.mode.toString(8)}\0${entry.size}\0${entry.sha256}\0`);
-  }
-  return hash.digest("hex");
 }
 
 function manifestsMatch(

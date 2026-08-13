@@ -51,12 +51,33 @@ describe("RetrySupervisor", () => {
       });
       const retry = supervisor.next();
       const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
-      supervisor.cancel(new Error("stop"));
+      const reason = new Error("stop");
+      supervisor.cancel(reason);
 
-      await expect(wait).rejects.toMatchObject({ message: "aborted" });
+      await expect(wait).rejects.toMatchObject({
+        name: "AbortError",
+        message: "aborted",
+        cause: reason,
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("can unref the scheduled timer", async () => {
+    const controller = new AbortController();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const sleeper = sleepWithAbort(60_000, controller.signal, { ref: false });
+      const timer = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+
+      expect(timer?.hasRef()).toBe(false);
+      controller.abort();
+      await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
+    } finally {
+      controller.abort();
+      setTimeoutSpy.mockRestore();
     }
   });
 });

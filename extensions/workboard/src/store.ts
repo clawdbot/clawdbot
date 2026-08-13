@@ -1,5 +1,6 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
+import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -19,7 +20,7 @@ import {
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
 import {
-  CLAIM_RECLAIM_MS,
+  isWorkboardClaimReclaimable,
   MAX_ATTACHMENT_ENTRIES,
   MAX_CARDS,
   MAX_CARD_NOTIFICATIONS,
@@ -39,19 +40,23 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
-import type { WorkboardAttachment, WorkboardCard } from "./types.js";
 
-export type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
+    if (
+      card.status !== "triage" ||
+      card.metadata?.archivedAt ||
+      card.metadata?.workerProtocol?.state === "idle"
+    ) {
+      return false;
+    }
+    const board = await this.boardStore.lookup(cardBoardId(card));
+    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
+  }
+
   async dispatch(
     input: number | WorkboardDispatchOptions = Date.now(),
   ): Promise<WorkboardDispatchResult> {
@@ -64,6 +69,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
       for (const card of await this.list({ boardId })) {
+        // Archived cards remain readable and restorable, but must never re-enter automation.
+        if (card.metadata?.archivedAt) {
+          continue;
+        }
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -73,7 +82,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         const timedOut =
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
           now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
-        const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const claimExpired = isWorkboardClaimReclaimable(claim, now);
         const retriesExhausted = retryBudgetExhausted(latest);
         if (latest.status === "running" && (timedOut || claimExpired)) {
           const reason = timedOut
@@ -133,7 +142,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready") {
+        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
@@ -219,7 +228,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
         const latest = await this.get(card.id);
-        if (!latest) {
+        if (!latest || latest.metadata?.archivedAt) {
           continue;
         }
         const diagnostics = mergeDiagnostics(
@@ -288,6 +297,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       boards: stores.boards,
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,
+      dataVersion: stores.dataVersion,
     });
   }
 }

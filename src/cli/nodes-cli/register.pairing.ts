@@ -10,10 +10,10 @@ import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   callNodePairApprovalGatewayCli,
   nodesCallOpts,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts, PendingRequest } from "./types.js";
 
@@ -107,6 +107,20 @@ function buildUnknownNodePairRequestIdMessage(
   return lines.join("\n");
 }
 
+function rethrowUnknownNodePairRequestId(
+  error: unknown,
+  requestId: string,
+  opts: NodesRpcOpts,
+): never {
+  if (!isUnknownNodePairRequestIdError(error)) {
+    throw error;
+  }
+  // Reuse the gateway error so generic formatting does not append its raw cause.
+  error.name = "Error";
+  error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+  throw error;
+}
+
 /** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -115,7 +129,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("pending", async () => {
-          const result = await callGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.writeJson(pending);
@@ -162,13 +176,7 @@ export function registerNodesPairingCommands(nodes: Command) {
               },
             );
           } catch (error) {
-            if (!isUnknownNodePairRequestIdError(error)) {
-              throw error;
-            }
-            // Reuse the gateway error so generic formatting does not append its raw cause.
-            error.name = "Error";
-            error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
-            throw error;
+            rethrowUnknownNodePairRequestId(error, requestId, opts);
           }
           defaultRuntime.writeJson(result);
         });
@@ -182,9 +190,14 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("reject", async () => {
-          const result = await callGatewayCli("node.pair.reject", opts, {
-            requestId,
-          });
+          let result: unknown;
+          try {
+            result = await callNodesGatewayCli("node.pair.reject", opts, {
+              requestId,
+            });
+          } catch (error) {
+            rethrowUnknownNodePairRequestId(error, requestId, opts);
+          }
           defaultRuntime.writeJson(result);
         });
       }),
@@ -197,15 +210,15 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("remove", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           if (!nodeId) {
             defaultRuntime.error(
-              `--node is required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node request.`,
+              `--node is required. Run ${formatCliCommand("openclaw nodes pending")} to choose a node request.`,
             );
             defaultRuntime.exit(1);
             return;
           }
-          const result = await callGatewayCli("node.pair.remove", opts, { nodeId });
+          const result = await callNodesGatewayCli("node.pair.remove", opts, { nodeId });
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -224,16 +237,16 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!nodeId || !name) {
             defaultRuntime.error(
-              `--node and --name are required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node, then rerun with --name <displayName>.`,
+              `--node and --name are required. Run ${formatCliCommand("openclaw nodes pending")} to choose a node, then rerun with --name <displayName>.`,
             );
             defaultRuntime.exit(1);
             return;
           }
-          const result = await callGatewayCli("node.rename", opts, {
+          const result = await callNodesGatewayCli("node.rename", opts, {
             nodeId,
             displayName: name,
           });

@@ -7,7 +7,7 @@ import {
   createSetSessionModeRequest,
   createSetSessionConfigOptionRequest,
   type MockCallSource,
-  requireRecord,
+  requireAcpObject,
   expectConfigOption,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
@@ -352,7 +352,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       (request as unknown as MockCallSource).mock.calls.some(
         ([method, params]) =>
           method === "sessions.patch" &&
-          requireRecord(params, "sessions.patch params").key === "bool-config-session",
+          requireAcpObject(params, "sessions.patch params").key === "bool-config-session",
       ),
     ).toBe(false);
 
@@ -383,7 +383,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         };
       }
       if (method === "sessions.patch") {
-        expect(requireRecord(_params, "sessions.patch params")).toMatchObject({
+        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
           key: "usage-inherit-session",
           responseUsage: null,
         });
@@ -434,7 +434,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         };
       }
       if (method === "sessions.patch") {
-        expect(requireRecord(_params, "sessions.patch params")).toMatchObject({
+        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
           key: "usage-off-session",
           responseUsage: "off",
         });

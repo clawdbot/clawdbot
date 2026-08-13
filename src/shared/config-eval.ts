@@ -4,7 +4,7 @@ import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
-export function isTruthy(value: unknown): boolean {
+function isTruthy(value: unknown): boolean {
   if (value === undefined || value === null) {
     return false;
   }
@@ -21,7 +21,7 @@ export function isTruthy(value: unknown): boolean {
 }
 
 /** Resolves dotted config paths, tolerating extra dots and missing branches. */
-export function resolveConfigPath(config: unknown, pathStr: string): unknown {
+function resolveConfigPath(config: unknown, pathStr: string): unknown {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -77,7 +77,7 @@ type RuntimeRequirementEvalParams = {
 };
 
 /** Evaluates binary/env/config requirements against local and optional remote capabilities. */
-export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
   const requires = params.requires;
   if (!requires) {
     return true;
@@ -156,7 +156,7 @@ export function evaluateRuntimeEligibility(
 }
 
 /** Returns the current Node runtime platform used by eligibility checks. */
-export function resolveRuntimePlatform(): string {
+function resolveRuntimePlatform(): string {
   return process.platform;
 }
 

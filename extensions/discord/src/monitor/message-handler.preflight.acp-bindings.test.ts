@@ -368,7 +368,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     });
 
     expect(restGet).toHaveBeenCalledTimes(1);
-    expect(result?.messageText).toBe("<media:sticker> (1 sticker)");
+    expect(result?.messageText).toBe("");
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });

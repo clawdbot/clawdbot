@@ -1,20 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  BLOCKED_TOO_LONG_MS,
-  MAX_CARD_ATTEMPTS,
-  MAX_CARD_EVENTS,
-  READY_STRANDED_MS,
-  RUNNING_HEARTBEAT_STALE_MS,
-} from "./store-constants.js";
-import type { WorkboardMutationScope } from "./store-inputs.js";
-import {
-  metadataIsEmpty,
-  normalizeEvents,
-  normalizeOptionalString,
-  normalizeTimestamp,
-  removeUndefinedMetadataFields,
-} from "./store-normalizers.js";
 import {
   WORKBOARD_STATUSES,
   type WorkboardAttemptStatus,
@@ -29,7 +13,24 @@ import {
   type WorkboardNotification,
   type WorkboardRunAttempt,
   type WorkboardStatus,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  BLOCKED_TOO_LONG_MS,
+  MAX_CARD_ATTEMPTS,
+  MAX_CARD_EVENTS,
+  READY_STRANDED_MS,
+  RUNNING_HEARTBEAT_STALE_MS,
+} from "./store-constants.js";
+import type { WorkboardMutationScope } from "./store-inputs.js";
+import {
+  metadataIsEmpty,
+  normalizeEvents,
+  normalizeTimestamp,
+  removeUndefinedMetadataFields,
+} from "./store-normalizers.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -83,9 +84,9 @@ export function syncExecutionAttemptMetadata(
     id: existingAttempt?.id ?? key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
-    engine: execution.engine,
     mode: execution.mode,
-    model: execution.model,
+    ...(execution.engine ? { engine: execution.engine } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
@@ -347,10 +348,9 @@ export function assertCanMutateClaimedCard(
   }
   const ownerId = normalizeOptionalString(scope.ownerId);
   const token = normalizeOptionalString(scope.token);
-  if (claim.ownerId === ownerId || (token && claim.token === token)) {
-    return;
+  if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
+    throw new Error(`card is claimed by ${claim.ownerId}.`);
   }
-  throw new Error(`card is claimed by ${claim.ownerId}.`);
 }
 
 export function retryBudgetExhausted(card: WorkboardCard): boolean {
@@ -394,6 +394,25 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  if (card.metadata?.archivedAt) {
+    // Archived cards intentionally skip automation. Keep nonterminal cards
+    // visible as a transient diagnostic without rewriting archived metadata.
+    if (card.status !== "done") {
+      return [
+        diagnostic(
+          {
+            kind: "archived_but_active",
+            severity: "warning",
+            title: "Archived card is still in an active status",
+            detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
+            actions: [],
+          },
+          now,
+        ),
+      ];
+    }
+    return [];
+  }
   const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;
@@ -742,3 +761,4 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

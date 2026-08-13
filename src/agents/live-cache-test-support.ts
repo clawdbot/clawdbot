@@ -1,9 +1,9 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Shared helpers for live prompt-cache integration tests.
  */
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
@@ -11,14 +11,14 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   isMissingProviderAuthError,
   isProviderAuthError,
   requireApiKey,
 } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 // Shared helpers for live prompt-cache regression tests. They resolve real
 // provider credentials/models, wrap live calls with timeouts, and build stable
@@ -168,7 +168,7 @@ export function buildAssistantHistoryTurn(
   text: string,
   model?: Pick<Model, "api" | "provider" | "id">,
 ): AssistantMessage {
-  return buildAssistantMessageWithZeroUsage({
+  return buildAssistantMessage({
     model: {
       api: model?.api ?? "openai-responses",
       provider: model?.provider ?? "openai",
@@ -176,6 +176,7 @@ export function buildAssistantHistoryTurn(
     },
     content: [{ type: "text", text }],
     stopReason: "stop",
+    usage: buildUsageWithNoCost({}),
     timestamp: Date.now(),
   });
 }
@@ -268,7 +269,7 @@ export async function resolveLiveDirectModelPool(params: {
   let apiKey: string;
   try {
     apiKey = requireApiKey(
-      await getApiKeyForModel({
+      await getApiKeyForModelCore({
         model: resolvedModel,
         cfg,
         agentDir,

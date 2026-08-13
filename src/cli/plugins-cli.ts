@@ -15,6 +15,7 @@ type PluginUpdateOptions = {
 };
 
 type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawHubRisk?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
 
@@ -67,6 +68,11 @@ type PluginAuthoringBuildOptions = {
 type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
+};
+
+export type PluginDoctorOptions = {
+  json?: boolean;
 };
 
 type PluginAuthoringInitOptions = {
@@ -172,7 +178,11 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
@@ -247,9 +257,10 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(async () => {
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginDoctorOptions) => {
       const { runPluginsDoctorCommand } = await loadPluginsRuntime();
-      await runPluginsDoctorCommand();
+      await runPluginsDoctorCommand(opts);
     });
 
   plugins
@@ -268,6 +279,7 @@ export function registerPluginsCli(program: Command) {
     .description("Validate simple tool plugin metadata")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--json", "Print JSON")
     .action(async (opts: PluginAuthoringValidateOptions) => {
       const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
       await runPluginsValidateCommand(opts);
@@ -324,5 +336,6 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

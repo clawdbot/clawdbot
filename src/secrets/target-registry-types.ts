@@ -5,7 +5,7 @@ export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allow
 /** Resolved value shape accepted by runtime and apply validation. */
 export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
 /** Auth profile families that have separate secret target coverage. */
-export type AuthProfileType = "api_key" | "token";
+type AuthProfileType = "api_key" | "token";
 
 /**
  * Registry metadata for one configurable secret-bearing value.

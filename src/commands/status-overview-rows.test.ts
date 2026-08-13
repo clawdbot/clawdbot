@@ -23,6 +23,7 @@ describe("status-overview-rows", () => {
       "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
+    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
       "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
@@ -41,6 +42,28 @@ describe("status-overview-rows", () => {
     );
   });
 
+  it("shows managed host desktop coordinates", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows({
+      ...params,
+      summary: {
+        ...params.summary,
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "running",
+          display: 99,
+          port: 46_001,
+          security: "VncAuth",
+        },
+      },
+    });
+
+    expect(findRowValue(rows, "Host desktop")).toBe(
+      "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
+    );
+  });
+
   it("shows update restart state in fast status output", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({
@@ -49,6 +72,29 @@ describe("status-overview-rows", () => {
     );
 
     expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
+  });
+
+  it("lists plugins quarantined as configured-unavailable", () => {
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...createStatusCommandOverviewRowsParams().summary,
+          degradedPlugins: [
+            {
+              pluginId: "discord",
+              state: "configured-unavailable",
+              diagnostic: {
+                kind: "plugin-verification",
+                reason: "unreadable-package-json",
+                detail: "permission denied",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
   it("builds status-all overview rows from the shared surface", () => {

@@ -21,6 +21,7 @@ type HeartbeatResponseDetails = {
   notificationText?: string;
   priority?: string;
   nextCheck?: string;
+  scratch?: string;
 };
 
 describe("createHeartbeatResponseTool", () => {
@@ -75,6 +76,26 @@ describe("createHeartbeatResponseTool", () => {
         summary: "Nothing needs attention.",
       }),
     ).rejects.toThrow("heartbeat_respond already recorded");
+  });
+
+  it("captures scratch without echoing future prompt content to the model", async () => {
+    const tool = createHeartbeatResponseTool();
+    const scratch = "Private monitor context that must not enter tool output.";
+
+    const result = await tool.execute("call-1", {
+      outcome: "progress",
+      notify: false,
+      summary: "Updated monitor context.",
+      scratch,
+    });
+
+    const details = result.details as HeartbeatResponseDetails;
+    expect(details.scratch).toBe(scratch);
+    expect(JSON.stringify(result.content)).not.toContain(scratch);
+    expect(JSON.stringify(details)).not.toContain(scratch);
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining('"scratchPending": true') }),
+    ]);
   });
 
   it("accepts notification text and optional scheduling metadata", async () => {

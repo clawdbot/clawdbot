@@ -31,15 +31,15 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
-            allowInsecurePath: true,
           },
           vault: {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
-            allowSymlinkCommand: true,
           },
+          store: { source: "store" },
         },
+        defaults: { store: "store" },
       },
       models: {
         providers: {
@@ -48,11 +48,22 @@ describe("config secret refs schema", () => {
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
+          stored: {
+            baseUrl: "https://stored.example.test/v1",
+            apiKey: { source: "store", provider: "store", id: "STORED_API_KEY" },
+            models: [{ id: "fixture", name: "fixture" }],
+          },
         },
       },
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects store refs outside the env-name grammar", () => {
+    expect(
+      validateOpenAiApiKeyRef({ source: "store", provider: "default", id: "lowercase" }).ok,
+    ).toBe(false);
   });
 
   it("accepts openai-chatgpt-responses as a model api value", () => {
@@ -113,8 +124,8 @@ describe("config secret refs schema", () => {
                 passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
               },
             },
-            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
           },
+          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
         },
       },
     });

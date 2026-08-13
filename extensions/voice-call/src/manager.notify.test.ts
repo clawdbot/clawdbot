@@ -1,4 +1,5 @@
 // Voice Call tests cover manager.notify plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
@@ -77,12 +78,7 @@ function requireFirstPlayTtsCall(provider: FakeProvider) {
   return call;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireSingleStartListeningCall(provider: FakeProvider) {
   expect(provider.startListeningCalls).toHaveLength(1);

@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
+  resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -23,7 +23,7 @@ const log = createSubsystemLogger("embedded-agent-settings");
 // Embedded-agent settings snapshot assembly. Global settings merge with enabled
 // bundle settings and optional project settings, with shell execution fields
 // sanitized unless the project policy is explicitly trusted.
-export const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
+const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
 /** Policy for whether workspace project settings can influence embedded-agent behavior. */
@@ -150,7 +150,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
     if (record.format !== "bundle" || settingsFiles.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,

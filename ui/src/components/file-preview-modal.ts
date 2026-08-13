@@ -1,10 +1,12 @@
 // Control UI component implements the file preview modal element.
-import { css, html, type PropertyValues } from "lit";
+import { css, html, type PropertyValues, type TemplateResult } from "lit";
 import { property, query } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
+import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { icons } from "./icons.ts";
+import "./modal-dialog.ts";
 
 type FilePreviewModalFile = {
   path: string;
@@ -38,46 +40,11 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
   static override styles = css`
     :host {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      display: block;
-    }
-
-    .backdrop {
-      position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(6px);
-      animation: fade 140ms ease-out;
-    }
-
-    @keyframes fade {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    @keyframes pop {
-      from {
-        transform: translate(-50%, -48%) scale(0.97);
-        opacity: 0;
-      }
-      to {
-        transform: translate(-50%, -50%) scale(1);
-        opacity: 1;
-      }
+      display: contents;
     }
 
     .modal {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: min(1100px, 92vw);
+      width: 100%;
       height: min(780px, 86vh);
       background: var(--bg);
       border: 1px solid var(--border-strong);
@@ -86,7 +53,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      animation: pop 160ms ease-out;
     }
 
     .head {
@@ -105,6 +71,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .search {
       flex: 1;
+      min-width: 0;
       background: transparent;
       border: none;
       outline: none;
@@ -136,12 +103,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       background: var(--bg-elevated);
-    }
-
-    .kbd {
-      font-family: var(--mono);
-      border: 1px solid var(--border);
-      color: var(--muted);
     }
 
     .body {
@@ -432,8 +393,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .kbd {
+      font-family: var(--mono);
       font-size: 10.5px;
       padding: 2px 6px;
+      border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg-elevated);
       color: var(--text);
@@ -470,6 +433,33 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       font-size: 13px;
       color: var(--muted);
       max-width: 380px;
+    }
+
+    @media (max-width: 640px) {
+      .head {
+        padding: 12px;
+      }
+
+      .body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, min(180px, 30dvh)) minmax(0, 1fr);
+      }
+
+      .list {
+        min-width: 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 10px 8px;
+      }
+
+      .item {
+        min-width: 0;
+      }
+
+      .foot {
+        gap: 8px;
+        padding: 10px 12px;
+      }
     }
   `;
 
@@ -512,55 +502,54 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     const searchPlaceholder = this.searchPlaceholder || t("filePreview.searchPlaceholder");
 
     return html`
-      <div class="backdrop" @click=${this.emitClose}></div>
-      <div
-        class="modal"
-        role="dialog"
-        aria-label=${label}
-        aria-modal="true"
-        tabindex="-1"
+      <openclaw-modal-dialog
+        label=${label}
+        style="--openclaw-modal-width: min(1100px, 92vw); --openclaw-modal-max-height: 86vh;"
+        @modal-cancel=${this.emitClose}
         @keydown=${this.handleKeydown}
       >
-        <header class="head">
-          <span class="search-icon">⌕</span>
-          <input
-            class="search"
-            placeholder=${searchPlaceholder}
-            .value=${this.query}
-            @input=${this.handleQueryInput}
-          />
-          <span class="state">${fileCount}</span>
-        </header>
-        <div class="body">
-          <aside class="list">
-            <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
-            ${filteredFiles.length === 0
-              ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
-              : filteredFiles.map(
-                  (file) => html`
-                    <button
-                      class="item ${file.path === activeFile?.path ? "is-active" : ""}"
-                      @pointerdown=${this.preventItemPointerFocus}
-                      @mousedown=${this.preventItemPointerFocus}
-                      @click=${() => this.emitSelect(file.path)}
-                    >
-                      <span class="item-icon">${iconForFile(file.path)}</span>
-                      <span class="item-name">${file.path}</span>
-                      <span class="item-meta">${file.size}</span>
-                    </button>
-                  `,
-                )}
-          </aside>
-          ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+        <div class="modal">
+          <header class="head">
+            <span class="search-icon">⌕</span>
+            <input
+              class="search"
+              placeholder=${searchPlaceholder}
+              .value=${this.query}
+              @input=${this.handleQueryInput}
+            />
+            <span class="state">${fileCount}</span>
+          </header>
+          <div class="body">
+            <aside class="list">
+              <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
+              ${filteredFiles.length === 0
+                ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
+                : filteredFiles.map(
+                    (file) => html`
+                      <button
+                        class="item ${file.path === activeFile?.path ? "is-active" : ""}"
+                        @pointerdown=${this.preventItemPointerFocus}
+                        @mousedown=${this.preventItemPointerFocus}
+                        @click=${() => this.emitSelect(file.path)}
+                      >
+                        <span class="item-icon">${iconForFile(file.path)}</span>
+                        <span class="item-name">${file.path}</span>
+                        <span class="item-meta">${file.size}</span>
+                      </button>
+                    `,
+                  )}
+            </aside>
+            ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+          </div>
+          <footer class="foot">
+            <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
+            <span class="spacer"></span>
+            <button class="button" @click=${this.emitClose}>
+              ${t("common.close")} <span class="kbd">esc</span>
+            </button>
+          </footer>
         </div>
-        <footer class="foot">
-          <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
-          <span class="spacer"></span>
-          <button class="button" @click=${this.emitClose}>
-            ${t("common.close")} <span class="kbd">esc</span>
-          </button>
-        </footer>
-      </div>
+      </openclaw-modal-dialog>
     `;
   }
 
@@ -742,54 +731,34 @@ function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
     md: "Markdown",
-    txt: "Text",
+    txt: t("filePreview.kind.text"),
     json: "JSON",
     yaml: "YAML",
     yml: "YAML",
     ts: "TypeScript",
     js: "JavaScript",
     py: "Python",
-    sh: "Shell",
+    sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
+  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
 }
 
-const CODE_EXTENSIONS = new Set([
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "sh",
-  "bash",
-  "zsh",
-  "rb",
-  "go",
-  "rs",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "cc",
-  "cpp",
-  "h",
-  "hpp",
-  "json",
-  "yaml",
-  "yml",
-  "toml",
-  "xml",
-  "html",
-  "css",
-  "scss",
-  "sql",
-]);
+// Same glyph vocabulary chat file links paint through CSS masks
+// (styles/chat/text.css), resolved from the shared kind so a file looks the
+// same wherever the Control UI names it.
+const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
+  code: icons.fileCode,
+  component: icons.layoutGrid,
+  data: icons.braces,
+  file: icons.fileText,
+  image: icons.image,
+  markdown: icons.book,
+  package: icons.box,
+  shell: icons.terminal,
+};
 
 function iconForFile(path: string) {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  return CODE_EXTENSIONS.has(ext) ? icons.fileCode : icons.fileText;
+  return FILE_KIND_ICONS[fileKindForPath(path)];
 }
 
 declare global {

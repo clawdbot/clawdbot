@@ -13,7 +13,7 @@ import {
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
+} from "./test-helpers/live-model-turn-probes.js";
 
 function createImageProbeRunner(responses: string[]) {
   const attempts: Array<1 | 2> = [];
@@ -106,9 +106,6 @@ describe("live model turn probes", () => {
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(
       true,
     );
-    expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "arcee-ai/trinity-mini" }),
-    ).toBe(true);
     expect(
       shouldSkipLiveModelFileProbe({
         provider: "openrouter",

@@ -1,9 +1,9 @@
 // Matrix tests cover reaction events plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
   registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
@@ -12,11 +12,17 @@ type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTarg
 type ResolveTargetParams = Parameters<
   typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
 >[0];
+const touchedTargets = new Map<
+  string,
+  Parameters<typeof unregisterMatrixApprovalReactionTarget>[0]
+>();
 
 function registerMatrixApprovalReactionTarget(
   params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
 ): void {
   const { accountId = "default", ...target } = params;
+  const targetRef = { accountId, roomId: target.roomId, eventId: target.eventId };
+  touchedTargets.set(JSON.stringify(targetRef), targetRef);
   registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
 }
 
@@ -37,10 +43,12 @@ type MatrixReactionClient = MatrixReactionParams["client"];
 type MatrixReactionCore = MatrixReactionParams["core"];
 type MatrixReactionEvent = MatrixReactionParams["event"];
 
-vi.mock("../../exec-approval-resolver.js", () => ({
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: (err: unknown) =>
     err instanceof Error && /unknown or expired approval id/i.test(err.message),
-  resolveMatrixApproval: (...args: unknown[]) => resolveMatrixApproval(...args),
 }));
 
 vi.mock("../send.js", () => ({
@@ -53,7 +61,13 @@ beforeEach(() => {
     approval: { id: "req-123", status: "allowed", decision: "allow-once" },
   });
   editMessageMatrix.mockReset().mockResolvedValue("$edit");
-  clearMatrixApprovalReactionTargetsForTest();
+});
+
+afterEach(() => {
+  for (const target of touchedTargets.values()) {
+    unregisterMatrixApprovalReactionTarget(target);
+  }
+  touchedTargets.clear();
 });
 
 function buildConfig(): CoreConfig {
@@ -178,6 +192,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -247,6 +263,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "deny",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -274,6 +292,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -309,6 +329,8 @@ describe("matrix approval reactions", () => {
       approvalId: "plugin:req-123",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();

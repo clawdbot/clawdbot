@@ -15,11 +15,15 @@ const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
+  cleanupTalkConnectionMock,
+  touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
+  cleanupTalkConnectionMock: vi.fn(),
+  touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -30,17 +34,23 @@ vi.mock("./ws-connection/worker-connection.js", () => ({
   attachWorkerWsMessageHandler: attachWorkerWsMessageHandlerMock,
 }));
 vi.mock("../../infra/system-presence.js", () => ({
+  touchPresence: touchPresenceMock,
   upsertPresence: upsertPresenceMock,
 }));
 vi.mock("./presence-events.js", () => ({
   broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
+vi.mock("../talk-session-registry.js", () => ({
+  cleanupTalkConnection: cleanupTalkConnectionMock,
+}));
 
+import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
 } from "./ws-types.js";
 
 async function waitForLazyMessageHandler() {
@@ -88,6 +98,8 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
+    cleanupTalkConnectionMock.mockReset();
+    touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
 
@@ -95,7 +107,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useRealTimers();
   });
 
-  it("keeps worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
+  it("keeps loopback worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
       socket: { terminate: vi.fn() },
@@ -143,13 +155,44 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(gatewayBudget.release).not.toHaveBeenCalled();
   });
 
+  it("uses the main budget and public admission context for public worker sockets", async () => {
+    const socket = createGatewayWsTestSocket();
+    const gatewayBudget = { release: vi.fn() };
+    const rateLimiter = { check: vi.fn() };
+    Object.assign(socket, {
+      [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
+      [GATEWAY_WS_WORKER_INGRESS_PROPERTY]: "public",
+      __openclawPreauthBudgetKey: "203.0.113.10",
+    });
+    markPublicWorkerIngress(socket as never, {
+      clientIp: "203.0.113.10",
+      rateLimiter: rateLimiter as never,
+    });
+
+    await connectTestWs({
+      socket,
+      options: {
+        preauthConnectionBudget: gatewayBudget as never,
+      },
+    });
+
+    const handler = firstAttachedWorkerHandlerParams() as {
+      publicAdmission: { clientIp: string; rateLimiter: unknown };
+      setClient(client: never): boolean;
+    };
+    expect(handler).toMatchObject({
+      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
+    });
+    expect(handler.setClient({ socket } as never)).toBe(true);
+    expect(gatewayBudget.release).toHaveBeenCalledWith("203.0.113.10");
+  });
+
   it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {
     const initialAuth = createResolvedGatewayTokenAuth("token-before");
     let currentAuth = initialAuth;
 
     const { passed } = await connectTestWs({
       options: {
-        resolvedAuth: initialAuth,
         getResolvedAuth: () => currentAuth,
       },
     });
@@ -226,6 +269,62 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
+  it("allows only one authenticated client registration per socket", async () => {
+    vi.useFakeTimers();
+    const clients = new Set();
+    const socket = createGatewayWsTestSocket({ ping: true });
+    const { passed } = await connectTestWs({ clients, socket });
+    const handlerParams = passed as {
+      setClient: (client: unknown) => boolean;
+    };
+    const firstClient = {
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "first-client",
+      usesSharedGatewayAuth: false,
+    };
+    const racedClient = {
+      ...firstClient,
+      connId: "raced-client",
+    };
+
+    expect(handlerParams.setClient(firstClient)).toBe(true);
+    expect(handlerParams.setClient(racedClient)).toBe(false);
+    expect(clients).toEqual(new Set([firstClient]));
+
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledOnce();
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(clients.size).toBe(0);
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledOnce();
+  });
+
+  it("runs connection-owned Talk cleanup when a gateway connection closes", async () => {
+    const { passed, socket } = await connectTestWs();
+    const handlerParams = passed as {
+      connId: string;
+      setClient: (client: unknown) => boolean;
+    };
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: handlerParams.connId,
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledOnce();
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledWith(
+      handlerParams.connId,
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
+  });
+
   it("continues protocol pings after pong and stops when the connection closes", async () => {
     vi.useFakeTimers();
     const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {
@@ -240,13 +339,16 @@ describe("attachGatewayWsConnectionHandler", () => {
         socket,
         connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
         connId: "ping-client",
+        presenceKey: "ping-client",
         usesSharedGatewayAuth: false,
       }),
     ).toBe(true);
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(touchPresenceMock).not.toHaveBeenCalled();
     socket.emit("pong");
+    expect(touchPresenceMock).toHaveBeenCalledWith("ping-client");
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(2);
@@ -431,6 +533,31 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("done"));
 
     expect(logWsControl.warn).not.toHaveBeenCalled();
+  });
+
+  it("logs the authenticated user when a connection closes", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      setClient: (client: never) => boolean;
+    };
+
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "ui" } },
+        connId: "conn-authenticated-user",
+        authenticatedUserId: "alice@example.com",
+        usesSharedGatewayAuth: false,
+      } as never),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(logWsControl.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^authenticated user disconnected code=1000 reason=done conn=.+ user=alice@example\.com$/,
+      ),
+    );
   });
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {

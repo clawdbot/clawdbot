@@ -246,12 +246,18 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 | Verb            | Effect                                | Example                           |
 | --------------- | ------------------------------------- | --------------------------------- |
 | `num`           | compact count                         | `272000 -> 272k`                  |
-| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `fixed:N`       | N decimals (`0..100`, default 2)      | `0.0377`                          |
 | `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
 | `pct`           | append `%`                            | `96 -> 96%`                       |
 | `inv`           | `100 - x`                             | for used to remaining             |
 | `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
 | `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+`fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
+precision arguments make that interpolation empty.
+
+`meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
+widths make that interpolation empty.
 
 ### Piece forms
 
@@ -309,7 +315,6 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
   Shows each provider-reported currency balance.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
-- **Gemini CLI**: OAuth tokens in auth profiles.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back

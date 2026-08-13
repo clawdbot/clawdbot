@@ -683,7 +683,6 @@ describe("migrateApplyCommand", () => {
     const selectionPrompt = multiselectPrompt();
     expect(String(selectionPrompt.message)).toContain("Select Codex skills");
     expect(selectionPrompt.initialValues).toStrictEqual(["skill:alpha", "skill:beta"]);
-    expect(selectionPrompt.required).toBe(false);
     expect(selectionPrompt.options?.map(({ label, value }) => ({ label, value }))).toStrictEqual([
       { value: MIGRATION_SELECTION_ACCEPT, label: "Accept recommended" },
       { value: "skill:alpha", label: "alpha" },
@@ -743,7 +742,6 @@ describe("migrateApplyCommand", () => {
     const pluginPrompt = multiselectPrompt(1);
     expect(String(pluginPrompt.message)).toContain("Select native Codex plugins");
     expect(pluginPrompt.initialValues).toStrictEqual(["plugin:google-calendar", "plugin:gmail"]);
-    expect(pluginPrompt.required).toBe(false);
     expect(pluginPrompt.options?.map(({ label, value }) => ({ label, value }))).toStrictEqual([
       { value: MIGRATION_SELECTION_ACCEPT, label: "Accept recommended" },
       { value: "plugin:google-calendar", label: "google-calendar" },
@@ -1545,3 +1543,4 @@ describe("migrateApplyCommand", () => {
     expect(logPayload.warnings).toEqual([warning]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

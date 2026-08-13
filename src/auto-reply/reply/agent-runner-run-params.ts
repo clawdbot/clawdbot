@@ -33,6 +33,7 @@ export function resolveModelFallbackOptions(
     cfg: config,
     provider: run.provider,
     model: run.model,
+    requestedRouteResolution: run.requestedRouteResolution,
     agentDir: run.agentDir,
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
@@ -88,16 +89,18 @@ export function buildEmbeddedRunBaseParams(params: {
     params.isReasoningTagProvider,
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  return {
+  const runParams = {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
     agentDir: params.run.agentDir,
     config,
+    toolOverrides: params.run.toolOverrides,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
+    conversationToolPolicy: params.run.conversationToolPolicy,
     channelContext: params.run.channelContext,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
@@ -106,6 +109,7 @@ export function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
+    toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,
@@ -124,4 +128,5 @@ export function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
+  return runParams;
 }

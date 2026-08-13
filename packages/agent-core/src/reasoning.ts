@@ -1,9 +1,10 @@
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   type Model,
   type SimpleStreamOptions,
-} from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
 import type { ThinkingLevel } from "./types.js";
 
 type EnabledThinkingLevel = Exclude<NonNullable<SimpleStreamOptions["reasoning"]>, "off">;
@@ -37,7 +38,8 @@ export function resolveAgentReasoningOption(
   if (isEnabledThinkingLevel(offFallback)) {
     return offFallback;
   }
-  return model.api === "anthropic-messages" && resolveClaudeSonnet5ModelIdentity(model)
+  return model.api === "anthropic-messages" &&
+    (resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model))
     ? "off"
     : undefined;
 }

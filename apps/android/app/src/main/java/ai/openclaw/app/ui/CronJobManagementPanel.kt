@@ -94,8 +94,8 @@ internal fun CronJobManagementPanel(
           Text(nativeString("Cancel"))
         }
       },
-      title = { Text(nativeString("Delete cron job?")) },
-      text = { Text(nativeString("This permanently removes the scheduled job from the gateway.")) },
+      title = { Text(nativeString("Delete automation?")) },
+      text = { Text(nativeString("This permanently removes the automation and its schedule from the gateway.")) },
     )
   }
 
@@ -120,9 +120,9 @@ internal fun CronJobManagementPanel(
       Text(
         text =
           if (editorDraft.hasIncomingConflict) {
-            nativeString("This job changed while you were editing. Revert to the latest gateway version before saving.")
+            nativeString("This automation changed while you were editing. Revert to the latest gateway version before saving.")
           } else {
-            nativeString("Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.")
+            nativeString("Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.warning,
@@ -224,7 +224,7 @@ private fun CronActionPanel(
         )
       }
       ClawSecondaryButton(
-        text = nativeString("Delete Job"),
+        text = nativeString("Delete Automation"),
         onClick = onDelete,
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
@@ -257,11 +257,11 @@ private fun CronEditorPanel(
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
-        Text(text = nativeString("Edit Job"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Edit Automation"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       }
       CronSwitchRow(
         title = nativeString("Enabled"),
-        subtitle = nativeString("Allow the scheduler to run this job."),
+        subtitle = nativeString("Allow the scheduler to run this automation."),
         checked = edit.enabled,
         onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(enabled = it))) },
         enabled = enabled,
@@ -269,7 +269,7 @@ private fun CronEditorPanel(
       if (edit.schedule is GatewayCronScheduleEdit.At) {
         CronSwitchRow(
           title = nativeString("Delete after run"),
-          subtitle = nativeString("Remove this job after a successful one-shot run."),
+          subtitle = nativeString("Remove this automation after a successful one-shot run."),
           checked = edit.deleteAfterRun,
           onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
           enabled = enabled,
@@ -278,7 +278,7 @@ private fun CronEditorPanel(
       ClawTextField(
         value = edit.name,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(name = it))) },
-        placeholder = nativeString("Job name"),
+        placeholder = nativeString("Automation name"),
         label = nativeString("Name"),
         enabled = enabled,
       )
@@ -550,6 +550,21 @@ private fun CronPayloadEditor(
         )
       }
     }
+    is GatewayCronPayloadEdit.ReadOnlyScript -> {
+      ClawTextField(
+        value = payload.script,
+        onValueChange = {},
+        placeholder = nativeString("Script"),
+        label = nativeString("Script · read-only"),
+        enabled = false,
+        minLines = 4,
+      )
+      Text(
+        text = nativeString("Script payloads are preserved unchanged. Use the CLI to edit this script."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+    }
   }
 }
 
@@ -627,6 +642,7 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.SystemEvent -> nativeString("System event")
     is GatewayCronPayloadEdit.AgentTurn -> nativeString("Agent turn")
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
+    is GatewayCronPayloadEdit.ReadOnlyScript -> nativeString("Script · read-only")
   }
 
 internal data class CronWakeModeOption(

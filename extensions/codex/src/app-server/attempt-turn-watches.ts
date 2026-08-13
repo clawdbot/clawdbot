@@ -6,6 +6,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 type Timer = ReturnType<typeof setTimeout>;
+type WatchTimerKind = "completion" | "assistant" | "attempt" | "terminal";
 
 /** Timeout bucket reported by the turn watch controller. */
 export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
@@ -44,27 +45,26 @@ export function createCodexAttemptTurnWatchController(params: {
   turnAttemptIdleTimeoutMs: number;
   turnTerminalIdleTimeoutMs: number;
   interruptTimeoutMs: number;
-  onInterruptTurn: (input: { threadId: string; turnId: string; timeoutMs: number }) => void;
+  onInterruptTurn: (input: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+  }) => Promise<boolean>;
   onTimeout: (timeout: CodexAttemptTurnWatchTimeout) => void;
-  onMarkTimedOut: () => void;
   onAbort: (reason: string) => void;
   onCompleted: () => void;
-  onResolveCompletion: () => void;
   onRecordEvent: (name: string, fields: Record<string, unknown>) => void;
   onAttemptProgress: (reason: string, details?: Record<string, unknown>) => void;
   onProgressDiagnostic: (reason: string) => void;
 }) {
-  let completionIdleTimer: Timer | undefined;
+  const timers: Partial<Record<WatchTimerKind, Timer>> = {};
   let completionIdleWatchArmed = false;
   let completionIdleWatchPinnedByTerminalError = false;
   let completionIdleTimeoutOverrideMs: number | undefined;
-  let assistantCompletionIdleTimer: Timer | undefined;
   let assistantCompletionIdleWatchArmed = false;
   let assistantCompletionLastActivityAt = Date.now();
   let assistantCompletionLastActivityDetails: Record<string, unknown> | undefined;
-  let attemptIdleTimer: Timer | undefined;
   let attemptIdleWatchArmed = false;
-  let terminalIdleTimer: Timer | undefined;
   let terminalIdleWatchArmed = false;
   let completionLastActivityAt = Date.now();
   let completionLastActivityReason = "startup";
@@ -83,101 +83,77 @@ export function createCodexAttemptTurnWatchController(params: {
   const interruptTimeoutMs = resolveTimerTimeoutMs(params.interruptTimeoutMs, 1);
   const resolveWatchTimeoutMs = (timeoutMs: number) => resolveTimerTimeoutMs(timeoutMs, 1);
 
-  const clearCompletionIdleTimer = () => {
-    if (completionIdleTimer) {
-      clearTimeout(completionIdleTimer);
-      completionIdleTimer = undefined;
+  const clearTimer = (kind: WatchTimerKind) => {
+    const timer = timers[kind];
+    if (timer) {
+      clearTimeout(timer);
+      delete timers[kind];
     }
   };
-
-  const clearTerminalIdleTimer = () => {
-    if (terminalIdleTimer) {
-      clearTimeout(terminalIdleTimer);
-      terminalIdleTimer = undefined;
-    }
-  };
-
-  const clearAssistantCompletionIdleTimer = () => {
-    if (assistantCompletionIdleTimer) {
-      clearTimeout(assistantCompletionIdleTimer);
-      assistantCompletionIdleTimer = undefined;
-    }
-  };
-
-  const clearAttemptIdleTimer = () => {
-    if (attemptIdleTimer) {
-      clearTimeout(attemptIdleTimer);
-      attemptIdleTimer = undefined;
-    }
-  };
-
+  const clearCompletionIdleTimer = () => clearTimer("completion");
   const clearAllTimers = () => {
-    clearAttemptIdleTimer();
-    clearCompletionIdleTimer();
-    clearAssistantCompletionIdleTimer();
-    clearTerminalIdleTimer();
+    for (const kind of Object.keys(timers) as WatchTimerKind[]) {
+      clearTimer(kind);
+    }
   };
 
-  function scheduleCompletionIdleWatch() {
-    clearCompletionIdleTimer();
-    if (
-      params.isCompleted() ||
-      params.signal.aborted ||
-      !completionIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0 ||
-      params.getActiveCompletionBlockerItemCount() > 0
-    ) {
+  function scheduleWatch(
+    kind: WatchTimerKind,
+    callback: () => void,
+    lastActivityAt: number,
+    timeoutMs: number,
+    ready: boolean,
+  ) {
+    clearTimer(kind);
+    if (!ready || params.isCompleted() || params.signal.aborted) {
       return;
     }
-    const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
-    const timeoutMs = completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
-    const delayMs = Math.max(1, timeoutMs - elapsedMs);
-    completionIdleTimer = setTimeout(fireCompletionIdleTimeout, delayMs);
-    completionIdleTimer.unref?.();
+    const elapsedMs = Math.max(0, Date.now() - lastActivityAt);
+    const timer = setTimeout(callback, Math.max(1, timeoutMs - elapsedMs));
+    timer.unref?.();
+    timers[kind] = timer;
+  }
+
+  function scheduleCompletionIdleWatch() {
+    scheduleWatch(
+      "completion",
+      fireCompletionIdleTimeout,
+      completionLastActivityAt,
+      completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs,
+      completionIdleWatchArmed &&
+        params.getActiveAppServerTurnRequests() === 0 &&
+        params.getActiveCompletionBlockerItemCount() === 0,
+    );
   }
 
   function scheduleAssistantCompletionIdleWatch() {
-    clearAssistantCompletionIdleTimer();
-    if (
-      params.isCompleted() ||
-      params.signal.aborted ||
-      !assistantCompletionIdleWatchArmed ||
-      params.getActiveFinalizationHookCount() > 0
-    ) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnAssistantCompletionIdleTimeoutMs - elapsedMs);
-    assistantCompletionIdleTimer = setTimeout(fireAssistantCompletionIdleRelease, delayMs);
-    assistantCompletionIdleTimer.unref?.();
+    scheduleWatch(
+      "assistant",
+      fireAssistantCompletionIdleRelease,
+      assistantCompletionLastActivityAt,
+      turnAssistantCompletionIdleTimeoutMs,
+      assistantCompletionIdleWatchArmed && params.getActiveFinalizationHookCount() === 0,
+    );
   }
 
   function scheduleAttemptIdleWatch() {
-    clearAttemptIdleTimer();
-    if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - attemptLastProgressAt);
-    const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
-    const delayMs = Math.max(1, timeoutMs - elapsedMs);
-    attemptIdleTimer = setTimeout(fireAttemptIdleTimeout, delayMs);
-    attemptIdleTimer.unref?.();
+    scheduleWatch(
+      "attempt",
+      fireAttemptIdleTimeout,
+      attemptLastProgressAt,
+      attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs,
+      attemptIdleWatchArmed,
+    );
   }
 
   function scheduleTerminalIdleWatch() {
-    clearTerminalIdleTimer();
-    if (
-      params.isCompleted() ||
-      params.signal.aborted ||
-      !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
-    ) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
-    const delayMs = Math.max(1, turnTerminalIdleTimeoutMs - elapsedMs);
-    terminalIdleTimer = setTimeout(fireTerminalIdleTimeout, delayMs);
-    terminalIdleTimer.unref?.();
+    scheduleWatch(
+      "terminal",
+      fireTerminalIdleTimeout,
+      completionLastActivityAt,
+      turnTerminalIdleTimeoutMs,
+      terminalIdleWatchArmed && params.getActiveAppServerTurnRequests() === 0,
+    );
   }
 
   function scheduleProgressWatches() {
@@ -234,7 +210,7 @@ export function createCodexAttemptTurnWatchController(params: {
     if (!params.canReleaseAssistantCompletionIdle()) {
       assistantCompletionIdleWatchArmed = false;
       assistantCompletionLastActivityDetails = undefined;
-      clearAssistantCompletionIdleTimer();
+      clearTimer("assistant");
       return;
     }
     const idleMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);
@@ -244,34 +220,49 @@ export function createCodexAttemptTurnWatchController(params: {
     }
     assistantCompletionIdleWatchArmed = false;
     clearCompletionIdleTimer();
-    clearTerminalIdleTimer();
+    clearTimer("terminal");
     const turnId = params.getTurnId();
-    params.onRecordEvent("turn.assistant_completion_idle_release", {
+    const fields = {
       threadId: params.threadId,
       turnId,
       idleMs,
       timeoutMs: turnAssistantCompletionIdleTimeoutMs,
       ...assistantCompletionLastActivityDetails,
-    });
+    };
+    params.onRecordEvent("turn.assistant_completion_idle_release", fields);
     embeddedAgentLog.warn(
       "codex app-server turn released after completed assistant item without terminal event",
-      {
-        threadId: params.threadId,
-        turnId,
-        idleMs,
-        timeoutMs: turnAssistantCompletionIdleTimeoutMs,
-        ...assistantCompletionLastActivityDetails,
-      },
+      fields,
     );
     if (turnId) {
-      params.onInterruptTurn({
-        threadId: params.threadId,
-        turnId,
-        timeoutMs: interruptTimeoutMs,
-      });
+      void params
+        .onInterruptTurn({
+          threadId: params.threadId,
+          turnId,
+          timeoutMs: interruptTimeoutMs,
+        })
+        .finally(params.onCompleted);
+      return;
     }
     params.onCompleted();
-    params.onResolveCompletion();
+  }
+
+  function reportTimeout(timeout: CodexAttemptTurnWatchTimeout) {
+    params.onTimeout(timeout);
+    const fields = {
+      threadId: params.threadId,
+      turnId: params.getTurnId(),
+      idleMs: timeout.idleMs,
+      timeoutMs: timeout.timeoutMs,
+      lastActivityReason: timeout.lastActivityReason,
+      ...timeout.details,
+    };
+    params.onRecordEvent(`turn.${timeout.kind}_idle_timeout`, fields);
+    embeddedAgentLog.warn(
+      `codex app-server turn idle timed out waiting for ${timeout.kind === "terminal" ? "terminal event" : timeout.kind}`,
+      fields,
+    );
+    params.onAbort(`turn_${timeout.kind}_idle_timeout`);
   }
 
   function fireAttemptIdleTimeout() {
@@ -288,32 +279,13 @@ export function createCodexAttemptTurnWatchController(params: {
       fireCompletionIdleTimeout();
       return;
     }
-    const timeout = {
+    reportTimeout({
       kind: "progress" as const,
       idleMs,
       timeoutMs,
       lastActivityReason: attemptLastProgressReason,
       details: attemptLastProgressDetails,
-    };
-    params.onTimeout(timeout);
-    params.onMarkTimedOut();
-    params.onRecordEvent("turn.progress_idle_timeout", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs: timeout.timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
     });
-    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for progress", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs: timeout.timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
-    });
-    params.onAbort("turn_progress_idle_timeout");
   }
 
   function fireCompletionIdleTimeout() {
@@ -342,32 +314,13 @@ export function createCodexAttemptTurnWatchController(params: {
       assistantCompletionIdleWatchArmed,
       terminalIdleWatchArmed,
     };
-    const timeout = {
+    reportTimeout({
       kind: "completion" as const,
       idleMs,
       timeoutMs,
       lastActivityReason: completionLastActivityReason,
       details,
-    };
-    params.onTimeout(timeout);
-    params.onMarkTimedOut();
-    params.onRecordEvent("turn.completion_idle_timeout", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
     });
-    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for completion", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
-    });
-    params.onAbort("turn_completion_idle_timeout");
   }
 
   function fireTerminalIdleTimeout() {
@@ -391,32 +344,13 @@ export function createCodexAttemptTurnWatchController(params: {
       scheduleTerminalIdleWatch();
       return;
     }
-    const timeout = {
+    reportTimeout({
       kind: "terminal" as const,
       idleMs,
       timeoutMs: turnTerminalIdleTimeoutMs,
       lastActivityReason: completionLastActivityReason,
       details: completionLastActivityDetails,
-    };
-    params.onTimeout(timeout);
-    params.onMarkTimedOut();
-    params.onRecordEvent("turn.terminal_idle_timeout", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs: timeout.timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
     });
-    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
-      threadId: params.threadId,
-      turnId: params.getTurnId(),
-      idleMs,
-      timeoutMs: timeout.timeoutMs,
-      lastActivityReason: timeout.lastActivityReason,
-      ...timeout.details,
-    });
-    params.onAbort("turn_terminal_idle_timeout");
   }
 
   return {
@@ -453,7 +387,7 @@ export function createCodexAttemptTurnWatchController(params: {
     disarmAssistantCompletionIdleWatch: () => {
       assistantCompletionIdleWatchArmed = false;
       assistantCompletionLastActivityDetails = undefined;
-      clearAssistantCompletionIdleTimer();
+      clearTimer("assistant");
     },
     touchActivity: (
       reason: string,
@@ -509,9 +443,6 @@ export function createCodexAttemptTurnWatchController(params: {
     },
     scheduleProgressWatches,
     clearCompletionIdleTimer,
-    clearAssistantCompletionIdleTimer,
-    clearTerminalIdleTimer,
-    clearAttemptIdleTimer,
     clearAllTimers,
   };
 }

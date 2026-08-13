@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -20,7 +20,7 @@ class SkillManagementTest {
   fun searchResultsKeepOnlyIdentifiedSkills() {
     val results =
       parseClawHubSearchResults(
-        """{"results":[{"slug":" alpha ","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
+        """{"results":[{"slug":" alpha ","installRef":"@alice/alpha","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
         json,
       )
 
@@ -28,6 +28,7 @@ class SkillManagementTest {
       listOf(
         GatewayClawHubSkillSummary(
           slug = "alpha",
+          installRef = "@alice/alpha",
           displayName = "Alpha",
           summary = "Useful",
           version = "1.2.3",
@@ -38,11 +39,22 @@ class SkillManagementTest {
   }
 
   @Test
+  fun sameSlugResultsKeepSeparatePublisherReferences() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"},{"slug":"email","installRef":"@bob/email","displayName":"Email"},{"slug":"orphan","displayName":"Orphan"}]}""",
+        json,
+      )
+
+    assertEquals(listOf("@alice/email", "@bob/email", "orphan"), results.map { it.reference })
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha Skill","summary":"Reviewed metadata"},"latestVersion":{"version":"2.0.0"},"owner":{"displayName":"Alice","handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
         json,
       )
 
@@ -63,7 +75,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, "1.9.0"),
+        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, "1.9.0"),
         json,
       )
 
@@ -75,7 +87,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
         json,
       )
 
@@ -102,7 +114,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -127,7 +139,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -152,7 +164,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "download blocked",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -197,6 +209,23 @@ class SkillManagementTest {
     assertFalse(isClawHubSkillInstalled(listOf(skill), "registry-slug", "1.2.4"))
     assertFalse(isClawHubSkillInstalled(listOf(skill.copy(clawHubValid = false)), "registry-slug", "1.2.3"))
     assertFalse(isClawHubSkillInstalled(listOf(skill), "custom-frontmatter-key", "1.2.3"))
+  }
+
+  @Test
+  fun ownerQualifiedInstallStaysActiveForBrowseSlug() {
+    assertTrue(isClawHubSkillOperationActive(setOf("@registry-owner/registry-slug"), "registry-slug"))
+    assertTrue(
+      isClawHubSkillOperationActive(
+        setOf("@registry-owner/registry-slug"),
+        "@registry-owner/registry-slug",
+      ),
+    )
+    assertFalse(
+      isClawHubSkillOperationActive(
+        setOf("@other-owner/registry-slug"),
+        "@registry-owner/registry-slug",
+      ),
+    )
   }
 
   @Test

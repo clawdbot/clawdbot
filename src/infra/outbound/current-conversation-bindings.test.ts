@@ -229,6 +229,44 @@ describe("generic current-conversation bindings", () => {
     ).toBeNull();
   });
 
+  it("stores Control UI session-key conversations without a channel plugin", async () => {
+    setActivePluginRegistry(createTestRegistry([]));
+    expect(
+      getGenericCurrentConversationBindingCapabilities({
+        channel: "webchat",
+        accountId: "default",
+      }),
+    ).toMatchObject({ bindSupported: true, placements: ["current"] });
+
+    const bound = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:adopted",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      },
+      metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
+    });
+
+    expectBindingFields(bound, {
+      targetSessionKey: "agent:main:adopted",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      },
+    });
+    expectBindingFields(
+      resolveGenericCurrentConversationBinding({
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      }),
+      { targetSessionKey: "agent:main:adopted" },
+    );
+  });
+
   it("reloads persisted bindings after the in-memory cache is cleared", async () => {
     const bound = await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:workspace-dm",

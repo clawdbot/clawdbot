@@ -18,10 +18,8 @@ import {
   runLogbookAnalysisNow,
   setLogbookCapturePaused,
   shiftDay,
-  type LogbookCardPayload,
-  type LogbookStatusPayload,
-  type LogbookUiState,
 } from "./logbook-controller.ts";
+import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
 type LogbookProps = {
   host: object;
@@ -29,6 +27,8 @@ type LogbookProps = {
   connected: boolean;
   onRequestUpdate?: () => void;
 };
+
+type LogbookControllerState = ReturnType<typeof getLogbookState>;
 
 function formatClock(ms: number, timeZone: string): string {
   return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
@@ -97,7 +97,7 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
 }
 
 function renderCard(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   card: LogbookCardPayload,
   timeZone: string,
@@ -148,7 +148,7 @@ function renderCard(
             ? html`<span class="logbook-card__app">${card.appPrimary}</span>`
             : nothing}
           <span class="logbook-card__duration"
-            >${formatDurationCompact(card.endMs - card.startMs, { spaced: true }) ?? "0s"}</span
+            >${formatDurationCompact(card.endMs - card.startMs) ?? "0s"}</span
           >
         </span>
       </button>
@@ -209,7 +209,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
           <span>${t("logbook.stats.focus", { pct: String(focusPct) })}</span>
           <span
             >${t("logbook.stats.tracked", {
-              duration: formatDurationCompact(stats.trackedMs, { spaced: true }) ?? "0s",
+              duration: formatDurationCompact(stats.trackedMs) ?? "0s",
             })}</span
           >
         </div>
@@ -229,7 +229,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
                 ></span>
               </span>
               <span class="logbook-stats__category-time"
-                >${formatDurationCompact(entry.ms, { spaced: true }) ?? "0s"}</span
+                >${formatDurationCompact(entry.ms) ?? "0s"}</span
               >
             </div>
           `,
@@ -248,7 +248,10 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
   `;
 }
 
-function renderStandup(state: LogbookUiState, client: GatewayBrowserClient | null): TemplateResult {
+function renderStandup(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient | null,
+): TemplateResult {
   return html`
     <section class="card logbook-side__card">
       <div class="logbook-side__card-header">
@@ -275,7 +278,10 @@ function renderStandup(state: LogbookUiState, client: GatewayBrowserClient | nul
   `;
 }
 
-function renderAsk(state: LogbookUiState, client: GatewayBrowserClient | null): TemplateResult {
+function renderAsk(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient | null,
+): TemplateResult {
   return html`
     <section class="card logbook-side__card">
       <div class="card-title">${t("logbook.ask.title")}</div>

@@ -14,9 +14,12 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("@openclaw/media-core/mime", () => ({
-  detectMime: (...args: unknown[]) => detectMimeMock(...args),
-}));
+vi.mock("@openclaw/media-core/mime", async () => {
+  const actual = await vi.importActual<typeof import("@openclaw/media-core/mime")>(
+    "@openclaw/media-core/mime",
+  );
+  return { ...actual, detectMime: (...args: unknown[]) => detectMimeMock(...args) };
+});
 
 vi.mock("./pdf-extract.js", () => ({
   extractPdfContent: (...args: unknown[]) => extractPdfContentMock(...args),
@@ -28,12 +31,11 @@ async function waitForMicrotaskTurn(): Promise<void> {
   });
 }
 
-let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
+  ({ extractImageContentFromSource, extractFileContentFromSource } =
     await import("./input-files.js"));
 });
 
@@ -207,6 +209,51 @@ describe("HEIC input image normalization", () => {
         mimeType: "image/png",
       },
     },
+    {
+      name: "prefers sniffed JPEG when base64 mediaType is absent (OpenAI-compatible endpoint path)",
+      source: {
+        type: "base64",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+      } as const,
+      limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "image/jpeg",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "prefers sniffed JPEG when declared HEIC bytes are actually JPEG",
+      source: {
+        type: "base64",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/jpeg",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "prefers sniffed MIME for URL images with a generic Content-Type header",
+      source: {
+        type: "url",
+        url: "https://example.com/photo",
+      } as const,
+      limits: createImageSourceLimits(["image/png", "image/webp"], true),
+      detectedMime: "image/webp",
+      fetchedUrl: "https://example.com/photo",
+      fetchedBody: Buffer.from("webp-bytes"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("webp-bytes").toString("base64"),
+        mimeType: "image/webp",
+      },
+    },
   ] as const)("$name", async (testCase) => {
     await expectResolvedImageContentCase(testCase);
   });
@@ -241,7 +288,7 @@ describe("HEIC input image normalization", () => {
   });
 });
 
-describe("fetchWithGuard", () => {
+describe("guarded input file URL fetches", () => {
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -263,11 +310,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Failed to fetch: 503 Service Unavailable");
 
@@ -296,11 +344,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Content too large: 2048 bytes");
 
@@ -329,11 +378,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("invalid content-length header: 1e9");
 
@@ -371,11 +421,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 6,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 6,
+        },
       }),
     ).rejects.toThrow("Content too large");
 

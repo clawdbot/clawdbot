@@ -386,8 +386,12 @@ struct SettingsSkillsDestination: View {
                 }
                 ClawHubSkillRow(
                     skill: skill,
-                    installed: SkillManagementContract.installed(self.installedSkills, slug: skill.slug),
-                    isBusy: self.reviewingSlug == skill.slug,
+                    installed: skill.version.map {
+                        SkillManagementContract.installed(self.installedSkills, slug: skill.reference, version: $0)
+                    } ?? SkillManagementContract.installed(self.installedSkills, slug: skill.reference),
+                    isBusy: self.reviewingSlug == skill.reference || self.installingSlug.map {
+                        SkillManagementContract.sameClawHubSkill($0, skill.reference)
+                    } == true,
                     onReview: { Task { await self.review(skill) } })
             }
         }
@@ -395,6 +399,12 @@ struct SettingsSkillsDestination: View {
 
     private func loadInitialState() async {
         guard self.scenePhase == .active else { return }
+        if self.appModel.isScreenshotFixtureModeEnabled {
+            self.installedSkills = Self.screenshotSkills
+            self.clawHubSupported = true
+            self.loadedGatewayID = self.appModel.connectedGatewayID
+            return
+        }
         guard self.canRead else {
             self.resetGatewayState()
             return
@@ -513,7 +523,7 @@ struct SettingsSkillsDestination: View {
         let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
         self.reviewID = operationID
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.reference
         self.notice = nil
         defer {
             if self.reviewID == operationID {
@@ -525,7 +535,7 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let data = try await request(
                 method: "skills.detail",
-                params: ClawHubDetailRequest(slug: skill.slug),
+                params: ClawHubDetailRequest(slug: skill.reference),
                 timeoutSeconds: 20,
                 route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
@@ -706,12 +716,16 @@ struct SettingsSkillsDestination: View {
     {
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else { throw SkillsSettingsError.invalidPayload }
-        return try await self.appModel.operatorSession.request(
+        let response = try await self.appModel.operatorSession.request(
             method: method,
             paramsJSON: json,
             timeoutSeconds: timeoutSeconds,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
+        guard await self.appModel.operatorSession.currentRoute() == route else {
+            throw SkillsSettingsError.gatewayChanged
+        }
+        return response
     }
 
     private func gatewayRoute() async throws -> GatewayNodeSessionRoute {
@@ -738,6 +752,65 @@ struct SettingsSkillsDestination: View {
         self.installID = nil
         self.installingSlug = nil
         self.mutationIDs = [:]
+    }
+
+    private static var screenshotSkills: [SkillStatus] {
+        [
+            SkillStatus(
+                name: "github",
+                description: "Review pull requests, issues, checks, and repository activity.",
+                source: "managed",
+                bundled: true,
+                filePath: "/skills/github/SKILL.md",
+                baseDir: "/skills/github",
+                skillKey: "github",
+                primaryEnv: nil,
+                emoji: "🐙",
+                homepage: "https://docs.openclaw.ai/tools/skills",
+                always: false,
+                disabled: false,
+                eligible: true,
+                requirements: SkillRequirements(bins: ["gh"], env: [], config: []),
+                missing: SkillMissing(bins: [], env: [], config: []),
+                configChecks: [],
+                install: []),
+            SkillStatus(
+                name: "calendar",
+                description: "Plan meetings and turn your schedule into focused daily briefs.",
+                source: "managed",
+                bundled: false,
+                filePath: "/skills/calendar/SKILL.md",
+                baseDir: "/skills/calendar",
+                skillKey: "calendar",
+                primaryEnv: nil,
+                emoji: "📅",
+                homepage: nil,
+                always: false,
+                disabled: false,
+                eligible: true,
+                requirements: SkillRequirements(bins: [], env: [], config: []),
+                missing: SkillMissing(bins: [], env: [], config: []),
+                configChecks: [],
+                install: []),
+            SkillStatus(
+                name: "image-generation",
+                description: "Create and edit images from a clear visual brief.",
+                source: "managed",
+                bundled: false,
+                filePath: "/skills/image-generation/SKILL.md",
+                baseDir: "/skills/image-generation",
+                skillKey: "image-generation",
+                primaryEnv: "OPENAI_API_KEY",
+                emoji: "🎨",
+                homepage: nil,
+                always: false,
+                disabled: false,
+                eligible: false,
+                requirements: SkillRequirements(bins: [], env: ["OPENAI_API_KEY"], config: []),
+                missing: SkillMissing(bins: [], env: ["OPENAI_API_KEY"], config: []),
+                configChecks: [],
+                install: []),
+        ]
     }
 
     static func isReady(_ skill: SkillStatus) -> Bool {
@@ -814,7 +887,11 @@ private struct InstalledSkillRow: View {
     }
 
     private var missingSummary: String {
-        let values = self.skill.missing.bins + self.skill.missing.env + self.skill.missing.config
+        let values = self.skill.missing.bins
+            + self.skill.missing.anyBins.map { String(format: String(localized: "Any binary: %@"), $0) }
+            + self.skill.missing.env
+            + self.skill.missing.config
+            + self.skill.missing.os.map { String(format: String(localized: "OS: %@"), $0) }
         return values.isEmpty ? "" : String(format: String(localized: "Missing: %@"), values.joined(separator: ", "))
     }
 }
@@ -830,12 +907,12 @@ private struct ClawHubSkillRow: View {
             ProIconBadge(systemName: "shippingbox", color: self.installed ? OpenClawBrand.ok : OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.skill.displayName).font(OpenClawType.subheadSemiBold)
-                Text(self.skill.summary ?? self.skill.slug)
+                Text(self.skill.summary ?? self.skill.reference)
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
-                    Text(self.skill.slug).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
+                    Text(self.skill.reference).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     if let version = self.skill.version {
                         Text(verbatim: version).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     }

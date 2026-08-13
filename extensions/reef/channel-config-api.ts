@@ -1,8 +1,2 @@
-export {
-  ReefChannelConfigSchema,
-  ReefFriendSchema,
-  autonomyBudget,
-  normalizeReefTarget,
-  resolveReefConfig,
-} from "./src/config-schema.js";
-export type { ReefChannelConfig, ReefFriendConfig, ReefCoreConfig } from "./src/config-schema.js";
+// Reef config API module exposes only the channel's public config contract.
+export { ReefChannelConfigSchema } from "./src/config-schema.js";

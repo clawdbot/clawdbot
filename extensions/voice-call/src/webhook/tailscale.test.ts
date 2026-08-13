@@ -14,7 +14,6 @@ import {
   getTailscaleSelfInfo,
   setupTailscaleExposure,
   setupTailscaleExposureRoute,
-  TAILSCALE_COMMAND_STDOUT_MAX_BYTES,
 } from "./tailscale.js";
 
 function commandResult(overrides: Record<string, unknown> = {}) {
@@ -50,7 +49,7 @@ describe("voice-call tailscale helpers", () => {
       ["tailscale", "status", "--json", "--peers=false"],
       expect.objectContaining({
         killProcessTree: true,
-        maxOutputBytes: { stdout: TAILSCALE_COMMAND_STDOUT_MAX_BYTES, stderr: 1 },
+        maxOutputBytes: { stdout: 4 * 1024 * 1024, stderr: 1 },
         terminateOnOutputLimit: { stdout: true },
         timeoutMs: 2500,
       }),
