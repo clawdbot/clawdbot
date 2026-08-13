@@ -521,15 +521,12 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     account: {
       accountId: "default",
       config: progressCard
-        ? {}
+        ? // Native task cards are the progress default; this scenario owns the
+          // Block Kit opt-out path.
+          { streaming: { progress: { nativeTaskCards: false } } }
         : nativeProgress
-          ? {
-              streaming: {
-                mode: "progress",
-                nativeTransport: true,
-                progress: { nativeTaskCards: true },
-              },
-            }
+          ? // Empty progress config on purpose: proves the shipped default.
+            { streaming: { mode: "progress" } }
           : {
               streaming: {
                 mode: "partial",
