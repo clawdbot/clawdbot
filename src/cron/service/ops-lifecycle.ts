@@ -1,4 +1,5 @@
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
+import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
@@ -66,6 +67,18 @@ export async function start(state: CronServiceState) {
         // Older releases used runningAtMs for both queued and active work. Those
         // rows are intentionally recovered conservatively to avoid replaying side effects.
         const runningAtMs = job.state.runningAtMs;
+        const liveReceipt = reconcileCronRunReceiptForStartup({
+          storePath: state.deps.storePath,
+          jobId: job.id,
+          startedAtMs: runningAtMs,
+          nowMs: state.deps.nowMs(),
+        });
+        if (liveReceipt) {
+          // An overlapping replacement gateway must not retire work whose
+          // exact process incarnation is still alive.
+          interruptedJobIds.add(job.id);
+          continue;
+        }
         const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
         const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
         if (finalized) {

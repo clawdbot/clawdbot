@@ -1,10 +1,20 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import {
+  CronRunReceiptConflictError,
+  CronRunReceiptRevisionError,
+  finishCronRunReceipt,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
+import {
+  claimServiceCronRunReceipt,
+  cronRunReceiptPersistHooks,
+  supersedeServiceCronRunReceipt,
+} from "./run-receipts.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
@@ -243,11 +253,28 @@ export async function activateQueuedCronRun(params: {
   onUnavailable?: () => void;
   onUnavailableRollbackError?: () => Promise<void>;
 }): Promise<
-  | { kind: "activated"; startedAt: number }
+  | {
+      kind: "activated";
+      startedAt: number;
+      runReceipt: ReturnType<typeof claimServiceCronRunReceipt>;
+    }
+  | { kind: "fenced" }
   | { kind: "unavailable"; reason: "stopped" | "restart-recovery-pending" }
 > {
   const { state, job, reservationIdentity } = params;
   const startedAt = state.deps.nowMs();
+  let runReceipt: ReturnType<typeof claimServiceCronRunReceipt>;
+  try {
+    runReceipt = claimServiceCronRunReceipt({ state, job, startedAtMs: startedAt });
+  } catch (error) {
+    if (
+      error instanceof CronRunReceiptConflictError ||
+      error instanceof CronRunReceiptRevisionError
+    ) {
+      return { kind: "fenced" };
+    }
+    throw error;
+  }
   const previousLastError = job.state.lastError;
   const activationRollbackSnapshot = snapshotStoreForRollback(state);
   delete job.state.queuedAtMs;
@@ -255,14 +282,30 @@ export async function activateQueuedCronRun(params: {
   job.state.lastError = undefined;
   // Persist running ownership before execution. A failed write restores the
   // durable queued marker so the caller can release or recover that claim.
-  await persistOrRestore(state, activationRollbackSnapshot);
+  try {
+    await persistOrRestore(state, activationRollbackSnapshot, {
+      transactionHooks: cronRunReceiptPersistHooks({ state, handle: runReceipt }),
+    });
+  } catch (error) {
+    if (error instanceof CronRunReceiptRevisionError) {
+      supersedeServiceCronRunReceipt(runReceipt, state.deps.nowMs(), error.message);
+      return { kind: "fenced" };
+    }
+    finishCronRunReceipt({
+      handle: runReceipt,
+      status: "error",
+      finishedAtMs: state.deps.nowMs(),
+      error: normalizeCronRunErrorText(error),
+    });
+    throw error;
+  }
   const reservation = state.queuedRunReservationsByJobId.get(job.id);
   if (reservation?.identity === reservationIdentity) {
     reservation.markerAtMs = startedAt;
     reservation.activationPreviousLastError = { value: previousLastError };
   }
   if (!state.stopped && !state.restartRecoveryPending) {
-    return { kind: "activated", startedAt };
+    return { kind: "activated", startedAt, runReceipt };
   }
 
   params.onUnavailable?.();
@@ -270,7 +313,17 @@ export async function activateQueuedCronRun(params: {
   const rollbackSnapshot = snapshotStoreForRollback(state);
   delete job.state.runningAtMs;
   try {
-    await persistOrRestore(state, rollbackSnapshot);
+    await persistOrRestore(state, rollbackSnapshot, {
+      transactionHooks: cronRunReceiptPersistHooks({
+        state,
+        handle: runReceipt,
+        terminal: {
+          status: "skipped",
+          finishedAtMs: state.deps.nowMs(),
+          error: state.stopped ? "cron service stopped" : "cron restart recovery pending",
+        },
+      }),
+    });
   } catch (error) {
     await params.onUnavailableRollbackError?.();
     throw error;
@@ -360,7 +413,7 @@ export async function executeQueuedCronRun(params: {
       }
       activated = true;
       params.onActivated?.();
-      return { job, startedAt: activation.startedAt };
+      return { job, startedAt: activation.startedAt, runReceipt: activation.runReceipt };
     });
     if (!started) {
       return undefined;
@@ -372,6 +425,7 @@ export async function executeQueuedCronRun(params: {
       state,
       job: executionJob,
       startedAt: started.startedAt,
+      publicRunId: started.runReceipt.receiptId,
     });
     const activeJobMarker = markCronJobActive(executionJob.id, {
       preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
@@ -389,12 +443,14 @@ export async function executeQueuedCronRun(params: {
       activeJobMarker,
       reservationIdentity: params.reservationIdentity,
       startedAt: started.startedAt,
+      runReceipt: started.runReceipt,
     };
     let outcome: TimedCronRunOutcome;
     try {
       const result = await executeJobCoreWithTimeout(state, executionJob, {
         runId: taskRunId,
         activeJobMarker,
+        runReceipt: started.runReceipt,
       });
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {

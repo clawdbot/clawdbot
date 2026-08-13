@@ -1,6 +1,7 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type { CronJob, CronPayload, CronRunErrorClassification } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -71,6 +72,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   activeJobMarker?: CronActiveJobMarker;
   admittedJob: CronJob;
   executionJob: CronJob;
+  runReceipt: CronRunReceiptHandle;
 };
 
 export type ManualRunOptions = {
@@ -483,13 +485,17 @@ export async function activatePreparedManualRun(
     if (activation.kind === "unavailable") {
       return { ok: true, ran: false, reason: activation.reason } as const;
     }
+    if (activation.kind === "fenced") {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "already-running" } as const;
+    }
     const { startedAt } = activation;
     emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({
       state,
       job,
       startedAt,
-      publicRunId: prepared.runId,
+      publicRunId: prepared.runId ?? activation.runReceipt.receiptId,
     });
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
@@ -512,6 +518,7 @@ export async function activatePreparedManualRun(
       activeJobMarker,
       admittedJob,
       executionJob,
+      runReceipt: activation.runReceipt,
     } as const;
   });
 }

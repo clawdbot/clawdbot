@@ -18,6 +18,7 @@ import {
   isSetupTimeoutErrorText,
   timeoutErrorMessage,
 } from "./execution-errors.js";
+import { assertServiceCronRunReceiptCurrent } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -43,6 +44,7 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
+  runReceipt?: import("../store/run-receipt-store.js").CronRunReceiptHandle;
 };
 
 async function deliverPrimaryWebhook(
@@ -52,6 +54,7 @@ async function deliverPrimaryWebhook(
   abortSignal: AbortSignal,
   progress: CronRunProgress,
   deadlineAtMs?: number,
+  assertRunCurrent?: () => void,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
@@ -96,6 +99,8 @@ async function deliverPrimaryWebhook(
       error: interruptionError(),
     });
   }
+
+  assertRunCurrent?.();
 
   const startedAt = job.state.runningAtMs;
   const deliveredResult = withPrimaryWebhookTrace({ job, result, delivered: true });
@@ -183,6 +188,9 @@ export async function executeJobCoreWithTimeout(
   opts?: CronCoreRunOptions,
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
+  const assertRunCurrent = opts?.runReceipt
+    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!)
+    : undefined;
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
   let resolveOperatorCancellation: ((value: typeof operatorCancellationMarker) => void) | undefined;
   const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
@@ -244,13 +252,22 @@ export async function executeJobCoreWithTimeout(
         streamSourceIdentity: opts?.streamSourceIdentity,
         onExecutionStarted: noteExecutionStarted,
         onExecutionPhase: accumulateExecution,
+        assertRunCurrent,
       };
       const corePromise = withCronTaskRunId(opts?.runId, () =>
         executeJobCore(state, job, runAbortController.signal, coreOptions),
       );
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
-        return await deliverPrimaryWebhook(state, job, result, runAbortController.signal, progress);
+        return await deliverPrimaryWebhook(
+          state,
+          job,
+          result,
+          runAbortController.signal,
+          progress,
+          undefined,
+          assertRunCurrent,
+        );
       });
       trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
       void runPromise.catch((err: unknown) => {
@@ -322,6 +339,7 @@ export async function executeJobCoreWithTimeout(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      assertRunCurrent,
     };
     const corePromise = withCronTaskRunId(opts?.runId, () =>
       executeJobCore(state, job, runAbortController.signal, coreOptions),
@@ -336,6 +354,7 @@ export async function executeJobCoreWithTimeout(
         runAbortController.signal,
         progress,
         watchdog.deadlineAtMs(),
+        assertRunCurrent,
       );
     });
     trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);

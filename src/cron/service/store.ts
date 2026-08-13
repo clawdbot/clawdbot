@@ -9,6 +9,7 @@ import {
   getCronJobsStoreRevision,
   loadCronJobsStoreWithConfigJobs,
   saveCronJobsStore,
+  type CronStoreTransactionHooks,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
@@ -22,6 +23,7 @@ type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
   postPersistNotifications?: DeferredCronNotifications;
+  transactionHooks?: CronStoreTransactionHooks;
 };
 
 export type CronRollbackSnapshot = {
@@ -282,7 +284,13 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     await saveCronJobsStore(
       state.deps.storePath,
       store,
-      quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined,
+      quarantine
+        ? { quarantine, transactionHooks: opts?.transactionHooks }
+        : stateOnly
+          ? { stateOnly: true, transactionHooks: opts?.transactionHooks }
+          : opts?.transactionHooks
+            ? { transactionHooks: opts.transactionHooks }
+            : undefined,
     );
   } catch (error) {
     if (!quarantine) {

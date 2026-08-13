@@ -4,6 +4,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -46,6 +47,7 @@ export type TimedCronRunOutcome = CronRunOutcome &
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     reservationIdentity?: object;
+    runReceipt?: CronRunReceiptHandle;
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
@@ -110,6 +112,8 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  /** Revalidates the durable run fence after awaited planning and before effects. */
+  assertRunCurrent?: () => void;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

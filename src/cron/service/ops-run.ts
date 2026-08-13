@@ -2,6 +2,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { CronRunReceiptRevisionError, finishCronRunReceipt } from "../store/run-receipt-store.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -19,6 +20,11 @@ import {
 } from "./ops-run-preparation.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
+import {
+  assertServiceCronRunReceiptCurrent,
+  cronRunReceiptPersistHooks,
+  supersedeServiceCronRunReceipt,
+} from "./run-receipts.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
@@ -55,6 +61,7 @@ async function finishPreparedManualRun(
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
+  let finalized = false;
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -66,6 +73,7 @@ async function finishPreparedManualRun(
         streamBatch: prepared.streamBatch,
         streamScheduleKey: prepared.streamScheduleKey,
         streamSourceIdentity: prepared.streamSourceIdentity,
+        runReceipt: prepared.runReceipt,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
@@ -147,7 +155,6 @@ async function finishPreparedManualRun(
       return;
     }
 
-    let finalized = false;
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
@@ -161,6 +168,16 @@ async function finishPreparedManualRun(
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (!job) {
         return;
+      }
+      try {
+        assertServiceCronRunReceiptCurrent(state, prepared.runReceipt);
+      } catch (error) {
+        if (error instanceof CronRunReceiptRevisionError) {
+          supersedeServiceCronRunReceipt(prepared.runReceipt, state.deps.nowMs(), error.message);
+          notifySetupTimeout = false;
+          return;
+        }
+        throw error;
       }
 
       const scheduleOwnership = resolveCronRunScheduleOwnership({
@@ -305,9 +322,27 @@ async function finishPreparedManualRun(
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot, {
-        postPersistNotifications,
-      });
+      try {
+        await persistOrRestore(state, rollbackSnapshot, {
+          postPersistNotifications,
+          transactionHooks: cronRunReceiptPersistHooks({
+            state,
+            handle: prepared.runReceipt,
+            terminal: {
+              status: triggerSkipped ? "skipped" : coreResult.status,
+              finishedAtMs: endedAt,
+              error: coreResult.error,
+            },
+          }),
+        });
+      } catch (error) {
+        if (error instanceof CronRunReceiptRevisionError) {
+          supersedeServiceCronRunReceipt(prepared.runReceipt, state.deps.nowMs(), error.message);
+          notifySetupTimeout = false;
+          return;
+        }
+        throw error;
+      }
       if (removedJob) {
         pruneCronJobScratchAfterCommit(state, [removedJob.id]);
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
@@ -336,6 +371,14 @@ async function finishPreparedManualRun(
     }
     emitMissingQueuedTerminal();
   } finally {
+    if (!finalized) {
+      finishCronRunReceipt({
+        handle: prepared.runReceipt,
+        status: "superseded",
+        finishedAtMs: state.deps.nowMs(),
+        error: "cron run result was not applied to the current job revision",
+      });
+    }
     releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
   }

@@ -236,11 +236,19 @@ type SaveCronStoreOptions = {
   stateOnly?: boolean;
 };
 
+export type CronStoreTransactionHooks = {
+  /** Runs inside the authoritative write transaction before cron rows change. */
+  beforeWrite?: (db: DatabaseSync) => void;
+  /** Runs after row changes but before the same transaction commits. */
+  afterWrite?: (db: DatabaseSync) => void;
+};
+
 type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
   quarantine?: {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
   };
+  transactionHooks?: CronStoreTransactionHooks;
 };
 
 /** Persists cron jobs, or only mutable runtime state when stateOnly is set. */
@@ -256,6 +264,7 @@ export async function saveCronJobsStore(
     assertCronStoreCanPersist(store);
   }
   runOpenClawStateWriteTransaction((database) => {
+    opts?.transactionHooks?.beforeWrite?.(database.db);
     if (opts?.quarantine?.entries.length) {
       saveCronQuarantinedJobs({
         storePath: resolvedStorePath,
@@ -268,10 +277,12 @@ export async function saveCronJobsStore(
     // quarantine and full replacement commit together or roll back together.
     if (stateOnly) {
       updateCronRuntimeRows(database.db, storeKey, store);
+      opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
     const normalizedJobs = replaceCronRows(database.db, storeKey, store);
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
+    opts?.transactionHooks?.afterWrite?.(database.db);
   });
   noteCronJobsStoreCommit(storeKey);
 }
