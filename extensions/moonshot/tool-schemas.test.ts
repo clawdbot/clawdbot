@@ -74,6 +74,31 @@ describe("moonshot schema normalization", () => {
     });
   });
 
+  // JSON Schema treats `integer` as a subtype of `number`, so a branch already typed
+  // `integer` must not block the rewrite under a `number` parent the way a genuinely
+  // wider type (e.g. `string`) does.
+  it("keeps a union already typed with a number-compatible integer subtype", () => {
+    const schema = {
+      type: "number",
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "number" }],
+    };
+
+    expect(normalizeSchema(schema)).toEqual({
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "number" }],
+    });
+  });
+
+  it("pushes the parent type into an untyped branch alongside a compatible typed integer branch", () => {
+    const schema = {
+      type: "number",
+      anyOf: [{ minimum: 0 }, { type: "integer" }],
+    };
+
+    expect(normalizeSchema(schema)).toEqual({
+      anyOf: [{ type: "number", minimum: 0 }, { type: "integer" }],
+    });
+  });
+
   it.each([
     {
       name: "a branch that is itself a union",

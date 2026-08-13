@@ -3,6 +3,7 @@ import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Draft-07 `dependencies` is the union of the modern `dependentSchemas` and
 // `dependentRequired`: each value is either a subschema or a list of property names.
@@ -36,12 +37,6 @@ const SCHEMA_VALUE_KEYS = new Set([
   "contentSchema",
 ]);
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Own-property assignment so an own `__proto__` key from an MCP server stays an own key. */
 function setOwnKey(target: Record<string, unknown>, key: string, value: unknown): void {
   Object.defineProperty(target, key, {
@@ -62,6 +57,15 @@ function readSchemaTypes(schema: Record<string, unknown>): string[] | null {
     return type as string[];
   }
   return null;
+}
+
+/**
+ * JSON Schema treats `integer` as a numeric subtype: every integer value already satisfies
+ * `number`, so a branch typed `integer` is no wider than a `number` parent even though the
+ * literal strings differ.
+ */
+function isBranchTypeCompatible(branchType: string, parentTypeSet: Set<string>): boolean {
+  return parentTypeSet.has(branchType) || (branchType === "integer" && parentTypeSet.has("number"));
 }
 
 /**
@@ -87,7 +91,7 @@ function canPushTypeIntoBranches(branches: unknown[], parentTypes: string[]): bo
       const branchTypes = readSchemaTypes(record);
       return branchTypes === null
         ? !("type" in record)
-        : branchTypes.every((entry) => parentTypeSet.has(entry));
+        : branchTypes.every((entry) => isBranchTypeCompatible(entry, parentTypeSet));
     })
   );
 }
