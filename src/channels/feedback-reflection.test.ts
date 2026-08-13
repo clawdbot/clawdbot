@@ -6,6 +6,7 @@ const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
+const resolveSessionTranscriptRuntimeTarget = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
 vi.mock("../config/sessions/paths.js", () => ({
@@ -16,6 +17,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry,
   loadSessionEntryReadOnly: loadSessionEntry,
   readSessionUpdatedAtCore,
+  resolveSessionTranscriptRuntimeTarget,
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
@@ -114,8 +116,14 @@ describe("channel feedback reflection", () => {
     ).resolves.toMatchObject({ status: "complete", followUp: false });
   });
 
-  it("records feedback through the canonical transcript accessor", async () => {
+  it("records feedback through the persisted transcript owner", async () => {
     loadSessionEntry.mockReturnValue({ sessionId: "session-1" });
+    resolveSessionTranscriptRuntimeTarget.mockResolvedValue({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/state/main/sessions.json",
+    });
     const event = { type: "custom", event: "feedback", ts: 1 };
 
     await expect(
@@ -130,7 +138,7 @@ describe("channel feedback reflection", () => {
       {
         agentId: "main",
         sessionId: "session-1",
-        sessionKey: "agent:main:msteams:feedback-2",
+        sessionKey: "agent:main:main",
         storePath: "/state/main/sessions.json",
       },
       event,
