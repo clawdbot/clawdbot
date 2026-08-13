@@ -135,8 +135,12 @@ export function createTelegramInboundMedia({
       authorization;
     const textParts = getTelegramTextParts(msg);
     const documentMime = msg.document?.mime_type?.split(";")[0]?.trim().toLowerCase();
+    const disableAudioPreflight =
+      (authorization.topicConfig?.disableAudioPreflight ??
+        authorization.groupConfig?.disableAudioPreflight) === true;
     const mayNeedDownload =
       !textParts.text.trim() &&
+      !disableAudioPreflight &&
       Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
     // Media-less messages have nothing to skip-download. They must reach the
     // canonical mention gate (bot-message-context.body), which records group
