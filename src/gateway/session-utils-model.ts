@@ -524,6 +524,21 @@ export async function resolveGatewayModelSupportsImages(params: {
     ) {
       return true;
     }
+    // Runtime-only rows are intentionally absent from the prepared turn catalog. Missing metadata
+    // is not proof of text-only input; preserve the attachment and let the runtime decide.
+    if (
+      snapshot &&
+      params.agentId &&
+      params.provider &&
+      publishedModelCatalogOwnerMatchesAgent(snapshot, params.agentId) &&
+      !snapshot.staticEntries?.some(
+        (entry) =>
+          normalizeLowercaseStringOrEmpty(entry.id) ===
+          normalizeLowercaseStringOrEmpty(params.model),
+      )
+    ) {
+      return true;
+    }
     return false;
   } catch {
     return false;

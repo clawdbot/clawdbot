@@ -7,6 +7,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
@@ -48,6 +49,7 @@ export type PreparedModelWorkerResult =
       kind: "auth-refresh";
       generationFingerprint: string;
       authStore: AuthProfileStore;
+      authModes: PreparedAgentCredentialModes;
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
@@ -329,14 +331,14 @@ export function runPreparedModelCatalogWorker(params: {
 export function runPreparedModelAuthRefreshWorker(params: {
   input: PreparedModelAuthRefreshWorkerInput;
   isCurrent: () => boolean;
-}): Promise<AuthProfileStore> {
+}): Promise<PreparedModelRuntimeAuth> {
   return runPreparedModelWorker({
     ...params,
     project: (message) => {
       if (message.kind !== "auth-refresh") {
         throw new Error("prepared model auth refresh worker returned a catalog result");
       }
-      return message.authStore;
+      return { authStore: message.authStore, authModes: message.authModes };
     },
   });
 }

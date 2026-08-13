@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
-import { setPreparedModelRuntimeAuthStoreLoader } from "../agents/prepared-model-runtime-auth.js";
+import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeferredCatalog } from "./server-model-catalog-auth.js";
 import {
@@ -99,13 +99,20 @@ describe("gateway prepared model catalog", () => {
   it("refreshes auth only for the explicit deferred projection", async () => {
     const config = ownerConfig();
     const candidate = ownerSnapshot(config);
-    const loadAuthStore = vi.fn(async () => ({
-      version: 1 as const,
-      profiles: {
-        "openai:refreshed": { type: "api_key" as const, provider: "openai", key: "refreshed" },
+    const loadAuth = vi.fn(async () => ({
+      authStore: {
+        version: 1 as const,
+        profiles: {
+          "openai:refreshed": {
+            type: "api_key" as const,
+            provider: "openai",
+            key: "refreshed",
+          },
+        },
       },
+      authModes: { openai: "api_key" as const },
     }));
-    setPreparedModelRuntimeAuthStoreLoader(candidate, loadAuthStore);
+    setPreparedModelRuntimeAuthLoader(candidate, loadAuth);
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => candidate);
 
     const prepared = await loadGatewayModelCatalogSnapshot({
@@ -113,7 +120,7 @@ describe("gateway prepared model catalog", () => {
       loadPublishedPreparedModelCatalogOwnerSnapshot,
     });
     expect(prepared.authStore).toEqual(candidate.authStore);
-    expect(loadAuthStore).not.toHaveBeenCalled();
+    expect(loadAuth).not.toHaveBeenCalled();
 
     const deferred = await loadGatewayModelCatalogSnapshot({
       deferAuthRefresh: true,
@@ -128,7 +135,34 @@ describe("gateway prepared model catalog", () => {
     expect(loaded.authStore).toEqual(
       expect.objectContaining({ profiles: { "openai:refreshed": expect.any(Object) } }),
     );
-    expect(loadAuthStore).toHaveBeenCalledWith(["openai"]);
+    expect(loaded.authModes).toEqual({ openai: "api_key" });
+    expect(loadAuth).toHaveBeenCalledWith(["openai"]);
+  });
+
+  it("removes stale prepared auth modes when deferred auth observes logout", async () => {
+    const config = ownerConfig();
+    const candidate = {
+      ...ownerSnapshot(config),
+      authModes: { openai: "oauth" as const },
+    };
+    setPreparedModelRuntimeAuthLoader(candidate, async () => ({
+      authStore: { version: 1, profiles: {} },
+      authModes: {},
+    }));
+
+    const deferred = await loadGatewayModelCatalogSnapshot({
+      deferAuthRefresh: true,
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+    });
+    const loaded = await loadDeferredCatalog(
+      { loadGatewayModelCatalogSnapshot: vi.fn(async () => deferred) } as never,
+      "main",
+      true,
+    );
+
+    expect(loaded.authStore?.profiles).toEqual({});
+    expect(loaded.authModes).toEqual({});
   });
 
   it("rejects an ambiguous owner without an authoritative agent identity", async () => {

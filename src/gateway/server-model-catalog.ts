@@ -2,11 +2,11 @@ import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-cata
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import {
   getPreparedModelRuntimeAuthMaterializations,
-  loadPreparedModelRuntimeAuthStore,
+  loadPreparedModelRuntimeAuth,
 } from "../agents/prepared-model-runtime-auth.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
-import { setPendingGatewayModelCatalogAuthStore } from "./server-model-catalog-auth.js";
+import { setPendingGatewayModelCatalogAuth } from "./server-model-catalog-auth.js";
 import type {
   GatewayModelCatalogOwnerSnapshot,
   GatewayModelCatalogSnapshot,
@@ -104,12 +104,12 @@ export async function loadGatewayModelCatalogSnapshot(
 ): Promise<GatewayModelCatalogSnapshot> {
   const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
   if (params?.deferAuthRefresh) {
-    const pendingAuthStore = loadPreparedModelRuntimeAuthStore(
+    const pendingAuth = loadPreparedModelRuntimeAuth(
       candidate,
       owner.modelCatalog.entries.map((entry) => entry.provider),
     );
     const snapshot = projectGatewayModelCatalogSnapshot(owner);
-    setPendingGatewayModelCatalogAuthStore(snapshot, pendingAuthStore);
+    setPendingGatewayModelCatalogAuth(snapshot, pendingAuth);
     return snapshot;
   }
   return projectGatewayModelCatalogSnapshot(owner);

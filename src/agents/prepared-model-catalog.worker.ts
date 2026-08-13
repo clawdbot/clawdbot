@@ -61,18 +61,22 @@ export async function runPreparedModelCatalogWorkerInput(
 ): Promise<PreparedModelWorkerResult> {
   try {
     if (value.kind === "auth-refresh") {
+      const authStore = refreshAuthStore({
+        agentDir: value.agentDir,
+        inheritedAuthDir: value.inheritedAuthDir,
+        authStore: value.authStore,
+        config: value.config,
+        env: value.env,
+        providerIds: value.providerIds,
+      });
       return {
         status: "ok",
         kind: "auth-refresh",
         generationFingerprint: value.generationFingerprint,
-        authStore: refreshAuthStore({
-          agentDir: value.agentDir,
-          inheritedAuthDir: value.inheritedAuthDir,
-          authStore: value.authStore,
-          config: value.config,
-          env: value.env,
-          providerIds: value.providerIds,
-        }),
+        authStore,
+        authModes: resolveUsableAgentCredentialModes(
+          resolveAgentCredentialMapFromStore(authStore, { config: value.config }),
+        ),
       };
     }
     const { prepareAgentCatalogSource, prepareFullCatalogFacts, prepareWorkspaceBuildGroup } =

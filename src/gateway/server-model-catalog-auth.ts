@@ -1,13 +1,13 @@
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { PreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
-const pendingAuthStoreBySnapshot = new WeakMap<object, Promise<AuthProfileStore | undefined>>();
+const pendingAuthBySnapshot = new WeakMap<object, Promise<PreparedModelRuntimeAuth | undefined>>();
 
-export function setPendingGatewayModelCatalogAuthStore(
+export function setPendingGatewayModelCatalogAuth(
   snapshot: object,
-  pending: Promise<AuthProfileStore | undefined>,
+  pending: Promise<PreparedModelRuntimeAuth | undefined>,
 ): void {
-  pendingAuthStoreBySnapshot.set(snapshot, pending);
+  pendingAuthBySnapshot.set(snapshot, pending);
   // A timed-out catalog read may abandon the snapshot before it reaches the auth projection.
   // Observe rejection here while preserving it for a caller that does resolve this snapshot.
   void pending.catch(() => undefined);
@@ -27,12 +27,12 @@ export async function loadDeferredCatalog(
   } as NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> & {
     deferAuthRefresh: true;
   });
-  const pendingAuthStore = pendingAuthStoreBySnapshot.get(snapshot);
-  if (!pendingAuthStore) {
+  const pendingAuth = pendingAuthBySnapshot.get(snapshot);
+  if (!pendingAuth) {
     return snapshot;
   }
   try {
-    return { ...snapshot, authStore: (await pendingAuthStore) ?? snapshot.authStore };
+    return { ...snapshot, ...(await pendingAuth) };
   } catch {
     // Auth refresh is opportunistic browse data. Preserve the exact prepared generation when
     // external credential discovery fails instead of failing the model catalog response.

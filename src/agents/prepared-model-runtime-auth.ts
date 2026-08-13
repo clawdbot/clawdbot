@@ -1,12 +1,18 @@
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+
+export type PreparedModelRuntimeAuth = Readonly<{
+  authStore: AuthProfileStore;
+  authModes: PreparedAgentCredentialModes;
+}>;
 
 /** Private auth facts owned by an immutable prepared model generation. */
 const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
 const materializationsBySnapshot = new WeakMap<object, readonly RuntimeAuthMaterialization[]>();
-const authStoreLoaderBySnapshot = new WeakMap<
+const authLoaderBySnapshot = new WeakMap<
   object,
-  (providerIds: readonly string[]) => Promise<AuthProfileStore>
+  (providerIds: readonly string[]) => Promise<PreparedModelRuntimeAuth>
 >();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
@@ -21,19 +27,23 @@ export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileS
   return authStoreBySnapshot.get(snapshot);
 }
 
-export function setPreparedModelRuntimeAuthStoreLoader(
+export function setPreparedModelRuntimeAuthLoader(
   snapshot: object,
-  loader: (providerIds: readonly string[]) => Promise<AuthProfileStore>,
+  loader: (providerIds: readonly string[]) => Promise<PreparedModelRuntimeAuth>,
 ): void {
-  authStoreLoaderBySnapshot.set(snapshot, loader);
+  authLoaderBySnapshot.set(snapshot, loader);
 }
 
-export async function loadPreparedModelRuntimeAuthStore(
-  snapshot: object,
+export async function loadPreparedModelRuntimeAuth(
+  snapshot: object & { authModes?: PreparedAgentCredentialModes },
   providerIds: readonly string[],
-): Promise<AuthProfileStore | undefined> {
-  const loader = authStoreLoaderBySnapshot.get(snapshot);
-  return loader ? await loader(providerIds) : authStoreBySnapshot.get(snapshot);
+): Promise<PreparedModelRuntimeAuth | undefined> {
+  const loader = authLoaderBySnapshot.get(snapshot);
+  if (loader) {
+    return await loader(providerIds);
+  }
+  const authStore = authStoreBySnapshot.get(snapshot);
+  return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
 }
 
 export function setPreparedModelRuntimeAuthMaterializations(

@@ -11,7 +11,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -22,7 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
-import { setPendingGatewayModelCatalogAuthStore } from "../server-model-catalog-auth.js";
+import { setPendingGatewayModelCatalogAuth } from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -224,7 +224,8 @@ function requestModelsList(params: {
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
-  deferredAuthStore?: Promise<AuthProfileStore>;
+  deferredAuth?: Promise<PreparedModelRuntimeAuth>;
+  preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
 }) {
   const respond = params.respond ?? vi.fn();
   const runtimeConfig = params.runtimeConfig ?? ({} as OpenClawConfig);
@@ -237,6 +238,7 @@ function requestModelsList(params: {
       agentId,
       agentDir,
       config,
+      authModes: params.preparedAuthModes ?? {},
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
         loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
@@ -279,8 +281,8 @@ function requestModelsList(params: {
           entries,
           routeVariants: entries,
         };
-        if (params.deferredAuthStore) {
-          setPendingGatewayModelCatalogAuthStore(snapshot, params.deferredAuthStore);
+        if (params.deferredAuth) {
+          setPendingGatewayModelCatalogAuth(snapshot, params.deferredAuth);
         }
         return snapshot;
       },
@@ -677,7 +679,7 @@ describe("models.list", () => {
 
   it("does not let deferred auth outlive the configured browse deadline", async () => {
     await withoutOpenAIEnvAuth(async () => {
-      const authStore = createDeferred<AuthProfileStore>();
+      const auth = createDeferred<PreparedModelRuntimeAuth>();
       const runtimeConfig = {
         models: {
           providers: {
@@ -694,7 +696,7 @@ describe("models.list", () => {
         const { request, respond } = requestModelsList({
           view: "configured",
           runtimeConfig,
-          deferredAuthStore: authStore.promise,
+          deferredAuth: auth.promise,
           loadGatewayModelCatalog: vi.fn(() =>
             Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
           ),
@@ -741,7 +743,7 @@ describe("models.list", () => {
       const { request, respond } = requestModelsList({
         view: "configured",
         runtimeConfig,
-        deferredAuthStore: Promise.reject(new Error("auth refresh failed")),
+        deferredAuth: Promise.reject(new Error("auth refresh failed")),
         loadGatewayModelCatalog: vi.fn(() =>
           Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
         ),
@@ -761,6 +763,55 @@ describe("models.list", () => {
               agentRuntime: { id: "openclaw", source: "implicit" },
               available: false,
             },
+          ],
+        },
+        undefined,
+      );
+    });
+  });
+
+  it("does not advertise a subscription route after deferred auth observes logout", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        preparedAuthModes: { openai: "oauth" },
+        deferredAuth: Promise.resolve({
+          authStore: { version: 1, profiles: {} },
+          authModes: {},
+        }),
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ]),
+        ),
+        reqId: "req-models-list-cli-logout",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            expect.objectContaining({ id: "gpt-5.4", provider: "openai", available: false }),
           ],
         },
         undefined,

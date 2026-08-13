@@ -3660,6 +3660,23 @@ describe("resolveGatewayModelSupportsImages", () => {
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
+  test("preserves images when a provider-scoped runtime model is absent from the prepared catalog", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-vision-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            entries: [],
+            staticEntries: [],
+          }),
+      }),
+    ).resolves.toBe(true);
+  });
+
   test("repairs a stale visible text-only row with same-agent provider-static vision", async () => {
     await expect(
       resolveGatewayModelSupportsImages({

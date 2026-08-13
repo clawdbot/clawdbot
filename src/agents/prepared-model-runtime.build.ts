@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
@@ -14,8 +15,9 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import {
   setPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStoreLoader,
+  type PreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -48,9 +50,7 @@ const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUIL
 
 type PreparedModelRuntimeCatalogAccess = Readonly<{
   loadFullModelCatalog: () => Promise<ModelCatalogSnapshot>;
-  loadAuthStore: (
-    providerIds: readonly string[],
-  ) => Promise<PreparedModelRuntimeAgentFacts["authStore"]>;
+  loadAuth: (providerIds: readonly string[]) => Promise<PreparedModelRuntimeAuth>;
 }>;
 type PreparedModelRuntimeBuildGuards =
   | ReadonlyMap<PreparedModelRuntimeInput, () => boolean>
@@ -125,7 +125,7 @@ function createFullModelCatalogAccess(params: {
   let pendingAuth:
     | {
         key: string;
-        promise: Promise<PreparedModelRuntimeAgentFacts["authStore"]>;
+        promise: Promise<PreparedModelRuntimeAuth>;
       }
     | undefined;
   const assertCurrent = () => {
@@ -136,12 +136,15 @@ function createFullModelCatalogAccess(params: {
     }
   };
   return {
-    loadAuthStore: (providerIds) => {
+    loadAuth: (providerIds) => {
       const key = [...new Set(providerIds)]
         .toSorted((left, right) => left.localeCompare(right))
         .join("\0");
       if (key.length === 0) {
-        return Promise.resolve(params.agentFacts.authStore);
+        return Promise.resolve({
+          authStore: params.agentFacts.authStore,
+          authModes: resolveUsableAgentCredentialModes(params.agentFacts.credentials),
+        });
       }
       if (pendingAuth?.key === key) {
         return pendingAuth.promise;
@@ -157,11 +160,22 @@ function createFullModelCatalogAccess(params: {
       const promise = runPreparedModelAuthRefreshWorker({
         input,
         isCurrent: params.isCurrent,
-      }).finally(() => {
-        if (pendingAuth?.promise === promise) {
-          pendingAuth = undefined;
-        }
-      });
+      })
+        .then((refreshed) => {
+          const authModes = {
+            ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
+          };
+          for (const providerId of providerIds) {
+            delete authModes[normalizeProviderId(providerId)];
+          }
+          Object.assign(authModes, refreshed.authModes);
+          return { authStore: refreshed.authStore, authModes: Object.freeze(authModes) };
+        })
+        .finally(() => {
+          if (pendingAuth?.promise === promise) {
+            pendingAuth = undefined;
+          }
+        });
       pendingAuth = { key, promise };
       return promise;
     },
@@ -232,7 +246,7 @@ function createSnapshot(
     createStores,
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
-  setPreparedModelRuntimeAuthStoreLoader(snapshot, catalogAccess.loadAuthStore);
+  setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
   setPreparedModelRuntimeAuthMaterializations(
     snapshot,
     Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),

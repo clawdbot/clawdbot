@@ -114,7 +114,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
   runPreparedModelCatalogWorker: (...args: unknown[]) =>
     preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
   runPreparedModelAuthRefreshWorker: ({ input }: { input: { authStore: unknown } }) =>
-    Promise.resolve(input.authStore),
+    Promise.resolve({ authStore: input.authStore, authModes: {} }),
 }));
 
 vi.mock("./model-catalog.js", () => ({

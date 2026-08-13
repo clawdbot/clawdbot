@@ -22,6 +22,11 @@ import {
   getPreparedModelFullCatalogAuth,
   runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  loadPreparedModelRuntimeAuth,
+  setPreparedModelRuntimeAuthLoader,
+} from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -394,26 +399,28 @@ describe("prepared model catalog worker boundary", () => {
     const owner = Object.freeze({
       ...fixture.snapshot,
       config,
+      authStore: getPreparedModelRuntimeAuthStore(fixture.snapshot),
       modelCatalog: { entries: [route], routeVariants: [route] },
     });
-    const listModels = async () => {
-      const fullCatalog = await fixture.snapshot.loadFullModelCatalog?.();
-      const fullAuth = fullCatalog && getPreparedModelFullCatalogAuth(fullCatalog);
-      if (!fullAuth) {
-        throw new Error("full catalog omitted prepared auth");
+    setPreparedModelRuntimeAuthLoader(owner, async (providerIds) => {
+      const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, providerIds);
+      if (!refreshed) {
+        throw new Error("prepared auth refresh was unavailable");
       }
-      const projected = await loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
-          ...owner,
-          authModes: fullAuth.authModes,
-          authStore: fullAuth.authStore,
-        }),
-      });
+      return refreshed;
+    });
+    const listModels = async () => {
       const context = {
         getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: async () => projected,
-        readPreparedGatewayModelCatalogSnapshot: async () => projected,
+        loadGatewayModelCatalogSnapshot: async (
+          loadParams: Parameters<typeof loadGatewayModelCatalogSnapshot>[0],
+        ) =>
+          await loadGatewayModelCatalogSnapshot({
+            ...loadParams,
+            getConfig: () => config,
+            loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+          }),
+        readPreparedGatewayModelCatalogSnapshot: async () => undefined,
         logGateway: { debug: () => undefined },
       } as unknown as GatewayRequestContext;
       return await buildModelsListResult({ context, params: { view: "all" } });
