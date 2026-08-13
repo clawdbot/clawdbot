@@ -13,6 +13,7 @@ import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerDefinitelyStale,
@@ -395,7 +396,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("re-arms the next run after a foreign owner completes normally", async () => {
+  it("re-arms foreign completion and schedules an unrelated imported job", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -412,9 +413,11 @@ describe("cron durable run ownership", () => {
       outputPath,
     });
     await waitForLine(owner, "started");
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET next_run_at_ms = NULL WHERE job_id = ?")
-      .run(job.id);
+    const database = openOpenClawStateDatabase().db;
+    const unrelated = makeCommandJob("imported-during-foreign-run", now + 60_000);
+    unrelated.state = {};
+    upsertCronJobRow(database, cronStoreKey(storePath), unrelated, 1);
+    database.prepare("UPDATE cron_jobs SET next_run_at_ms = NULL WHERE job_id = ?").run(job.id);
 
     const replacement = makeParentService(storePath);
     try {
@@ -427,9 +430,13 @@ describe("cron durable run ownership", () => {
       await vi.waitFor(
         async () => {
           expect(replacementState.timer).not.toBe(staleTimer);
-          expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toEqual(
+          const persisted = await loadCronStore(storePath);
+          expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
             expect.any(Number),
           );
+          expect(
+            persisted.jobs.find((entry) => entry.id === unrelated.id)?.state.nextRunAtMs,
+          ).toEqual(expect.any(Number));
         },
         { timeout: 10_000, interval: 50 },
       );

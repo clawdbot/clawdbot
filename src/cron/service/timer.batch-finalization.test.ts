@@ -172,23 +172,30 @@ describe("cron batch outcome finalization", () => {
         runIsolatedAgentJob,
         onEvent: (event) => events.push(event),
       });
-      const save = cronStoreModule.saveCronJobsStore;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (...args) => {
-          const persistedJob = args[1].jobs.find((entry) => entry.id === job.id);
-          if (!reservationPersisted && persistedJob?.state.queuedAtMs === reservedAt) {
-            await save(...args);
-            reservationPersisted = true;
-            now = startedAt;
-            return;
-          }
-          if (!terminalWriteRejected && persistedJob?.state.lastRunStatus === "ok") {
-            terminalWriteRejected = true;
-            throw new Error("cron terminal write failed");
-          }
-          await save(...args);
-        });
+      const database = openOpenClawStateDatabase().db;
+      const functionName = `observe_advanced_clock_${trigger}`;
+      const triggerName = `observe_advanced_clock_${trigger}`;
+      database.function(functionName, (writtenJobId, stateJson) => {
+        if (writtenJobId !== job.id || typeof stateJson !== "string") {
+          return 0;
+        }
+        const persistedState = JSON.parse(stateJson) as CronJob["state"];
+        if (!reservationPersisted && persistedState.queuedAtMs === reservedAt) {
+          reservationPersisted = true;
+          now = startedAt;
+        } else if (!terminalWriteRejected && persistedState.lastRunStatus === "ok") {
+          terminalWriteRejected = true;
+          throw new Error("cron terminal write failed");
+        }
+        return 0;
+      });
+      database.exec(`
+        CREATE TEMP TRIGGER ${triggerName}
+        AFTER UPDATE ON cron_jobs
+        BEGIN
+          SELECT ${functionName}(NEW.job_id, NEW.state_json);
+        END;
+      `);
 
       let recoveryState: ReturnType<typeof createCronServiceState> | undefined;
       try {
@@ -207,7 +214,7 @@ describe("cron batch outcome finalization", () => {
           expect.objectContaining({ jobId: job.id, status: "ok" }),
         ]);
 
-        saveSpy.mockRestore();
+        database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
         recoveryState = createCronServiceState({
           cronEnabled: true,
           storePath: store.storePath,
@@ -245,7 +252,7 @@ describe("cron batch outcome finalization", () => {
         });
         expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
       } finally {
-        saveSpy.mockRestore();
+        database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
         stop(state);
         if (recoveryState) {
           stop(recoveryState);

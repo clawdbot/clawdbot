@@ -602,8 +602,8 @@ function recomputeJobNextRunAtMs(params: {
   return changed;
 }
 
-/** Re-arms one atomically recovered job without taking a second store snapshot. */
-export function recomputeRecoveredJobNextRunAtMs(params: {
+/** Re-arms one authoritative job without taking a second store snapshot. */
+export function recomputeSingleJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;

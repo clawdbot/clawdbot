@@ -14,6 +14,7 @@ import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import {
   proposeCronRunRecovery,
+  recomputeUnownedCronSchedules,
   recoverCronRunProposal,
   type CronRunRecoveryProposal,
   type CronRunRecoveryResult,
@@ -162,6 +163,13 @@ export async function start(state: CronServiceState): Promise<void> {
     }
     if (proposals.length > 0) {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    }
+    if (listForeignReceipts(state).length > 0) {
+      const maintenance = recomputeUnownedCronSchedules(state);
+      runPostPersistCronNotifications(state, maintenance.notifications);
+      if (maintenance.changed) {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      }
     }
   });
 

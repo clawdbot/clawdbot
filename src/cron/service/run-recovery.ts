@@ -18,7 +18,7 @@ import {
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
 import type { CronRunStatus } from "../types.js";
-import { recomputeRecoveredJobNextRunAtMs } from "./jobs-scheduling.js";
+import { recomputeSingleJobNextRunAtMs } from "./jobs-scheduling.js";
 import {
   type InterruptedStartupRun,
   markInterruptedStartupRun,
@@ -142,7 +142,7 @@ function repairInDatabase(params: {
       });
       replacementAtMs = interrupted.replacementAtMs;
       if (job.enabled && job.state.nextRunAtMs === undefined) {
-        recomputeRecoveredJobNextRunAtMs({
+        recomputeSingleJobNextRunAtMs({
           state,
           job,
           nowMs,
@@ -221,6 +221,59 @@ export function recoverCronRunProposal(
   );
   if (result.kind === "repaired") {
     noteCronJobsStoreCommit(cronStoreKey(state.deps.storePath));
+  }
+  return result;
+}
+
+/** Schedules only authoritative rows that are not protected by an active run. */
+export function recomputeUnownedCronSchedules(state: CronServiceState): {
+  changed: boolean;
+  notifications: DeferredCronNotifications;
+} {
+  const storeKey = cronStoreKey(state.deps.storePath);
+  const nowMs = state.deps.nowMs();
+  const result = runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const notifications: DeferredCronNotifications = [];
+      let changed = false;
+      for (const row of loadCronRows(db, storeKey)) {
+        if (
+          findActiveCronRunReceiptInDatabase({
+            database: db,
+            storePath: state.deps.storePath,
+            jobId: row.job_id,
+          })
+        ) {
+          continue;
+        }
+        const job = loadedCronStoreFromRows([row]).store.jobs[0];
+        if (
+          !job ||
+          job.state.nextRunAtMs !== undefined ||
+          job.state.queuedAtMs !== undefined ||
+          job.state.runningAtMs !== undefined
+        ) {
+          continue;
+        }
+        if (
+          recomputeSingleJobNextRunAtMs({
+            state,
+            job,
+            nowMs,
+            deferredNotifications: notifications,
+          })
+        ) {
+          upsertCronJobRow(db, storeKey, job, row.sort_order);
+          changed = true;
+        }
+      }
+      return { changed, notifications };
+    },
+    {},
+    { operationLabel: "cron.schedule-unowned" },
+  );
+  if (result.changed) {
+    noteCronJobsStoreCommit(storeKey);
   }
   return result;
 }

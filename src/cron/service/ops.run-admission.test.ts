@@ -14,8 +14,10 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { stop } from "./ops-lifecycle.js";
@@ -165,7 +167,6 @@ describe("cron service run admission", () => {
       jobs: [completingJob, failingJob, queuedJob],
     });
 
-    let now = dueAt;
     const completingStarted = createDeferred();
     const releaseCompleting = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
@@ -178,29 +179,21 @@ describe("cron service run admission", () => {
       storePath: store.storePath,
       testAdmissionLimit: 2,
       log: noopLogger,
-      nowMs: () => now,
+      nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
-    const realSave = cronStoreModule.saveCronJobsStore;
-    let reservationsPersisted = false;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (storePath, nextStore, opts) => {
-        const nextFailingJob = nextStore.jobs.find((job) => job.id === failingJob.id);
-        if (reservationsPersisted && nextFailingJob?.state.runningAtMs === dueAt + 1) {
-          throw new Error("scheduled sibling activation failed");
-        }
-        await realSave(storePath, nextStore, opts);
-        if (
-          !reservationsPersisted &&
-          nextStore.jobs.every((job) => job.state.queuedAtMs === dueAt)
-        ) {
-          reservationsPersisted = true;
-          now = dueAt + 1;
-        }
-      });
+    inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: failingJob.id });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TRIGGER reject_scheduled_sibling_activation
+      BEFORE INSERT ON cron_run_receipts
+      WHEN NEW.job_id = '${failingJob.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'scheduled sibling activation failed');
+      END;
+    `);
 
     try {
       const timerRun = onTimer(state);
@@ -208,7 +201,7 @@ describe("cron service run admission", () => {
       releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
       await expect(timerRun).rejects.toThrow();
     } finally {
-      saveSpy.mockRestore();
+      database.exec("DROP TRIGGER IF EXISTS reject_scheduled_sibling_activation");
     }
 
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
@@ -861,15 +854,20 @@ describe("cron service run admission", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    const realSave = cronStoreModule.saveCronJobsStore;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (storePath, nextStore, opts) => {
-        await realSave(storePath, nextStore, opts);
-        if (nextStore.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs === dueAt) {
-          stop(state);
-        }
-      });
+    const database = openOpenClawStateDatabase().db;
+    database.function("stop_after_reservation", () => {
+      stop(state);
+      return 0;
+    });
+    database.exec(`
+      CREATE TEMP TRIGGER stop_after_manual_reservation
+      BEFORE INSERT ON cron_jobs
+      WHEN NEW.job_id = '${job.id}'
+        AND json_extract(NEW.state_json, '$.queuedAtMs') = ${dueAt}
+      BEGIN
+        SELECT stop_after_reservation();
+      END;
+    `);
     const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
     let cleanupReloadFailed = false;
     const loadSpy = vi
@@ -890,7 +888,7 @@ describe("cron service run admission", () => {
       });
     } finally {
       loadSpy.mockRestore();
-      saveSpy.mockRestore();
+      database.exec("DROP TRIGGER IF EXISTS stop_after_manual_reservation");
     }
 
     expect(cleanupReloadFailed).toBe(true);
@@ -921,12 +919,11 @@ describe("cron service run admission", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const realSave = cronStoreModule.saveCronJobsStore;
-    let saveCount = 0;
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (storePath, nextStore, opts) => {
-        saveCount += 1;
-        if (saveCount === 3) {
+        const nextJob = nextStore.jobs.find((entry) => entry.id === job.id);
+        if (nextJob?.state.lastRunStatus === "ok" && nextJob.state.runningAtMs === undefined) {
           throw new Error("finalization persist failed");
         }
         await realSave(storePath, nextStore, opts);

@@ -1,6 +1,10 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { noteCronJobsStoreCommit } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
+import { loadedCronStoreFromRows, loadCronRows, upsertCronJobRow } from "../store/row-codec.js";
 import {
   assertNoActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
@@ -282,8 +286,8 @@ export function isQueuedCronRunReservationMarkerCurrent(
 }
 
 /** Persists queued markers only while no gateway owns an active run receipt.
- * Conflicting jobs are enrolled for lifecycle recovery; unrelated jobs retry
- * from the transaction rollback snapshot and reserve independently.
+ * Each retry re-reads and updates only pending rows, so excluded foreign jobs
+ * can advance without a stale full-store snapshot overwriting their state.
  */
 export async function persistQueuedCronRunReservations(params: {
   state: CronServiceState;
@@ -291,30 +295,53 @@ export async function persistQueuedCronRunReservations(params: {
   reservedAtMs: number;
 }): Promise<CronJob[]> {
   const pendingJobIds = new Set(params.jobIds);
+  const storeKey = cronStoreKey(params.state.deps.storePath);
   while (pendingJobIds.size > 0) {
-    const jobs = (params.state.store?.jobs ?? []).filter((job) => pendingJobIds.has(job.id));
-    if (jobs.length === 0) {
-      return [];
-    }
-    const rollbackSnapshot = snapshotStoreForRollback(params.state);
-    for (const job of jobs) {
-      job.state.queuedAtMs = params.reservedAtMs;
-    }
     try {
-      await persistOrRestore(params.state, rollbackSnapshot, {
-        transactionHooks: {
-          beforeWrite: (database) => {
-            for (const jobId of [...pendingJobIds].toSorted()) {
-              assertNoActiveCronRunReceiptInDatabase({
-                database,
-                storePath: params.state.deps.storePath,
-                jobId,
-              });
+      const committedJobs = runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const rows = loadCronRows(db, storeKey);
+          const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
+          const jobIds = [...pendingJobIds].toSorted();
+          for (const jobId of jobIds) {
+            assertNoActiveCronRunReceiptInDatabase({
+              database: db,
+              storePath: params.state.deps.storePath,
+              jobId,
+            });
+          }
+          const committed: CronJob[] = [];
+          for (const jobId of jobIds) {
+            const row = rowsByJobId.get(jobId);
+            const job = row
+              ? loadedCronStoreFromRows([row]).store.jobs.find((entry) => entry.id === jobId)
+              : undefined;
+            if (!row || !job) {
+              continue;
             }
-          },
+            job.state.queuedAtMs = params.reservedAtMs;
+            committed.push(upsertCronJobRow(db, storeKey, job, row.sort_order));
+          }
+          return committed;
         },
-      });
-      return jobs;
+        {},
+        { operationLabel: "cron.run-reservation" },
+      );
+      if (committedJobs.length > 0) {
+        noteCronJobsStoreCommit(storeKey);
+      }
+      if (params.state.stopped) {
+        const committedById = new Map(committedJobs.map((job) => [job.id, job] as const));
+        if (params.state.store) {
+          params.state.store.jobs = params.state.store.jobs.map(
+            (job) => committedById.get(job.id) ?? job,
+          );
+        }
+        return committedJobs;
+      }
+      await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
+      const committed = new Set(committedJobs.map((job) => job.id));
+      return (params.state.store?.jobs ?? []).filter((job) => committed.has(job.id));
     } catch (error) {
       if (!(error instanceof CronRunReceiptConflictError)) {
         throw error;
@@ -323,6 +350,7 @@ export async function persistQueuedCronRunReservations(params: {
       pendingJobIds.delete(error.candidate.jobId);
     }
   }
+  await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
   return [];
 }
 
