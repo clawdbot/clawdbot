@@ -245,6 +245,41 @@ describe("skill collection review", () => {
     ]);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not dispatch a review for read-only trusted symlink targets",
+    async () => {
+      const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-readonly-");
+      const targetSkillsDir = await makeWorkspaceDir("openclaw-collection-review-target-");
+      const targetSkillDir = path.join(targetSkillsDir, "skills", "shared-skill");
+      await writeWorkspaceSkills(targetSkillsDir, [
+        { name: "shared-skill", description: "Shared read-only procedure" },
+      ]);
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.symlink(
+        path.join(targetSkillsDir, "skills", "shared-skill"),
+        path.join(workspaceDir, "skills", "shared-skill"),
+        "dir",
+      );
+      const onError = vi.fn();
+
+      await runScheduledSkillCollectionReviews({
+        config: {
+          agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+          skills: {
+            load: { allowSymlinkTargets: [path.join(targetSkillsDir, "skills")] },
+            workshop: { autonomous: { mode: "auto" } },
+          },
+        },
+        env: testState.env,
+        onError,
+      });
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      await expect(fs.access(path.join(targetSkillDir, "SKILL.md"))).resolves.toBeUndefined();
+    },
+  );
+
   it("does not dispatch a second review when the runner fails after reconciliation", async () => {
     const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-restart-");
     await writeWorkspaceSkills(workspaceDir, [
