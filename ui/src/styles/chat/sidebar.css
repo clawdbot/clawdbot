@@ -465,6 +465,10 @@ openclaw-chat-sidebar-region,
   display: flex;
 }
 
+.sidebar-column__single-panel {
+  cursor: grab;
+}
+
 .sidebar-column__body,
 .sidebar-column__panel,
 .sidebar-column__panel > :is(.chat, openclaw-chat-detail-panel, openclaw-session-discussion) {
