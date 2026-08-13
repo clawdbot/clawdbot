@@ -209,6 +209,42 @@ describe("codex doctor contract", () => {
     expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
   });
 
+  it("uses the persisted system owner for legacy bindings in a multi-agent config", async () => {
+    const fixture = await createBindingMigrationFixture({
+      name: "session-current",
+      sessionIndex: {
+        "agent:main:session-1": {
+          sessionId: "session-current",
+          sessionFile: "session-current.jsonl",
+          updatedAt: 1,
+        },
+      },
+      threadId: "thread-1",
+    });
+    const params = {
+      ...fixture.params,
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      },
+    };
+
+    try {
+      await expect(fixture.migration.detectLegacyState(params)).resolves.toMatchObject({
+        preview: [expect.stringContaining("legacy sidecar")],
+      });
+      await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
+        changes: [expect.stringContaining("Migrated 1")],
+        warnings: [],
+      });
+    } finally {
+      await fs.rm(fixture.stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("imports and archives shipped binding sidecars", async () => {
     const fixture = await createBindingMigrationFixture({
       name: "session-current",

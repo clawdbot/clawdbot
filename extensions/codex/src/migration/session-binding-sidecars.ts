@@ -42,6 +42,12 @@ type SessionSurface = {
   agentIds: Set<string>;
 };
 
+function resolveLegacyMigrationFallbackAgentId(
+  config: MigrationEnvironment["config"],
+): string | undefined {
+  return config.agents?.defaults?.systemAgent?.agentId?.trim() || undefined;
+}
+
 type LegacyBindingSource = {
   sidecarPath: string;
   transcriptPath: string;
@@ -147,7 +153,10 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
-  const defaultAgentId = resolveSessionAgentIds({ config: params.config }).defaultAgentId;
+  const defaultAgentId = resolveSessionAgentIds({
+    config: params.config,
+    fallbackAgentId: resolveLegacyMigrationFallbackAgentId(params.config),
+  }).defaultAgentId;
   await add(legacyRoot, path.join(legacyRoot, "sessions.json"), defaultAgentId, true);
   return [...surfaces.values()].toSorted((a, b) => a.root.localeCompare(b.root));
 }
@@ -424,7 +433,9 @@ function resolveLegacyBindingOwnerAgentId(params: {
   return resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+    ...(storeAgentId
+      ? { agentId: storeAgentId }
+      : { fallbackAgentId: resolveLegacyMigrationFallbackAgentId(params.config) }),
   }).sessionAgentId;
 }
 
