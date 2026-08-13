@@ -331,6 +331,9 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("kills controlled subagents after the parent run has already ended", async () => {
+    const actualChatAbort =
+      await vi.importActual<typeof import("./chat-abort-handler.js")>("./chat-abort-handler.js");
+    chatAbortMock.mockImplementationOnce(actualChatAbort.handleChatAbortRequestWithLifecycle);
     const childSessionKey = "agent:main:subagent:orphaned-after-parent-stop";
     addSubagentRunForTests({
       runId: "run-orphaned-child",
@@ -345,9 +348,18 @@ describe("sessions.abort agent scope", () => {
       createdAt: Date.now() - 2_000,
       startedAt: Date.now() - 1_000,
     });
-    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
     const context = createContext({
-      extra: { getSessionEventSubscriberConnIds: () => new Set() },
+      extra: {
+        agentRunSeq: new Map(),
+        broadcast: vi.fn(),
+        cancelRunBoundApprovals: vi.fn(),
+        chatQueuedTurns: new Map(),
+        chatRunState: { resolveBuffer: () => ({ text: "" }) } as never,
+        dedupe: new Map(),
+        getSessionEventSubscriberConnIds: () => new Set(),
+        nodeSendToSession: vi.fn(),
+        removeChatRun: vi.fn(),
+      },
     });
 
     const respond = await callSessions(

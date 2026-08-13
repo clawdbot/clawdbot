@@ -173,10 +173,9 @@ export function buildGatewaySessionRow(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun);
-  const activeDescendantCount = rowContext
-    ? rowContext.subagentRuns.countActiveDescendantRuns(key)
-    : countActiveDescendantRuns(key);
-  const hasActiveSubagentRun = liveSubagentRunActive || activeDescendantCount > 0;
+  const hasActiveSubagentRun =
+    liveSubagentRunActive ||
+    (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
   const persistedSessionStatus = entry?.status;
   const persistedSessionEndedAt = entry?.endedAt;
   const persistedSessionStartedAt = entry?.startedAt;
