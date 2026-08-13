@@ -1,4 +1,3 @@
-// Plugin install persistence tests cover saving installed plugin records after install.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +15,7 @@ import {
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
+  setRecoveredPluginInstallRecords,
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
   applyPluginUninstallDirectoryRemovalMock,
@@ -105,12 +105,18 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
+    const install = {
+      source: "npm" as const,
+      spec: "alpha@1.0.0",
+      installPath: "/tmp/alpha",
+    };
     enablePluginInConfigMock.mockImplementation((...args: unknown[]) => {
       const [cfg, pluginId] = args as [OpenClawConfig, string];
       expect(pluginId).toBe("alpha");
       expect(cfg.plugins?.allow).toEqual(["memory-core", "alpha"]);
       return { config: enabledConfig, enabled: true };
     });
+    setRecoveredPluginInstallRecords({ alpha: install });
 
     const next = await persistPluginInstall({
       snapshot: {
@@ -125,11 +131,7 @@ describe("persistPluginInstall", () => {
         },
       },
       pluginId: "alpha",
-      install: {
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath: "/tmp/alpha",
-      },
+      install,
     });
 
     expect(next).toEqual(enabledConfig);
