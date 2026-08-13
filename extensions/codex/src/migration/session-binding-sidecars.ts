@@ -351,8 +351,19 @@ async function collectBindingOwners(
           config: params.config,
           storeAgentIds: storeAgentIds.get(storePath),
         });
-      } catch {
-        failures.push(`session index ${storePath} has no agent owner for ${sessionKey}`);
+      } catch (error) {
+        // Ambiguous legacy ownership is operator-repairable; unexpected resolver
+        // failures must still abort Doctor instead of being mislabeled.
+        if (
+          !(error instanceof Error) ||
+          !("code" in error) ||
+          error.code !== "AGENT_SELECTION_REQUIRED"
+        ) {
+          throw error;
+        }
+        failures.push(
+          `session index ${storePath} has no agent owner for ${sessionKey}: ${error.message}`,
+        );
         continue;
       }
       let legacyTranscriptPath: string;

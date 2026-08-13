@@ -188,7 +188,11 @@ describe("codex doctor contract", () => {
 
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [],
-      warnings: [expect.stringContaining("has no agent owner for legacy")],
+      warnings: [
+        expect.stringContaining(
+          "Multiple agents are configured, but session agent resolution has no explicit owner. Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
+        ),
+      ],
     });
     await expect(fs.access(sidecarPath)).resolves.toBeUndefined();
 
