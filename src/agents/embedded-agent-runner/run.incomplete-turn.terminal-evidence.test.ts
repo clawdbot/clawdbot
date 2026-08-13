@@ -128,6 +128,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     {
+      label: "provider failure with finalization context",
+      hasContext: true,
+      expectedContinuation: true,
+    },
+    {
+      label: "provider failure without finalization context",
+      hasContext: false,
+      expectedContinuation: false,
+    },
+  ])(
+    "$label after settled tools returns continuation=$expectedContinuation",
+    ({ hasContext, expectedContinuation }) => {
+      const attempt = makeSettledIdleWriteAttempt({
+        terminal: { kind: "failed", source: "prompt", error: new Error("provider failure") },
+      });
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(
+          hasContext
+            ? {
+                ...attempt,
+                settledTurnFinalizationContext: {
+                  source: "openclaw-transcript",
+                  messages: attempt.messagesSnapshot,
+                },
+              }
+            : attempt,
+        ),
+      );
+
+      expect(instruction === SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION).toBe(
+        expectedContinuation,
+      );
+    },
+  );
+
+  it.each([
+    {
       label: "external abort",
       terminal: { kind: "timeout", phase: "prompt", source: "external" } as const,
       aborted: true,

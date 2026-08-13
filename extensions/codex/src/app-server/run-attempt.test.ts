@@ -3912,17 +3912,34 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it.each([
-    { label: "completed turn", failure: undefined },
+    { label: "completed turn", failure: undefined, expectedContext: true },
     {
-      label: "provider error after the tool result",
+      label: "provider overload after the tool result",
       failure: {
         message: "Selected model is at capacity. Please try a different model.",
         codexErrorInfo: "serverOverloaded",
       },
+      expectedContext: true,
+    },
+    {
+      label: "usage limit after the tool result",
+      failure: {
+        message: "Usage limit exceeded.",
+        codexErrorInfo: "usageLimitExceeded",
+      },
+      expectedContext: false,
+    },
+    {
+      label: "unauthorized response after the tool result",
+      failure: {
+        message: "Unauthorized.",
+        codexErrorInfo: "unauthorized",
+      },
+      expectedContext: false,
     },
   ])(
     "captures the complete mirrored branch through a settled tool-result boundary for a $label",
-    async ({ failure }) => {
+    async ({ failure, expectedContext }) => {
       const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
       const sessionId = "session-settled-finalization-context";
       const sessionFile = `agent:main:${sessionId}`;
@@ -3969,16 +3986,19 @@ describe("runCodexAppServerAttempt", () => {
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       }
       const result = await run;
-      expect(readAttemptTerminal(result).promptError).toBe(failure?.message ?? null);
-      expect(result.settledTurnFinalizationContext).toMatchObject({
-        source: "openclaw-transcript",
-        messages: [
-          expect.objectContaining({ role: "user" }),
-          expect.objectContaining({ role: "assistant" }),
-          expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
-        ],
-      });
-      expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
+      expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
+      if (result.settledTurnFinalizationContext) {
+        expect(result.settledTurnFinalizationContext).toMatchObject({
+          source: "openclaw-transcript",
+          messages: [
+            expect.objectContaining({ role: "user" }),
+            expect.objectContaining({ role: "assistant" }),
+            expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+          ],
+        });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext.messages)).toBe(true);
+      }
     },
   );
   it("preserves every command failure from official app-server events", async () => {

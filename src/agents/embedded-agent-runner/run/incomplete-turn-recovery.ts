@@ -314,6 +314,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || params.attempt.terminal.kind === "timeout") && !idlePromptTimeout) ||
+    (terminal.kind === "failed" && !params.attempt.settledTurnFinalizationContext) ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
     hasUnsettledToolError ||
     hasAsyncActivity(params.attempt.toolMetas) ||
