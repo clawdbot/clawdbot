@@ -94,9 +94,14 @@ suite.define(() => {
       ]);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       expect(capped.overflowY).toBe("auto");
-      expect(expandedIdentityBox?.y).toBeCloseTo(identityBox?.y ?? 0, 0);
-      expect(expandedTriggersBox?.y).toBeCloseTo(triggersBox?.y ?? 0, 0);
-      expect(expandedComposerBox?.y).toBeCloseTo(composerBox?.y ?? 0, 0);
+      // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
+      for (const [before, after] of [
+        [identityBox, expandedIdentityBox],
+        [triggersBox, expandedTriggersBox],
+        [composerBox, expandedComposerBox],
+      ]) {
+        expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(2);
+      }
       await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
       const start = page.getByRole("button", { name: "Start session" });
       await expect(start.isVisible()).resolves.toBe(true);

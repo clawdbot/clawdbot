@@ -21,6 +21,7 @@ type SessionMenuItemOptions = {
   label: string;
   icon?: unknown;
   sub?: string;
+  facts?: readonly string[];
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -45,6 +46,13 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         : nothing}
       <span class="session-menu__text">${params.label}</span>
       ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
+      ${params.facts?.length
+        ? html`<span class="new-session-page__menu-facts">
+            ${params.facts.map(
+              (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+            )}
+          </span>`
+        : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
@@ -67,6 +75,12 @@ export function renderCloudProfileMenuItems(params: {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
+        facts:
+          profile.trust === "disposable"
+            ? [t("newSession.environmentDisposable")]
+            : profile.trust === "persistent"
+              ? [t("newSession.environmentPersistent")]
+              : undefined,
         checked: params.selectedId === profile.id,
         disabled: params.disabled,
         title:

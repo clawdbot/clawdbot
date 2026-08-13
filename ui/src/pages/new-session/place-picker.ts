@@ -16,6 +16,7 @@ import type {
   DraftNode,
 } from "./discovery.ts";
 import { folderDisplayName } from "./path.ts";
+import { environmentMenuFacts } from "./place-facts.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
@@ -258,6 +259,9 @@ export function renderPlaceSelect(params: {
     (profile) => profile.id === params.cloudProfileId,
   );
   const { deviceNodes, cloudProfiles } = resolvePlacePickerSections(params);
+  const environmentById = new Map(
+    (params.environments ?? []).map((environment) => [environment.id, environment]),
+  );
   const gatewayLabel = params.gatewayName
     ? t("newSession.gatewayNamed", { name: params.gatewayName })
     : t("newSession.gateway");
@@ -569,6 +573,9 @@ export function renderPlaceSelect(params: {
                                   ? icons.monitorSmartphone
                                   : icons.monitor,
                                 sub: nodeSuffixes[index],
+                                facts: environmentMenuFacts(
+                                  environmentById.get(`node:${node.nodeId}`),
+                                ),
                                 checked: params.execNode === node.nodeId,
                                 title: nodeTooltip(node),
                                 onSelect: () => params.onSelectExecNode(node.nodeId),

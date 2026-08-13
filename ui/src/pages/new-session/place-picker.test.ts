@@ -89,7 +89,7 @@ describe("project picker", () => {
     expect(projectCloneInput(value) !== null).toBe(expected);
   });
 
-  it("groups gateway, device, and cloud destinations without status copy", () => {
+  it("shows bounded environment facts without default-state or infrastructure clutter", () => {
     const container = document.createElement("div");
     render(
       renderPlaceSelect(
@@ -104,8 +104,53 @@ describe("project picker", () => {
               canExec: true,
               canBrowse: true,
             },
+            {
+              nodeId: "iphone",
+              displayName: "iPhone",
+              connected: true,
+              canExec: true,
+              canBrowse: false,
+            },
           ],
-          cloudProfiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+          environments: readDraftEnvironments([
+            {
+              id: "gateway",
+              type: "local",
+              status: "available",
+              platform: "linux",
+              sessionHost: true,
+              trust: "persistent",
+              capabilities: ["sessions", "tools", "workspace"],
+            },
+            {
+              id: "node:macbook",
+              type: "node",
+              status: "unavailable",
+              platform: "darwin",
+              sessionHost: false,
+              trust: "persistent",
+              capabilities: [
+                "camera.snap",
+                "screen.record",
+                "voice",
+                "microphone.capture",
+                "system.run",
+                "fs.listDir",
+                "custom.unknown",
+              ],
+            },
+            {
+              id: "node:iphone",
+              type: "node",
+              platform: "iOS 26.4",
+              capabilities: ["location.get", "talk.ptt.start", "canvas.navigate"],
+            },
+          ]),
+          cloudProfiles: [
+            { id: "aws", providerId: "crabbox", trust: "disposable" },
+            { id: "shared", providerId: "static-ssh", trust: "persistent" },
+            { id: "plain", providerId: "opaque-provider" },
+          ],
         }),
       ),
       container,
@@ -120,8 +165,47 @@ describe("project picker", () => {
     expect(container.querySelector('[data-value="gateway"]')).not.toBeNull();
     expect(container.querySelector('[data-value="node:macbook"]')).not.toBeNull();
     expect(container.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("persistent");
-    expect(container.textContent).not.toContain("disposable");
+    expect(
+      [
+        ...container.querySelectorAll('[data-value="node:macbook"] .new-session-page__menu-fact'),
+      ].map((element) => element.textContent?.trim()),
+    ).toEqual(["macOS", "Camera", "Screen capture", "Voice"]);
+    expect(
+      [
+        ...container.querySelectorAll('[data-value="node:iphone"] .new-session-page__menu-fact'),
+      ].map((element) => element.textContent?.trim()),
+    ).toEqual(["iOS 26.4", "Location", "Talk", "Canvas"]);
+    expect(
+      [...container.querySelectorAll('[data-value="cloud:aws"] .new-session-page__menu-fact')].map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual(["Disposable"]);
+    expect(
+      [
+        ...container.querySelectorAll('[data-value="cloud:shared"] .new-session-page__menu-fact'),
+      ].map((element) => element.textContent?.trim()),
+    ).toEqual(["Persistent"]);
+    expect(
+      container.querySelector('[data-value="cloud:plain"] .new-session-page__menu-fact'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-value="gateway"] .new-session-page__menu-fact'),
+    ).toBeNull();
+
+    const visibleCopy = container.textContent?.toLowerCase() ?? "";
+    for (const clutter of [
+      "available",
+      "online",
+      "session host",
+      "crabbox",
+      "static-ssh",
+      "opaque-provider",
+      "system.run",
+      "fs.listdir",
+      "custom.unknown",
+    ]) {
+      expect(visibleCopy).not.toContain(clutter);
+    }
   });
 
   it("renders local matches before remote clone results and explains missing credentials", () => {
