@@ -2,13 +2,14 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import {
-  formatRawProviderLabel,
-  providerDisplayLabel,
-  renderProviderBrandIcon,
-} from "../../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
+import {
+  renderChatModelPickerOption,
+  renderChatModelPickerTargetOption,
+  renderChatModelProviderIcon,
+} from "./chat-model-picker-options.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
@@ -34,24 +35,6 @@ export type ChatModelPickerTargetGroup = {
   options: readonly { label: string; value: string }[];
 };
 
-// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
-// which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
-
-function formatAgentRuntimeLabel(id: string): string {
-  const normalized = id.trim().toLowerCase();
-  return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
-  );
-}
-
 type ChatModelPickerParams = {
   defaultModelLabel: string;
   disabled: boolean;
@@ -69,23 +52,6 @@ type ChatModelPickerParams = {
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
-
-function renderProviderIcon(provider: string) {
-  return renderProviderBrandIcon(provider, { className: "chat-controls__provider-icon" });
-}
-
-function formatModelLabel(option: ChatModelPickerOption): string {
-  const prefixes = [
-    formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
-  ].toSorted((left, right) => right.length - left.length);
-  for (const prefix of prefixes) {
-    if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
-      return option.label.slice(prefix.length + 1);
-    }
-  }
-  return option.label;
-}
 
 function pickerMenu(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element
@@ -412,6 +378,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       details.querySelector<HTMLElement>("summary")?.focus();
     }
   };
+  const highlightOption = (row: HTMLButtonElement) => {
+    const menu = pickerMenu(row);
+    if (menu) {
+      highlightModelRow(menu, row);
+    }
+  };
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
@@ -533,96 +505,21 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                               class="chat-controls__provider-heading"
                               data-chat-model-provider=${provider}
                             >
-                              ${renderProviderIcon(provider)}
+                              ${renderChatModelProviderIcon(provider)}
                               <span>${providerDisplayLabel(provider)}</span>
                             </div>
                             ${repeat(
                               options,
                               (entry) => entry.value,
-                              (entry) => {
-                                const selected =
-                                  entry.value === params.selectedModelValue ||
-                                  (entry.isDefault && params.selectedModelValue === "");
-                                const modelLabel = formatModelLabel(entry);
-                                const modelMeta = [
-                                  entry.contextWindow
-                                    ? formatContextTokenCapacity(entry.contextWindow)
-                                    : "",
-                                  entry.supportsTools === false
-                                    ? t("chat.modelControls.chatOnly")
-                                    : "",
-                                  entry.agentRuntimeId
-                                    ? formatAgentRuntimeLabel(entry.agentRuntimeId)
-                                    : "",
-                                  entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ");
-                                const index = optionIndex.get(entry.value) ?? 0;
-                                return html`
-                                  <button
-                                    class="chat-controls__inline-select-option chat-controls__model-option ${selected
-                                      ? "chat-controls__inline-select-option--selected"
-                                      : ""}"
-                                    data-chat-model-option=${entry.value}
-                                    data-chat-model-default=${entry.isDefault ? "true" : nothing}
-                                    data-chat-model-index=${index}
-                                    data-chat-model-name=${modelLabel.toLocaleLowerCase()}
-                                    data-chat-model-provider-label=${providerDisplayLabel(
-                                      entry.provider,
-                                    ).toLocaleLowerCase()}
-                                    role="option"
-                                    aria-selected=${selected ? "true" : "false"}
-                                    type="button"
-                                    ?disabled=${params.disabled || entry.disabled}
-                                    @mouseenter=${(event: MouseEvent) => {
-                                      const menu = pickerMenu(event.currentTarget);
-                                      if (menu) {
-                                        highlightModelRow(
-                                          menu,
-                                          event.currentTarget as HTMLButtonElement,
-                                        );
-                                      }
-                                    }}
-                                    @click=${(event: MouseEvent) => selectModel(entry, event)}
-                                  >
-                                    <span class="chat-controls__model-option-provider">
-                                      ${renderProviderIcon(entry.provider)}
-                                    </span>
-                                    <span class="chat-controls__model-option-copy">
-                                      <span class="chat-controls__model-option-title">
-                                        <span class="chat-controls__model-option-name"
-                                          >${modelLabel}</span
-                                        >
-                                        ${entry.isDefault
-                                          ? html`<span
-                                              class="chat-controls__model-state-label chat-controls__model-state-label--default"
-                                              >${t("chat.modelControls.default")}</span
-                                            >`
-                                          : nothing}
-                                      </span>
-                                      ${modelMeta
-                                        ? html`<span class="chat-controls__model-option-meta"
-                                            >${modelMeta}</span
-                                          >`
-                                        : nothing}
-                                    </span>
-                                    <span class="chat-controls__model-option-action">
-                                      ${selected
-                                        ? html`<span
-                                            class="chat-controls__inline-select-check"
-                                            aria-hidden="true"
-                                            >${icons.check}</span
-                                          >`
-                                        : html`<kbd
-                                            data-chat-model-shortcut="true"
-                                            aria-hidden="true"
-                                            hidden
-                                          ></kbd>`}
-                                    </span>
-                                  </button>
-                                `;
-                              },
+                              (entry) =>
+                                renderChatModelPickerOption({
+                                  disabled: params.disabled,
+                                  entry,
+                                  index: optionIndex.get(entry.value) ?? 0,
+                                  selectedModelValue: params.selectedModelValue,
+                                  onHighlight: highlightOption,
+                                  onSelect: selectModel,
+                                }),
                             )}
                           </section>
                         `,
@@ -647,51 +544,16 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                             ${repeat(
                               group.options,
                               (entry) => entry.value,
-                              (entry, targetIndex) => html`
-                                <button
-                                  class="chat-controls__inline-select-option chat-controls__model-option"
-                                  data-chat-model-option=${`target:${group.id}:${entry.value}`}
-                                  data-chat-model-target=${entry.value}
-                                  data-chat-model-index=${orderedOptions.length + targetIndex}
-                                  data-chat-model-name=${entry.label.toLocaleLowerCase()}
-                                  data-chat-model-provider-label=${group.label.toLocaleLowerCase()}
-                                  role="option"
-                                  aria-selected="false"
-                                  type="button"
-                                  ?disabled=${params.disabled}
-                                  @mouseenter=${(event: MouseEvent) => {
-                                    const menu = pickerMenu(event.currentTarget);
-                                    if (menu) {
-                                      highlightModelRow(
-                                        menu,
-                                        event.currentTarget as HTMLButtonElement,
-                                      );
-                                    }
-                                  }}
-                                  @click=${(event: MouseEvent) =>
-                                    selectTarget(group.id, entry.value, event)}
-                                >
-                                  <span
-                                    class="chat-controls__model-option-provider chat-controls__target-icon"
-                                    aria-hidden="true"
-                                    >${icons.terminal}</span
-                                  >
-                                  <span class="chat-controls__model-option-copy">
-                                    <span class="chat-controls__model-option-title">
-                                      <span class="chat-controls__model-option-name"
-                                        >${entry.label}</span
-                                      >
-                                    </span>
-                                  </span>
-                                  <span class="chat-controls__model-option-action">
-                                    <kbd
-                                      data-chat-model-shortcut="true"
-                                      aria-hidden="true"
-                                      hidden
-                                    ></kbd>
-                                  </span>
-                                </button>
-                              `,
+                              (entry, targetIndex) =>
+                                renderChatModelPickerTargetOption({
+                                  disabled: params.disabled,
+                                  entry,
+                                  groupId: group.id,
+                                  groupLabel: group.label,
+                                  index: orderedOptions.length + targetIndex,
+                                  onHighlight: highlightOption,
+                                  onSelect: selectTarget,
+                                }),
                             )}
                           </section>
                         `,
