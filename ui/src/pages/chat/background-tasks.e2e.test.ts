@@ -94,10 +94,12 @@ const runningExec = {
 suite.define(() => {
   it("opens the rail, applies pushed completion, and sends cancel", async () => {
     await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const railFlowDir = path.join(artifactDir, "rail-flow");
+    await mkdir(railFlowDir, { recursive: true });
     await suite.withPage(
       {
         locale: "en-US",
+        recordVideo: { dir: railFlowDir, size: { width: 1440, height: 900 } },
         serviceWorkers: "block",
         viewport: { width: 1440, height: 900 },
       },
@@ -127,47 +129,9 @@ suite.define(() => {
                     thinkingLevel: null,
                   },
                 },
-                {
-                  match: { sessionKey: finishedCli.sessionKey },
-                  response: {
-                    messages: [
-                      {
-                        content: [
-                          { type: "text", text: "CLI transcript stayed in the task rail." },
-                        ],
-                        role: "assistant",
-                        timestamp: Date.now(),
-                      },
-                    ],
-                    sessionId: "cli-task-transcript",
-                    thinkingLevel: null,
-                  },
-                },
               ],
             },
             "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
-            "tasks.get": {
-              cases: [
-                {
-                  match: { taskId: runningSubagent.id },
-                  response: {
-                    task: {
-                      ...runningSubagent,
-                      prompt: "Trace model routing across provider and session boundaries.",
-                    },
-                  },
-                },
-                {
-                  match: { taskId: finishedCli.id },
-                  response: {
-                    task: {
-                      ...finishedCli,
-                      prompt: "Generate a searchable media index.",
-                    },
-                  },
-                },
-              ],
-            },
             "tasks.cancel": {
               found: true,
               cancelled: true,
@@ -208,27 +172,42 @@ suite.define(() => {
           expect(request.params).toMatchObject({ sessionKey: "main" });
           expect(request.params).not.toHaveProperty("agentId");
         }
-        await page.screenshot({ path: path.join(artifactDir, "01-rail-open.png"), fullPage: true });
+        await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
 
         const chatUrl = page.url();
-        await rail
-          .locator('[data-task-id="task-subagent"]')
-          .getByRole("button", { name: "Show details for Map model routing code" })
-          .click();
-        await rail
-          .getByText("Trace model routing across provider and session boundaries.")
-          .waitFor();
-        expect(await rail.textContent()).toContain("Reading provider catalogs");
-        expect(await rail.getByRole("button", { name: "Back to background tasks" }).count()).toBe(
-          1,
+        const mainTranscript = page.locator(".chat-main .chat-thread");
+        const mainTranscriptBefore = await mainTranscript.textContent();
+        const openRow = rail.locator('[data-task-id="task-subagent"]');
+        await openRow.click();
+        const detailPanel = page.locator("[data-task-detail-panel]");
+        await detailPanel.waitFor({ state: "visible" });
+        await detailPanel.getByText("Subagent transcript proof.").waitFor();
+        expect(await detailPanel.textContent()).toContain("Map model routing code");
+        expect(await detailPanel.textContent()).toContain("Subagent");
+        expect(await openRow.getAttribute("aria-current")).toBe("true");
+        expect(
+          await openRow.evaluate((element) =>
+            element.classList.contains("chat-tasks-rail__task--open"),
+          ),
+        ).toBe(true);
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("chat.history")).some(
+              (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
+            ),
+          )
+          .toBe(true);
+        const transcriptRequest = (await gateway.getRequests("chat.history")).find(
+          (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
         );
-        expect(await rail.getByRole("button", { name: "View transcript" }).count()).toBe(0);
+        expect(transcriptRequest?.params).toEqual({
+          sessionKey: runningSubagent.childSessionKey,
+          limit: 100,
+        });
         expect(page.url()).toBe(chatUrl);
-        await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
-        const detailRequest = await gateway.waitForRequest("tasks.get");
-        expect(detailRequest.params).toEqual({ taskId: "task-subagent" });
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
         await page.screenshot({
-          path: path.join(artifactDir, "02-task-detail.png"),
+          path: path.join(railFlowDir, "02-task-detail-sidebar.png"),
           fullPage: true,
         });
 
@@ -241,19 +220,21 @@ suite.define(() => {
             terminalSummary: "Routing map complete",
           },
         });
-        await rail.getByText("Routing map complete").waitFor({ state: "visible" });
+        await detailPanel.getByText("Completed").waitFor({ state: "visible" });
+        const completedRow = rail.locator(
+          '[data-tasks-section="finished"] [data-task-id="task-subagent"]',
+        );
+        await completedRow.waitFor({ state: "visible" });
+        expect(await completedRow.getAttribute("aria-current")).toBe("true");
+        expect(
+          await rail
+            .locator('[data-tasks-section="running"] [data-task-id="task-subagent"]')
+            .count(),
+        ).toBe(0);
         await page.screenshot({
-          path: path.join(artifactDir, "03-pushed-completion.png"),
+          path: path.join(railFlowDir, "03-pushed-completion.png"),
           fullPage: true,
         });
-
-        await rail.getByRole("button", { name: "Back to background tasks" }).click();
-        await rail
-          .locator('[data-tasks-section="finished"] [data-task-id="task-subagent"]')
-          .waitFor({ state: "visible" });
-        await rail
-          .locator('[data-tasks-section="running"] [data-task-id="task-subagent"]')
-          .waitFor({ state: "detached" });
 
         await rail
           .locator('[data-task-id="task-cron"]')
@@ -262,64 +243,24 @@ suite.define(() => {
         const cancelRequest = await gateway.waitForRequest("tasks.cancel");
         expect(cancelRequest.params).toEqual({ taskId: "task-cron" });
         expect(page.url()).toBe(chatUrl);
+        await detailPanel.waitFor({ state: "visible" });
+        await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
+        expect(await mainTranscript.textContent()).not.toContain("Subagent transcript proof.");
+        await page.screenshot({
+          path: path.join(railFlowDir, "04-list-remains-with-detail-open.png"),
+          fullPage: true,
+        });
+
+        // Region close leaves sidebarContent set; the rail highlight must
+        // follow panel visibility, not retained content.
+        await page.getByRole("button", { name: "Close Details" }).click();
+        await detailPanel.waitFor({ state: "detached" });
+        expect(await completedRow.getAttribute("aria-current")).toBe(null);
         expect(
-          (await gateway.getRequests("chat.history")).some(
-            (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
+          await completedRow.evaluate((element) =>
+            element.classList.contains("chat-tasks-rail__task--open"),
           ),
         ).toBe(false);
-        await page.screenshot({
-          path: path.join(artifactDir, "04-back-to-list.png"),
-          fullPage: true,
-        });
-
-        const mainTranscript = page.locator(".chat-main .chat-thread");
-        const mainTranscriptBefore = await mainTranscript.textContent();
-        await rail
-          .locator('[data-task-id="task-cli"]')
-          .getByRole("button", { name: "Show details for Generate media index" })
-          .click();
-        await rail.getByText("Generate a searchable media index.").waitFor();
-        await page.screenshot({
-          path: path.join(artifactDir, "05-cli-task-detail.png"),
-          fullPage: true,
-        });
-
-        await rail.getByRole("button", { name: "View transcript" }).click();
-        await expect
-          .poll(async () =>
-            (await gateway.getRequests("chat.history")).some(
-              (request) => requestSessionKey(request) === finishedCli.sessionKey,
-            ),
-          )
-          .toBe(true);
-        const transcriptRequest = (await gateway.getRequests("chat.history")).find(
-          (request) => requestSessionKey(request) === finishedCli.sessionKey,
-        );
-        expect(transcriptRequest?.params).toEqual({
-          sessionKey: finishedCli.sessionKey,
-          limit: 100,
-        });
-        await rail.getByText("CLI transcript stayed in the task rail.").waitFor();
-        expect(await rail.locator(".chat-thread").textContent()).toContain(
-          "CLI transcript stayed in the task rail.",
-        );
-        expect(page.url()).toBe(chatUrl);
-        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
-        expect(await rail.getByRole("button", { name: "Back to task details" }).count()).toBe(1);
-        await page.screenshot({
-          path: path.join(artifactDir, "06-cli-task-transcript.png"),
-          fullPage: true,
-        });
-
-        await rail.getByRole("button", { name: "Back to task details" }).click();
-        await rail.locator('[data-task-detail="task-cli"]').waitFor({ state: "visible" });
-        await rail.getByText("Generate a searchable media index.").waitFor();
-        expect(page.url()).toBe(chatUrl);
-        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
-        await page.screenshot({
-          path: path.join(artifactDir, "07-cli-task-detail-restored.png"),
-          fullPage: true,
-        });
       },
     );
   });
@@ -407,7 +348,7 @@ suite.define(() => {
         });
 
         await firstRow.click();
-        const detailPanel = page.locator("[data-subagent-detail-panel]");
+        const detailPanel = page.locator("[data-task-detail-panel]");
         await detailPanel.waitFor({ state: "visible" });
         await detailPanel.getByText("Inspecting session ownership boundaries.").waitFor();
         expect(await detailPanel.textContent()).toContain("Review session ownership");

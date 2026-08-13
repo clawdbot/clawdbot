@@ -113,7 +113,7 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
 
 function renderSubagentActivityRow(
   task: TaskSummary,
-  onOpenSubagentDetail?: (task: TaskSummary) => void,
+  onOpenTaskDetail?: (task: TaskSummary) => void,
 ): TemplateResult {
   const snippet = subagentActivitySnippet(task);
   const label = subagentActivityLabel(task);
@@ -132,7 +132,7 @@ function renderSubagentActivityRow(
       : nothing}
     ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
   `;
-  if (!onOpenSubagentDetail) {
+  if (!onOpenTaskDetail) {
     return html`<div
       class="chat-subagent-activity__row"
       data-subagent-task-id=${task.id}
@@ -149,7 +149,7 @@ function renderSubagentActivityRow(
     aria-label=${t("chat.backgroundTasks.subagentActivity.openDetails", {
       title: taskTitle(task),
     })}
-    @click=${() => onOpenSubagentDetail(task)}
+    @click=${() => onOpenTaskDetail(task)}
   >
     ${content}
   </button>`;
@@ -157,7 +157,7 @@ function renderSubagentActivityRow(
 
 export function renderSubagentActivity(
   presentation: SubagentActivityPresentation,
-  onOpenSubagentDetail?: (task: TaskSummary) => void,
+  onOpenTaskDetail?: (task: TaskSummary) => void,
 ): TemplateResult | typeof nothing {
   if (presentation.rows.length === 0) {
     return nothing;
@@ -170,7 +170,7 @@ export function renderSubagentActivity(
       ${repeat(
         presentation.rows,
         (task) => task.id,
-        (task) => renderSubagentActivityRow(task, onOpenSubagentDetail),
+        (task) => renderSubagentActivityRow(task, onOpenTaskDetail),
       )}
       ${presentation.overflowWorking > 0
         ? html`<div class="chat-subagent-activity__overflow">

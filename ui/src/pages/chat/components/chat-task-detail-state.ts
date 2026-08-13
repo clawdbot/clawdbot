@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
@@ -6,55 +7,56 @@ import {
   visibleChatHistoryMessages,
 } from "../chat-history.ts";
 
-const SUBAGENT_TRANSCRIPT_REFRESH_MS = 2_000;
+const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
 
-type SubagentTranscriptLoad =
+type TaskTranscriptLoad =
   | { status: "loading" }
   | { status: "loaded"; messages: unknown[] }
   | { status: "error" };
 
-type SubagentDetailState = {
+type TaskDetailState = {
   client: GatewayBrowserClient;
   connectionEpoch: number | undefined;
   eventVersion: number;
   inFlight: boolean;
   lastRequestStartedAt: number;
-  load: SubagentTranscriptLoad;
+  load: TaskTranscriptLoad;
   refreshTimer: number | null;
   requestId: number;
   sessionKey: string;
   taskId: string;
 };
 
-export type SubagentDetailHost = {
+export type TaskDetailHost = UiSessionDefaultsHost & {
+  sessionKey: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
   connectionEpoch?: number;
   requestUpdate?: () => void;
-  subagentDetailState?: SubagentDetailState;
+  taskDetailState?: TaskDetailState;
 };
 
-function clearRefreshTimer(state: SubagentDetailState) {
+function clearRefreshTimer(state: TaskDetailState) {
   if (state.refreshTimer !== null) {
     window.clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
   }
 }
 
-export function resetSubagentDetail(host: SubagentDetailHost) {
-  const current = host.subagentDetailState;
+export function resetTaskDetail(host: TaskDetailHost) {
+  const current = host.taskDetailState;
   if (!current) {
     return;
   }
   clearRefreshTimer(current);
-  host.subagentDetailState = undefined;
+  host.taskDetailState = undefined;
 }
 
-function scheduleTranscriptLoad(host: SubagentDetailHost, state: SubagentDetailState) {
-  if (host.subagentDetailState !== state || state.inFlight) {
+function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
+  if (host.taskDetailState !== state || state.inFlight) {
     return;
   }
-  const remaining = SUBAGENT_TRANSCRIPT_REFRESH_MS - (Date.now() - state.lastRequestStartedAt);
+  const remaining = TASK_TRANSCRIPT_REFRESH_MS - (Date.now() - state.lastRequestStartedAt);
   if (remaining > 0) {
     if (state.refreshTimer === null) {
       state.refreshTimer = window.setTimeout(() => {
@@ -85,7 +87,7 @@ function scheduleTranscriptLoad(host: SubagentDetailHost, state: SubagentDetailS
   }
   host.requestUpdate?.();
   void (async () => {
-    let load: SubagentTranscriptLoad;
+    let load: TaskTranscriptLoad;
     try {
       const result = await client.request<ChatHistoryResult>("chat.history", {
         sessionKey: state.sessionKey,
@@ -95,7 +97,7 @@ function scheduleTranscriptLoad(host: SubagentDetailHost, state: SubagentDetailS
     } catch {
       load = { status: "error" };
     }
-    const current = host.subagentDetailState;
+    const current = host.taskDetailState;
     if (
       current !== state ||
       current.requestId !== requestId ||
@@ -115,12 +117,12 @@ function scheduleTranscriptLoad(host: SubagentDetailHost, state: SubagentDetailS
   })();
 }
 
-export function readSubagentTranscript(
-  host: SubagentDetailHost,
+export function readTaskTranscript(
+  host: TaskDetailHost,
   selection: { taskId: string; sessionKey: string },
-): SubagentTranscriptLoad {
+): TaskTranscriptLoad {
   const client = host.client;
-  const current = host.subagentDetailState;
+  const current = host.taskDetailState;
   if (
     current &&
     current.taskId === selection.taskId &&
@@ -130,11 +132,11 @@ export function readSubagentTranscript(
   ) {
     return current.load;
   }
-  resetSubagentDetail(host);
+  resetTaskDetail(host);
   if (!client || !host.connected) {
     return { status: "error" };
   }
-  const next: SubagentDetailState = {
+  const next: TaskDetailState = {
     client,
     connectionEpoch: host.connectionEpoch,
     eventVersion: 0,
@@ -146,25 +148,25 @@ export function readSubagentTranscript(
     sessionKey: selection.sessionKey,
     taskId: selection.taskId,
   };
-  host.subagentDetailState = next;
+  host.taskDetailState = next;
   scheduleTranscriptLoad(host, next);
   return next.load;
 }
 
-export function observeSubagentTaskEvent(
-  host: SubagentDetailHost,
+export function observeTaskDetailEvent(
+  host: TaskDetailHost,
   event:
     | { action: "upserted"; task: TaskSummary }
     | { action: "deleted"; taskId: string }
     | { action: "restored" },
 ) {
-  const state = host.subagentDetailState;
+  const state = host.taskDetailState;
   if (!state) {
     return;
   }
   if (event.action === "deleted") {
     if (event.taskId === state.taskId) {
-      resetSubagentDetail(host);
+      resetTaskDetail(host);
     }
     return;
   }
@@ -173,6 +175,6 @@ export function observeSubagentTaskEvent(
   }
   state.eventVersion += 1;
   // A terminal version remains pending through an in-flight or throttled read,
-  // so the next request is always the final child-session snapshot.
+  // so the next request is always the final task-session snapshot.
   scheduleTranscriptLoad(host, state);
 }
