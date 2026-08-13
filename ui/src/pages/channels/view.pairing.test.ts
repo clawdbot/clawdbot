@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -107,9 +107,21 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
   };
 }
 
+// Rendered prompts mount <openclaw-modal-dialog> into document.body; leaked
+// containers keep an open dialog alive and poison later dialog-owning test
+// files in the same worker.
+const renderedContainers: HTMLDivElement[] = [];
+
+afterEach(() => {
+  for (const container of renderedContainers.splice(0)) {
+    container.remove();
+  }
+});
+
 function renderInto(template: unknown): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
+  renderedContainers.push(container);
   render(template as never, container);
   return container;
 }
