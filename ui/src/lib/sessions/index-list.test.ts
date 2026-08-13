@@ -19,15 +19,12 @@ function listResult(keys: string[] = [], totalCount = keys.length, offset = 0): 
   };
 }
 
-function sessionHarness(
-  request: unknown,
-  options: { sessionKey?: string; assistantAgentId?: string } = {},
-) {
+function sessionHarness(request: unknown) {
   const snapshot = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected" as "connected" | "reconnecting",
-    sessionKey: options.sessionKey ?? "agent:main:main",
-    assistantAgentId: options.assistantAgentId ?? "main",
+    sessionKey: "agent:main:main",
+    assistantAgentId: "main",
     hello: null,
   };
   let listener: ((next: typeof snapshot) => void) | undefined;
@@ -85,28 +82,11 @@ describe("session list requests", () => {
     await sessions.list({ boardFace: "dashboard" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       configuredAgentsOnly: true,
-      agentId: "main",
       boardFace: "dashboard",
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
     });
-    sessions.dispose();
-  });
-
-  it("defaults ad hoc lists to the selected session agent", async () => {
-    const request = vi.fn(async () => listResult());
-    const { sessions } = sessionHarness(request, {
-      sessionKey: "agent:work:dashboard:current",
-      assistantAgentId: "main",
-    });
-
-    await sessions.list({ boardFace: "dashboard" });
-
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "work" }),
-    );
     sessions.dispose();
   });
 
