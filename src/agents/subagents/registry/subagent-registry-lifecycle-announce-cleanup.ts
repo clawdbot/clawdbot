@@ -597,10 +597,13 @@ export const startSubagentAnnounceCleanupFlow = (
         latestDeliveryError = undefined;
         return;
       }
-      if (delivery.reason === "steer_dropped") {
-        // Live-queue refusals keep steer_dropped even when completion retains
-        // a failed direct path. Collapsing those to sink_unavailable erases
-        // the only durable distinction from no viable requester.
+      const steerDropped =
+        delivery.reason === "steer_dropped" ||
+        Boolean(delivery.phases?.some((phase) => phase.reason === "steer_dropped"));
+      if (steerDropped) {
+        // Live-queue refusals persist as steer_dropped even when completion
+        // keeps a failed direct reason. Collapsing those to sink_unavailable
+        // erases the only durable distinction from no viable requester.
         ensureDeliveryState(entry).lastDropReason = "steer_dropped";
       } else if (delivery.path === "none" && delivery.disposition !== "intentional_non_delivery") {
         ensureDeliveryState(entry).lastDropReason = "sink_unavailable";

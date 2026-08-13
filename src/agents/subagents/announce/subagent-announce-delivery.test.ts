@@ -2146,14 +2146,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves steer_dropped when completion direct delivery fails and fallback steering drops", async () => {
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
     const callGateway = createGatewayMock({
-      result: {
-        deliveryStatus: {
-          status: "failed",
-          errorMessage: "requester wake failed",
-        },
-      },
+      result: { payloads: [{ text: "NO_REPLY" }] },
     });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
     const result = await deliverSlackThreadAnnouncement({
@@ -2171,11 +2166,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "requester wake failed",
-      reason: "steer_dropped",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
     });
     expect(result.terminal).toBeUndefined();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalled();
   });
 

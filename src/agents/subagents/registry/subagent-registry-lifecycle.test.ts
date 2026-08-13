@@ -2841,7 +2841,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalledWith(entry.runId);
   });
 
-  it("persists steer_dropped after completion direct failure plus dropped steer fallback", async () => {
+  it("persists steer_dropped after completion visible_reply_missing plus dropped steer fallback", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -2856,7 +2856,8 @@ describe("subagent registry lifecycle hardening", () => {
           direct: async () => ({
             delivered: false,
             path: "direct",
-            error: "failed",
+            error: "completion agent did not produce a visible reply",
+            reason: "visible_reply_missing",
           }),
         });
         announceParams.onDeliveryResult?.(delivery);
@@ -2869,7 +2870,9 @@ describe("subagent registry lifecycle hardening", () => {
     await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
 
     await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe("steer_dropped"));
-    expect(entry.delivery?.lastError).toBe("failed; steer_dropped; direct-primary: failed");
+    expect(entry.delivery?.lastError).toBe(
+      "completion agent did not produce a visible reply; visible_reply_missing; direct-primary: completion agent did not produce a visible reply",
+    );
     expect(entry.delivery?.status).toBe("suspended");
     expect(persist).toHaveBeenCalledWith(entry.runId);
   });

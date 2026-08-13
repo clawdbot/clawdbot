@@ -175,6 +175,7 @@ describe("runSubagentAnnounceDispatch", () => {
     {
       name: "cannot deliver",
       steerStatus: "none" as const,
+      directReason: undefined,
       expectedReason: undefined,
       fallbackPhase: {
         phase: "steer-fallback" as const,
@@ -186,7 +187,21 @@ describe("runSubagentAnnounceDispatch", () => {
     {
       name: "drops the new item",
       steerStatus: "dropped" as const,
-      expectedReason: "steer_dropped" as const,
+      directReason: undefined,
+      expectedReason: undefined,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        reason: "steer_dropped" as const,
+        error: undefined,
+      },
+    },
+    {
+      name: "drops the new item after a visible reply is missing",
+      steerStatus: "dropped" as const,
+      directReason: "visible_reply_missing" as const,
+      expectedReason: "visible_reply_missing" as const,
       fallbackPhase: {
         phase: "steer-fallback" as const,
         delivered: false,
@@ -197,12 +212,13 @@ describe("runSubagentAnnounceDispatch", () => {
     },
   ])(
     "returns direct failure when completion fallback steering $name",
-    async ({ steerStatus, expectedReason, fallbackPhase }) => {
+    async ({ steerStatus, directReason, expectedReason, fallbackPhase }) => {
       const steer = vi.fn(async () => ({ status: steerStatus }));
       const direct = vi.fn(async () => ({
         delivered: false,
         path: "direct" as const,
         error: "failed",
+        ...(directReason ? { reason: directReason } : {}),
       }));
 
       const result = await runSubagentAnnounceDispatch({
@@ -217,7 +233,13 @@ describe("runSubagentAnnounceDispatch", () => {
       expect(result.reason).toBe(expectedReason);
       expect(result.terminal).toBeUndefined();
       expect(result.phases).toEqual([
-        { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          error: "failed",
+          ...(directReason ? { reason: directReason } : {}),
+        },
         fallbackPhase,
       ]);
     },
