@@ -19,6 +19,7 @@ import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { formatError } from "../session.js";
+import { createWhatsAppInboundAdmissionChain } from "./admission-retry.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import {
   createWhatsAppDurableInboundQueue,
@@ -67,14 +68,6 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
     return;
   }
   defaultRuntime.log(message);
-}
-
-function recordAcceptedInboundActivity(accountId: string): void {
-  recordChannelActivity({
-    channel: "whatsapp",
-    accountId,
-    direction: "inbound",
-  });
 }
 
 export type WhatsAppAppendReplyWindow = {
@@ -470,7 +463,11 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return "completed";
     }
 
-    recordAcceptedInboundActivity(options.accountId);
+    recordChannelActivity({
+      channel: "whatsapp",
+      accountId: options.accountId,
+      direction: "inbound",
+    });
     await enqueueInboundMessage(msg, inbound, enriched, {
       readReceipt: deliveryReadReceipt,
       receiveOrder: context.receiveOrder ?? context.receivedAt,
@@ -494,11 +491,14 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     },
   });
 
-  const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    if (upsert.type !== "notify" && upsert.type !== "append") {
-      return;
-    }
-    for (const msg of upsert.messages ?? []) {
+  const inboundAdmission = createWhatsAppInboundAdmissionChain(
+    durableInboundMonitor,
+    inboundLogger,
+    inboundConsoleLog,
+  );
+
+  const deliverUpsert = async (upsertType: "notify" | "append", messages: Array<WAMessage>) => {
+    for (const msg of messages) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;
@@ -518,7 +518,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       }
 
       const receivedAt = Date.now();
-      const skipStaleAppend = shouldSkipStaleAppend(msg, upsert.type);
+      const skipStaleAppend = shouldSkipStaleAppend(msg, upsertType);
       const skipRecentOutboundEcho = shouldSkipRecentOutboundEcho(msg);
       const remoteJid = msg.key?.remoteJid;
       const id = msg.key?.id;
@@ -551,31 +551,19 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           preparedInboundByDurableId.delete(durableId);
         }
       };
-      let result: Awaited<ReturnType<typeof durableInboundMonitor.admit>>;
-      try {
-        // Shared admission owns the serialized [0, 100, 300] append retries and
-        // returns the atomic accepted/pending/completed queue verdict.
-        result = await durableInboundMonitor.admit(
-          {
-            message: msg,
-            upsertType: upsert.type,
-            skipStaleAppend,
-            skipRecentOutboundEcho,
-            receivedAt,
-            receiveOrder,
-          },
-          { receivedAt },
-        );
-      } catch (error) {
+      const result = await inboundAdmission.admitInArrivalOrder(
+        {
+          message: msg,
+          upsertType,
+          skipStaleAppend,
+          skipRecentOutboundEcho,
+          receivedAt,
+          receiveOrder,
+        },
+        receivedAt,
+      );
+      if (!result) {
         finishPreparation(undefined);
-        const formattedError = formatError(error);
-        inboundLogger.error(
-          { error: formattedError },
-          "failed persisting durable WhatsApp inbound after retries; message dropped",
-        );
-        inboundConsoleLog.error(
-          `Failed persisting durable WhatsApp inbound after retries; message dropped: ${formattedError}`,
-        );
         continue;
       }
       if (result.kind === "durable" && result.queueResult.kind === "completed") {
@@ -603,6 +591,15 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         finishPreparation(undefined);
       }
     }
+  };
+
+  const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
+    const upsertType = upsert.type;
+    if (upsertType !== "notify" && upsertType !== "append") {
+      return;
+    }
+    const messages = upsert.messages ?? [];
+    await inboundAdmission.withCustody(messages.length, () => deliverUpsert(upsertType, messages));
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     const task = handleMessagesUpsert(upsert).catch((err: unknown) => {
@@ -646,7 +643,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       }
       await drainDebouncedInboundMessages();
     }
-    await durableInboundMonitor.stop();
+    await inboundAdmission.stop();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -670,7 +667,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       }
       // Start abort/dispose even when channel work ignored the graceful bound;
       // a successor must not share this account queue with a live owner.
-      void durableInboundMonitor.stop();
+      void inboundAdmission.stop();
     }
   };
   let detachMessagesUpsert: (() => void) | undefined;
