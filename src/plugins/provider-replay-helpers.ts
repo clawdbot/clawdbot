@@ -98,22 +98,6 @@ export function buildStrictAnthropicReplayPolicy(
   };
 }
 
-/**
- * Returns true for Claude models that preserve thinking blocks in context
- * natively. For these models, dropping thinking blocks from prior turns breaks
- * replay and prompt caching.
- *
- * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
- *
- * @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks.
- */
-export function shouldPreserveThinkingBlocks(
-  modelId?: string,
-  model?: Pick<ProviderRuntimeModel, "params">,
-): boolean {
-  return preservesClaudeThinkingBlocks({ id: modelId, params: model?.params });
-}
-
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function shouldDropClaudeThinkingBlocks(
   modelId?: string,

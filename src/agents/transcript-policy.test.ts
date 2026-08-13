@@ -69,8 +69,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 repairToolUseResultPairing: true,
                 validateAnthropicTurns: true,
                 allowSyntheticToolResults: true,
-                ...(modelId.includes("claude") &&
-                !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                   ? { dropThinkingBlocks: true }
                   : {}),
               };
@@ -92,8 +91,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(modelId.includes("claude") &&
-                    !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                    ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };
