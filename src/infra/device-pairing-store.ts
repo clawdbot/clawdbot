@@ -618,31 +618,40 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   }, resolveDevicePairingStateDbOptions(params.baseDir));
 }
 
-/** Read one setup-completion record, ignoring any record past its retention horizon. */
+/** Prune elapsed setup completions, then read one live record. */
 export function loadDevicePairSetupCompletionRecord(
   setupId: string,
   nowMs: number,
   baseDir?: string,
 ): DevicePairSetupCompletionRecord | null {
-  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  ensureDevicePairSetupCompletionSchema(db);
-  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("device_pair_setup_completions")
-      .selectAll()
-      .where("setup_id", "=", setupId)
-      .where("retain_until_ms", ">", nowMs),
+  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
+  const database = openOpenClawStateDatabase(databaseOptions);
+  ensureDevicePairSetupCompletionSchema(database.db);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("device_pair_setup_completions").where("retain_until_ms", "<=", nowMs),
+      );
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("device_pair_setup_completions")
+          .selectAll()
+          .where("setup_id", "=", setupId),
+      );
+      return row
+        ? {
+            setupId: row.setup_id,
+            deviceId: row.device_id,
+            ...optional("deviceName", row.device_name),
+            access: fromSetupCompletionAccessColumn(row.access),
+            completedAtMs: row.completed_at_ms,
+            retainUntilMs: row.retain_until_ms,
+          }
+        : null;
+    },
+    { ...databaseOptions, database },
   );
-  return row
-    ? {
-        setupId: row.setup_id,
-        deviceId: row.device_id,
-        ...optional("deviceName", row.device_name),
-        access: fromSetupCompletionAccessColumn(row.access),
-        completedAtMs: row.completed_at_ms,
-        retainUntilMs: row.retain_until_ms,
-      }
-    : null;
 }

@@ -11,6 +11,7 @@ import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -33,6 +34,7 @@ import {
   loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
 } from "./device-pairing-store.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-device-bootstrap-test-");
@@ -230,6 +232,19 @@ describe("device bootstrap tokens", () => {
       vi.setSystemTime(new Date(recordedAtMs + elapsedMs));
       const found = await readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId });
       expect(found === null).toBe(!expectFound);
+      if (!expectFound) {
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+        });
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+            .selectFrom("device_pair_setup_completions")
+            .select("setup_id")
+            .where("setup_id", "=", issued.setupId),
+        );
+        expect(row).toBeUndefined();
+      }
     } finally {
       vi.useRealTimers();
     }
