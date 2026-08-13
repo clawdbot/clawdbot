@@ -41,6 +41,9 @@ function railScenario(): ControlUiMockGatewayScenario {
       "chat.metadata",
       "chat.startup",
       "board.get",
+      "desktop.observe",
+      "environments.list",
+      "openclaw.chat",
       "session.discussion.info",
       "session.discussion.open",
       "sessions.diff",
@@ -76,6 +79,14 @@ function railScenario(): ControlUiMockGatewayScenario {
             frameUrl: "about:blank#release-status",
           },
         ],
+      },
+      "environments.list": {
+        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+      },
+      "openclaw.chat": {
+        sessionId: "rail-proof-custodian",
+        reply: "The shared rail header contract is ready for review.",
+        action: "none",
       },
       "session.discussion.info": {
         embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
@@ -304,6 +315,111 @@ async function expectSingleRailSeparator(page: Page, selector: string): Promise<
   }
 }
 
+async function expectSharedRailActions(actions: Locator[]): Promise<void> {
+  const metrics = [];
+  for (const action of actions) {
+    await action.waitFor();
+    const rest = await action.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const glyph = element.querySelector("svg")?.getBoundingClientRect();
+      return {
+        background: style.backgroundColor,
+        borderBottomWidth: style.borderBottomWidth,
+        borderLeftWidth: style.borderLeftWidth,
+        borderRightWidth: style.borderRightWidth,
+        borderTopWidth: style.borderTopWidth,
+        color: style.color,
+        height: rect.height,
+        opacity: style.opacity,
+        glyphHeight: glyph?.height ?? 0,
+        glyphWidth: glyph?.width ?? 0,
+        width: rect.width,
+      };
+    });
+    await action.hover();
+    const hover = await action.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, color: style.color };
+    });
+    await action.focus();
+    const focus = await action.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        outlineWidth: style.outlineWidth,
+      };
+    });
+    await action.evaluate((element) => (element as HTMLElement).blur());
+    metrics.push({ focus, hover, rest });
+  }
+  expect(
+    metrics.every(
+      ({ rest }) =>
+        Math.abs(rest.width - 28) <= 1 &&
+        Math.abs(rest.height - 28) <= 1 &&
+        Math.abs(rest.glyphWidth - 16) <= 1 &&
+        Math.abs(rest.glyphHeight - 16) <= 1,
+    ),
+    JSON.stringify(metrics),
+  ).toBe(true);
+  for (const metric of metrics) {
+    expect(metric.rest).toMatchObject({
+      background: "rgba(0, 0, 0, 0)",
+      borderBottomWidth: "0px",
+      borderLeftWidth: "0px",
+      borderRightWidth: "0px",
+      borderTopWidth: "0px",
+      opacity: "1",
+    });
+    expect(metric.hover.background).toBe("rgba(0, 0, 0, 0)");
+    expect(metric.focus).toMatchObject({
+      background: "rgba(0, 0, 0, 0)",
+      outlineWidth: "2px",
+    });
+  }
+  expect(new Set(metrics.map(({ rest }) => rest.color)).size).toBe(1);
+  expect(new Set(metrics.map(({ hover }) => hover.color)).size).toBe(1);
+  expect(new Set(metrics.map(({ focus }) => focus.color)).size).toBe(1);
+}
+
+async function expectSharedActiveRailActions(
+  activeActions: Locator[],
+  inactiveActions: Locator[],
+): Promise<void> {
+  const read = (action: Locator) =>
+    action.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        opacity: style.opacity,
+      };
+    });
+  const active = await Promise.all(activeActions.map(read));
+  const inactive = await Promise.all(inactiveActions.map(read));
+  for (const metric of [...active, ...inactive]) {
+    expect(metric.background).toBe("rgba(0, 0, 0, 0)");
+    expect(metric.opacity).toBe("1");
+  }
+  expect(new Set(active.map((metric) => metric.color)).size).toBe(1);
+  expect(new Set(inactive.map((metric) => metric.color)).size).toBe(1);
+  expect(active[0]?.color).not.toBe(inactive[0]?.color);
+}
+
+async function navigateWithinApp(page: Page, routeId: string): Promise<void> {
+  await page.evaluate((targetRouteId) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { navigate: (route: string) => void } };
+    };
+    if (!app.runtime) {
+      throw new Error("OpenClaw application runtime is unavailable");
+    }
+    app.runtime.context.navigate(targetRouteId);
+  }, routeId);
+}
+
 async function capture(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
@@ -350,6 +466,7 @@ suite.define(() => {
         const companion = page.locator("openclaw-chat-session-rail");
         await companion.locator(".chat-session-rail--expanded").waitFor();
         await companion.getByRole("button", { name: "Close session companion" }).waitFor();
+        await capture(page, "00-rail-header-contract");
         if (proofPhase === "after") {
           await expectFullHeightRail(page, tasks);
           await expectFullHeightRail(page, workspace);
@@ -367,7 +484,12 @@ suite.define(() => {
                 .locator(".chat-session-rail--expanded")
                 .evaluate((element) => getComputedStyle(element).borderLeftWidth),
             )
-            .toBe("1px");
+            .toBe("0px");
+          await expectSharedRailActions([
+            workspace.getByRole("button", { name: "Collapse session workspace" }),
+            tasks.getByRole("button", { name: "Collapse background tasks" }),
+            companion.getByRole("button", { name: "Close session companion" }),
+          ]);
         }
         await capture(page, "01-three-rails-default");
 
@@ -390,7 +512,7 @@ suite.define(() => {
           );
           await capture(page, "02-workspace-tasks-resized");
 
-          await workspace.getByRole("button", { name: "Close session workspace" }).click();
+          await workspace.getByRole("button", { name: "Collapse session workspace" }).click();
           await page.getByRole("button", { name: "Show session files", exact: true }).click();
           await expect
             .poll(() => workspace.evaluate((element) => element.getBoundingClientRect().width))
@@ -399,8 +521,8 @@ suite.define(() => {
         }
 
         await workspace.getByRole("button", { name: "Show session changes" }).click();
-        await workspace.getByRole("button", { name: "Close session workspace" }).click();
-        await tasks.getByRole("button", { name: "Close background tasks" }).click();
+        await workspace.getByRole("button", { name: "Collapse session workspace" }).click();
+        await tasks.getByRole("button", { name: "Collapse background tasks" }).click();
         if (proofPhase === "after") {
           await expectSingleRailSeparator(page, ".chat-companion-rail-resizer");
           await expect
@@ -448,6 +570,15 @@ suite.define(() => {
           ]);
           await expectSingleRailSeparator(page, '.sidebar-column__divider[role="separator"]');
           await expectSingleRailSeparator(page, "openclaw-browser-panel .bp-resizer--right");
+          await expectSharedRailActions([
+            changes.locator(".sidebar-column__actions button").last(),
+            companion.getByRole("button", { name: "Close session companion" }),
+            browser.getByRole("button", { name: "Close browser panel" }),
+          ]);
+          await expectSharedActiveRailActions(
+            [browser.getByRole("button", { name: "Dock to right" })],
+            [browser.getByRole("button", { name: "Dock to bottom" })],
+          );
         }
         await capture(page, "07-companion-details-browser");
 
@@ -463,7 +594,16 @@ suite.define(() => {
           ),
         );
         await gateway.waitForRequest("terminal.open");
-        await page.locator("openclaw-terminal-panel .tp").waitFor();
+        const terminal = page.locator("openclaw-terminal-panel");
+        await terminal.locator(".tp").waitFor();
+        if (proofPhase === "after") {
+          await expectSharedRailHeaders(page, [terminal.locator(".tp-header")]);
+          await expectSharedRailActions([terminal.getByRole("button", { name: "Hide terminal" })]);
+          await expectSharedActiveRailActions(
+            [terminal.getByRole("button", { name: "Dock to bottom" })],
+            [terminal.getByRole("button", { name: "Dock to right" })],
+          );
+        }
         await capture(page, "08-terminal-reference");
 
         await page.evaluate(() =>
@@ -471,6 +611,79 @@ suite.define(() => {
             new CustomEvent("openclaw:terminal-toggle", { detail: { open: false } }),
           ),
         );
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new CustomEvent("openclaw:desktop-toggle", { detail: { open: true } }),
+          ),
+        );
+        const desktop = page.locator("openclaw-desktop-panel");
+        await desktop.locator(".bp-header").waitFor();
+        await gateway.waitForRequest("environments.list");
+        if (proofPhase === "after") {
+          await expectSharedRailHeaders(page, [
+            changes.locator(".sidebar-column__header"),
+            companion.locator(".chat-session-rail__header"),
+            desktop.locator(".bp-header"),
+          ]);
+          await expectSingleRailSeparator(page, "openclaw-desktop-panel .bp-resizer--right");
+          await expectSharedRailActions([
+            changes.locator(".sidebar-column__actions button").last(),
+            companion.getByRole("button", { name: "Close session companion" }),
+            desktop.getByRole("button", { name: "Hide desktop panel" }),
+          ]);
+          await expectSharedActiveRailActions(
+            [desktop.getByRole("button", { name: "Dock to right" })],
+            [desktop.getByRole("button", { name: "Dock to bottom" })],
+          );
+        }
+        await capture(page, "09-companion-details-desktop");
+
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+          ),
+        );
+        await navigateWithinApp(page, "custodian");
+        const custodianComposer = page.getByLabel("Message OpenClaw…");
+        await custodianComposer.waitFor();
+        await custodianComposer.fill("Audit the shared rail header chrome.");
+        await page.getByRole("button", { name: "Send", exact: true }).click();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("openclaw.chat")).some(
+              (request) => request.params.message === "Audit the shared rail header chrome.",
+            ),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page
+              .getByText("The shared rail header contract is ready for review.", { exact: true })
+              .count(),
+          )
+          .toBeGreaterThanOrEqual(2);
+        await navigateWithinApp(page, "chat");
+        await page.locator(".chat-group").first().waitFor();
+        const custodian = page.locator("openclaw-custodian-panel");
+        await custodian.locator(".cp-header").waitFor();
+        if (proofPhase === "after") {
+          await changes.waitFor();
+          await companion.locator(".chat-session-rail__header").waitFor();
+          await expectSharedRailHeaders(page, [
+            changes.locator(".sidebar-column__header"),
+            companion.locator(".chat-session-rail__header"),
+            custodian.locator(".cp-header"),
+          ]);
+          await expectSingleRailSeparator(page, "openclaw-custodian-panel .cp-resizer--right");
+          await expectSharedRailActions([
+            changes.locator(".sidebar-column__actions button").last(),
+            companion.getByRole("button", { name: "Close session companion" }),
+            custodian.getByRole("button", { name: "Close Ask OpenClaw" }),
+          ]);
+        }
+        await capture(page, "10-custodian");
+        await custodian.getByRole("button", { name: "Close Ask OpenClaw" }).click();
+
         await page.goto(`${suite.server.baseUrl}dashboard`);
         const boardChat = page.locator('.sidebar-column[data-column-id="chat-column"]');
         await boardChat.waitFor();
@@ -485,7 +698,7 @@ suite.define(() => {
             ),
           )
           .toBeGreaterThanOrEqual(88);
-        await capture(page, "09-board-chat-web");
+        await capture(page, "11-board-chat-web");
 
         await page.evaluate(() => {
           document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
@@ -494,7 +707,7 @@ suite.define(() => {
         await expect
           .poll(() => dashboardHeader.evaluate((element) => getComputedStyle(element).paddingLeft))
           .toBe("204px");
-        await capture(page, "10-board-chat-native");
+        await capture(page, "12-board-chat-native");
       },
     );
   });
@@ -560,7 +773,7 @@ suite.define(() => {
 
         await page
           .locator(".chat-workspace-rail")
-          .getByRole("button", { name: "Close session workspace" })
+          .getByRole("button", { name: "Collapse session workspace" })
           .click();
         await page.getByRole("button", { name: "Show session files", exact: true }).click();
         await expect

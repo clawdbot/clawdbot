@@ -167,7 +167,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     const openUrl = this.panelOpenUrls[active.slot];
     return html`
       <div
-        class="sidebar-column__header"
+        class="rail-header sidebar-column__header"
         @dragover=${(event: DragEvent) => (narrow ? undefined : this.allowPanelDrop(event))}
         @drop=${(event: DragEvent) => (narrow ? undefined : this.dropOnHeader(event, column))}
       >
@@ -198,10 +198,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             `;
           })}
         </wa-tab-group>
-        <div class="sidebar-column__actions">
+        <div class="rail-header__actions sidebar-column__actions">
           ${openUrl
             ? html`<a
-                class="btn btn--ghost btn--icon"
+                class="rail-header__action"
                 href=${openUrl}
                 target="_blank"
                 rel="noopener"
@@ -212,7 +212,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             : nothing}
           ${this.canMutatePanel(active.slot)
             ? html`<button
-                class="btn btn--ghost btn--icon"
+                class="rail-header__action"
                 type="button"
                 aria-label=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
                 title=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}

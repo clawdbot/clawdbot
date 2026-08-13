@@ -846,7 +846,7 @@ export function renderSessionWorkspaceToggle(
     return nothing;
   }
   const expanded = !sessionWorkspace.collapsed;
-  const label = expanded ? t("chat.workspaceFiles.close") : t("chat.workspaceFiles.showFiles");
+  const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
   const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
@@ -907,7 +907,7 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("terminal.toggle")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal"
+            class="rail-header__action chat-workspace-rail__terminal"
             aria-label=${t("terminal.toggle")}
             @click=${sessionWorkspace.onToggleTerminal}
           >
@@ -921,7 +921,7 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("browser.toggle")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal"
+            class="rail-header__action chat-workspace-rail__terminal"
             aria-label=${t("browser.toggle")}
             @click=${sessionWorkspace.onToggleBrowser}
           >
@@ -935,7 +935,7 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal"
+            class="rail-header__action chat-workspace-rail__terminal"
             aria-label=${t("custodian.panel.toggle")}
             @click=${sessionWorkspace.onToggleCustodian}
           >
@@ -949,7 +949,7 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal chat-session-diff-toggle"
+            class="rail-header__action chat-workspace-rail__terminal chat-session-diff-toggle"
             aria-label=${t("chat.sessionDiff.show")}
             @click=${sessionWorkspace.onOpenDiff}
           >
@@ -1233,12 +1233,14 @@ export function renderSessionWorkspaceRail(
         `;
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
-      <div class="chat-workspace-rail__header">
-        <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
-          <strong>${t("chat.workspaceFiles.files")}</strong>
+      <div class="rail-header chat-workspace-rail__header">
+        <div class="rail-header__copy chat-workspace-rail__title">
+          <span class="rail-header__eyebrow chat-workspace-rail__eyebrow"
+            >${t("chat.workspaceFiles.workspace")}</span
+          >
+          <strong class="rail-header__title">${t("chat.workspaceFiles.files")}</strong>
         </div>
-        <div class="chat-workspace-rail__actions">
+        <div class="rail-header__actions chat-workspace-rail__actions">
           ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
@@ -1249,7 +1251,7 @@ export function renderSessionWorkspaceRail(
                     : t("chat.workspaceFiles.dockBottom")}
                 >
                   <button
-                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
+                    class="rail-header__action chat-workspace-rail__dock"
                     type="button"
                     aria-label=${dock === "bottom"
                       ? t("chat.workspaceFiles.dockRight")
@@ -1263,7 +1265,7 @@ export function renderSessionWorkspaceRail(
               `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+              class="rail-header__action chat-workspace-rail__refresh"
               type="button"
               aria-label=${t("chat.workspaceFiles.refresh")}
               ?disabled=${sessionWorkspace.loading}
@@ -1272,16 +1274,18 @@ export function renderSessionWorkspaceRail(
               ${icons.refresh}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.close")} (⇧⌘B)`}>
+          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
-              class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-              aria-label=${t("chat.workspaceFiles.close")}
+              class="rail-header__action chat-workspace-rail__collapse-toggle"
+              aria-label=${t("chat.workspaceFiles.collapse")}
               aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
               @click=${sessionWorkspace.onToggleCollapsed}
             >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.x}</span>
+              <span class="nav-collapse-toggle__icon" aria-hidden="true"
+                >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
+              >
             </button>
           </openclaw-tooltip>
         </div>

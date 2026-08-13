@@ -17,25 +17,6 @@ export const browserPanelStyles = css`
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
   }
-  .bp-header {
-    box-sizing: border-box;
-    height: var(--rail-header-height, 48px);
-    min-height: var(--rail-header-height, 48px);
-    gap: 8px;
-    padding: 0 var(--rail-header-padding-end, 8px) 0 var(--rail-header-padding-start, 12px);
-    border-bottom-color: var(--rail-divider-color, var(--border, #262b34));
-  }
-  .bp-icon {
-    width: var(--rail-header-action-size, 28px);
-    height: var(--rail-header-action-size, 28px);
-  }
-  .bp-icon.is-active {
-    color: var(--accent, #ff5c5c);
-    background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
-  }
-  .bp-icon:disabled {
-    opacity: 0.4;
-  }
   .bp-actions {
     flex: none;
   }
@@ -45,6 +26,23 @@ export const browserPanelStyles = css`
     gap: 4px;
     padding: 5px 8px;
     border-bottom: 1px solid var(--border, #262b34);
+  }
+  .bp-toolbar .bp-icon {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted, #8a919e);
+  }
+  .bp-toolbar .bp-icon:hover,
+  .bp-toolbar .bp-icon:focus-visible {
+    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    color: var(--text, #d7dae0);
   }
   .bp-url {
     flex: 1;

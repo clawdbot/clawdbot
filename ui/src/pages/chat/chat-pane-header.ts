@@ -278,7 +278,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelMenuActions.push({
         id: "background-tasks",
         label: t(
-          backgroundTasks.collapsed ? "chat.backgroundTasks.show" : "chat.backgroundTasks.close",
+          backgroundTasks.collapsed ? "chat.backgroundTasks.show" : "chat.backgroundTasks.collapse",
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
@@ -289,7 +289,9 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     panelMenuActions.push({
       id: "session-files",
       label: t(
-        sessionWorkspace.collapsed ? "chat.workspaceFiles.showFiles" : "chat.workspaceFiles.close",
+        sessionWorkspace.collapsed
+          ? "chat.workspaceFiles.showFiles"
+          : "chat.workspaceFiles.collapse",
       ),
       icon: icons.fileText,
       active: !sessionWorkspace.collapsed,

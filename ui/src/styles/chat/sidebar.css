@@ -57,8 +57,7 @@
     minmax(270px, var(--chat-tasks-rail-width));
 }
 
-/* Compact icon button shared by the pane header actions. Sizing only — chrome
-   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
+/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
@@ -307,6 +306,114 @@ openclaw-chat-sidebar-region,
   background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
 }
 
+/* Canonical rail header contract. The header owns geometry; actions are bare
+   glyphs with an invisible hit area so generic button chrome cannot leak in. */
+.rail-header {
+  box-sizing: border-box;
+  display: flex;
+  height: var(--rail-header-height);
+  min-height: var(--rail-header-height);
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+}
+
+.rail-header__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--rail-header-copy-gap);
+}
+
+.rail-header__eyebrow {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--rail-header-eyebrow-size);
+  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rail-header__title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--rail-header-title-size);
+  font-weight: var(--rail-header-title-weight);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--rail-header-action-gap);
+}
+
+.rail-header__action {
+  display: inline-flex;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-color);
+  font: inherit;
+  opacity: 1;
+  transform: none;
+}
+
+.rail-header__action:hover,
+.rail-header__action:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-hover-color);
+  transform: none;
+}
+
+.rail-header__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.rail-header__action.is-active,
+.rail-header__action[aria-pressed="true"] {
+  background: transparent;
+  color: var(--rail-header-action-active-color);
+}
+
+.rail-header__action:disabled,
+.rail-header__action[aria-disabled="true"] {
+  opacity: var(--rail-header-action-disabled-opacity);
+}
+
+.rail-header__action svg,
+.rail-header__action .nav-collapse-toggle__icon,
+.rail-header__action .nav-collapse-toggle__icon svg {
+  display: block;
+  width: var(--rail-header-action-glyph-size);
+  height: var(--rail-header-action-glyph-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-column__tabs {
   --track-width: 0;
   display: block;
@@ -362,17 +469,6 @@ openclaw-chat-sidebar-region,
 
 .sidebar-column__actions {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-}
-
-.sidebar-column__actions .btn {
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  padding: 5px;
 }
 
 .sidebar-column__body,
@@ -478,82 +574,6 @@ openclaw-chat-sidebar-region,
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-workspace-rail__header {
-  display: flex;
-}
-
-.chat-workspace-rail__title {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.chat-workspace-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chat-workspace-rail__title strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  line-height: 1.2;
-}
-
-.chat-workspace-rail__actions {
-  display: inline-flex;
-  align-items: center;
-}
-
-.chat-workspace-rail__refresh,
-.chat-workspace-rail__dock,
-.chat-workspace-rail__collapse-toggle {
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  padding: 0;
-}
-
-.chat-workspace-rail__terminal {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-}
-
-.chat-workspace-rail__terminal:hover,
-.chat-workspace-rail__terminal:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
-   background, inset highlight): rail header buttons only show chrome on
-   hover. */
-.chat-workspace-rail__collapse-toggle {
-  flex: 0 0 auto;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.chat-workspace-rail__collapse-toggle:hover {
-  border-color: transparent;
-  background: var(--bg-hover);
-  transform: none;
-}
-
-.chat-workspace-rail__refresh svg,
-.chat-workspace-rail__dock svg,
-.chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
@@ -887,88 +907,6 @@ openclaw-chat-sidebar-region,
   flex: 1 1 0;
   flex-direction: column;
   overflow: hidden;
-}
-
-.chat-tasks-rail__header {
-  display: flex;
-}
-
-.chat-tasks-rail__title {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.chat-tasks-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__title strong {
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__actions {
-  display: inline-flex;
-  align-items: center;
-}
-
-/* Every chat rail header resolves through this one geometry contract. The
-   Browser shadow DOM consumes the same variables in its scoped stylesheet. */
-:is(
-  .chat-workspace-rail__header,
-  .chat-tasks-rail__header,
-  .chat-session-rail__header,
-  .sidebar-column__header
-) {
-  box-sizing: border-box;
-  height: var(--rail-header-height);
-  min-height: var(--rail-header-height);
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
-  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
-}
-
-:is(.chat-workspace-rail__title, .chat-tasks-rail__title, .chat-session-rail__header-copy) {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-}
-
-:is(
-  .chat-workspace-rail__actions,
-  .chat-tasks-rail__actions,
-  .chat-session-rail__actions,
-  .sidebar-column__actions
-) {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-}
-
-.chat-tasks-rail__refresh svg,
-.chat-tasks-rail__collapse-toggle svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
 }
 
 .chat-tasks-rail__state {

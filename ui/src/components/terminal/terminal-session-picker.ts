@@ -20,7 +20,7 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
   return html`
     <div class="tp-session-picker" @focusout=${props.onFocusOut}>
       <button
-        class="tp-icon"
+        class="rail-header__action tp-icon"
         type="button"
         title=${t("terminal.sessions")}
         aria-label=${t("terminal.sessions")}
