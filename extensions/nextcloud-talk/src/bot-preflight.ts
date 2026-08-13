@@ -1,5 +1,6 @@
 // Nextcloud Talk plugin module implements bot preflight behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -134,11 +135,14 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
           response,
           BOT_PREFLIGHT_ERROR_BODY_LIMIT_BYTES,
         ).catch(() => "");
+        // The probe sends Basic auth credentials; reflected upstream text must
+        // be sanitized independently of the operator's log-redaction setting.
+        const safeBody = body ? redactToolPayloadText(body) : "";
         return {
           ok: false,
           code: "api_error",
           status: response.status,
-          message: `Nextcloud Talk bot response feature probe failed (${response.status})${body ? `: ${body}` : ""}`,
+          message: `Nextcloud Talk bot response feature probe failed (${response.status})${safeBody ? `: ${safeBody}` : ""}`,
         };
       }
 
