@@ -64,23 +64,6 @@ extension OnboardingAISetupModel {
             detectError: nil)
     }
 
-    func recoverConfiguredGatewayVerification(
-        modelRef: String,
-        status: String?,
-        error: String?)
-    {
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.updateConfiguredGatewayBlockerState(
-            .verificationFailed(ConfiguredGatewayVerificationFailure(
-                modelRef: modelRef,
-                status: status,
-                error: error)),
-            phase: .detecting,
-            detectError: nil)
-        self.started = true
-        self.scheduleDetection()
-    }
-
     func enterGatewayAuthBlocker(_ issue: RemoteGatewayAuthIssue) {
         self.resetForGatewayChange(clearPendingHandoff: false)
         self.updateConfiguredGatewayBlockerState(
