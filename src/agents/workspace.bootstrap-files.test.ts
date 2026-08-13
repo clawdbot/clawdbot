@@ -235,8 +235,12 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nopen retry\n",
     });
 
-    // openRootFile reports a transient open failure as reason "io"; the reader
-    // must retry it (re-open) rather than drop the file for the turn.
+    // Behavior under test: the transient-open RETRY contract — a transient open
+    // failure (reason "io") must be retried (re-open) rather than dropping the
+    // file for the turn. Spying on openSync is incidental: the identity-pinned
+    // open is a synchronous fs-safe primitive (openPinnedFileSync), so that is
+    // simply where a transient open surfaces. This test does not assert that the
+    // open MUST stay synchronous — only that a transient open is retried.
     const originalOpenSync = syncFs.openSync.bind(syncFs);
     let threwTransientOpen = false;
     const openSpy = vi.spyOn(syncFs, "openSync").mockImplementation(((

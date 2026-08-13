@@ -38,12 +38,25 @@ export function hasGlobPattern(pattern: string): boolean {
 // whether a pattern rooted at a literal directory symlink escapes the workspace
 // before fs.glob reads there. A magic-first pattern (`{a,b}/…`) collapses to "."
 // (the workspace root), matching fs.glob which would root that walk at the
-// workspace; a fully-literal pattern (brackets included) keeps its whole path.
-function literalPatternPrefix(pattern: string): string {
+// workspace.
+//
+// The prefix grammar must match how the pattern is actually resolved, or the
+// pre-gate realpaths the wrong directory. `hasGlobPattern` keeps `[ ]` literal
+// for routing (so `pkg[ab]/AGENTS.md` opens its real bracket-named file), but a
+// pattern that ALSO contains `? * { }` is routed to fs.glob, where `[ab]` is a
+// character class. For that routed case the literal prefix must stop before a
+// bracket segment too: `pkg[ab]/*/AGENTS.md` collapses to the workspace root,
+// exactly where fs.glob roots its walk over `pkga`/`pkgb`. Realpathing the
+// literal `pkg[ab]` directory instead would falsely reject the whole pattern if
+// a stray `pkg[ab]` symlink escaped the workspace. A fully-literal pattern
+// (routedToGlob false) keeps `[ ]` literal and its whole path — the `main`
+// bracket-path compatibility contract.
+function literalPatternPrefix(pattern: string, routedToGlob: boolean): string {
+  const magicSegment = routedToGlob ? /[?*{}[\]]/u : /[?*{}]/u;
   const segments = normalizeWorkspacePatternPath(pattern).split("/");
   const literal: string[] = [];
   for (const segment of segments) {
-    if (hasGlobPattern(segment)) {
+    if (magicSegment.test(segment)) {
       break;
     }
     literal.push(segment);
@@ -56,7 +69,6 @@ function literalPatternPrefix(pattern: string): string {
 export async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
-  strictRead: boolean,
 ): Promise<string[]> {
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
   // Canonical workspace root bounds containment: a symlinked workspace dir
@@ -87,12 +99,12 @@ export async function resolveExtraBootstrapPatternPaths(
       }
     }
   } catch (error) {
-    // fs.glob skips per-entry read failures (an unreadable subtree is walked
-    // past, not thrown), so this only fires on a top-level failure such as a
-    // missing cwd. Strict doctor discovery surfaces a genuine non-ENOENT
-    // failure; a normal bootstrap load drops the pattern instead of failing the
-    // whole load.
-    if (strictRead && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+    // fs.glob walks past per-entry read failures (an unreadable subtree is
+    // skipped, not thrown), so a throw here is a top-level failure. A missing
+    // cwd (ENOENT) legitimately means "no matches". Every other failure must
+    // surface: the loader turns the rethrow into an operator-visible "io"
+    // diagnostic, instead of silently dropping every configured bootstrap file.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
   }
@@ -111,7 +123,10 @@ export async function patternWalkRootStaysInWorkspace(
   workspaceDir: string,
   pattern: string,
 ): Promise<boolean> {
-  const walkRoot = path.resolve(workspaceDir, literalPatternPrefix(pattern));
+  const walkRoot = path.resolve(
+    workspaceDir,
+    literalPatternPrefix(pattern, hasGlobPattern(pattern)),
+  );
   if (!isPathInside(workspaceDir, walkRoot)) {
     return false;
   }

@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   loadExtraBootstrapFilesWithDiagnostics,
   loadWorkspacePatternFilesWithDiagnostics,
@@ -27,6 +27,10 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function loadExtraBootstrapFileList(dir: string, extraPatterns: string[]) {
@@ -57,6 +61,44 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     }
     return contained.toSorted();
   };
+
+  it("surfaces an io diagnostic when fs.glob fails for a non-ENOENT reason", async () => {
+    // F1: fs.glob walks past per-entry failures, so a thrown error is a real
+    // top-level failure. Any non-ENOENT failure must surface as an
+    // operator-visible `io` diagnostic instead of silently dropping every
+    // configured bootstrap file (the pre-fix behavior gated the rethrow behind a
+    // strict-read flag, so a normal load returned [] with no diagnostic).
+    const workspaceDir = await createWorkspaceDir("glob-io-failure");
+    const globError = Object.assign(new Error("simulated glob failure"), { code: "EIO" });
+    const globSpy = vi.spyOn(fs, "glob").mockImplementation((() => {
+      throw globError;
+    }) as unknown as typeof fs.glob);
+
+    try {
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "**/AGENTS.md",
+      ]);
+      expect(files).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.reason).toBe("io");
+      expect(diagnostics[0]?.detail).toContain("simulated glob failure");
+    } finally {
+      globSpy.mockRestore();
+    }
+  });
+
+  it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
+    // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
+    // means "no matches" rather than an error to surface — no files, no diagnostic.
+    const missingDir = path.join(fixtureRoot, `missing-cwd-${fixtureCount++}`);
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(missingDir, [
+      "**/AGENTS.md",
+    ]);
+
+    expect(files).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
+  });
 
   it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
@@ -517,6 +559,64 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(loadedPaths).not.toContain(path.join(workspaceDir, "pkga", "AGENTS.md"));
     expect(loadedPaths).not.toContain(path.join(workspaceDir, "pkgb", "AGENTS.md"));
   });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves a routed mixed-bracket glob past an external bracket-named symlink without a false security reject",
+    async () => {
+      // F2 regression: `pkg[ab]/*/AGENTS.md` contains `*`, so it is routed to
+      // fs.glob where `[ab]` is a character class matching the real `pkga`/`pkgb`
+      // dirs. A directory symlink literally named `pkg[ab]` points OUTSIDE the
+      // workspace. Pre-fix the security pre-gate derived the literal prefix with
+      // brackets-literal grammar, realpath'd that escaping `pkg[ab]` symlink, and
+      // falsely rejected the whole pattern with a `security` diagnostic even
+      // though fs.glob never walks the symlink. The fix uses routed grammar for
+      // the prefix so it stops before the bracket segment (collapsing to the
+      // workspace root, where fs.glob actually roots the walk).
+      const routedWs = await createWorkspaceDir("routed-bracket-symlink");
+      const outsideRouted = await createWorkspaceDir("routed-bracket-outside");
+      await fs.writeFile(path.join(outsideRouted, "AGENTS.md"), "outside", "utf-8");
+      for (const name of ["pkga", "pkgb"]) {
+        const dir = path.join(routedWs, name, "core");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+      }
+      try {
+        await fs.symlink(outsideRouted, path.join(routedWs, "pkg[ab]"), "dir");
+      } catch (err) {
+        if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+          return;
+        }
+        throw err;
+      }
+
+      const routed = await loadExtraBootstrapFilesWithDiagnostics(routedWs, [
+        "pkg[ab]/*/AGENTS.md",
+      ]);
+      expect(routed.diagnostics).toHaveLength(0);
+      expect(routed.files.map((file) => file.path).toSorted()).toStrictEqual(
+        [
+          path.join(routedWs, "pkga", "core", "AGENTS.md"),
+          path.join(routedWs, "pkgb", "core", "AGENTS.md"),
+        ].toSorted(),
+      );
+
+      // A fully-literal `pkg[ab]/AGENTS.md` (no `? * { }`) is NOT routed: brackets
+      // stay literal and name the real on-disk `pkg[ab]` directory, so the
+      // `main` bracket-path compatibility contract still opens that one file.
+      const literalWs = await createWorkspaceDir("literal-bracket-realdir");
+      const realBracketDir = path.join(literalWs, "pkg[ab]");
+      await fs.mkdir(realBracketDir, { recursive: true });
+      await fs.writeFile(path.join(realBracketDir, "AGENTS.md"), "literal bracket", "utf-8");
+
+      const literal = await loadExtraBootstrapFilesWithDiagnostics(literalWs, [
+        "pkg[ab]/AGENTS.md",
+      ]);
+      expect(literal.diagnostics).toHaveLength(0);
+      expect(literal.files.map((file) => file.path)).toStrictEqual([
+        path.join(realBracketDir, "AGENTS.md"),
+      ]);
+    },
+  );
 
   it("treats a bracket parent with a child glob as fs.glob (bracket is a class)", async () => {
     // A pattern that mixes brackets with real magic (`pkg[ab]/**/AGENTS.md`)

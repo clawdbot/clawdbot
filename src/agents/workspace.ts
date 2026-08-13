@@ -164,8 +164,15 @@ export async function readWorkspaceFileWithGuards(params: {
     // each attempt uses a fresh fd (retrying the read on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
-    // Use the async fd read/close helpers so the bootstrap reader never blocks
-    // the event loop during embedded_run bootstrap-context.
+    // The bounded read and the fd close run through the async helpers below
+    // (readWorkspaceBootstrapFile / closeFdAsync); only the identity-pinned OPEN
+    // is synchronous — a deliberate TOCTOU-atomic primitive owned by
+    // @openclaw/fs-safe (openPinnedFileSync: lstat -> open -> fstat comparing the
+    // pre-open realpath stat to the fd's fstat). fs-safe exposes no async pinned
+    // open, and inserting await points into that lstat/open/fstat window would
+    // reopen the swap race the pin closes; the sync open is a bounded per-file
+    // primitive, so keeping the read/close async moves the bulk of the work off
+    // the event loop without weakening the identity guard.
     return await retryAsync(
       async () => {
         const opened = await openRootFileFollowingParents({
@@ -1445,11 +1452,7 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(
-          resolvedDir,
-          pattern,
-          options.strictPatternRead === true,
-        );
+        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
         for (const match of matches) {
           resolvedPaths.add(match);
         }
