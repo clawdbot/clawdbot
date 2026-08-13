@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      fail_fast:
+        description: Cancel each child workflow after its first failed job; false collects independent failures to completion
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Validation group to run
         required: false
@@ -177,6 +182,7 @@ jobs:
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -188,6 +194,7 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
@@ -395,6 +402,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
         run: |
           set -euo pipefail
 
@@ -487,7 +495,10 @@ jobs:
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
-            fail_fast_failed_jobs() {
+            cancel_on_failed_jobs_when_enabled() {
+              if [[ "$FAIL_FAST" != "true" ]]; then
+                return 0
+              fi
               local failed_jobs_json
               failed_jobs_json="$(
                 fetch_child_jobs |
@@ -526,7 +537,7 @@ jobs:
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 2 == 0 )); then
-                fail_fast_failed_jobs
+                cancel_on_failed_jobs_when_enabled
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -585,6 +596,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
         run: |
           set -euo pipefail
 
@@ -677,7 +689,10 @@ jobs:
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
-            fail_fast_failed_jobs() {
+            cancel_on_failed_jobs_when_enabled() {
+              if [[ "$FAIL_FAST" != "true" ]]; then
+                return 0
+              fi
               local failed_jobs_json
               failed_jobs_json="$(
                 fetch_child_jobs |
@@ -716,7 +731,7 @@ jobs:
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 2 == 0 )); then
-                fail_fast_failed_jobs
+                cancel_on_failed_jobs_when_enabled
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -772,6 +787,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -910,7 +926,10 @@ jobs:
               [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
             }
 
-            fail_fast_failed_jobs() {
+            cancel_on_failed_jobs_when_enabled() {
+              if [[ "$FAIL_FAST" != "true" ]]; then
+                return 0
+              fi
               local failed_jobs_json
               if [[ "$workflow" == "openclaw-release-checks.yml" && "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
                 return 0
@@ -952,7 +971,7 @@ jobs:
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 2 == 0 )); then
-                fail_fast_failed_jobs
+                cancel_on_failed_jobs_when_enabled
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -1026,6 +1045,7 @@ jobs:
             -f mode="$MODE"
             -f release_profile="$RELEASE_PROFILE"
             -f run_release_soak="$RUN_RELEASE_SOAK"
+            -f fail_fast="$FAIL_FAST"
             -f rerun_group="$child_rerun_group"
           )
           if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -1071,6 +1091,7 @@ jobs:
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
         run: |
           set -euo pipefail
 
@@ -1176,7 +1197,10 @@ jobs:
             exit 1
           fi
 
-          fail_fast_failed_jobs() {
+          cancel_on_failed_jobs_when_enabled() {
+            if [[ "$FAIL_FAST" != "true" ]]; then
+              return 0
+            fi
             local failed_jobs_json
             failed_jobs_json="$(
               gh_with_retry run view "$run_id" --json jobs \
@@ -1199,7 +1223,7 @@ jobs:
             fi
             poll_count=$((poll_count + 1))
             if (( poll_count % 2 == 0 )); then
-              fail_fast_failed_jobs
+              cancel_on_failed_jobs_when_enabled
             fi
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"

@@ -75,6 +75,26 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
 }
 
 describe("release validation no-push transport", () => {
+  it("collects child failures by default and propagates explicit fail-fast", () => {
+    const fullReleaseSource = readFileSync(FULL_RELEASE, "utf8");
+    const fullRelease = readWorkflow(FULL_RELEASE);
+    const releaseChecksSource = readFileSync(RELEASE_CHECKS, "utf8");
+    const releaseChecks = readWorkflow(RELEASE_CHECKS);
+
+    expect(fullRelease.on?.workflow_dispatch?.inputs?.fail_fast).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(fullReleaseSource.match(/if \[\[ "\$FAIL_FAST" != "true" \]\]; then/gu)).toHaveLength(4);
+    expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
+    expect(releaseChecks.on?.workflow_dispatch?.inputs?.fail_fast).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(releaseChecksSource).toContain("FAIL_FAST: ${{ needs.resolve_target.outputs.fail_fast }}");
+    expect(releaseChecksSource).toContain('if [[ "$FAIL_FAST" == "true" ]]');
+  });
+
   it("does not persist Git credentials in validation checkouts", () => {
     for (const workflowPath of [PLUGIN_PRERELEASE, RELEASE_CHECKS]) {
       const workflow = readWorkflow(workflowPath);
