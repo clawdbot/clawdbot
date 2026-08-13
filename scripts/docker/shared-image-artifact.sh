@@ -12,6 +12,9 @@ shared_package_sha256="${OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256:-}"
 shared_archive_sha256="${OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256:-}"
 shared_run_id="${OPENCLAW_SHARED_IMAGE_RUN_ID:-}"
 shared_run_attempt="${OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT:-}"
+# gh api has no built-in request deadline, so a stalled connection would otherwise
+# hang until the job-level timeout kills the whole runner job.
+gh_api_get_request_timeout="${OPENCLAW_GH_API_GET_REQUEST_TIMEOUT:-30s}"
 
 archive_name="shared-images.tar.zst"
 manifest_path=""
@@ -66,6 +69,7 @@ is_transient_gh_api_get_error() {
   fi
 
   [[ "$error_text" == *"i/o timeout"* ||
+    "$error_text" == *"request deadline"* ||
     "$error_text" =~ [Cc]ontext[[:space:]]+deadline[[:space:]]+exceeded ||
     "$error_text" =~ [Cc]onnection[[:space:]]+(refused|reset) ||
     "$error_text" =~ [Nn]etwork[[:space:]]+is[[:space:]]+unreachable ||
@@ -103,10 +107,20 @@ gh_api_get_with_retry() {
   for attempt in 1 2 3; do
     : > "$response_file"
     : > "$error_file"
-    if gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
+    local gh_status=0
+    timeout "$gh_api_get_request_timeout" gh api --method GET "$endpoint" \
+      > "$response_file" 2> "$error_file" || gh_status=$?
+    if [[ "$gh_status" -eq 0 ]]; then
       cat "$response_file"
       rm -rf -- "$retry_dir"
       return 0
+    fi
+
+    if [[ "$gh_status" -eq 124 ]]; then
+      # timeout(1) killed a stalled gh api request; record a transient signature
+      # so the retry classifier below treats the hang like any other network stall.
+      printf 'gh: GitHub API GET exceeded the %s request deadline.\n' \
+        "$gh_api_get_request_timeout" >> "$error_file"
     fi
 
     if [[ "$attempt" -lt 3 ]] &&
