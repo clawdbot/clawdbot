@@ -677,7 +677,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         // An in-flight plugin teardown may still own resources. A rejected stop
         // outcome only preserves diagnostics; a paired include-known rollback
         // start can retry after the aborted task has actually settled.
-        const currentStop = store.stops.get(id);
+        let currentStop = store.stops.get(id);
         if (currentStop?.status === "stopping") {
           return;
         }
@@ -727,6 +727,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ) {
             store.stops.delete(id);
           }
+          currentStop = store.stops.get(id);
         }
         const existingTask = store.tasks.get(id);
         const existingAbort = store.aborts.get(id);

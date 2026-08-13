@@ -1106,6 +1106,41 @@ describe("server-channels auto restart", () => {
     expect(account?.restartPending).toBe(false);
   });
 
+  it("lets ordinary start recover when manual stopAccount succeeds during fence wait", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const stopTimedOut = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTimedOut;
+
+    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await startTask;
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
   it("lets ordinary start recover after a timed-out stopAccount succeeds late", async () => {
     const releaseStopAccount = createDeferred();
     const releaseAbortedTask = createDeferred();
