@@ -1591,7 +1591,7 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("accounts sandbox skill reads against the original canonical file", async () => {
     const workspaceDir = "/workspace";
-    const readPath = "/workspace/.openclaw/sandbox-skills/.openclaw-generations/1/demo/SKILL.md";
+    const readPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
     const skillFile = "/agent-workspace/skills/demo/SKILL.md";
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
@@ -1625,7 +1625,7 @@ describe("before_tool_call loop detection behavior", () => {
     await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
         "tool-call-sandbox-skill",
-        { path: ".openclaw/sandbox-skills/.openclaw-generations/1/demo/SKILL.md" },
+        { path: ".openclaw/sandbox-skills/skills/demo/SKILL.md" },
         undefined,
         undefined,
       );

@@ -320,12 +320,12 @@ describe("syncWorkspaceSkills", () => {
     expect(secondAlphaPath).toBe(firstAlphaPath);
     expect(await pathExists(firstAlphaPath ?? "")).toBe(true);
     expect(await pathExists(secondGammaPath ?? "")).toBe(true);
-    // A skill that left the catalog, and a file the source no longer has, are
-    // the only things the refresh deletes.
-    expect(await pathExists(firstBetaPath ?? "")).toBe(false);
+    // A file the source dropped is deleted immediately; a child that left the
+    // catalog survives one refresh for readers still holding the old prompt.
     expect(await pathExists(path.join(path.dirname(firstAlphaPath ?? ""), "preserved.txt"))).toBe(
       false,
     );
+    expect(await pathExists(firstBetaPath ?? "")).toBe(true);
   });
 
   it("refreshes same-key skill trees after the watcher version changes", async () => {

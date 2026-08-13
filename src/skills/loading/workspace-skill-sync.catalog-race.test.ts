@@ -216,10 +216,31 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       for (const skill of newCodeModeSkills) {
         await expect(readCodeModeSkill(skill)).resolves.toContain(`# ${skill.name}`);
       }
-      // skill-08 left the catalog, so its child is pruned once the refresh lands.
-      expect(await pathExists(path.join(targetWorkspace, "skills", "skill-08", "SKILL.md"))).toBe(
-        false,
-      );
+      // skill-08 left the catalog but survives this refresh: reader A built its
+      // prompt from the previous catalog and still advertises that location.
+      const departedSkillPath = path.join(targetWorkspace, "skills", "skill-08", "SKILL.md");
+      expect(await pathExists(departedSkillPath)).toBe(true);
+      expect(second.skillsSnapshot.prompt).not.toContain("skill-08");
+
+      // Retention is one generation, not unbounded: the next change drops it.
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", "skill-10"),
+        name: "skill-10",
+        description: "skill-10 skill",
+      });
+      const thirdVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+      await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot: buildSkillSnapshot(sourceWorkspace, {
+          bundledSkillsDir,
+          managedSkillsDir,
+          snapshotVersion: thirdVersion,
+        }),
+      });
+      expect(await pathExists(departedSkillPath)).toBe(false);
     } finally {
       releasePause();
       cpSpy.mockRestore();
@@ -280,6 +301,111 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     expect(
       second.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "stable")?.filePath,
     ).toBe(stablePath);
+  });
+
+  it("recovers when a published child's entry changes type in the source", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "demo");
+    const publish = async () => {
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    await writeSkill({ dir: sourceSkillDir, name: "demo", description: "Demo skill" });
+    await fs.writeFile(path.join(sourceSkillDir, "AGENTS.md"), "guide v1\n");
+    await fs.writeFile(path.join(sourceSkillDir, "notes"), "note v1\n");
+    await publish();
+
+    // Skills ship AGENTS.md with a sibling CLAUDE.md symlink, and a plain file can
+    // become a directory. `fs.cp` only replaces regular files, so both changes
+    // must be reconciled before the copy or the child stalls half-updated.
+    await fs.symlink("AGENTS.md", path.join(sourceSkillDir, "CLAUDE.md"));
+    await fs.rm(path.join(sourceSkillDir, "notes"));
+    await fs.mkdir(path.join(sourceSkillDir, "notes"), { recursive: true });
+    await fs.writeFile(path.join(sourceSkillDir, "notes", "detail.md"), "detail\n");
+    await fs.writeFile(path.join(sourceSkillDir, "AGENTS.md"), "guide v2\n");
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    await publish();
+
+    const publishedDir = path.join(targetWorkspace, "skills", "demo");
+    expect(await fs.readFile(path.join(publishedDir, "AGENTS.md"), "utf8")).toBe("guide v2\n");
+    expect((await fs.lstat(path.join(publishedDir, "CLAUDE.md"))).isSymbolicLink()).toBe(true);
+    expect((await fs.lstat(path.join(publishedDir, "notes"))).isDirectory()).toBe(true);
+    expect(await fs.readFile(path.join(publishedDir, "notes", "detail.md"), "utf8")).toBe(
+      "detail\n",
+    );
+  });
+
+  it("gives basename-colliding skills stable directories across catalog changes", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    // Two skills whose directories share a basename. Suffixing by iteration order
+    // would let the survivor inherit the departed sibling's directory, so a run
+    // still advertising that location would read the wrong skill's content.
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha", "tools"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "beta", "tools"),
+      name: "beta",
+      description: "Beta skill",
+    });
+    const publish = async (skillFilter?: string[]) => {
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        ...(skillFilter ? { skillFilter } : {}),
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        ...(skillFilter ? { skillFilter } : {}),
+        skillsSnapshot,
+      });
+    };
+
+    const both = await publish();
+    const alphaPath = both.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "alpha",
+    )?.filePath;
+    const betaPath = both.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "beta",
+    )?.filePath;
+    expect(alphaPath).toBeTruthy();
+    expect(betaPath).toBeTruthy();
+    expect(alphaPath).not.toBe(betaPath);
+    expect(await fs.readFile(alphaPath ?? "", "utf8")).toContain("name: alpha");
+
+    // Eligibility narrows to beta only. Alpha's location must never start
+    // serving beta: a missing or stale file is a failure the model can report,
+    // silently reading a different skill is not.
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const betaOnly = await publish(["beta"]);
+    expect(await fs.readFile(alphaPath ?? "", "utf8")).toContain("name: alpha");
+    const betaOnlyPath = betaOnly.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "beta",
+    )?.filePath;
+    expect(await fs.readFile(betaOnlyPath ?? "", "utf8")).toContain("name: beta");
   });
 
   it("keeps node-hosted skills in the published sandbox catalog", async () => {

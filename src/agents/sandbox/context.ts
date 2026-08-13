@@ -360,7 +360,7 @@ async function resolveProvisionedSandboxContext(
   return sandboxContext;
 }
 
-async function resolveSandboxContextInternal(
+export async function resolveSandboxContext(
   params: ResolveSandboxContextParams,
 ): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
@@ -376,18 +376,6 @@ async function resolveSandboxContextInternal(
   } catch (error) {
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
   }
-}
-
-export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  execOverrides?: ExecPolicyOverrides;
-  requireCurrentConfig?: boolean;
-  sessionKey?: string;
-  skillsSnapshot?: SkillSnapshot;
-  workspaceDir?: string;
-}): Promise<SandboxContext | null> {
-  return resolveSandboxContextInternal(params);
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

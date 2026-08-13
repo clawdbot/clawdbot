@@ -7,6 +7,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { escapeSkillXml, type Skill } from "../../skills/loading/skill-contract.js";
+import { compactPromptSkills } from "../../skills/loading/skill-paths.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type {
@@ -184,9 +185,13 @@ function remapMaterializedSkillsSnapshotForPrompt(params: {
       skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
     }),
   );
+  // The renderer compacts $HOME-rooted locations to "~/…" and the materialized
+  // skills dir lives under the state dir, so match the serialized form. Matching
+  // the absolute path silently leaves host "~/…" locations in the prompt.
+  const serializedHostPaths = compactPromptSkills(hostSkills).map((skill) => skill.filePath);
   let prompt = params.skillsSnapshot.prompt;
   for (let index = 0; index < hostSkills.length; index += 1) {
-    const hostPath = hostSkills[index]?.filePath;
+    const hostPath = serializedHostPaths[index];
     const mappedPath = mappedSkills[index]?.filePath;
     if (!hostPath || !mappedPath || hostPath === mappedPath) {
       continue;
