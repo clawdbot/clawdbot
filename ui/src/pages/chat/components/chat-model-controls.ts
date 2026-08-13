@@ -14,12 +14,11 @@ import {
 } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
-import {
-  renderChatModelPicker,
-  type ChatModelCatalogState,
-  type ChatModelPickerOption,
-  type ChatModelPickerTargetGroup,
-} from "./chat-model-picker.ts";
+import type {
+  ChatModelPickerOption,
+  ChatModelPickerTargetGroup,
+} from "./chat-model-picker-options.ts";
+import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 

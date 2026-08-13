@@ -9,30 +9,14 @@ import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
   renderChatModelProviderIcon,
+  type ChatModelPickerOption,
+  type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
   onRetry?: () => void;
   status: "idle" | "loading" | "refreshing" | "ready" | "error";
-};
-
-export type ChatModelPickerOption = {
-  agentRuntimeId?: string;
-  commitValue: string;
-  contextWindow?: number;
-  disabled?: boolean;
-  isDefault: boolean;
-  label: string;
-  provider: string;
-  supportsTools?: boolean;
-  value: string;
-};
-
-export type ChatModelPickerTargetGroup = {
-  id: string;
-  label: string;
-  options: readonly { label: string; value: string }[];
 };
 
 type ChatModelPickerParams = {

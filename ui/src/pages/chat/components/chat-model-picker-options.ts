@@ -7,7 +7,24 @@ import {
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
-import type { ChatModelPickerOption, ChatModelPickerTargetGroup } from "./chat-model-picker.ts";
+
+export type ChatModelPickerOption = {
+  agentRuntimeId?: string;
+  commitValue: string;
+  contextWindow?: number;
+  disabled?: boolean;
+  isDefault: boolean;
+  label: string;
+  provider: string;
+  supportsTools?: boolean;
+  value: string;
+};
+
+export type ChatModelPickerTargetGroup = {
+  id: string;
+  label: string;
+  options: readonly { label: string; value: string }[];
+};
 
 // Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
 // which cannot be imported here (it drags terminal sanitizers into the bundle).

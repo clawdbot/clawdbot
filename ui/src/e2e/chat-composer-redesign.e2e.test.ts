@@ -661,9 +661,11 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      // The advertised default is unavailable, so no usable catalog row is
-      // marked as the default and no synthetic empty row is introduced.
-      await expect.poll(() => composer.locator('[data-chat-model-default="true"]').count()).toBe(0);
+      // The advertised default is configured but unavailable, so its row stays
+      // visible and disabled while the usable model remains selectable.
+      const unavailableDefault = composer.locator('[data-chat-model-default="true"]');
+      await expect.poll(() => unavailableDefault.count()).toBe(1);
+      await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     });
   });
@@ -715,10 +717,15 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
-      const picker = composer.locator("wa-select.chat-controls__model-picker");
-      const options = picker.locator("wa-option");
+      const picker = composer.locator("details.chat-controls__model-picker");
+      const options = picker.locator(
+        "button[data-chat-model-option]:not([data-chat-model-target])",
+      );
+      await picker.locator("summary").click();
       await expect.poll(() => options.count()).toBe(2);
-      await expect.poll(() => options.first().textContent()).toContain("Default (GPT-5.6 Sol)");
+      await expect.poll(() => options.last().isVisible()).toBe(true);
+      await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
+      await expect.poll(() => options.first().textContent()).toContain("Default");
       await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
       await expect
         .poll(() =>
@@ -733,13 +740,10 @@ suite.define(() => {
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
-        await picker.click();
-        await expect.poll(() => options.last().isVisible()).toBe(true);
         await composer.screenshot({
           animations: "disabled",
           path: `${artifactDir}/auth-cold-model-picker.png`,
         });
-        await picker.click();
       }
       await composer.locator('[data-chat-model-setup="true"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
