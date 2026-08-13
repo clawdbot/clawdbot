@@ -137,6 +137,17 @@ function addTrailingClassStem(value: string, output: Set<string>): void {
   }
 }
 
+function inlineConditionalStringValues(node: ts.Expression): string[] {
+  if (
+    !ts.isConditionalExpression(node) ||
+    !ts.isStringLiteral(node.whenTrue) ||
+    !ts.isStringLiteral(node.whenFalse)
+  ) {
+    return [];
+  }
+  return [node.whenTrue.text, node.whenFalse.text];
+}
+
 function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null {
   if (!ts.isPropertyAssignment(node) && !ts.isShorthandPropertyAssignment(node)) {
     return null;
@@ -163,6 +174,12 @@ export function collectControlUiClassReferences(
     } else if (ts.isTemplateExpression(node)) {
       addLiteralClassTokens(node.head.text, literalClasses);
       addTrailingClassStem(node.head.text, stems);
+      const firstSpan = node.templateSpans[0];
+      if (node.head.text === "" && firstSpan) {
+        for (const branch of inlineConditionalStringValues(firstSpan.expression)) {
+          addTrailingClassStem(`${branch}${firstSpan.literal.text}`, stems);
+        }
+      }
       for (const span of node.templateSpans) {
         addLiteralClassTokens(span.literal.text, literalClasses);
         if (ts.isTemplateMiddle(span.literal)) {

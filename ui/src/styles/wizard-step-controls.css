@@ -3,6 +3,12 @@
   gap: 12px;
 }
 
+.wizard-step__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .wizard-step__external-link {
   justify-self: start;
 }
@@ -21,6 +27,11 @@
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.08em;
+}
+
+.wizard-step__options {
+  display: grid;
+  gap: 8px;
 }
 
 .wizard-step__option {
