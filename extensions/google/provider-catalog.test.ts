@@ -26,9 +26,10 @@ describe("google provider catalog", () => {
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
+        "gemini-3.7-flash",
       ]),
     );
-    expect(provider.models.find((model) => model.id === "gemini-3.6-flash")).toMatchObject({
+    expect(provider.models.find((model) => model.id === "gemini-3.7-flash")).toMatchObject({
       contextWindow: 1_048_576,
       maxTokens: 65_536,
       reasoning: true,
