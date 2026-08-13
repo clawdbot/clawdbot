@@ -149,7 +149,7 @@ function readSourceInstallSkillKey(skillDir: string): string | undefined {
   }
 }
 
-function resolveSkillEntryMetadata(params: {
+export function resolveSkillEntryMetadata(params: {
   frontmatter: ParsedSkillFrontmatter;
   skillDir: string;
 }): OpenClawSkillMetadata | undefined {

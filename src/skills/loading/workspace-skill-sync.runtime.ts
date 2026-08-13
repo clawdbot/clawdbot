@@ -9,18 +9,20 @@ import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveUserPath } from "../../utils.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
   SkillSnapshot,
+  SkillTelemetrySource,
   SkillUsagePath,
 } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
-import { resolveSkillKey } from "./frontmatter.js";
+import { resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
 import { loadSkillsFromDirSafe } from "./local-loader.js";
 import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills, resolveSkillEntryMetadata } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import {
   collectRetainedSyncedSkillGenerations,
@@ -54,6 +56,7 @@ type SyncedSkillsManifest = {
   entryKeys: string[];
   generation: number;
   skillsVersion: number;
+  skillUsagePaths?: SkillUsagePath[];
 };
 
 export type SyncedWorkspaceSkills = {
@@ -132,6 +135,119 @@ function resolveSyncedSkillIdentity(skillKey: string, skillName: string): string
   return JSON.stringify([skillKey, skillName]);
 }
 
+function isSkillTelemetrySource(value: unknown): value is SkillTelemetrySource {
+  return value === "bundled" || value === "unknown" || value === "workspace";
+}
+
+function parseSyncedSkillUsagePaths(value: unknown): SkillUsagePath[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const skillUsagePaths: SkillUsagePath[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.readPath !== "string" ||
+      typeof entry.skillFile !== "string" ||
+      typeof entry.skillName !== "string" ||
+      !isSkillTelemetrySource(entry.skillSource)
+    ) {
+      return undefined;
+    }
+    skillUsagePaths.push({
+      readPath: entry.readPath,
+      skillFile: entry.skillFile,
+      skillName: entry.skillName,
+      skillSource: entry.skillSource,
+    });
+  }
+  return skillUsagePaths;
+}
+
+function applyPublishedSkillTelemetrySource(
+  skill: SkillEntry["skill"],
+  skillSource: SkillTelemetrySource | undefined,
+): SkillEntry["skill"] {
+  // Generation reload defaults to source "workspace". allowBundled and
+  // workspace provenance checks need the original loader labels.
+  const source =
+    skillSource === "bundled"
+      ? "openclaw-bundled"
+      : skillSource === "workspace"
+        ? "openclaw-workspace"
+        : undefined;
+  if (!source) {
+    return skill;
+  }
+  return {
+    ...skill,
+    source,
+    sourceInfo: {
+      ...skill.sourceInfo,
+      source,
+    },
+  };
+}
+
+function loadPublishedGenerationSkillEntries(
+  generationDir: string,
+  skillUsagePaths?: SkillUsagePath[],
+): SkillEntry[] {
+  const loaded = loadSkillsFromDirSafe({
+    dir: generationDir,
+    source: "workspace",
+  });
+  const sourceByName = new Map(
+    (skillUsagePaths ?? []).map((usage) => [usage.skillName, usage.skillSource]),
+  );
+  return loaded.skills.map((skill) => {
+    const frontmatter = loaded.frontmatterByFilePath.get(skill.filePath) ?? {};
+    const metadata = resolveSkillEntryMetadata({
+      frontmatter,
+      skillDir: skill.baseDir,
+    });
+    return {
+      skill: applyPublishedSkillTelemetrySource(skill, sourceByName.get(skill.name)),
+      frontmatter,
+      ...(metadata ? { metadata } : {}),
+      invocation: resolveSkillInvocationPolicy(frontmatter),
+    };
+  });
+}
+
+function projectSnapshotFromPublishedGeneration(params: {
+  targetSkillsDir: string;
+  targetWorkspaceDir: string;
+  generation: number;
+  config?: OpenClawConfig;
+  skillFilter?: string[];
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+  skillsVersion: number;
+  skillUsagePaths?: SkillUsagePath[];
+}): SkillSnapshot | undefined {
+  // Physical files stay in the generation dir. Prompt notes and node:// members
+  // are this run's projection; do not return another run's cached snapshot.
+  const fileEntries = loadPublishedGenerationSkillEntries(
+    resolveSyncedSkillGenerationDir(params.targetSkillsDir, params.generation),
+    params.skillUsagePaths,
+  );
+  if (fileEntries.length === 0) {
+    return undefined;
+  }
+  return buildSkillSnapshot(params.targetWorkspaceDir, {
+    entries: mergeRemoteNodeSkillEntries(fileEntries, {
+      canExec: params.eligibility?.nodeSkills?.canExec,
+      node: params.eligibility?.nodeSkills?.node,
+    }),
+    config: params.config,
+    skillFilter: params.skillFilter,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+    snapshotVersion: params.skillsVersion,
+  });
+}
+
 function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null {
   if (
     !isRecord(value) ||
@@ -153,10 +269,18 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     }
     generation = value.generation;
   }
+  let skillUsagePaths: SkillUsagePath[] | undefined;
+  if (value.skillUsagePaths !== undefined) {
+    skillUsagePaths = parseSyncedSkillUsagePaths(value.skillUsagePaths);
+    if (!skillUsagePaths) {
+      return null;
+    }
+  }
   return {
     entryKeys: value.entryKeys,
     generation,
     skillsVersion: value.skillsVersion,
+    ...(skillUsagePaths ? { skillUsagePaths } : {}),
   };
 }
 
@@ -293,44 +417,37 @@ async function hydratePublishedSyncedSkillsCache(params: {
     }
     throw error;
   }
-  const loaded = loadSkillsFromDirSafe({
-    dir: generationDir,
-    source: "workspace",
-  });
-  if (loaded.skills.length === 0) {
+  const entries = loadPublishedGenerationSkillEntries(generationDir);
+  if (entries.length === 0) {
     return undefined;
   }
-  const entries = loaded.skills.map((skill) => ({
-    skill,
-    frontmatter: loaded.frontmatterByFilePath.get(skill.filePath) ?? {},
-  }));
+  const skillUsagePaths =
+    params.manifest.skillUsagePaths?.map((usage) => ({ ...usage })) ??
+    entries.map((entry) => ({
+      readPath: entry.skill.filePath,
+      skillFile: canonicalizePath(entry.skill.filePath),
+      skillName: entry.skill.name,
+      skillSource: resolveSkillTelemetrySource(entry.skill),
+    }));
+  const snapshot = projectSnapshotFromPublishedGeneration({
+    targetSkillsDir: params.targetSkillsDir,
+    targetWorkspaceDir: params.targetWorkspaceDir,
+    generation: params.manifest.generation,
+    config: params.config,
+    skillFilter: params.skillFilter,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+    skillsVersion: params.manifest.skillsVersion,
+    skillUsagePaths,
+  });
+  if (!snapshot) {
+    return undefined;
+  }
   const entry = {
     generation: params.manifest.generation,
-    manifestKey: JSON.stringify([
-      params.manifest.skillsVersion,
-      entries
-        .map((skillEntry) =>
-          resolveSyncedSkillIdentity(
-            resolveSkillKey(skillEntry.skill, skillEntry),
-            skillEntry.skill.name,
-          ),
-        )
-        .toSorted(),
-    ]),
-    skillUsagePaths: loaded.skills.map((skill) => ({
-      readPath: skill.filePath,
-      skillFile: canonicalizePath(skill.filePath),
-      skillName: skill.name,
-      skillSource: resolveSkillTelemetrySource(skill),
-    })),
-    skillsSnapshot: buildSkillSnapshot(params.targetWorkspaceDir, {
-      entries,
-      config: params.config,
-      agentId: params.agentId,
-      skillFilter: params.skillFilter,
-      eligibility: params.eligibility,
-      snapshotVersion: params.manifest.skillsVersion,
-    }),
+    manifestKey: JSON.stringify([params.manifest.skillsVersion, params.manifest.entryKeys]),
+    skillUsagePaths,
+    skillsSnapshot: snapshot,
   };
   writeSyncedSkillsUsageCache(params.targetSkillsDir, entry);
   pruneSyncedSkillsUsageCache(100);
@@ -410,16 +527,37 @@ export async function syncWorkspaceSkills(params: {
     const manifestKey = manifest
       ? JSON.stringify([manifest.skillsVersion, manifest.entryKeys])
       : undefined;
+    const publishedGeneration = cachedUsage?.generation ?? 0;
     if (
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
-      cachedUsage?.manifestKey === manifestKey
+      cachedUsage?.manifestKey === manifestKey &&
+      publishedGeneration > 0
     ) {
-      return {
-        skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
-        skillsSnapshot: cachedUsage.skillsSnapshot,
-        generation: cachedUsage.generation ?? 0,
-      };
+      const projected = projectSnapshotFromPublishedGeneration({
+        targetSkillsDir,
+        targetWorkspaceDir: targetDir,
+        generation: publishedGeneration,
+        config: params.config,
+        skillFilter: params.skillFilter,
+        agentId: params.agentId,
+        eligibility: params.eligibility,
+        skillsVersion,
+        skillUsagePaths: cachedUsage.skillUsagePaths,
+      });
+      if (projected) {
+        writeSyncedSkillsUsageCache(targetSkillsDir, {
+          generation: publishedGeneration,
+          manifestKey: cachedUsage.manifestKey,
+          skillUsagePaths: cachedUsage.skillUsagePaths,
+          skillsSnapshot: projected,
+        });
+        return {
+          skillUsagePaths: cachedUsage.skillUsagePaths.map((usage) => ({ ...usage })),
+          skillsSnapshot: projected,
+          generation: publishedGeneration,
+        };
+      }
     }
 
     const entries = loadWorkspaceSkills(sourceDir, {
@@ -519,12 +657,25 @@ export async function syncWorkspaceSkills(params: {
       // Leave the previously published complete catalog and generation in
       // place. A failed refresh must not force concurrent readers onto a
       // partial live tree.
-      if (cachedUsage) {
-        return {
-          skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
-          skillsSnapshot: cachedUsage.skillsSnapshot,
+      if (cachedUsage && (cachedUsage.generation ?? 0) > 0) {
+        const recoveredSnapshot = projectSnapshotFromPublishedGeneration({
+          targetSkillsDir,
+          targetWorkspaceDir: targetDir,
           generation: cachedUsage.generation ?? 0,
-        };
+          config: params.config,
+          skillFilter: params.skillFilter,
+          agentId: params.agentId,
+          eligibility: params.eligibility,
+          skillsVersion: cachedUsage.skillsSnapshot.version ?? skillsVersion,
+          skillUsagePaths: cachedUsage.skillUsagePaths,
+        });
+        if (recoveredSnapshot) {
+          return {
+            skillUsagePaths: cachedUsage.skillUsagePaths.map((usage) => ({ ...usage })),
+            skillsSnapshot: recoveredSnapshot,
+            generation: cachedUsage.generation ?? 0,
+          };
+        }
       }
       // First publish has no committed generation. Returning nextSkillsSnapshot
       // after deleting generationDir would advertise unreadable <location> paths.
@@ -538,6 +689,7 @@ export async function syncWorkspaceSkills(params: {
       entryKeys: plans.map((plan) => plan.identity).toSorted(),
       generation: nextGeneration,
       skillsVersion,
+      skillUsagePaths,
     };
     await writeJson(manifestPath, nextManifest, { trailingNewline: true });
     writeSyncedSkillsUsageCache(targetSkillsDir, {
@@ -547,15 +699,22 @@ export async function syncWorkspaceSkills(params: {
       skillsSnapshot: nextSkillsSnapshot,
     });
     pruneSyncedSkillsUsageCache(100);
-    await pruneSyncedSkillGenerations({
-      targetSkillsDir,
-      retainGenerations: collectRetainedSyncedSkillGenerations({
+    try {
+      await pruneSyncedSkillGenerations({
         targetSkillsDir,
-        currentGeneration: nextGeneration,
-        previousGeneration,
-      }),
-      retainRootBasenames,
-    });
+        retainGenerations: collectRetainedSyncedSkillGenerations({
+          targetSkillsDir,
+          currentGeneration: nextGeneration,
+          previousGeneration,
+        }),
+        retainRootBasenames,
+      });
+    } catch (error) {
+      // The new generation is already the committed catalog. Prune is cleanup;
+      // failing it must not hide that catalog from this run's prompt.
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
+      skillsLogger.warn(`Failed to prune published sandbox skill generations: ${message}`);
+    }
     return {
       skillUsagePaths,
       skillsSnapshot: nextSkillsSnapshot,

@@ -185,7 +185,9 @@ describe("syncWorkspaceSkills", () => {
     copy.mockRestore();
 
     expect(second.skillUsagePaths).toEqual(first.skillUsagePaths);
-    expect(second.skillsSnapshot).toEqual(first.skillsSnapshot);
+    expect(second.generation).toBe(first.generation);
+    expect(second.skillsSnapshot.prompt).toBe(first.skillsSnapshot.prompt);
+    expect(second.skillsSnapshot.skills).toEqual(first.skillsSnapshot.skills);
     expect(copyCount).toBe(0);
     expect(
       await pathExists(
@@ -504,6 +506,229 @@ describe("syncWorkspaceSkills", () => {
       await fs.readFile(path.join(path.dirname(firstFilePath ?? ""), "asset.txt"), "utf8"),
     ).toBe("before");
     expect(await pathExists(firstFilePath ?? "")).toBe(true);
+  });
+
+  it("keeps canonical skill identity after restarting from the published generation", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillFile = path.join(sourceWorkspace, "skills", "alpha", "SKILL.md");
+    await writeSkill({
+      dir: path.dirname(sourceSkillFile),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+    const first = await syncWorkspaceSkills(syncParams);
+    const firstUsage = first.skillUsagePaths[0];
+    expect(firstUsage?.skillFile).toBe(sourceSkillFile);
+    expect(firstUsage?.readPath).toContain(`${path.sep}.openclaw-generations${path.sep}`);
+
+    dropSyncedSkillsUsageCacheForTests(targetWorkspace);
+    const recovered = await syncWorkspaceSkills(syncParams);
+    const recoveredUsage = recovered.skillUsagePaths[0];
+    expect(recoveredUsage?.readPath).toBe(firstUsage?.readPath);
+    expect(recoveredUsage?.skillFile).toBe(sourceSkillFile);
+    expect(recoveredUsage?.skillFile).not.toContain(".openclaw-generations");
+  });
+
+  it("keeps canonical skill metadata when projecting a reused generation", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+      metadata: '{"openclaw":{"skillKey":"canonical-alpha","primaryEnv":"ALPHA_KEY"}}',
+    });
+    const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+    const first = await syncWorkspaceSkills(syncParams);
+    expect(first.skillsSnapshot.skills).toEqual([
+      {
+        name: "alpha",
+        skillKey: "canonical-alpha",
+        primaryEnv: "ALPHA_KEY",
+      },
+    ]);
+
+    const second = await syncWorkspaceSkills(syncParams);
+    expect(second.generation).toBe(first.generation);
+    expect(second.skillsSnapshot.skills).toEqual(first.skillsSnapshot.skills);
+  });
+
+  it("keeps source-origin skill keys when projecting a reused generation", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({
+      dir: sourceSkillDir,
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await fs.mkdir(path.join(sourceSkillDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceSkillDir, ".openclaw", "source-origin.json"),
+      JSON.stringify({ slug: "custom-key" }),
+      "utf8",
+    );
+    const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+    const first = await syncWorkspaceSkills(syncParams);
+    expect(first.skillsSnapshot.skills[0]?.skillKey).toBe("custom-key");
+    const second = await syncWorkspaceSkills(syncParams);
+    expect(second.generation).toBe(first.generation);
+    expect(second.skillsSnapshot.skills[0]?.skillKey).toBe("custom-key");
+  });
+
+  it("projects the current eligibility onto a retained catalog after copy failure", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
+    const remoteNote =
+      "Remote macOS node available (Build Mac). Run macOS-only skills via exec host=node on that node.";
+    const firstSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const first = await syncWorkspaceSkills({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: firstSnapshot,
+      eligibility: {
+        nodeSkills: { canExec: true },
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+    expect(first.skillsSnapshot.prompt).toContain(remoteNote);
+
+    await writeSkill({
+      dir: sourceSkillDir,
+      name: "alpha",
+      description: "Alpha skill updated",
+    });
+    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const secondSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: nextVersion,
+    });
+    const copy = vi
+      .spyOn(nodeFs.promises, "cp")
+      .mockRejectedValueOnce(new Error("injected copy failure"));
+    const recovered = await syncWorkspaceSkills({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: secondSnapshot,
+      eligibility: { nodeSkills: { canExec: false } },
+    });
+    copy.mockRestore();
+
+    expect(recovered.generation).toBe(first.generation);
+    expect(recovered.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: false });
+    expect(recovered.skillsSnapshot.prompt).not.toContain(remoteNote);
+    expect(recovered.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha"]);
+  });
+
+  it("keeps a committed catalog when generation pruning fails", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    const publish = async (description: string) => {
+      await writeSkill({
+        dir: sourceSkillDir,
+        name: "alpha",
+        description,
+      });
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    const first = await publish("generation-one");
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const second = await publish("generation-two");
+    expect(second.generation).toBeGreaterThan(first.generation);
+
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
+    const rm = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, opts) => {
+      if (
+        String(target).includes(
+          `${path.sep}.openclaw-generations${path.sep}${String(first.generation)}`,
+        )
+      ) {
+        throw new Error("injected prune failure");
+      }
+      return await originalRm(target, opts);
+    });
+    const third = await publish("generation-three");
+    rm.mockRestore();
+
+    expect(third.generation).toBeGreaterThan(second.generation);
+    expect(third.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha"]);
+    expect(third.skillUsagePaths).toHaveLength(1);
+    expect(await pathExists(third.skillUsagePaths[0]?.readPath ?? "")).toBe(true);
   });
 
   it("returns no snapshot paths when the first generation copy fails", async () => {

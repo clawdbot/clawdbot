@@ -23,6 +23,7 @@ import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
   createMaterializedSkillsBridge,
   createWorkspaceSkillSyncFixtures,
+  dropSyncedSkillsUsageCacheForTests,
   pathExists,
   sortedSkillNames,
 } from "./workspace-skill-sync.test-support.js";
@@ -325,6 +326,97 @@ describe("syncWorkspaceSkills catalog generations", () => {
     }
   });
 
+  it("recovers a mixed local/node catalog after cold-cache copy failure", async () => {
+    resetRemoteNodeSkillsForTests();
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "demo"),
+      name: "demo",
+      description: "Demo skill",
+    });
+    recordRemoteSkillNodeInfo({
+      nodeId: "node-1",
+      connId: "conn-1",
+      displayName: "Build Mac",
+      commands: ["system.run"],
+    });
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      displayName: "Build Mac",
+      skills: [
+        {
+          name: "release-helper",
+          description: "Prepare a release",
+          content: [
+            "---",
+            "name: release-helper",
+            "description: Prepare a release",
+            "---",
+            "",
+            "# Instructions",
+            "",
+          ].join("\n"),
+        },
+      ],
+    });
+    try {
+      const firstSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+        eligibility: { nodeSkills: { canExec: true } },
+      });
+      const syncParams = {
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        eligibility: { nodeSkills: { canExec: true } } as const,
+      };
+      const first = await syncWorkspaceSkills({
+        ...syncParams,
+        skillsSnapshot: firstSnapshot,
+      });
+      expect(sortedSkillNames(first.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
+        "demo",
+        "release-helper",
+      ]);
+
+      dropSyncedSkillsUsageCacheForTests(targetWorkspace);
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", "demo"),
+        name: "demo",
+        description: "Demo skill updated",
+      });
+      const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+      const secondSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: nextVersion,
+        eligibility: { nodeSkills: { canExec: true } },
+      });
+      const copy = vi
+        .spyOn(nodeFs.promises, "cp")
+        .mockRejectedValueOnce(new Error("injected copy failure"));
+      const recovered = await syncWorkspaceSkills({
+        ...syncParams,
+        skillsSnapshot: secondSnapshot,
+      });
+      copy.mockRestore();
+
+      expect(recovered.generation).toBe(first.generation);
+      expect(sortedSkillNames(recovered.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
+        "demo",
+        "release-helper",
+      ]);
+    } finally {
+      resetRemoteNodeSkillsForTests();
+    }
+  });
+
   it("keeps a leased generation readable after later catalogs replace it", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
@@ -487,5 +579,72 @@ describe("syncWorkspaceSkills catalog generations", () => {
       releasePublishedSandboxSkills(ownerA);
       releasePublishedSandboxSkills(ownerB);
     }
+  });
+
+  it("does not reuse a published catalog prompt across node-eligibility changes", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+    const remoteNote =
+      "Remote macOS node available (Build Mac). Run macOS-only skills via exec host=node on that node.";
+
+    const first = await syncWorkspaceSkills({
+      ...syncParams,
+      eligibility: {
+        nodeSkills: { canExec: true },
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+    const second = await syncWorkspaceSkills({
+      ...syncParams,
+      eligibility: { nodeSkills: { canExec: false } },
+    });
+
+    expect(first.skillsSnapshot.prompt).toContain(remoteNote);
+    expect(first.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: true });
+    expect(second.generation).toBe(first.generation);
+    expect(second.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: false });
+    expect(second.skillsSnapshot.prompt).not.toContain(remoteNote);
+
+    const otherNote = "Remote macOS node available (Other Mac).";
+    const third = await syncWorkspaceSkills({
+      ...syncParams,
+      eligibility: {
+        nodeSkills: { canExec: true },
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: otherNote,
+        },
+      },
+    });
+    expect(third.generation).toBe(first.generation);
+    expect(third.skillsSnapshot.nodeSkillsEligibility).toEqual({ canExec: true });
+    expect(third.skillsSnapshot.prompt).toContain(otherNote);
+    expect(third.skillsSnapshot.prompt).not.toContain(remoteNote);
   });
 });
