@@ -19,7 +19,8 @@ export async function restartRunningChannelAccounts(
   for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
     for (const [accountId, status] of Object.entries(accounts ?? {})) {
       const channel = channelId as ChannelId;
-      if (status?.running !== true || manager.isManuallyStopped(channel, accountId)) {
+      const shouldRestart = status?.running === true || status?.restartPending === true;
+      if (!shouldRestart || manager.isManuallyStopped(channel, accountId)) {
         continue;
       }
       // A suspension can commit while an account stop is awaited; later
@@ -28,9 +29,11 @@ export async function restartRunningChannelAccounts(
         return;
       }
       try {
-        await manager.stopChannel(channel, accountId, { manual: false });
-        if (!opts.shouldContinue()) {
-          return;
+        if (status?.running === true) {
+          await manager.stopChannel(channel, accountId, { manual: false });
+          if (!opts.shouldContinue()) {
+            return;
+          }
         }
         await manager.startChannel(channel, accountId, { preserveManualStop: true });
         const restarted = manager.getRuntimeSnapshot().channelAccounts[channel]?.[accountId];

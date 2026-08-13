@@ -1080,6 +1080,9 @@ describe("server-channels auto restart", () => {
 
     releaseFirstStop.resolve();
     await flushMicrotasks();
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
 
     const secondRestart = restartRunningChannelAccounts(manager, {
       shouldContinue: () => true,
@@ -1087,9 +1090,9 @@ describe("server-channels auto restart", () => {
     });
     await secondRestart;
 
-    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(stopAccount).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(2);
-    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
   });
@@ -1130,6 +1133,52 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(2);
     const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("marks a late successful stopAccount timeout as stopped after task teardown", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTaskRejected;
+
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to finalize stopped runtime",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toBeNull();

@@ -1538,6 +1538,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                       currentStopAfterFence.error === stopAccountFence.timeoutError
                     ) {
                       store.stops.delete(id);
+                      if (
+                        !store.aborts.has(id) &&
+                        !store.tasks.has(id) &&
+                        !store.starting.has(id)
+                      ) {
+                        recoveryStopTimedOut.delete(rKey);
+                        recoveryStartRequested.delete(rKey);
+                        clearPluginCommandCatalogOwner(store, id);
+                        setStoppedRuntime(channelId, id, {
+                          restartPending: accountRestartPending,
+                          lastStopAt: Date.now(),
+                        });
+                      }
                     }
                   }
                 });
