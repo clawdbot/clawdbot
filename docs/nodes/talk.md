@@ -161,6 +161,9 @@ bound OpenClaw session inside Codex realtime V3 instead of proxying turns throug
 Subscription OAuth requires
 `plugins.entries.codex.config.appServer.transport: "stdio"`; Codex app-server negotiates the
 WebRTC media transport internally. See the [Codex plugin guide](/plugins/codex-harness).
+Codex realtime voice requires a Gateway-local session placement; if an existing session is
+currently placed on a remote worker, session creation fails closed rather than moving or
+duplicating that session.
 
 For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
 browser sessions, Platform credentials remain preferred in this order: the
