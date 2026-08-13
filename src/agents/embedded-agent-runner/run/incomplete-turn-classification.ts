@@ -34,6 +34,7 @@ export type IncompleteTurnAttempt = Pick<
   | "messagesSnapshot"
   | "replayMetadata"
   | "currentAttemptReplayMetadata"
+  | "settledTurnFinalizationContext"
   | "terminal"
   | "toolMetas"
 > &

@@ -430,6 +430,7 @@ enum class GatewayMethod(
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
   NodeSkillsUpdate("node.skills.update"),
+  NodeRunnerInventoryUpdate("node.runnerInventory.update"),
   NodePendingDrain("node.pending.drain"),
   NodePendingEnqueue("node.pending.enqueue"),
   NodeInvoke("node.invoke"),
@@ -577,6 +578,9 @@ enum class GatewayMethod(
   DesktopLaunch("desktop.launch"),
   DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
   DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
+  PortalList("portal.list"),
+  PortalOpen("portal.open"),
+  PortalClose("portal.close"),
 }
 
 enum class GatewayEvent(
@@ -609,6 +613,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),
   NodeInvokeRequest("node.invoke.request"),
@@ -628,4 +633,5 @@ enum class GatewayEvent(
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
+  PortalChanged("portal.changed"),
 }

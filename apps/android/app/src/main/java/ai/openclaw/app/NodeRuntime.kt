@@ -1119,6 +1119,8 @@ class NodeRuntime private constructor(
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
+  private val _desktopObserveAvailable = MutableStateFlow(false)
+  val desktopObserveAvailable: StateFlow<Boolean> = _desktopObserveAvailable.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
@@ -2914,6 +2916,14 @@ class NodeRuntime private constructor(
     _serverName.value = "OpenClaw Gateway"
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
+    replaceGatewayMethods(setOf(GatewayMethod.DesktopObserve.rawValue))
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = AndroidScreenshotFixture.controlUiBaseUrl,
+        token = null,
+        password = null,
+        tlsFingerprintSha256 = null,
+      )
     updateGatewayDefaultAgentId("main")
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
@@ -7523,6 +7533,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayMethodsLock) {
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
+      _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in methods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in methods
       gatewayMethodsEpoch += 1
     }

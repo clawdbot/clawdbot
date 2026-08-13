@@ -74,7 +74,7 @@ export function resolveProjectChip(params: {
         )
       : normalizedQuery
         ? []
-        : params.recents,
+        : params.recents.filter((recent) => recent.kind === "folder"),
     showWorkspace:
       mode === "projects" &&
       (!normalizedQuery ||

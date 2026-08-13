@@ -223,7 +223,7 @@ describe("resolveSlackChannelConfig", () => {
     );
   });
 
-  it("matches per-channel users only in their selected workspace", () => {
+  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
     const channels = {
       "team:T11111111:channel:C01234567": {
         users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],

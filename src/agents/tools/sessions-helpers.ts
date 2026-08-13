@@ -5,10 +5,10 @@
  */
 export {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
 } from "./sessions-access.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 export {
@@ -18,6 +18,7 @@ export {
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
+  isExpectedSessionLookupMiss,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";

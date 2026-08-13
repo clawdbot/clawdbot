@@ -25,7 +25,9 @@ import {
   type WorkerEnvironmentStore,
 } from "./store.js";
 
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
+  installKind?: "bundle" | "local";
+};
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 
@@ -670,7 +672,7 @@ describe("worker environment store", () => {
     ).toThrow("lease id is immutable");
   });
 
-  it("persists a ready node lease without validating SSH metadata", () => {
+  it("persists a credential-bound local receipt without SSH metadata", () => {
     createIntent("worker-node", { settings: { device: "device-1" } });
     store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
 
@@ -678,23 +680,38 @@ describe("worker environment store", () => {
       environmentId: "worker-node",
       from: "provisioning",
       to: "ready",
-      patch: { leaseId: "device-lease-1", sshEndpoint: null, sharedHost: true },
+      patch: {
+        leaseId: "device-lease-1",
+        sshEndpoint: null,
+        sharedHost: true,
+        ...readyPatch({ ...BOOTSTRAP_RECEIPT, installKind: "local" }),
+      },
     });
 
     expect(ready).toMatchObject({
       state: "ready",
       leaseId: "device-lease-1",
       sshEndpoint: null,
-      bootstrapReceipt: null,
+      bootstrapReceipt: {
+        ...BOOTSTRAP_RECEIPT,
+        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+        installKind: "local",
+      },
       sharedHost: true,
       ownerEpoch: 1,
     });
     expect(store.get("worker-node")).toEqual(ready);
     expect(
       database.db
-        .prepare("SELECT ssh_host, ssh_host_key FROM worker_environments WHERE environment_id = ?")
+        .prepare(
+          "SELECT ssh_host, ssh_host_key, bootstrap_install_kind FROM worker_environments WHERE environment_id = ?",
+        )
         .get("worker-node"),
-    ).toEqual({ ssh_host: null, ssh_host_key: null });
+    ).toEqual({
+      ssh_host: null,
+      ssh_host_key: null,
+      bootstrap_install_kind: "local",
+    });
   });
 
   it("enforces one credential-bound session and teardown fencing", () => {

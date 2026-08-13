@@ -102,6 +102,11 @@ describe("Dynamic route startup bridge", () => {
     expect(routeIdFromPath("/settings/secrets")).toBe("secrets");
   });
 
+  it("registers the Portals workspace path", () => {
+    expect(pathForRoute("portals")).toBe("/portals");
+    expect(routeIdFromPath("/portals")).toBe("portals");
+  });
+
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
     async ({ routeId, location: initialLocation }) => {

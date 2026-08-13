@@ -7,7 +7,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  buildFallbackSlashCommands,
+  buildSlashCommandsFromEntries,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -967,6 +972,25 @@ describe("refreshChatAvatar", () => {
   });
 });
 
+function installPairClientPresentationCommand() {
+  replaceSlashCommands(
+    buildSlashCommandsFromEntries([
+      {
+        name: "pair",
+        textAliases: ["/pair"],
+        description: "Pair a device.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: true,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
+      },
+    ]),
+  );
+}
+
 describe("handleSendChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
@@ -1038,8 +1062,198 @@ describe("handleSendChat", () => {
   );
 
   afterEach(() => {
+    replaceSlashCommands(buildFallbackSlashCommands());
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["/pair", "/pair:", "/pair :"])(
+    "handles parsed no-argument presentation %s before queueing",
+    async (chatMessage) => {
+      installPairClientPresentationCommand();
+      const dispatchClientPresentation = vi.fn(async () => true);
+      const baselineMessages = [{ role: "assistant", content: "Ready." }];
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": { status: "started" } },
+        chatMessage,
+        chatMessages: baselineMessages,
+        dispatchClientPresentation,
+      });
+
+      await handleSendChat(host);
+
+      expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatMessages).toEqual(baselineMessages);
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
+  it("does not mutate another session after an awaited presentation is handled", async () => {
+    installPairClientPresentationCommand();
+    const handled = createDeferred<boolean>();
+    const dispatchClientPresentation = vi.fn(() => handled.promise);
+    const otherSessionHistory = [{ text: "keep this", ts: 1 }];
+    const host = makeChatHost({
+      chatMessage: "/pair",
+      dispatchClientPresentation,
+      sessionKey: "agent:main",
+      chatLocalInputHistoryBySession: { "agent:other": otherSessionHistory },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+
+    host.sessionKey = "agent:other";
+    host.chatMessage = "/pair";
+    handled.resolve(true);
+    await send;
+
+    expect(host.chatMessage).toBe("/pair");
+    expect(host.chatLocalInputHistoryBySession["agent:other"]).toEqual(otherSessionHistory);
+    expect(host.chatLocalInputHistoryBySession["agent:main"]).toBeUndefined();
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it.each(["/pair status", "/pair approve request-1", "/pair:qr", "/pair unknown"])(
+    "keeps argument-bearing presentation command %s on the remote path",
+    async (chatMessage) => {
+      installPairClientPresentationCommand();
+      const dispatchClientPresentation = vi.fn(async () => true);
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": { status: "started" } },
+        chatMessage,
+        dispatchClientPresentation,
+      });
+
+      await handleSendChat(host);
+
+      expect(dispatchClientPresentation).not.toHaveBeenCalled();
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: chatMessage }),
+      );
+    },
+  );
+
+  it("keeps presentation commands with a persisted reply target on the remote path", async () => {
+    installPairClientPresentationCommand();
+    const sent = createDeferred<unknown>();
+    const dispatchClientPresentation = vi.fn(async () => true);
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": () => sent.promise },
+      chatMessage: "/pair",
+      chatReplyTarget: {
+        messageId: "id:pair-source",
+        text: "pairing context",
+        senderLabel: "Molty",
+        sourceMessageId: "pair-source",
+      },
+      dispatchClientPresentation,
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(dispatchClientPresentation).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]).toMatchObject({ text: "/pair", replyToId: "pair-source" });
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "/pair", replyToId: "pair-source" }),
+    );
+    expect(host.chatReplyTarget?.messageId).toBe("id:pair-source");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it.each([
+    { name: "unavailable", dispatch: vi.fn(async () => false) },
+    {
+      name: "failed",
+      dispatch: vi.fn(async () => {
+        throw new Error("presentation unavailable");
+      }),
+    },
+  ])("retains remote behavior when client presentation is $name", async ({ dispatch }) => {
+    installPairClientPresentationCommand();
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": { status: "started" } },
+      chatMessage: "/pair",
+      dispatchClientPresentation: dispatch,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "/pair" }),
+    );
+  });
+
+  it("does not intercept offline presentation commands before durable queue admission", async () => {
+    installPairClientPresentationCommand();
+    const dispatchClientPresentation = vi.fn(async () => true);
+    const host = makeChatHost({
+      chatMessage: "/pair",
+      connected: false,
+      dispatchClientPresentation,
+    });
+
+    await handleSendChat(host);
+
+    expect(dispatchClientPresentation).not.toHaveBeenCalled();
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ text: "/pair", sendState: "waiting-reconnect" }),
+    ]);
+
+    const request = makeRequestMock({
+      "chat.history": idleChatHistory(),
+      "chat.send": { status: "started" },
+    });
+    host.client = clientWithRequest(request);
+    host.connected = true;
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(dispatchClientPresentation).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "/pair" }),
+    );
+  });
+
+  it("keeps presentation commands with attachments on the remote path", async () => {
+    installPairClientPresentationCommand();
+    const dispatchClientPresentation = vi.fn(async () => true);
+    const file = new File(["pairing notes"], "pairing.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "pairing-notes",
+        mimeType: "text/plain",
+        fileName: file.name,
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:text/plain;base64,cGFpcmluZyBub3Rlcw==",
+      file,
+    });
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": { status: "started" } },
+      chatMessage: "/pair",
+      chatAttachments: [attachment],
+      dispatchClientPresentation,
+    });
+
+    await handleSendChat(host);
+
+    expect(dispatchClientPresentation).not.toHaveBeenCalled();
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "/pair" }),
+    );
   });
 
   it("routes typed /new through the fresh-session action without confirmation", async () => {

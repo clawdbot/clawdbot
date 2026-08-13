@@ -475,6 +475,14 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
+      // Resize re-layout is async; wait for the header controls to adopt the
+      // mobile width before sampling one-shot bounding boxes below.
+      await expect
+        .poll(async () => {
+          const settled = await settings.boundingBox();
+          return settled ? settled.x + settled.width : Number.POSITIVE_INFINITY;
+        })
+        .toBeLessThanOrEqual(393);
       const [mobileAttachBox, mobileModelBox, mobileSettingsBox, mobileContextBox, mobileVoiceBox] =
         await Promise.all([
           attach.boundingBox(),

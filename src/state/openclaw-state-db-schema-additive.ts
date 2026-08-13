@@ -424,6 +424,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_install_kind TEXT");
   ensureColumn(
     db,
     "worker_environments",

@@ -56,6 +56,7 @@ import type {
 import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
+import { buildGatewaySessionEventRow } from "./session-event-payload.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
@@ -564,6 +565,7 @@ export function createAgentEventHandler({
     evt?: AgentEventPayload,
     agentId?: string,
     includeActiveRunState = false,
+    lifecycleProjection = false,
   ) => {
     const snapshotOptions = agentId ? { agentId } : undefined;
     const lifecycleSnapshot = loadGatewaySessionLifecycleSnapshotForEvent(
@@ -612,9 +614,14 @@ export function createAgentEventHandler({
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
-    const session = row
+    const projectedRow = row
+      ? lifecycleProjection
+        ? buildGatewaySessionEventRow(row, { lifecycle: true })
+        : row
+      : undefined;
+    const session = projectedRow
       ? {
-          ...row,
+          ...projectedRow,
           ...lifecyclePatch,
           ...activeRunFields,
           // JSON drops undefined values, so a start/success must send null to
@@ -664,17 +671,17 @@ export function createAgentEventHandler({
       lastTo: row?.lastTo,
       lastAccountId: row?.lastAccountId,
       lastThreadId: row?.lastThreadId,
-      totalTokens: row?.totalTokens,
-      totalTokensFresh: row?.totalTokensFresh,
+      totalTokens: projectedRow?.totalTokens,
+      totalTokensFresh: projectedRow?.totalTokensFresh,
       ...(omitUnscopedGlobalGoal ? {} : { goal: row?.goal ?? null }),
-      contextTokens: row?.contextTokens,
-      estimatedCostUsd: row?.estimatedCostUsd,
+      contextTokens: projectedRow?.contextTokens,
+      estimatedCostUsd: projectedRow?.estimatedCostUsd,
       responseUsage: row?.responseUsage,
       // Carry the row-built channel-aware effective mode so the chat snapshot
       // matches the session-event/list projections.
       effectiveResponseUsage: row?.effectiveResponseUsage,
-      modelProvider: row?.modelProvider,
-      model: row?.model,
+      modelProvider: projectedRow?.modelProvider,
+      model: projectedRow?.model,
       ...activeRunFields,
       status: snapshotSource.status,
       lastRunError: snapshotSource.lastRunError ?? null,
@@ -901,7 +908,7 @@ export function createAgentEventHandler({
               runId: evt.runId,
               ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
               ts: evt.ts,
-              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId, true),
+              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId, true, true),
             },
             sessionEventConnIds,
             { dropIfSlow: true },
@@ -1771,7 +1778,7 @@ export function createAgentEventHandler({
             runId: evt.runId,
             ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
             ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId, true),
+            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId, true, true),
           },
           sessionEventConnIds,
           { dropIfSlow: true },

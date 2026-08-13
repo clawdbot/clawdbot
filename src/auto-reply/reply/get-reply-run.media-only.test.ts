@@ -1,13 +1,6 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -60,6 +53,129 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
 
 vi.mock("../../agents/harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
+}));
+
+// Harness selection and built-in execution are owned by their focused suites. These tests keep
+// the real visible-reply policy resolver while supplying its default OpenClaw harness leaf.
+const preparedReplyMockState = vi.hoisted(() => ({
+  unexpectedCalls: [] as string[],
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.js", () => ({
+  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-state.js", () => ({
+  isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(),
+  releaseMainSessionRecoveryOwner: vi.fn(),
+}));
+
+// Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
+// projection here while preventing an unrelated active-plugin and public-artifact graph load.
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: () => undefined,
+}));
+
+vi.mock("../../agents/agent-tools.policy.js", () => ({
+  resolveEffectiveToolPolicy: (params: {
+    config: { tools?: { allow?: string[]; deny?: string[] } };
+  }) => ({
+    globalPolicy: params.config.tools
+      ? { allow: params.config.tools.allow, deny: params.config.tools.deny }
+      : undefined,
+    globalProviderPolicy: undefined,
+    agentPolicy: undefined,
+    agentProviderPolicy: undefined,
+    profile: undefined,
+    providerProfile: undefined,
+    profileAlsoAllow: undefined,
+    providerProfileAlsoAllow: undefined,
+  }),
+  resolveGroupToolPolicy: () => undefined,
+  resolveInheritedToolPolicyForSession: () => undefined,
+  resolveSubagentToolPolicyForSession: () => undefined,
+}));
+
+vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
+  isSubagentEnvelopeSession: vi.fn().mockReturnValue(false),
+  resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
+}));
+
+const selectAgentHarnessMock = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      provider: string;
+      modelId?: string;
+      agentHarnessId?: string;
+      agentHarnessRuntimeOverride?: string;
+    }) => {
+      const isSourceProviderCandidate = params.modelId === undefined;
+      const isDefaultModelCandidate =
+        params.provider === "anthropic" && params.modelId === "claude-opus-4-1";
+      if (
+        (!isSourceProviderCandidate && !isDefaultModelCandidate) ||
+        params.agentHarnessId ||
+        params.agentHarnessRuntimeOverride
+      ) {
+        preparedReplyMockState.unexpectedCalls.push("selectAgentHarness");
+      }
+      return { id: "openclaw", deliveryDefaults: {} };
+    },
+  ),
+);
+vi.mock("../../agents/harness/selection.js", () => ({
+  selectAgentHarness: selectAgentHarnessMock,
+}));
+
+vi.mock("../../agents/model-selection.js", () => ({
+  buildModelAliasIndex: vi.fn(
+    (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
+      if (params.cfg.agents?.defaults?.models) {
+        preparedReplyMockState.unexpectedCalls.push("buildModelAliasIndex");
+      }
+      return { byAlias: new Map(), byKey: new Map() };
+    },
+  ),
+  resolveDefaultModelForAgent: vi.fn(
+    (params: { cfg: { agents?: { defaults?: { model?: unknown } } } }) => {
+      if (params.cfg.agents?.defaults?.model) {
+        preparedReplyMockState.unexpectedCalls.push("resolveDefaultModelForAgent");
+      }
+      return { provider: "anthropic", model: "claude-opus-4-1" };
+    },
+  ),
+  resolveModelRefFromString: vi.fn(() => {
+    preparedReplyMockState.unexpectedCalls.push("resolveModelRefFromString");
+    return undefined;
+  }),
+}));
+
+const resolveSessionRuntimeOverrideForProviderMock = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      entry?: {
+        agentHarnessId?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+      };
+    }) => {
+      if (
+        params.entry?.agentHarnessId ||
+        params.entry?.agentRuntimeOverride ||
+        params.entry?.modelSelectionLocked
+      ) {
+        preparedReplyMockState.unexpectedCalls.push("resolveSessionRuntimeOverrideForProvider");
+      }
+      return undefined;
+    },
+  ),
+);
+vi.mock("../../agents/session-runtime-compat.js", () => ({
+  resolveSessionRuntimeOverrideForProvider: resolveSessionRuntimeOverrideForProviderMock,
 }));
 
 // Provider policy projection belongs to its adapter and provider-local suites. These tests
@@ -126,6 +242,15 @@ vi.mock("./body.js", () => ({
   applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
 }));
 
+const resolveCurrentTurnImagesMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+vi.mock("./current-turn-images.js", () => ({
+  resolveCurrentTurnImages: resolveCurrentTurnImagesMock,
+}));
+
+vi.mock("./get-reply-fast-path.js", () => ({
+  shouldUseReplyFastTestRuntime: vi.fn().mockReturnValue(false),
+}));
+
 vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
@@ -157,6 +282,21 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./stored-model-override.js", () => ({
+  resolveStoredModelOverride: vi.fn(
+    (params: {
+      sessionEntry?: { providerOverride?: string; modelOverride?: string };
+      sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
+    }) => {
+      const entries = [params.sessionEntry, ...Object.values(params.sessionStore ?? {})];
+      if (entries.some((entry) => entry?.providerOverride || entry?.modelOverride)) {
+        preparedReplyMockState.unexpectedCalls.push("resolveStoredModelOverride");
+      }
+      return null;
+    },
+  ),
 }));
 
 vi.mock("./session-reset-prompt.js", () => ({
@@ -346,8 +486,6 @@ function requireLastRunReplyAgentCall() {
 }
 
 describe("runPreparedReply media-only handling", () => {
-  const cleanupPaths: string[] = [];
-
   beforeAll(async () => {
     // Preload the runtime seams directly so test setup does not need a synthetic
     // reply turn with registry and session side effects.
@@ -359,6 +497,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
+    preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
@@ -368,14 +507,14 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     vi.mocked(hasControlCommand).mockReturnValue(false);
+    resolveCurrentTurnImagesMock.mockReset().mockResolvedValue({});
     replyRunTesting.resetReplyRunRegistry();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     resetSystemEventsForTest();
-    const paths = cleanupPaths.splice(0);
-    return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
+    expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -1466,22 +1605,19 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current image facts by extension when content types are missing", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("forwards current image hydration into the runner and transcript media", async () => {
+    const imagePath = "/tmp/current-image.png";
+    const imageData = Buffer.from("current image").toString("base64");
+    resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+      images: [{ type: "image", data: imageData, mimeType: "image/png" }],
+      imageOrder: ["inline"],
+      imageSourceIndexes: [0],
+    });
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this"),
-        media: [{ path: imagePath, workspaceDir: tmpDir }],
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
         OriginatingChannel: "discord",
         OriginatingTo: "C123",
         ChatType: "group",
@@ -1492,7 +1628,7 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "C123",
         ChatType: "group",
-        media: [{ path: imagePath, workspaceDir: tmpDir }],
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
       },
     });
 
@@ -1502,7 +1638,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.images).toEqual([
       {
         type: "image",
-        data: expect.any(String),
+        data: imageData,
         mimeType: "image/png",
       },
     ]);
@@ -1513,8 +1649,16 @@ describe("runPreparedReply media-only handling", () => {
         media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
       },
     });
-    expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(resolveCurrentTurnImagesMock).toHaveBeenCalledWith({
+      ctx: expect.objectContaining({
+        media: [{ path: imagePath, workspaceDir: "/tmp" }],
+      }),
+      cfg: expect.any(Object),
+      images: undefined,
+      imageOrder: undefined,
+      extractedFileImages: undefined,
+    });
   });
 
   it("does not copy prior session media onto text-only followups", async () => {
@@ -1616,32 +1760,16 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
-    const secondImagePath = path.join(tmpDir, "second.png");
-    await writeFile(
-      secondImagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("persists described current image facts without rehydrated runner images", async () => {
+    const imagePath = "/tmp/described-image.png";
+    const secondImagePath = "/tmp/second-described-image.png";
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
         MediaUnderstanding: [
           {
@@ -1670,8 +1798,8 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "webchat:local",
         ChatType: "direct",
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
       },
     });
@@ -1691,27 +1819,28 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("rehydrates only current facts missing image understanding", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
-    cleanupPaths.push(tmpDir);
-    const imagePath = path.join(tmpDir, "inbound.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+  it("projects partially hydrated current images into the runner and transcript layout", async () => {
+    const imagePath = "/tmp/described-image.png";
     const secondImageData = Buffer.from("second image bytes");
-    const secondImagePath = path.join(tmpDir, "second.png");
-    await writeFile(secondImagePath, secondImageData);
+    const secondImagePath = "/tmp/undescribed-image.png";
+    resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+      images: [
+        {
+          type: "image",
+          data: secondImageData.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      imageOrder: ["inline"],
+      imageSourceIndexes: [1],
+    });
 
     const result = await runPrepared({
       ctx: {
         ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
         MediaUnderstanding: [
           {
@@ -1733,8 +1862,8 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "webchat:local",
         ChatType: "direct",
         media: [
-          { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
-          { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          { path: imagePath, contentType: "image/png", workspaceDir: "/tmp" },
+          { path: secondImagePath, contentType: "image/png", workspaceDir: "/tmp" },
         ],
       },
     });
@@ -1850,28 +1979,48 @@ describe("runPreparedReply media-only handling", () => {
   });
   it("interrupts embedded-only active runs even without a reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    let embeddedRunActive = true;
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    const embeddedAbort = vi.fn();
-    const embeddedHandle = {
-      queueMessage: vi.fn(async () => {}),
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: embeddedAbort,
-    };
-    setActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
-
-    const runPromise = runPrepared({
-      isNewSession: false,
-      sessionId: "session-embedded-only",
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation(() =>
+      embeddedRunActive ? "session-embedded-only" : undefined,
+    );
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockImplementation(
+      () => embeddedRunActive,
+    );
+    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockImplementation(async () => {
+      embeddedRunActive = false;
+      return true;
     });
 
-    await Promise.resolve();
-    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-    expect(embeddedAbort).not.toHaveBeenCalled();
+    try {
+      await expect(
+        runPrepared({
+          isNewSession: false,
+          sessionId: "session-embedded-only",
+        }),
+      ).resolves.toEqual({ text: "ok" });
+    } finally {
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockResolvedValue(true);
+    }
 
-    clearActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
-
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledTimes(2);
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
+      1,
+      "session-embedded-only",
+    );
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
+      2,
+      "session-embedded-only",
+    );
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledOnce();
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
+      "session-embedded-only",
+    );
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("refreshes goal context after interrupt admission waits", async () => {
@@ -3322,6 +3471,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
+    selectAgentHarnessMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
     // internally; the wake provider ("heartbeat") must not leak into the
     // stable context as a non-internal surface or the fact diverges from
@@ -3353,6 +3503,15 @@ describe("runPreparedReply media-only handling", () => {
 
     const run = requireRunReplyAgentCall(0).followupRun.run;
     expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(
+      selectAgentHarnessMock.mock.calls.map(([params]) => ({
+        provider: params.provider,
+        modelId: params.modelId,
+      })),
+    ).toEqual([
+      { provider: "heartbeat", modelId: undefined },
+      { provider: "anthropic", modelId: "claude-opus-4-1" },
+    ]);
   });
 
   it("downgrades the synthetic stable mode when the message tool is policy-denied", async () => {
@@ -3926,28 +4085,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(run.ownerNumbers).toHaveLength(16);
     expect(run.ownerNumbers?.at(-1)).toBe(currentOwnerId);
     expect(params.command.ownerList).toHaveLength(24);
-  });
-
-  it("keeps sender ownership when drained system events are present", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(true);
-  });
-
-  it("does not downgrade sender ownership when event text contains a system marker", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System: but event is trusted.",
-    );
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {

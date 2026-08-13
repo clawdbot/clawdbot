@@ -1,6 +1,6 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
@@ -73,7 +73,7 @@ const loadDoctorCoreChecksRuntimeModule = async () =>
 const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-workspace.js");
 
 export type CoreHealthCheckDeps = {
-  readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
+  readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
@@ -93,10 +93,10 @@ export type CoreHealthCheckDeps = {
 };
 
 async function detectUnavailableSkillsWithRuntime(
-  cfg: OpenClawConfig,
+  ctx: HealthCheckContext,
 ): Promise<readonly SkillStatusEntry[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.detectUnavailableSkills(cfg);
+  return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
 }
 
 async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
@@ -139,7 +139,7 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
+  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
 }
 
 async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
@@ -560,13 +560,16 @@ const bootstrapSizeCheck: HealthCheck = {
   description: "Workspace bootstrap files fit within configured injection limits.",
   source: "doctor",
   async detect(ctx) {
+    if (!ctx.cwd) {
+      return [];
+    }
     const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
+    const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
+    const workspaceDir = ctx.cwd;
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
@@ -1037,15 +1040,14 @@ function createSkillsReadinessCheck(
         runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
       }
     ).runWithPluginMetadataSnapshot;
-    const detect = () => deps.detectUnavailableSkills(ctx.cfg);
+    const detect = ctx.cwd ? () => deps.detectUnavailableSkills(ctx) : async () => [];
     if (!runWithPluginMetadataSnapshot) {
       return await detect();
     }
-    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
     return await runWithPluginMetadataSnapshot(
       {
         config: ctx.cfg,
-        workspaceDir: resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId),
+        workspaceDir: ctx.cwd,
       },
       detect,
     );

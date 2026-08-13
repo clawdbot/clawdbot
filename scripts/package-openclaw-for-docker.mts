@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Builds the OpenClaw package artifact used by Docker E2E.
-// The script owns the build/inventory/pack sequence so local scheduler, shell
-// helpers, and GitHub Actions all prepare the exact same npm tarball.
+// Builds the canonical OpenClaw package artifact used by Docker E2E.
 import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
@@ -32,10 +32,10 @@ const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 type KillChild = (signal: NodeJS.Signals) => void;
 type RunOptions = {
   captureStdout?: boolean;
-  deferForwardedSignalExit?: boolean;
   env?: NodeJS.ProcessEnv;
   killAfterMs?: unknown;
   maxCapturedStdoutBytes?: number;
+  stdoutFilePath?: string;
   timeoutMs?: unknown;
 };
 type CommandRunnerOptions = {
@@ -48,15 +48,11 @@ type CommandRunner = (
   cwd: string,
   options: CommandRunnerOptions,
 ) => Promise<unknown>;
-type CaptureRunnerOptions = {
-  deferForwardedSignalExit?: boolean;
-  timeoutMs?: number;
-};
 type RunImpl = (
   command: string,
   args: string[],
   cwd: string,
-  options: CaptureRunnerOptions,
+  options: RunOptions,
 ) => Promise<string>;
 type DocsMapLifecycle = {
   preparePackageDocsMap: (cwd: string) => Promise<unknown>;
@@ -305,6 +301,13 @@ export function parseArgs(argv: string[]) {
 }
 
 function run(command: string, args: string[], cwd: string, options: RunOptions = {}) {
+  const setupError =
+    options.captureStdout && options.stdoutFilePath
+      ? new Error("captureStdout and stdoutFilePath cannot be combined")
+      : forwardedSignalExitCode && new ForwardedSignalExitError(forwardedSignalExitCode);
+  if (setupError) {
+    return Promise.reject(setupError);
+  }
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
     const resolvedKillAfterMs = resolvePackageBuildTimeoutMs(
@@ -326,14 +329,22 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         : process.platform === "win32" && command === "npm"
           ? resolveNpmRunner({ env, npmArgs: args })
           : { args, command, shell: false };
-    const child = spawn(invocation.command, invocation.args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: invocation.env ?? env,
-      detached: useProcessGroup,
-      shell: invocation.shell,
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
+    const stdoutFd = options.stdoutFilePath ? openSync(options.stdoutFilePath, "wx") : undefined;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(invocation.command, invocation.args, {
+        cwd,
+        stdio: ["ignore", stdoutFd ?? "pipe", "pipe"],
+        env: invocation.env ?? env,
+        detached: useProcessGroup,
+        shell: invocation.shell,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      });
+    } finally {
+      if (stdoutFd !== undefined) {
+        closeSync(stdoutFd);
+      }
+    }
     let timedOut = false;
     let outputLimitExceeded = false;
     let stdout = "";
@@ -354,10 +365,6 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (forwardedSignalExitCode !== undefined && ACTIVE_CHILD_KILLERS.size === 0) {
-        if (options.deferForwardedSignalExit) {
-          reject(new ForwardedSignalExitError(forwardedSignalExitCode));
-          return;
-        }
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
@@ -423,7 +430,7 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
       finish(error, value);
     };
     if (options.captureStdout) {
-      child.stdout.on("data", (chunk) => {
+      child.stdout?.on("data", (chunk) => {
         if (outputLimitExceeded) {
           return;
         }
@@ -437,10 +444,10 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         stdout += chunkText;
         stdoutBytes += chunkBytes;
       });
-    } else {
-      child.stdout.pipe(process.stderr, { end: false });
+    } else if (!options.stdoutFilePath) {
+      child.stdout?.pipe(process.stderr, { end: false });
     }
-    child.stderr.pipe(process.stderr, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
     child.on("error", (error) => finish(error));
     child.on("close", (status, signal) => {
       if (timedOut) {
@@ -503,11 +510,11 @@ export async function buildPackageArtifacts(
   }
 }
 
-export const runCommandForTest = run;
-
 async function runCapture(command: string, args: string[], cwd: string, options: RunOptions = {}) {
-  return await run(command, args, cwd, { ...options, captureStdout: true });
+  return await run(command, args, cwd, { ...options, captureStdout: !options.stdoutFilePath });
 }
+
+export { run as runCommandForTest, runCapture as runCaptureForTest };
 
 async function newestOpenClawTarball(outputDir: string, packOutput: string) {
   let fromOutput = "";
@@ -628,6 +635,7 @@ export async function prepareBundledAiRuntimePackage(
 ) {
   const packageJsonPath = path.join(sourceDir, "package.json");
   const aiRuntimePackageJsonPath = path.join(sourceDir, "packages", "ai", "package.json");
+  const aiRuntimeSourceDir = path.dirname(aiRuntimePackageJsonPath);
   const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
   const aiRuntimeBackupPath = path.join(
     sourceDir,
@@ -646,6 +654,8 @@ export async function prepareBundledAiRuntimePackage(
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       }));
+  const prepareManifest = packageOptions.prepareManifest ?? (async () => false);
+  const restoreManifest = packageOptions.restoreManifest ?? (async () => false);
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
   let packageJson: MutableJsonRecord & {
     bundleDependencies?: unknown;
@@ -721,26 +731,39 @@ export async function prepareBundledAiRuntimePackage(
   };
 
   try {
-    await runCaptureImpl(
-      "pnpm",
-      [
-        "--dir",
-        "packages/ai",
-        "pack",
-        "--loglevel=error",
-        "--use-stderr",
-        "--pack-destination",
-        outputDir,
-      ],
-      sourceDir,
-      {
-        deferForwardedSignalExit: true,
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      },
-    );
+    let packError: Error | undefined;
+    await prepareManifest(aiRuntimeSourceDir);
+    try {
+      await runCaptureImpl(
+        "pnpm",
+        [
+          "--dir",
+          "packages/ai",
+          "pack",
+          "--loglevel=error",
+          "--use-stderr",
+          "--pack-destination",
+          outputDir,
+        ],
+        sourceDir,
+        {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        },
+      );
+    } catch (error) {
+      packError = toErrorObject(error, "AI runtime package failed.");
+    }
+    try {
+      await restoreManifest(aiRuntimeSourceDir);
+    } catch (restoreError) {
+      throw packError ? packagePreparationRestoreError(packError, restoreError) : restoreError;
+    }
+    if (packError) {
+      throw packError;
+    }
     packedAiTarballs = (await fs.readdir(outputDir))
       .filter(isPackedAiRuntimeTarball)
       .map((filename) => path.join(outputDir, filename));
@@ -842,11 +865,9 @@ async function loadSourcePackageLifecycle(
 }
 
 function packagePreparationRestoreError(error: unknown, restoreError: unknown) {
-  return new AggregateError(
-    [error, restoreError],
-    "Package preparation failed and source artifacts could not be restored.",
-    { cause: error },
-  );
+  return new AggregateError([error, restoreError], "Package operation and cleanup both failed.", {
+    cause: error,
+  });
 }
 
 export async function packOpenClawPackageForDocker(
@@ -904,6 +925,14 @@ export async function packOpenClawPackageForDocker(
   console.error("==> Packing OpenClaw package");
   // This receipt is the package lifecycle lock; acquire it before touching CHANGELOG.md.
   await prepareDocsMap(sourcePath);
+  const deferSignalExit: KillChild = () => {};
+  ACTIVE_CHILD_KILLERS.add(deferSignalExit);
+  const releaseSignalExit = () => {
+    ACTIVE_CHILD_KILLERS.delete(deferSignalExit);
+    if (forwardedSignalExitCode !== undefined) {
+      throw new ForwardedSignalExitError(forwardedSignalExitCode);
+    }
+  };
   try {
     await prepareManifest(sourcePath);
     await prepareChangelog(sourcePath);
@@ -916,58 +945,99 @@ export async function packOpenClawPackageForDocker(
         restoreChangelog,
       );
     } catch (restoreError) {
+      releaseSignalExit();
       throw packagePreparationRestoreError(error, restoreError);
     }
+    releaseSignalExit();
     throw error;
   }
   let packOutput = "";
-  let cleanupBundledAiRuntime = async () => {};
+  let packageError: unknown;
+  let packReceiptDir: string | undefined;
   try {
-    await cleanPackedOpenClawTarballs(outputPath);
-    cleanupBundledAiRuntime = await prepareBundledAiRuntime(sourcePath, outputPath, runCaptureImpl);
-    const packArgs =
-      packTool === "pnpm"
-        ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputPath]
-        : [
-            "pack",
-            ...(packageOptions.packJsonPath ? ["--json"] : []),
-            "--silent",
-            "--ignore-scripts",
-            "--pack-destination",
-            outputPath,
-          ];
-    packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
-      deferForwardedSignalExit: true,
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-      ),
-    });
+    let cleanupBundledAiRuntime = async () => {};
+    try {
+      await cleanPackedOpenClawTarballs(outputPath);
+      cleanupBundledAiRuntime = await prepareBundledAiRuntime(
+        sourcePath,
+        outputPath,
+        runCaptureImpl,
+        {
+          prepareManifest,
+          restoreManifest,
+        },
+      );
+      const packArgs =
+        packTool === "pnpm"
+          ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputPath]
+          : [
+              "pack",
+              ...(packageOptions.packJsonPath ? ["--json"] : []),
+              "--silent",
+              "--ignore-scripts",
+              "--pack-destination",
+              outputPath,
+            ];
+      if (packTool === "npm" && packageOptions.packJsonPath) {
+        packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
+      }
+      const packReceiptPath = packReceiptDir ? path.join(packReceiptDir, "pack.json") : undefined;
+      packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
+        stdoutFilePath: packReceiptPath,
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      });
+      if (packReceiptPath) {
+        packOutput = await fs.readFile(packReceiptPath, "utf8");
+      }
+    } finally {
+      try {
+        await cleanupBundledAiRuntime();
+      } finally {
+        await restorePackageSourceArtifacts(
+          sourcePath,
+          restoreDocsMap,
+          restoreManifest,
+          restoreChangelog,
+        );
+      }
+    }
+    // Scan the emptied pnpm destination instead of trusting its absolute-path output.
+    let tarball = await newestOpenClawTarball(
+      outputPath,
+      packageOptions.pnpmPack ? "" : packOutput,
+    );
+    if (packageOptions.outputName) {
+      const target = path.join(outputPath, packageOptions.outputName);
+      if (target !== tarball) {
+        await fs.rm(target, { force: true });
+        await fs.rename(tarball, target);
+        tarball = target;
+      }
+    }
+    await writePackJson(packOutput, tarball, packageOptions.packJsonPath, sourcePath);
+    return tarball;
+  } catch (error) {
+    packageError = error;
+    throw error;
   } finally {
     try {
-      await cleanupBundledAiRuntime();
+      if (packReceiptDir) {
+        try {
+          await fs.rm(packReceiptDir, { force: true, recursive: true });
+        } catch (cleanupError) {
+          // oxlint-disable-next-line eslint/no-unsafe-finally -- Preserve primary and cleanup failures.
+          throw packageError
+            ? packagePreparationRestoreError(packageError, cleanupError)
+            : cleanupError;
+        }
+      }
     } finally {
-      await restorePackageSourceArtifacts(
-        sourcePath,
-        restoreDocsMap,
-        restoreManifest,
-        restoreChangelog,
-      );
+      releaseSignalExit();
     }
   }
-  // pnpm reports an absolute destination path. The directory was emptied before packing,
-  // so scan that controlled destination instead of accepting a path from command output.
-  let tarball = await newestOpenClawTarball(outputPath, packageOptions.pnpmPack ? "" : packOutput);
-  if (packageOptions.outputName) {
-    const target = path.join(outputPath, packageOptions.outputName);
-    if (target !== tarball) {
-      await fs.rm(target, { force: true });
-      await fs.rename(tarball, target);
-      tarball = target;
-    }
-  }
-  await writePackJson(packOutput, tarball, packageOptions.packJsonPath, sourcePath);
-  return tarball;
 }
 
 export async function writePackageInventoryForDocker(

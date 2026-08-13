@@ -47,7 +47,6 @@ import { isChatRunWorking, renderChatComposer } from "./components/chat-composer
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import { renderReadOnlyTranscript } from "./components/chat-read-only-transcript.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
@@ -85,7 +84,6 @@ type ChatReplyTarget = {
 export type ChatProps = ChatTaskSuggestionTrayProps &
   ChatCloudStartupNoticeProps & {
     transcript: ChatTranscriptController;
-    backgroundTaskTranscript?: ChatTranscriptController;
     paneId: string;
     sessionKey: string;
     announceTranscript?: boolean;
@@ -396,22 +394,6 @@ export function renderChat(props: ChatProps) {
     },
     props.transcript,
   );
-  const backgroundTaskView = props.backgroundTasks?.view;
-  const backgroundTaskTranscript = props.backgroundTaskTranscript;
-  const backgroundTaskThread =
-    backgroundTaskTranscript &&
-    backgroundTaskView?.kind === "transcript" &&
-    backgroundTaskView.load.status === "loaded" &&
-    backgroundTaskView.load.messages.length > 0
-      ? renderReadOnlyTranscript({
-          chat: props,
-          messages: backgroundTaskView.load.messages,
-          paneId: `${props.paneId}:background-task-transcript`,
-          sessionKey: backgroundTaskView.sessionKey,
-          transcript: backgroundTaskTranscript,
-        })
-      : nothing;
-
   const chatColumnFooter = renderChatComposer({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -561,7 +543,7 @@ export function renderChat(props: ChatProps) {
           : ""} ${tasksDockBottom ? "chat-workbench--tasks-dock-bottom" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
-        ${renderBackgroundTasksRail(props.backgroundTasks, backgroundTaskThread)}
+        ${renderBackgroundTasksRail(props.backgroundTasks)}
         ${props.sessionWorkspace?.dockDragging
           ? html`
               <div class="chat-workbench__dock-zones" aria-hidden="true">

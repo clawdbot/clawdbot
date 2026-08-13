@@ -226,7 +226,7 @@
   flex: 0 0 40px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   object-fit: contain;
 }
 

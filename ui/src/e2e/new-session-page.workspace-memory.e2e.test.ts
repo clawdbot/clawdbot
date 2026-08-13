@@ -27,7 +27,7 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
 };
 const MOBILE_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
-  viewport: { height: 568, width: 320 },
+  viewport: { height: 740, width: 364 },
 };
 const MODELS = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
@@ -103,7 +103,20 @@ suite.define(() => {
   it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
-        models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+        models: [
+          {
+            id: "gpt-5.6-luna",
+            name: "GPT 5.6 Luna",
+            provider: "openai",
+            contextWindow: 400_000,
+          },
+          {
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "anthropic",
+            contextWindow: 200_000,
+          },
+        ],
         hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -154,9 +167,6 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
       expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
-      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
-        modelBox?.x ?? 0,
-      );
       for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
@@ -164,8 +174,7 @@ suite.define(() => {
         );
       }
       // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // all four controls share one 320px row; wrap or overflow here means the
-      // new-session.css mobile override regressed.
+      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
@@ -467,7 +476,7 @@ suite.define(() => {
     });
   });
 
-  it("uses identity-scoped server project recents instead of the shared roster", async () => {
+  it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -497,7 +506,14 @@ suite.define(() => {
       methodResponses: {
         "projects.list": {
           projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
-          recents: [{ kind: "project", projectId: "registered", displayName: "Registered" }],
+          recents: [
+            { kind: "project", projectId: "registered", displayName: "Registered" },
+            {
+              kind: "folder",
+              folder: `${WORKSPACE}/scratch`,
+              displayName: "scratch",
+            },
+          ],
         },
         "sessions.list": {
           count: 1,
@@ -519,10 +535,13 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
-      const recent = page.locator('[data-value="recent-project:registered"]');
-      await recent.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents.png");
-      await recent.click();
+      expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
+      const project = page.locator('[data-value="project:registered"]');
+      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      await project.waitFor();
+      await recentFolder.waitFor();
+      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");

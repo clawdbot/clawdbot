@@ -855,7 +855,6 @@ function createBackgroundTasks(
       taskIds: new Set<string>(),
       nextExpiryAt: null,
     },
-    view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
     taskDetails: new Map(),
@@ -865,9 +864,6 @@ function createBackgroundTasks(
     onToggleFinished: () => undefined,
     onRefresh: () => undefined,
     onCancel: () => undefined,
-    onSelectTask: () => undefined,
-    onBack: () => undefined,
-    onOpenTranscript: () => undefined,
     ...overrides,
   };
 }
@@ -5698,6 +5694,25 @@ describe("chat model controls", () => {
       getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
     ).toBe("1M");
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.2-retired",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" }],
+    });
+    const container = renderModelControls(state);
+
+    const optionValues = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).map((option) => option.getAttribute("data-chat-model-option"));
+    const overrideValue = optionValues.find((value) => value?.includes("gpt-5.2-retired"));
+    expect(overrideValue).toBeDefined();
+    const overrideOption = container.querySelector<HTMLButtonElement>(
+      `[data-chat-model-option="${overrideValue}"]`,
+    );
+    expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
   });
 
   it("distinguishes model rows that use different agent runtimes", () => {

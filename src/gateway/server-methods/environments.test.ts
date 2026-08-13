@@ -6,6 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
+import { isNodeRunnerSessionHost } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -17,6 +18,10 @@ vi.mock("../../infra/device-pairing.js", () => ({
 
 vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
+}));
+
+vi.mock("../node-registry-private.js", () => ({
+  isNodeRunnerSessionHost: vi.fn(() => false),
 }));
 
 const NOW = 10_000;
@@ -67,6 +72,11 @@ function mockContext(
           platform: "ios",
           caps: ["camera"],
           commands: ["system.run"],
+          workerRuns: {
+            bundleHash: "a".repeat(64),
+            openclawVersion: "2026.8.12",
+            protocolFeatures: ["worker-heartbeat-v1"],
+          },
           connectedAtMs: 123,
         },
       ],
@@ -183,6 +193,7 @@ class FakeWorkerServiceError extends Error {
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
+  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -199,7 +210,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
-  it("keeps the existing gateway and node projection unchanged without a worker service", async () => {
+  it("projects live node session-host capability without a worker service", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -221,7 +233,7 @@ describe("environment gateway methods", () => {
           label: "Live Node",
           status: "available",
           platform: "ios",
-          sessionHost: false,
+          sessionHost: true,
           trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
@@ -236,6 +248,18 @@ describe("environment gateway methods", () => {
         },
       ],
     });
+  });
+
+  it("marks only the current worker-build node as a session host", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockImplementation(({ nodeId }) => nodeId === "node-live");
+
+    const [ok, payload] = await callEnvironmentMethod("environments.list", {});
+
+    expect(ok).toBe(true);
+    const environments = (payload as { environments: Array<{ id: string; sessionHost?: boolean }> })
+      .environments;
+    expect(environments.find((entry) => entry.id === "node:node-live")?.sessionHost).toBe(true);
+    expect(environments.find((entry) => entry.id === "node:node-offline")?.sessionHost).toBe(false);
   });
 
   it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
@@ -383,6 +407,7 @@ describe("environment gateway methods", () => {
   });
 
   it("returns status for one node environment", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });
@@ -394,7 +419,7 @@ describe("environment gateway methods", () => {
       label: "Live Node",
       status: "available",
       platform: "ios",
-      sessionHost: false,
+      sessionHost: true,
       trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
