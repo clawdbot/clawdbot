@@ -141,11 +141,19 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
     return null;
   }
 
-  const answers = poll.answers
-    .map((answer) => ({
-      id: answer.id,
-      text: getTextContent(answer).trim(),
-    }))
+  // Event content is sender-controlled JSON: the declared shape cannot be
+  // trusted, so guard the array and every entry before mapping. Malformed
+  // entries are dropped instead of throwing — a throw here would bubble up
+  // through thread/reply context building and silently drop the whole message.
+  const rawAnswers: unknown = poll.answers;
+  const answers = (Array.isArray(rawAnswers) ? rawAnswers : [])
+    .map((answer) => {
+      const candidate = answer as Partial<PollAnswer> | null | undefined;
+      return {
+        id: typeof candidate?.id === "string" ? candidate.id : "",
+        text: getTextContent(candidate ?? undefined).trim(),
+      };
+    })
     .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
     return null;
