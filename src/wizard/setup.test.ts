@@ -2544,6 +2544,78 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it.each([
+    {
+      label: "explicit CLI gateway values",
+      gatewayOptions: {
+        gatewayPort: 19511,
+        gatewayBind: "lan" as const,
+        gatewayAuth: "password" as const,
+        gatewayToken: "manual-gateway-token-placeholder",
+        gatewayPassword: "manual-gateway-password-placeholder",
+        tailscale: "off" as const,
+        tailscaleResetOnExit: false,
+      },
+      expectedPort: 19511,
+      expectedProbeAuth: {
+        token: "manual-gateway-token-placeholder",
+        password: "manual-gateway-password-placeholder",
+      },
+    },
+    {
+      label: "derived port when gateway values are omitted",
+      gatewayOptions: {},
+      expectedPort: 18789,
+      expectedProbeAuth: {},
+    },
+  ])(
+    "uses the $label for the manual probe and port prompt",
+    async ({ gatewayOptions, expectedPort, expectedProbeAuth }) => {
+      const prompter = buildWizardPrompter({});
+      const runtime = createRuntime();
+
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "local",
+          authChoice: "skip",
+          ...gatewayOptions,
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+
+      expectRecordFields(
+        getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
+        { url: `ws://127.0.0.1:${expectedPort}`, ...expectedProbeAuth },
+        "gateway probe params",
+      );
+      const gatewaySetup = expectRecordFields(
+        getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup"),
+        { localPort: expectedPort },
+        "gateway setup params",
+      );
+      if (gatewayOptions.gatewayPort !== undefined) {
+        expect(gatewaySetup.quickstartGateway).toMatchObject({
+          port: 19511,
+          bind: "lan",
+          authMode: "password",
+          token: "manual-gateway-token-placeholder",
+          password: "manual-gateway-password-placeholder",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        });
+      }
+    },
+  );
+
   it("passes secretInputMode through to local gateway config step", async () => {
     configureGatewayForSetup.mockClear();
     const prompter = buildWizardPrompter({});
