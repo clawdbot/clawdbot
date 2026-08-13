@@ -54,6 +54,9 @@ export function renderSubagentDetailPanel(params: {
   `;
 }
 
+// No close button here on purpose: the sidebar region header owns the
+// "Close Details" control for every detail-slot panel (the classic panel is
+// embedded with its own header hidden); a second X 40px away duplicated it.
 function renderSubagentHeader(
   title: string,
   task?: TaskSummary,
