@@ -152,7 +152,7 @@ export function resolveSlackUserAllowListForTeam(params: {
     try {
       const target = parseSlackTarget(entry);
       if (target?.kind === "user" && target.teamId?.toLowerCase() === teamId) {
-        return [target.id.toLowerCase()];
+        return [entry];
       }
       return params.preserveUnmatchedScopedEntries ? [entry] : [];
     } catch {

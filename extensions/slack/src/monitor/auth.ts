@@ -48,6 +48,8 @@ const CHANNEL_MEMBERS_CACHE_MAX = 512;
 const SLACK_CHANNEL_ID = "slack";
 const SLACK_USER_NAME_KIND =
   "plugin:slack-user-name" as const satisfies ChannelIngressIdentifierKind;
+const SLACK_WORKSPACE_USER_ID_KIND =
+  "plugin:slack-workspace-user-id" as const satisfies ChannelIngressIdentifierKind;
 
 export class SlackSystemEventAuthRetryError extends Error {}
 function normalizeSlackUserId(raw?: string | null): string {
@@ -66,7 +68,7 @@ function isSlackStableUserId(value: string): boolean {
   return /^[ubw][a-z0-9_]+$/i.test(value);
 }
 
-function normalizeSlackStableEntry(entry: string): string | null {
+function normalizeSlackWorkspaceUserEntry(entry: string): string | null {
   const normalized = entry.trim().toLowerCase();
   if (!normalized) {
     return null;
@@ -79,8 +81,20 @@ function normalizeSlackStableEntry(entry: string): string | null {
   } catch {
     return null;
   }
+  return null;
+}
+
+function normalizeSlackBareUserEntry(entry: string): string | null {
+  const normalized = entry.trim().toLowerCase();
+  if (!normalized || normalizeSlackWorkspaceUserEntry(normalized)) {
+    return null;
+  }
   const userId = normalizeSlackUserId(normalized);
   return isSlackStableUserId(userId) ? userId : null;
+}
+
+function normalizeSlackStableEntry(entry: string): string | null {
+  return normalizeSlackBareUserEntry(entry) ?? normalizeSlackWorkspaceUserEntry(entry);
 }
 
 function normalizeSlackNameEntry(entry: string): string | null {
@@ -107,31 +121,46 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
 const slackIngressIdentity = defineStableChannelIngressIdentity({
   key: "senderId",
   kind: "stable-id",
-  normalizeEntry: normalizeSlackStableEntry,
+  normalizeEntry: normalizeSlackBareUserEntry,
   normalizeSubject: normalizeSlackUserId,
   sensitivity: "pii",
-  aliases: (
-    [
-      ["senderName", normalizeSlackNameEntry],
-      ["senderNameSlug", normalizeSlackNameSlugEntry],
-    ] as const
-  ).map(([key, normalizeEntry]) => ({
-    key,
-    kind: SLACK_USER_NAME_KIND,
-    normalizeEntry,
-    normalizeSubject: normalizeSlackNameSubject,
-    dangerous: true,
-    sensitivity: "pii" as const,
-  })),
+  aliases: [
+    {
+      key: "workspaceSenderId",
+      kind: SLACK_WORKSPACE_USER_ID_KIND,
+      normalizeEntry: normalizeSlackWorkspaceUserEntry,
+      normalizeSubject: normalizeSlackWorkspaceUserEntry,
+      sensitivity: "pii",
+    },
+    ...(
+      [
+        ["senderName", normalizeSlackNameEntry],
+        ["senderNameSlug", normalizeSlackNameSlugEntry],
+      ] as const
+    ).map(([key, normalizeEntry]) => ({
+      key,
+      kind: SLACK_USER_NAME_KIND,
+      normalizeEntry,
+      normalizeSubject: normalizeSlackNameSubject,
+      dangerous: true,
+      sensitivity: "pii" as const,
+    })),
+  ],
 });
 
-function createSlackIngressSubject(params: { senderId: string; senderName?: string }) {
+function createSlackIngressSubject(params: {
+  senderId: string;
+  senderName?: string;
+  teamId?: string;
+}) {
   const senderId = normalizeSlackUserId(params.senderId);
+  const teamId = normalizeOptionalLowercaseString(params.teamId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
   return {
     stableId: senderId,
     aliases: {
+      workspaceSenderId: teamId && senderId ? `team:${teamId}:user:${senderId}` : undefined,
       senderName,
       senderNameSlug,
     },
@@ -394,6 +423,7 @@ export async function resolveSlackCommandIngress(params: {
     subject: createSlackIngressSubject({
       senderId: params.senderId,
       senderName: params.senderName,
+      teamId,
     }),
     conversation: {
       kind: slackIngressConversationKind(params.channelType),
@@ -474,6 +504,7 @@ async function decideSlackSystemIngress(params: {
     createSlackIngressSubject({
       senderId: params.senderId,
       senderName,
+      teamId,
     });
   const resolver = createSlackIngressResolver(params.ctx);
   const input: Parameters<typeof resolver.message>[0] = {
