@@ -445,11 +445,9 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    // Attachment admission is a turn hot path. Consume lifecycle-prepared capabilities so a
-    // user send never starts full provider discovery before it can be acknowledged.
     const loadParams = {
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      readOnly: true,
+      readOnly: false,
     };
     const snapshot = params.loadGatewayModelCatalogSnapshot
       ? await params.loadGatewayModelCatalogSnapshot(loadParams)
@@ -520,21 +518,6 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "sonnet" ||
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
-      )
-    ) {
-      return true;
-    }
-    // Runtime-only rows are intentionally absent from the prepared turn catalog. Missing metadata
-    // is not proof of text-only input; preserve the attachment and let the runtime decide.
-    if (
-      snapshot &&
-      params.agentId &&
-      params.provider &&
-      publishedModelCatalogOwnerMatchesAgent(snapshot, params.agentId) &&
-      !snapshot.staticEntries?.some(
-        (entry) =>
-          normalizeLowercaseStringOrEmpty(entry.id) ===
-          normalizeLowercaseStringOrEmpty(params.model),
       )
     ) {
       return true;
