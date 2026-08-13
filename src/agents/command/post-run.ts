@@ -146,6 +146,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
         cfg,
+        agentDir,
         contextTokensOverride: agentCfg?.contextTokens,
         sessionId: effectiveSessionId,
         sessionKey,

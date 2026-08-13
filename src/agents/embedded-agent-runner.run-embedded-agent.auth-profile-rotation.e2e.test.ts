@@ -659,6 +659,42 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedAgent auth profile rotation", () => {
+  it("runs an agent-scoped session without an ambient default owner", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce({
+        ...makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            provider: "openai",
+            model: "mock-1",
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      });
+
+      await runEmbeddedAgentInline({
+        sessionId: "session:work",
+        sessionKey: "agent:work:dashboard:scoped-run",
+        workspaceDir,
+        agentDir,
+        config: {
+          ...makeConfig(),
+          agents: { entries: { main: {}, work: {} } },
+        },
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:work",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not persist auth profile bookkeeping for read-only probes", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

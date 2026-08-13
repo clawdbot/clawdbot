@@ -181,8 +181,17 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!scope) {
       return null;
     }
+    // Ad hoc lists inherit the visible session owner so strict multi-agent
+    // gateways never receive an ambiguous ambient request.
+    const snapshot = host.snapshot();
+    const agentId = normalizeAgentId(
+      options.agentId ??
+        parseAgentSessionKey(snapshot.sessionKey)?.agentId ??
+        host.readState().agentId ??
+        resolveUiSelectedGlobalAgentId(snapshot),
+    );
     try {
-      const result = await requestSessionList(scope.client, options);
+      const result = await requestSessionList(scope.client, { ...options, agentId });
       return host.connection.isCurrent(scope) ? host.decorate(result ?? null) : null;
     } catch (error) {
       if (!host.connection.isCurrent(scope)) {
