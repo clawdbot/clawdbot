@@ -1,0 +1,339 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export const NVIDIA_SPEECH_CATALOG_URL =
+  "https://raw.githubusercontent.com/nvidia-riva/Nemotron-speech-skills/main/skills/nemotron-speech/references/speech-models.v1.json";
+
+export const NVIDIA_CATALOG_ASR_MODEL_ID = "nvidia/parakeet-ctc-1.1b-asr";
+export const NVIDIA_CATALOG_TTS_MODEL_ID = "nvidia/magpie-tts-multilingual";
+
+const CATALOG_FETCH_TIMEOUT_MS = 3_000;
+const CATALOG_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CATALOG_FAILURE_BACKOFF_MS = 5 * 60 * 1_000;
+const CATALOG_MAX_BYTES = 256 * 1_024;
+const CATALOG_MAX_MODELS = 128;
+const NVCF_INVOCATION_SUFFIX = ".invocation.api.nvcf.nvidia.com";
+const NVCF_GRPC_SERVER = "grpc.nvcf.nvidia.com:443";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MODEL_ID_PATTERN = /^nvidia\/[a-z0-9][a-z0-9._-]{0,126}$/;
+const FUNCTION_NAME_PATTERN = /^ai-[a-z0-9][a-z0-9_-]{0,126}$/;
+const MODEL_STATUSES = new Set(["active", "transitioning", "deprecated"]);
+const MODEL_MODALITIES = new Set(["asr", "tts", "nmt"]);
+
+type NvidiaSpeechModality = "asr" | "tts" | "nmt";
+type NvidiaSpeechStatus = "active" | "transitioning" | "deprecated";
+
+type NvidiaSpeechCloudHttp = {
+  functionName: string;
+  functionId: string;
+  transport: "http";
+  baseUrl: string;
+  requestStyle: "openai-audio" | "riva-tts-http";
+  defaultLanguage?: string;
+};
+
+type NvidiaSpeechCloudGrpc = {
+  functionName: string;
+  functionId: string;
+  transport: "grpc";
+  server: typeof NVCF_GRPC_SERVER;
+  rpcMode: "offline" | "streaming" | "online";
+  defaultLanguage?: string;
+};
+
+export type NvidiaSpeechCatalogModel = {
+  id: string;
+  displayName: string;
+  modality: NvidiaSpeechModality;
+  status: NvidiaSpeechStatus;
+  capabilities: Record<string, unknown>;
+  selection: Record<string, unknown>;
+  cloud: NvidiaSpeechCloudHttp | NvidiaSpeechCloudGrpc;
+};
+
+type NvidiaSpeechCatalog = {
+  schemaVersion: 1;
+  catalogId: string;
+  updatedAt: string;
+  defaults: Record<NvidiaSpeechModality, Record<string, string>>;
+  models: NvidiaSpeechCatalogModel[];
+};
+
+type CachedCatalog = {
+  catalog: NvidiaSpeechCatalog;
+  expiresAt: number;
+};
+
+let cachedCatalog: CachedCatalog | undefined;
+let lastGoodCatalog: NvidiaSpeechCatalog | undefined;
+let catalogFetch: Promise<NvidiaSpeechCatalog | undefined> | undefined;
+let retryAfter = 0;
+
+export async function resolveNvidiaSpeechCatalogModel(params: {
+  id: string;
+  modality: NvidiaSpeechModality;
+}): Promise<NvidiaSpeechCatalogModel | undefined> {
+  const catalog = await loadNvidiaSpeechCatalog();
+  return catalog?.models.find(
+    (model) =>
+      model.id === params.id && model.modality === params.modality && model.status !== "deprecated",
+  );
+}
+
+async function loadNvidiaSpeechCatalog(): Promise<NvidiaSpeechCatalog | undefined> {
+  const now = Date.now();
+  if (cachedCatalog && cachedCatalog.expiresAt > now) {
+    return cachedCatalog.catalog;
+  }
+  if (!lastGoodCatalog && retryAfter > now) {
+    return undefined;
+  }
+  if (catalogFetch) {
+    return await catalogFetch;
+  }
+  catalogFetch = fetchNvidiaSpeechCatalog()
+    .then((catalog) => {
+      cachedCatalog = { catalog, expiresAt: Date.now() + CATALOG_CACHE_TTL_MS };
+      lastGoodCatalog = catalog;
+      retryAfter = 0;
+      return catalog;
+    })
+    .catch(() => {
+      if (!lastGoodCatalog) {
+        retryAfter = Date.now() + CATALOG_FAILURE_BACKOFF_MS;
+      }
+      return lastGoodCatalog;
+    })
+    .finally(() => {
+      catalogFetch = undefined;
+    });
+  return await catalogFetch;
+}
+
+async function fetchNvidiaSpeechCatalog(): Promise<NvidiaSpeechCatalog> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: NVIDIA_SPEECH_CATALOG_URL,
+    init: { method: "GET", headers: { Accept: "application/json" } },
+    timeoutMs: CATALOG_FETCH_TIMEOUT_MS,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_SPEECH_CATALOG_URL),
+    auditContext: "nvidia-speech-model-catalog",
+  });
+  try {
+    await assertOkOrThrowProviderError(response, "NVIDIA speech catalog request failed");
+    const payload = await readProviderJsonResponse<unknown>(response, "nvidia speech catalog", {
+      maxBytes: CATALOG_MAX_BYTES,
+    });
+    const catalog = parseNvidiaSpeechCatalog(payload);
+    if (!catalog) {
+      throw new Error("NVIDIA speech catalog response failed schema validation");
+    }
+    return catalog;
+  } finally {
+    await release();
+  }
+}
+
+function parseNvidiaSpeechCatalog(payload: unknown): NvidiaSpeechCatalog | undefined {
+  if (
+    !isRecord(payload) ||
+    payload.schemaVersion !== 1 ||
+    typeof payload.catalogId !== "string" ||
+    !payload.catalogId.trim() ||
+    typeof payload.updatedAt !== "string" ||
+    !isIsoTimestamp(payload.updatedAt) ||
+    !isRecord(payload.defaults) ||
+    !Array.isArray(payload.models) ||
+    payload.models.length === 0 ||
+    payload.models.length > CATALOG_MAX_MODELS
+  ) {
+    return undefined;
+  }
+
+  const models: NvidiaSpeechCatalogModel[] = [];
+  for (const row of payload.models) {
+    const model = parseNvidiaSpeechCatalogModel(row);
+    if (!model || models.some((candidate) => candidate.id === model.id)) {
+      return undefined;
+    }
+    models.push(model);
+  }
+  const defaults = parseDefaults(payload.defaults, models);
+  if (!defaults) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    catalogId: payload.catalogId,
+    updatedAt: payload.updatedAt,
+    defaults,
+    models,
+  };
+}
+
+function parseNvidiaSpeechCatalogModel(row: unknown): NvidiaSpeechCatalogModel | undefined {
+  if (
+    !isRecord(row) ||
+    typeof row.id !== "string" ||
+    !MODEL_ID_PATTERN.test(row.id) ||
+    typeof row.displayName !== "string" ||
+    !isBoundedText(row.displayName, 200) ||
+    typeof row.modality !== "string" ||
+    !MODEL_MODALITIES.has(row.modality) ||
+    typeof row.status !== "string" ||
+    !MODEL_STATUSES.has(row.status) ||
+    !isRecord(row.capabilities) ||
+    !isRecord(row.selection)
+  ) {
+    return undefined;
+  }
+  const modality = row.modality as NvidiaSpeechModality;
+  const cloud = parseNvidiaSpeechCloud(row.cloud, modality);
+  if (!cloud) {
+    return undefined;
+  }
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    modality,
+    status: row.status as NvidiaSpeechStatus,
+    capabilities: row.capabilities,
+    selection: row.selection,
+    cloud,
+  };
+}
+
+function parseNvidiaSpeechCloud(
+  value: unknown,
+  modality: NvidiaSpeechModality,
+): NvidiaSpeechCloudHttp | NvidiaSpeechCloudGrpc | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.functionName !== "string" ||
+    !FUNCTION_NAME_PATTERN.test(value.functionName) ||
+    typeof value.functionId !== "string" ||
+    !UUID_PATTERN.test(value.functionId) ||
+    (value.defaultLanguage !== undefined && !isBoundedText(value.defaultLanguage, 32))
+  ) {
+    return undefined;
+  }
+  if (value.transport === "http") {
+    if (
+      typeof value.baseUrl !== "string" ||
+      !isTrustedNvcfInvocationBaseUrl(value.baseUrl, value.functionId) ||
+      (value.requestStyle !== "openai-audio" && value.requestStyle !== "riva-tts-http") ||
+      (modality === "asr" && value.requestStyle !== "openai-audio") ||
+      (modality === "tts" && value.requestStyle !== "riva-tts-http") ||
+      modality === "nmt"
+    ) {
+      return undefined;
+    }
+    return {
+      functionName: value.functionName,
+      functionId: value.functionId.toLowerCase(),
+      transport: "http",
+      baseUrl: value.baseUrl,
+      requestStyle: value.requestStyle,
+      ...(value.defaultLanguage ? { defaultLanguage: value.defaultLanguage } : {}),
+    };
+  }
+  if (
+    value.transport !== "grpc" ||
+    value.server !== NVCF_GRPC_SERVER ||
+    (value.rpcMode !== "offline" && value.rpcMode !== "streaming" && value.rpcMode !== "online")
+  ) {
+    return undefined;
+  }
+  return {
+    functionName: value.functionName,
+    functionId: value.functionId.toLowerCase(),
+    transport: "grpc",
+    server: NVCF_GRPC_SERVER,
+    rpcMode: value.rpcMode,
+    ...(value.defaultLanguage ? { defaultLanguage: value.defaultLanguage } : {}),
+  };
+}
+
+function parseDefaults(
+  value: Record<string, unknown>,
+  models: readonly NvidiaSpeechCatalogModel[],
+): NvidiaSpeechCatalog["defaults"] | undefined {
+  const result = {} as NvidiaSpeechCatalog["defaults"];
+  for (const modality of ["asr", "tts", "nmt"] as const) {
+    const entries = value[modality];
+    if (!isRecord(entries) || Object.keys(entries).length === 0) {
+      return undefined;
+    }
+    const parsed: Record<string, string> = {};
+    for (const [key, modelId] of Object.entries(entries)) {
+      if (
+        !isBoundedText(key, 80) ||
+        typeof modelId !== "string" ||
+        !models.some((model) => model.id === modelId && model.modality === modality)
+      ) {
+        return undefined;
+      }
+      parsed[key] = modelId;
+    }
+    result[modality] = parsed;
+  }
+  return result;
+}
+
+function isTrustedNvcfInvocationBaseUrl(value: string, functionId: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "" &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.hostname === `${functionId.toLowerCase()}${NVCF_INVOCATION_SUFFIX}`
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isIsoTimestamp(value: string): boolean {
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+function isBoundedText(value: unknown, maxLength: number): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength) {
+    return false;
+  }
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (code <= 31 || code === 127) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function resetNvidiaSpeechCatalogCacheForTests(): void {
+  cachedCatalog = undefined;
+  lastGoodCatalog = undefined;
+  catalogFetch = undefined;
+  retryAfter = 0;
+}

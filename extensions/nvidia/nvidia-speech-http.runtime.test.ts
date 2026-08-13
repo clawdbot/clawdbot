@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   postMultipartRequest: vi.fn(),
   postTranscriptionRequest: vi.fn(),
+  resolveNvidiaSpeechCatalogModel: vi.fn(),
   transcodeAudioBufferToOpus: vi.fn(async (_params: { timeoutMs: number }) =>
     Buffer.from("transcoded-opus"),
   ),
@@ -20,6 +21,12 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
     postTranscriptionRequest: mocks.postTranscriptionRequest,
   };
 });
+
+vi.mock("./nvidia-speech-catalog.js", () => ({
+  NVIDIA_CATALOG_ASR_MODEL_ID: "nvidia/parakeet-ctc-1.1b-asr",
+  NVIDIA_CATALOG_TTS_MODEL_ID: "nvidia/magpie-tts-multilingual",
+  resolveNvidiaSpeechCatalogModel: mocks.resolveNvidiaSpeechCatalogModel,
+}));
 
 import { NVIDIA_DEFAULT_ASR_MODEL } from "./nvidia-speech-config.js";
 import { magpieSynthesize, transcribeNvidiaAudio } from "./nvidia-speech-http.runtime.js";
@@ -86,6 +93,7 @@ function okJson(text: string) {
 describe("NVIDIA speech HTTP runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue(undefined);
   });
 
   it("uses hosted Parakeet CTC by default and forwards ASR customizations", async () => {
@@ -122,6 +130,28 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.getAll("response_format")).toEqual(["json"]);
     expect(form.getAll("language")).toEqual(["en-US"]);
     expect(form.get("model")).toBeNull();
+  });
+
+  it("uses the validated catalog endpoint and default language for hosted ASR", async () => {
+    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
+      id: "nvidia/parakeet-ctc-1.1b-asr",
+      modality: "asr",
+      status: "active",
+      cloud: {
+        transport: "http",
+        baseUrl: "https://aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com",
+        defaultLanguage: "en-GB",
+      },
+    });
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("catalog transcript"));
+
+    await transcribeNvidiaAudio(transcriptionRequest());
+
+    const request = mocks.postTranscriptionRequest.mock.calls[0]?.[0];
+    expect(request.url).toBe(
+      "https://aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com/v1/audio/transcriptions",
+    );
+    expect((request.body as FormData).get("language")).toBe("en-GB");
   });
 
   it("uses an explicitly configured HTTP model and base URL", async () => {
@@ -307,6 +337,40 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.get("custom_dictionary")).toBe("tomato  pronunciation");
     expect(form.get("custom_configuration")).toBe("key:value");
     expect(form.get("encoding")).toBe("LINEAR_PCM");
+  });
+
+  it("uses the validated catalog endpoint for hosted Magpie", async () => {
+    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
+      id: "nvidia/magpie-tts-multilingual",
+      modality: "tts",
+      status: "active",
+      cloud: {
+        transport: "http",
+        baseUrl: "https://bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.invocation.api.nvcf.nvidia.com",
+      },
+    });
+    mocks.postMultipartRequest.mockResolvedValue({
+      response: new Response(Buffer.from("RIFF-catalog-wav"), {
+        status: 200,
+        headers: { "content-type": "audio/wav" },
+      }),
+      release: vi.fn(),
+    });
+
+    await magpieSynthesize({
+      text: "hello",
+      apiKey: "nvapi-test",
+      baseUrl: "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com",
+      model: "magpie-tts-multilingual",
+      voice: "Magpie-Multilingual.EN-US.Aria",
+      language: "en-US",
+      sampleRateHz: 44_100,
+      timeoutMs: 30_000,
+    });
+
+    expect(mocks.postMultipartRequest.mock.calls[0]?.[0]?.url).toBe(
+      "https://bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.invocation.api.nvcf.nvidia.com/v1/audio/synthesize",
+    );
   });
 
   it("keeps separate local ASR and TTS origins keyless in one configuration", async () => {
