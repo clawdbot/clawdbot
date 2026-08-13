@@ -104,6 +104,77 @@ describe("web readability extractor", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it("does not pop for slash-suffixed closing tag names", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = SAMPLE_HTML.replace("<article>", `<article>${"<div></div/>".repeat(1_000)}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("counts markup after self-closed raw-text tag syntax", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<script/>${"<div>".repeat(1_000)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("honors self-closing tags inside foreign content", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<svg>${"<g/><div></g>".repeat(1_000)}</svg>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does not let implicitly closed elements pop real nesting later", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = "<p><div></p>".repeat(1_000);
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does not let malformed attribute quotes hide following markup", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<div '>${"<div>".repeat(1_000)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does not treat truncated raw-text tag names as raw-text elements", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<script=>${"<div>".repeat(1_000)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
   it("stays bounded when unmatched closing tags flood a nearly full stack", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const flood = `${"<div>".repeat(790)}${"</x>".repeat(180_000)}${"<div>".repeat(20)}`;
