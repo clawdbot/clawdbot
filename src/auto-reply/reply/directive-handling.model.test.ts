@@ -28,7 +28,7 @@ const stickyModelMock = vi.hoisted(() => ({
   persistBestEffort: vi.fn(),
 }));
 const pluginPolicyMock = vi.hoisted(() => ({
-  channels: new Map<string, ChannelPlugin>(),
+  channels: new Map<string, Pick<ChannelPlugin, "id" | "commands">>(),
   thinkingProfiles: new Map<
     string,
     (context: ProviderDefaultThinkingPolicyContext) => ProviderThinkingProfile | null | undefined
@@ -906,7 +906,7 @@ describe("/model chat UX", () => {
       commands: {
         buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
       },
-    } as ChannelPlugin);
+    });
 
     const reply = await resolveModelInfoReply({ surface: "telegram" });
 
