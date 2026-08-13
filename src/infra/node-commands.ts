@@ -19,6 +19,26 @@ export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";
 
+export const NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND = "worker.supervisor.launch.v1";
+export const NODE_WORKER_SUPERVISOR_STATUS_COMMAND = "worker.supervisor.status.v1";
+export const NODE_WORKER_SUPERVISOR_CANCEL_COMMAND = "worker.supervisor.cancel.v1";
+export const NODE_WORKER_SUPERVISOR_COMMANDS = [
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+] as const;
+
+const PRIVATE_NODE_INVOKE_COMMAND_SET = new Set<string>(NODE_WORKER_SUPERVISOR_COMMANDS);
+
+/** Private node controls are never part of advertised or operator-invocable command surfaces. */
+export function isPrivateNodeInvokeCommand(command: unknown): boolean {
+  return typeof command === "string" && PRIVATE_NODE_INVOKE_COMMAND_SET.has(command.trim());
+}
+
+export function filterPublicNodeCommands(commands: readonly string[]): string[] {
+  return commands.filter((command) => !isPrivateNodeInvokeCommand(command));
+}
+
 // Node duplex heartbeats must arrive before the Gateway relay declares the
 // invoke idle, so both processes share this timeout contract.
 export const NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS = 30_000;

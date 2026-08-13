@@ -4,7 +4,20 @@ import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
+  readBackupFreshness: vi.fn(() => ({
+    latest: {
+      id: "backup-1",
+      createdAt: 123,
+      archivePath: "/backups/git",
+      status: "ok" as const,
+      kind: "git" as const,
+    },
+  })),
   resolveStatusRuntimeSnapshot: vi.fn(),
+}));
+
+vi.mock("./backup-health.js", () => ({
+  readBackupFreshness: mocks.readBackupFreshness,
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -17,6 +30,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
 
 function createScan() {
   return {
+    env: { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" },
     cfg: { update: { channel: "stable" }, gateway: {} },
     sourceConfig: { gateway: {} },
     summary: { ok: true },
@@ -72,8 +86,9 @@ describe("status-json-runtime", () => {
   });
 
   it("builds the full json output for status --json", async () => {
+    const scan = createScan();
     const result = await resolveStatusJsonOutput({
-      scan: createScan(),
+      scan,
       opts: { deep: true, usage: true, timeoutMs: 1234 },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
@@ -90,6 +105,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(scan.env);
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayConnection).toStrictEqual({
       url: "ws://127.0.0.1:18789",
@@ -113,6 +129,7 @@ describe("status-json-runtime", () => {
     expect(result).toEqual({
       built: true,
       input: payloadInput,
+      backups: mocks.readBackupFreshness(),
     });
   });
 
@@ -126,8 +143,9 @@ describe("status-json-runtime", () => {
       nodeService: { label: "node" },
     });
 
+    const { env: _env, ...scanWithoutEnv } = createScan();
     await resolveStatusJsonOutput({
-      scan: createScan(),
+      scan: scanWithoutEnv,
       opts: { deep: false, usage: false, timeoutMs: 500 },
       includeSecurityAudit: false,
       includePluginCompatibility: false,
@@ -144,6 +162,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith({});
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
     expect(payloadInput.securityAudit).toBeUndefined();

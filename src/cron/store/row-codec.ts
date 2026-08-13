@@ -2,8 +2,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -19,9 +21,14 @@ import type {
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
-import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
+import {
+  booleanToInteger,
+  integerToBoolean,
+  normalizeNumber,
+  tryParseJsonObject,
+} from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
-import { getCronStoreKysely } from "./schema.js";
+import { ensureCronStoreEpochSchema, getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
@@ -365,6 +372,67 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
       .orderBy("updated_at", "asc")
       .orderBy("job_id", "asc"),
   ).rows;
+}
+
+function incrementCronStoreEpoch(db: DatabaseSync, storeKey: string): void {
+  ensureCronStoreEpochSchema(db);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_store_epochs")
+      .values({ store_key: storeKey, store_epoch: 0 })
+      .onConflict((conflict) => conflict.column("store_key").doNothing()),
+  );
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .updateTable("cron_store_epochs")
+      .set((eb) => ({ store_epoch: eb("store_epoch", "+", 1) }))
+      .where("store_key", "=", storeKey),
+  );
+}
+
+/** Materializes retired ownership; the caller's transaction commits row and epoch updates together. */
+export function materializeCronRowAgentOwners(
+  db: DatabaseSync,
+  storeKey: string,
+  legacyDefaultAgentId: string,
+): number {
+  const agentId = normalizeAgentId(legacyDefaultAgentId);
+  let rewritten = 0;
+  for (const row of loadCronRows(db, storeKey)) {
+    const jobJson = tryParseJsonObject(row.job_json);
+    const jsonSessionAgentId = parseAgentSessionKey(
+      normalizeOptionalString(jobJson?.sessionKey),
+    )?.agentId;
+    if (
+      normalizeOptionalString(row.agent_id) ||
+      normalizeOptionalString(jobJson?.agentId) ||
+      parseAgentSessionKey(row.session_key)?.agentId ||
+      jsonSessionAgentId
+    ) {
+      continue;
+    }
+    if (jobJson) {
+      jobJson.agentId = agentId;
+    }
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({
+          agent_id: agentId,
+          ...(jobJson ? { job_json: JSON.stringify(jobJson) } : {}),
+        })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", row.job_id),
+    );
+    rewritten += 1;
+  }
+  if (rewritten > 0) {
+    incrementCronStoreEpoch(db, storeKey);
+  }
+  return rewritten;
 }
 
 export type CronJobFamilyIdentity = {

@@ -161,7 +161,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(rootSource.contains("RootSidebar("))
         #expect(source.contains("ForEach(self.pinnedPages)"))
-        #expect(source.contains("ForEach(RootTabs.pinnableSidebarPages)"))
+        #expect(source.contains("destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable)"))
+        #expect(source.contains("ForEach(self.destinations)"))
         #expect(source.contains("private var brandHeader: some View"))
         #expect(source.contains("private var agentsSection: some View"))
         #expect(source.contains("static func shownAgentCount(configured: Int, total: Int) -> Int"))
@@ -770,7 +771,7 @@ extension RootTabsSourceGuardTests {
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(!rootSource.contains("openVoiceSettings:"))
-        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 2)
+        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 3)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))

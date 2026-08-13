@@ -24,6 +24,7 @@ export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   leaseId: string | null;
+  sharedHost: boolean | null;
   state: WorkerEnvironmentState;
   ownerEpoch: number;
   createdAtMs: number;
@@ -72,6 +73,7 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  deviceId?: string;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;

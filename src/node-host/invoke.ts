@@ -43,8 +43,10 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -66,6 +68,8 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -81,6 +85,10 @@ const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  workerSupervisor?: NodeWorkerSupervisorControl;
+};
 
 const execHostEnforced =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
@@ -572,7 +580,7 @@ export async function handleInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
@@ -600,9 +608,27 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
+    command,
+    paramsJSON: frame.paramsJSON,
+    supervisor: runtime.workerSupervisor,
+  });
+  if (workerSupervisorResult.handled) {
+    if (workerSupervisorResult.ok) {
+      await sendJsonPayloadResult(client, frame, workerSupervisorResult.payload);
+    } else {
+      await sendErrorResult(
+        client,
+        frame,
+        workerSupervisorResult.code,
+        workerSupervisorResult.message,
+      );
+    }
+    return;
+  }
   if (command === NODE_DEVICE_APPS_COMMAND) {
     const result = await invokeDeviceApps({
       paramsJSON: frame.paramsJSON,
@@ -614,6 +640,27 @@ async function dispatchInvoke(
       await sendJsonPayloadResult(client, frame, result.payload);
     } else {
       await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
+  if (command === NODE_DESKTOP_STREAM_COMMAND) {
+    try {
+      await invokeNodeDesktopStream({
+        paramsJSON: frame.paramsJSON,
+        gatewayUrl: runtime.gatewayUrl,
+        gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        config: runtime.desktopHostConfig,
+        signal: runtime.signal,
+        emitStatus: runtime.emitProgress,
+      });
+      await sendJsonPayloadResult(client, frame, { status: "closed" });
+    } catch (error) {
+      await sendErrorResult(
+        client,
+        frame,
+        "UNAVAILABLE",
+        error instanceof Error ? error.message : "desktop stream unavailable",
+      );
     }
     return;
   }

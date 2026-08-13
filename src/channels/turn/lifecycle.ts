@@ -4,6 +4,7 @@ import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-fr
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
+import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deriveInboundMessageHookContext,
@@ -111,14 +112,17 @@ export function assembleResolvedChannelTurn<
 function resolveAssembledReplyPipeline(
   params: DispatchableChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
-  const turnAdoptionLifecycle =
-    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  let replyOptions = adoption
+    ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
+    : params.replyOptions;
+  if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
+    replyOptions = withReplySystemEventSessionKey(replyOptions ?? {}, params.routeSessionKey);
+  }
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: turnAdoptionLifecycle
-        ? { ...params.replyOptions, turnAdoptionLifecycle }
-        : params.replyOptions,
+      replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -135,8 +139,7 @@ function resolveAssembledReplyPipeline(
     },
     replyOptions: {
       onModelSelected,
-      ...params.replyOptions,
-      ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+      ...replyOptions,
     },
   };
 }

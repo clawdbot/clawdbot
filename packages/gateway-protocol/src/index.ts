@@ -37,6 +37,7 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
@@ -47,6 +48,7 @@ export type {
   SecretsStoreMutationResult,
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
+export * from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -142,6 +144,10 @@ export {
   WorkerDesktopObserveResultSchema,
   WorkerDesktopLaunchParamsSchema,
   WorkerDesktopLaunchResultSchema,
+  DesktopSourceSchema,
+  DesktopObserveParamsSchema,
+  DesktopObserveResultSchema,
+  DesktopLaunchParamsSchema,
   SystemInfoParamsSchema,
   SystemInfoResultSchema,
   StateVersionSchema,
@@ -243,8 +249,10 @@ export {
   SessionsFilesListResultSchema,
   SessionsFilesRevealParamsSchema,
   SessionsFilesRevealResultSchema,
+  SessionDiffCommitSchema,
   SessionDiffFileSchema,
   SessionDiffFileStatusSchema,
+  SessionDiffScopeSchema,
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
   SessionsCompactionListParamsSchema,
@@ -291,6 +299,8 @@ export {
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsRecoverParamsSchema,
+  SessionsRecoverResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
   SessionsReclaimParamsSchema,
@@ -681,18 +691,4 @@ export {
   PROTOCOL_VERSION,
 } from "./version.js";
 export type * from "./schema-types.js";
-
-// Local structural result keeps this package independent of core session types.
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: Record<string, unknown>;
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: import("./schema/agents-models-skills.js").GatewayAgentRuntime;
-    thinkingLevel?: string;
-    thinkingLevels?: Array<{ id: string; label: string }>;
-  };
-};
+export type { SessionsPatchResult } from "./sessions-patch-result.js";

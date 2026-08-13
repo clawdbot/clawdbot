@@ -501,12 +501,6 @@ export const describe0BeforeEach0 = () => {
   diagnosticMocks.logMessageProcessed.mockClear();
   diagnosticMocks.logSessionStateChange.mockClear();
   diagnosticMocks.markDiagnosticSessionProgress.mockClear();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
-    status: "skipped",
-    action: "keep_lane",
-    reason: "active_reply_work",
-  });
   diagnosticMocks.logMessageDispatchStarted.mockClear();
   diagnosticMocks.logMessageDispatchCompleted.mockClear();
   hookMocks.runner.hasHooks.mockClear();

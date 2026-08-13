@@ -142,7 +142,15 @@ struct DashboardGatewaysBridgeTests {
         #expect(controller._testTLSParams == params)
         #expect(DashboardWindowController.isExpectedTLSAuthority(
             host: "gateway.example",
+            port: 0,
+            dashboardURL: url))
+        #expect(DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
             port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
+            port: 8443,
             dashboardURL: url))
         #expect(!DashboardWindowController.isExpectedTLSAuthority(
             host: "other.example",

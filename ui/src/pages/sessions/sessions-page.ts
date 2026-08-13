@@ -1,5 +1,7 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -20,8 +22,8 @@ import {
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -58,7 +60,6 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
@@ -70,7 +71,7 @@ import {
   sessionAgentIds,
 } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
-import { loadStoredGroupBy, parseFilterInteger, saveStoredGroupBy } from "./page-state.ts";
+import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
@@ -566,8 +567,10 @@ class SessionsPage extends OpenClawLightDomElement {
       activeMinutes:
         deepLinkKey || this.statusFilter !== "active"
           ? undefined
-          : parseFilterInteger(this.activeMinutes),
-      limit: deepLinkKey ? DEFAULT_SESSION_LIST_QUERY.limit : parseFilterInteger(this.limit),
+          : parseStrictPositiveInteger(this.activeMinutes),
+      limit: deepLinkKey
+        ? DEFAULT_SESSION_LIST_QUERY.limit
+        : parseStrictPositiveInteger(this.limit),
       search: deepLinkKey ?? undefined,
       includeGlobal: deepLinkKey ? true : this.includeGlobal,
       includeUnknown: deepLinkKey ? true : this.includeUnknown,

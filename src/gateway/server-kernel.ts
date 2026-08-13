@@ -1,4 +1,5 @@
 import { isNixMode } from "../config/paths.js";
+import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -162,6 +163,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     if (lifecycleRuntime) {
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
+      clearGatewayAgentCliShim();
       clearSecretsRuntimeSnapshotState();
       clearPluginMetadataLifecycleCaches();
     }

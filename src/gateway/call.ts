@@ -650,6 +650,11 @@ type ResolvedGatewayCallContext = {
   explicitAuth: ExplicitGatewayAuth;
 };
 
+export type GatewayTargetClassificationOptions = Pick<
+  CallGatewayBaseOptions,
+  "config" | "url" | "localPortOverride" | "ignoreEnvUrlOverride"
+>;
+
 function resolveGatewayCallTimeout(timeoutValue: unknown): {
   timeoutMs: number | null;
   startupTimeoutMs: number;
@@ -698,6 +703,23 @@ async function resolveGatewayCallContext(
     isRemoteMode,
     explicitAuth,
   };
+}
+
+/** Whether the caller selected the configured local Gateway without a URL override. */
+export async function isImplicitLocalGatewayTarget(
+  opts: GatewayTargetClassificationOptions,
+): Promise<boolean> {
+  const urlOverride = resolveGatewayUrlOverride({
+    gatewayUrl: opts.url,
+    env: process.env,
+    ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
+    localPortOverride: opts.localPortOverride,
+  });
+  if (urlOverride.url) {
+    return false;
+  }
+  const config = opts.config ?? (await loadGatewayConfig());
+  return config.gateway?.mode !== "remote";
 }
 
 function ensureRemoteModeUrlConfigured(params: {

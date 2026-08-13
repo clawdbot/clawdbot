@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -66,6 +67,45 @@ describe("resolveAssistantIdentity", () => {
     expect(identity.agentId).toBe("worker");
     expect(identity.name).toBe("Main assistant");
     expect(identity.avatar).toBe("M");
+  });
+
+  it("uses the first roster entry for presentation on an explicit fleet", () => {
+    const identity = resolveAssistantIdentity({
+      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      workspaceDir: "",
+    });
+
+    expect(identity).toEqual({ ...DEFAULT_ASSISTANT_IDENTITY, agentId: "ops" });
+  });
+
+  it("applies ui.assistant identity only as authoritative for the retained owner", () => {
+    const baseCfg: OpenClawConfig = {
+      ui: { assistant: { name: "Shared assistant", avatar: "S" } },
+      agents: {
+        ownership: "explicit",
+        list: [
+          { id: "ops", identity: { name: "Ops agent", avatar: "O" } },
+          { id: "research", identity: { name: "Research agent", avatar: "R" } },
+        ],
+      },
+    };
+    const ownerlessCfg = { ...baseCfg };
+    const migratedCfg = retainLegacyDefaultAgentId(baseCfg, "ops");
+
+    expect(
+      resolveAssistantIdentity({ cfg: migratedCfg, agentId: "ops", workspaceDir: "" }),
+    ).toEqual({
+      agentId: "ops",
+      name: "Shared assistant",
+      avatar: "S",
+      emoji: undefined,
+    });
+    expect(
+      resolveAssistantIdentity({ cfg: migratedCfg, agentId: "research", workspaceDir: "" }),
+    ).toMatchObject({ name: "Research agent", avatar: "R" });
+    expect(
+      resolveAssistantIdentity({ cfg: ownerlessCfg, agentId: "ops", workspaceDir: "" }),
+    ).toMatchObject({ name: "Ops agent", avatar: "O" });
   });
 
   it("drops sentence-like avatar placeholders", () => {

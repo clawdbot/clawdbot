@@ -1,6 +1,7 @@
 // Discord plugin module implements components.base behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { BaseComponentInteraction } from "./interactions.js";
+export { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export type ComponentParserResult = {
   key: string;
@@ -33,10 +34,6 @@ export function parseCustomId(id: string): ComponentParserResult {
     data[name] = raw === "true" ? true : raw === "false" ? false : raw;
   }
   return { key, data };
-}
-
-export function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 export function colorToNumber(value: string | number | undefined): number | undefined {

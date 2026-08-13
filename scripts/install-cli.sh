@@ -41,27 +41,27 @@ cleanup_tmpfiles() {
 }
 trap cleanup_tmpfiles EXIT
 
-resolve_openclaw_effective_home() {
-  local openclaw_home="${OPENCLAW_HOME:-}"
-  if [[ -z "$openclaw_home" ]]; then
-    echo "$HOME"
-    return 0
-  fi
-
-  case "$openclaw_home" in
-    \~)
-      echo "$HOME"
-      ;;
-    \~/*)
-      echo "${HOME}/${openclaw_home#~/}"
-      ;;
-    *)
-      echo "$openclaw_home"
-      ;;
+resolve_home_path() {
+  local input="$1"
+  case "$input" in
+    \~) echo "$HOME" ;;
+    \~/*) echo "${HOME}${input:1}" ;;
+    *) echo "$input" ;;
   esac
 }
 
-OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
+INSTALLER_CWD="$(pwd -P)"
+resolve_installer_path() {
+  local input
+  input="$(resolve_home_path "$1")"
+  case "$input" in
+    "") echo "" ;;
+    /*) echo "$input" ;;
+    *) echo "${INSTALLER_CWD}/${input}" ;;
+  esac
+}
+
+OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
@@ -209,9 +209,6 @@ preflight_fresh_git_disk_space() {
   local available_kib
   local available_gib
 
-  if [[ "$repo_dir" != /* ]]; then
-    repo_dir="$(pwd)/$repo_dir"
-  fi
   if [[ -d "$repo_dir/.git" ]]; then
     return 0
   fi
@@ -1356,9 +1353,6 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  if [[ "$repo_dir" != /* ]]; then
-    repo_dir="$(pwd)/$repo_dir"
-  fi
   mkdir -p "$(dirname "$repo_dir")"
   repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
 
@@ -1515,6 +1509,8 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  PREFIX="$(resolve_installer_path "$PREFIX")"
+  GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
 
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then
     RUN_ONBOARD=0

@@ -326,6 +326,7 @@ function scheduleRestartRecoveryReservationRollback(
 }
 
 export async function resumeMainSession(params: {
+  agentId: string;
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -455,6 +456,7 @@ export async function resumeMainSession(params: {
         : "skipped";
     }
     const agentParams: AgentRunRequest = {
+      agentId: params.agentId,
       message: buildResumeMessage(sanitizedPendingText),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,

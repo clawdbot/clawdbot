@@ -28,6 +28,7 @@ export type TestRealtimeSessionEntry = {
     state: { status: string };
     stop: ReturnType<typeof vi.fn>;
   };
+  playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   realtime?: {
     beginSpeakerTurn: (

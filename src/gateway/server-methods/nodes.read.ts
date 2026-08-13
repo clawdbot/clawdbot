@@ -11,11 +11,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseNodeRunnerInventoryDeclaration } from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
+import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -56,6 +58,24 @@ function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
   return node !== null;
 }
 
+function currentSessionHostNodeIds(params: {
+  connectedNodes: readonly NodeSession[];
+  nodeRegistry: GatewayRequestContext["nodeRegistry"];
+}): Set<string> {
+  return new Set(
+    params.connectedNodes.flatMap((node) =>
+      isNodeRunnerSessionHost({
+        registry: params.nodeRegistry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+        pairingGeneration: node.pairingGeneration,
+      })
+        ? [node.nodeId]
+        : [],
+    ),
+  );
+}
+
 function listNodesForClient(params: {
   client: GatewayClient | null;
   pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
@@ -63,12 +83,15 @@ function listNodesForClient(params: {
   pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
   connectedNodes: readonly NodeSession[];
   localNodeId: string | null;
+  nodeRegistry: GatewayRequestContext["nodeRegistry"];
 }): NodeListNode[] {
+  const sessionHostNodeIds = currentSessionHostNodeIds(params);
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
+    sessionHostNodeIds,
   });
   const nodes = listKnownNodes(catalog).map((node) =>
     node.nodeId === params.localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
@@ -240,6 +263,7 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
         pendingNodes: nodePairing.pending,
         connectedNodes,
         localNodeId,
+        nodeRegistry: context.nodeRegistry,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
@@ -272,6 +296,10 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes,
+        sessionHostNodeIds: currentSessionHostNodeIds({
+          connectedNodes,
+          nodeRegistry: context.nodeRegistry,
+        }),
       });
       const catalogNode = getKnownNode(catalog, id);
       const node =
@@ -353,5 +381,30 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       skills: updated.nodeSkills,
     });
     respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
+  },
+  "node.runnerInventory.update": ({ params, respond, client, context }) => {
+    const declaration = parseNodeRunnerInventoryDeclaration(params);
+    if (!declaration) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid node runner inventory"),
+      );
+      return;
+    }
+    const nodeId = normalizeOptionalString(client?.connect?.device?.id);
+    const updated = nodeId
+      ? updateNodeRunnerInventory({
+          registry: context.nodeRegistry,
+          nodeId,
+          connId: client?.connId,
+          declaration,
+        })
+      : null;
+    if (!nodeId || !updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    respond(true, { nodeId }, undefined);
   },
 };

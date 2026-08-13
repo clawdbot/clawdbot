@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
@@ -240,6 +241,7 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
     listAgentIds.mockClear();
+    resolveDefaultAgentId.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     getMemorySearchManager.mockReset().mockResolvedValue({
       manager: null,
@@ -256,6 +258,31 @@ describe("doctor.memory agent targeting", () => {
     });
     dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
   });
+
+  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
+    "%s returns typed selection-required when agentId is omitted",
+    async (method) => {
+      resolveDefaultAgentId.mockImplementationOnce(() => {
+        throw new AgentSelectionRequiredError(["ops", "research"], {
+          surface: "doctor memory",
+          hint: "Pass agentId to select a configured agent.",
+        });
+      });
+      const respond = vi.fn();
+
+      await invokeDoctorMemory(method, respond, { includeCron: true });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("agent"),
+        }),
+      );
+      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s rejects an unknown agent before resolving agent state",

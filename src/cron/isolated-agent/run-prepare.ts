@@ -34,7 +34,7 @@ import {
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
-import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
+import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
@@ -165,13 +165,12 @@ export async function prepareCronRunContext(params: {
         }
       : {}),
   });
-  const runtimeCfg = modelOwner.config;
   const agentId = modelOwner.agentId;
   const agentDir = modelOwner.agentDir;
-  const selectedAgentConfig = resolveAgentConfig(runtimeCfg, agentId);
+  const selectedAgentConfig = resolveAgentConfig(modelOwner.config, agentId);
   const agentConfigOverride = normalizedRequested ? selectedAgentConfig : undefined;
-  const agentCfg: AgentDefaultsConfig = buildCronAgentDefaultsConfig({
-    defaults: runtimeCfg.agents?.defaults,
+  const { runtimeConfig: runtimeCfg, agentDefaults: agentCfg } = resolveCronAgentConfig({
+    config: modelOwner.config,
     agentConfigOverride,
   });
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();

@@ -15,8 +15,9 @@
       var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
-  --shell-floating-update-card-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
+      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
   );
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
@@ -73,6 +74,9 @@
 .shell--nav-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  );
 }
 
 /* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
@@ -134,6 +138,23 @@
 
 .shell--mobile-nav .shell-chrome-controls {
   display: none;
+}
+
+/* Reserve notice space only while the corresponding in-page chrome remains visible. */
+:is(
+    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--settings),
+    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
+  )
+  .content
+  > :is(
+    openclaw-update-banner,
+    openclaw-device-scope-upgrade-banner,
+    openclaw-device-auth-migration-banner
+  )
+  .callout {
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 html.openclaw-native-macos .shell-chrome-controls {
@@ -391,6 +412,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -421,12 +444,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .settings-sidebar__search-input::-webkit-search-cancel-button {
   appearance: none;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .settings-sidebar__search-input {
-    font-size: max(16px, calc(12.5px * var(--control-ui-text-scale)));
-  }
 }
 
 .settings-sidebar__search-clear {
@@ -1112,7 +1129,7 @@ openclaw-settings-save-indicator {
   flex-shrink: 0;
   width: 14px;
   height: 14px;
-  color: var(--warn, #b7791f);
+  color: var(--warn);
 }
 
 .sidebar-attention__item--error .sidebar-attention__icon {
@@ -1154,8 +1171,8 @@ openclaw-settings-save-indicator {
 
 /* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
-  margin-left: var(--shell-floating-update-card-left);
+  width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 /* Native hosts hide the web cluster; onboarding never mounts it. */
@@ -2717,14 +2734,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: 10px;
 }
 
-.session-menu__item:hover:not(:disabled),
+.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
   background: var(--bg-hover);
 }
 
-.session-menu__item:disabled {
+.session-menu__item:disabled,
+.session-menu__item[aria-disabled="true"] {
   opacity: 0.42;
   cursor: not-allowed;
 }
@@ -3495,6 +3513,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-agent-menu__filter input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   width: 100%;
   padding: 5px 8px;
   border-radius: 6px;
@@ -3503,12 +3523,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   color: inherit;
   font: inherit;
   font-size: var(--control-ui-text-sm);
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-agent-menu__filter input {
-    font-size: max(16px, var(--control-ui-text-sm));
-  }
 }
 
 .sidebar-agent-menu__empty {
@@ -3919,9 +3933,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
-   when the gateway refuses or lacks the terminal surface. */
-.terminal-view-unavailable {
+/* Standalone terminal/desktop documents: centered notice when the gateway
+   refuses or lacks the requested surface. */
+.terminal-view-unavailable,
+.desktop-view-unavailable {
   position: fixed;
   inset: 0;
   display: flex;
@@ -3963,11 +3978,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-pr-indicator--merged {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .sidebar-session-pr-indicator svg {

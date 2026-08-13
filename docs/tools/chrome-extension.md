@@ -101,6 +101,18 @@ openclaw config set browser.defaultProfile chrome
 Fresh automatic pairings use **All tabs**. Existing valid pairings are never
 overwritten, and older pairings keep their stored access mode.
 
+For local setup, native bootstrap connects the extension through the local
+Gateway's exact `/browser/extension` route. That first authenticated connection
+wakes the lazy browser-control service and starts the profile's loopback relay;
+OpenClaw and local clients such as mcporter then use that profile relay port.
+Keep `openclaw gateway run` or the managed Gateway service running. A separate
+browser request or prewarm step is not required.
+
+Browser-node setup remains different: the extension connects to the relay on
+the browser-node host while the node uses its configured remote Gateway. An
+explicit `--gateway-url` pairing connects directly to that remote Gateway and
+remains a manual-only flow.
+
 ### Choose tab access
 
 - **All tabs** exposes every eligible ordinary tab in that Chrome profile,
@@ -129,6 +141,11 @@ local setup** switch.
   detaches debugger sessions, and persists the opt-out.
 - **Use local OpenClaw** clears the opt-out and retries the native host.
 - Saving an explicit manual pairing also clears the opt-out.
+
+Pre-release development installs that paired before local Gateway wakeup
+routing keep their existing pairing unchanged. In Settings, use **Disconnect
+and disable automatic setup**, then **Use local OpenClaw** to create the new
+local pairing. Released builds do not require this recovery step.
 
 ### Upgrades from the retired tab copilot
 
@@ -177,6 +194,10 @@ openclaw browser extension pair
 
 Manual pairing remains useful on Windows and for recovery. Treat the complete
 pairing string as a password.
+
+Without `--gateway-url`, this command retains the host-local `/extension` relay
+for standalone manual pairing. It does not wake Browser control; the selected
+profile relay must already be running before the extension connects.
 
 For a laptop that has Chrome but does not run OpenClaw or a browser node, pair
 directly to a remote Gateway:
@@ -270,8 +291,10 @@ openclaw doctor
   OpenClaw**.
 - **Manual setup required:** use Settings for the advanced pairing flow. This
   is expected on Windows and direct extension-only remote Gateway setups.
-- **Relay unavailable:** confirm the Gateway or browser node is running, then
-  run browser doctor.
+- **Relay unavailable:** confirm `openclaw gateway run` or the managed Gateway
+  service is running for local setup, or confirm the browser node is running
+  for browser-node setup. Then run browser doctor. No separate browser prewarm
+  should be necessary.
 
 See [Browser](/tools/browser) for the full profile model and the managed
 `openclaw` and Chrome MCP `user` profiles.

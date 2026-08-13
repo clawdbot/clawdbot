@@ -83,6 +83,15 @@ function readBaseBudget(root: string, ref: string) {
     encoding: "utf8",
   });
   const baselineRef = mergeBase.stdout.trim();
+  // Exit 1 with no output is git reporting no shared ancestor; a real failure exits 128.
+  // Shallow clones and grafted agent checkouts resolve the ref but truncate history, and
+  // only the growth comparison needs a baseline, so skip it rather than failing the gate.
+  if (mergeBase.status === 1 && !baselineRef) {
+    process.stderr.write(
+      `[env-var-count] ${ref} shares no reachable ancestor here; skipping the base-budget comparison\n`,
+    );
+    return null;
+  }
   if (mergeBase.status !== 0 || !baselineRef) {
     throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
   }

@@ -22,8 +22,8 @@ export const slackChannelConfigUiHints = {
     nativeCommands: true,
     implicitMentions: true,
     streaming: {
-      "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
-      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress".',
+      "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
+      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default).',
       chunkMode: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
       "block.enabled":
         'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
@@ -34,8 +34,6 @@ export const slackChannelConfigUiHints = {
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
-      "progress.render":
-        'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
       "progress.nativeTaskCards":
         'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
     },

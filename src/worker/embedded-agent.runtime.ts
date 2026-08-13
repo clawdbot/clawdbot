@@ -67,7 +67,8 @@ type WorkerEmbeddedTranscriptClient = {
 };
 
 type WorkerEmbeddedLiveClient = {
-  emit: (event: WorkerLiveEvent) => Promise<void>;
+  enqueuePreview: (event: WorkerLiveEvent) => boolean;
+  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
 type RunWorkerEmbeddedTurnParams = {

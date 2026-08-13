@@ -707,10 +707,19 @@ describe("web_fetch extraction fallbacks", () => {
       firecrawl: { enabled: false },
     });
     const result = await tool?.execute?.("call", { url: "https://example.com/reset" });
-    const details = result?.details as { text?: string; warning?: string } | undefined;
+    const details = result?.details as
+      | {
+          text?: string;
+          warning?: string;
+          truncated?: boolean;
+          spill?: { path: string };
+        }
+      | undefined;
 
     expect(details?.text).toContain("partial");
+    expect(details?.truncated).toBe(true);
     expect(details?.warning).toContain("Response body incomplete after 7 bytes");
+    expect(details?.spill).toBeUndefined();
   });
 
   it("keeps DNS pinning for web_fetch by default even when HTTP_PROXY is configured", async () => {

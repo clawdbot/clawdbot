@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -64,9 +65,7 @@ export function normalizeStringSet(values: Iterable<string> | undefined): Set<st
   return normalized;
 }
 
-export function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+export const normalizeFiniteTimestamp = asFiniteNumber;
 
 export function hasCurrentProcessOwner(params: {
   activeSessionIds: Set<string>;

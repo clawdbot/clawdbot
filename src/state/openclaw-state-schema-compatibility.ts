@@ -17,6 +17,7 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_installs.bootstrap_content_digest",
   "claw_installs.bootstrap_source_path",
   "worker_environments.desktop_json",
+  "worker_environments.bootstrap_install_kind",
   "claw_package_refs.extension_adapter_identity",
   "claw_package_refs.extension_detected_format",
   "claw_package_refs.extension_format",
@@ -35,6 +36,9 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_turn_tool_authorities",
 ] as const;
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
+const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
+  "idx_operator_approvals_source_run_resolved",
+] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
 function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
@@ -79,16 +83,6 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
   allowCompatibleAdditiveColumns: true,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
-    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
-    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
-    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
-    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
-    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
-    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
-    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
-    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
-    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
     "claw_package_refs.package_integrity": [
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
@@ -108,6 +102,7 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
     "worker_environments.desktop_json": ["desktop_json TEXT"],
+    "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
@@ -117,6 +112,7 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
   allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...CLAW_STARTUP_ADDITIVE_STATE_TABLES],
+  allowedMissingIndexes: CLAW_READONLY_OPTIONAL_STATE_INDEXES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
 };
 

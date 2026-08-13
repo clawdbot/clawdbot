@@ -152,9 +152,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("exposes the strict production plugin normalization boundary command", () => {
-    expect(readPackageJson().scripts["lint:extensions:no-normalization-core-bypass"]).toBe(
-      "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
+  it("runs dead-code reports fail-fast", () => {
+    expect(readPackageJson().scripts["deadcode:report"]).toBe(
+      "pnpm deadcode:full && pnpm deadcode:exports",
     );
   });
 
@@ -218,6 +218,12 @@ describe("package scripts", () => {
   it("runs SQLite snapshot path coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs shared-state ownership coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/state/openclaw-state-ownership.test.ts",
     );
   });
 

@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,6 +9,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -98,7 +98,7 @@ export type ResolvePromptContextAmbientWatermarkParams = {
 };
 
 export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+  asFiniteNumber(timestampMs);
 
 export function promptContextBoundaryOptions(
   timestampMs?: number,
@@ -292,17 +292,18 @@ export function createTelegramMessageSessionRuntime({
 export function createTelegramMessageContextRuntime({
   cfg,
   accountId,
+  ownerAgentId,
   opts,
   telegramCfg,
   telegramDeps,
 }: Pick<
   RegisterTelegramHandlerParams,
-  "cfg" | "accountId" | "opts" | "telegramCfg" | "telegramDeps"
+  "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: cfg.agents ? resolveDefaultAgentId(cfg) : "main",
+        agentId: ownerAgentId,
       }),
     ),
   });

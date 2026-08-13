@@ -2,8 +2,7 @@ import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginConfig,
   type CodexPluginDestructiveApprovalMode,
@@ -89,9 +88,7 @@ const codexAppServerNetworkProxySchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z
-      .enum([CODEX_PLUGINS_MARKETPLACE_NAME, CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME])
-      .optional(),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
@@ -274,9 +271,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
 function isCodexPluginMarketplaceName(
   value: string | undefined,
 ): value is CodexPluginMarketplaceName {
-  return (
-    value === CODEX_PLUGINS_MARKETPLACE_NAME || value === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
-  );
+  return typeof value === "string" && CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(value);
 }
 
 function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {

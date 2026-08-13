@@ -1,5 +1,6 @@
 // Gateway RPC handlers for safe gateway restart requests and preflight state.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -12,7 +13,7 @@ import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js
 import type { GatewayRequestHandlers } from "./types.js";
 
 function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeReason(value: unknown): string | undefined {

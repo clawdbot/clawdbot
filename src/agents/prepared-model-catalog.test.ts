@@ -25,6 +25,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/tmp/prepared-model-catalog-workspace",
   resolveDefaultAgentDir: () => "/tmp/prepared-model-catalog-agent",
   resolveDefaultAgentId: () => "main",
+  tryResolveLegacyCompatibilityAgentId: () => "main",
 }));
 
 vi.mock("./prepared-model-runtime.js", () => {

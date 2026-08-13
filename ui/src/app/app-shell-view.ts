@@ -12,11 +12,9 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -27,7 +25,12 @@ import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { isOptionalElementDefined, type OptionalCustomElement } from "./lazy-custom-element.ts";
+import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
+import {
+  ensureOptionalElementForHost,
+  isOptionalElementDefined,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -47,6 +50,48 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
   ? "⌘K"
   : "Ctrl K";
 
+const SCOPE_UPGRADE_BANNER_ELEMENT = {
+  tagName: "openclaw-device-scope-upgrade-banner",
+  label: "device scope upgrade banner",
+  loadModule: () => import("./device-scope-upgrade.runtime.ts"),
+} satisfies OptionalCustomElement;
+
+function renderScopeUpgradeBanner(
+  host: ShellViewHost,
+  snapshot: ApplicationContext["gateway"]["snapshot"],
+) {
+  const state = readScopeUpgradeAvailability(snapshot);
+  if (state.phase === "hidden") {
+    return nothing;
+  }
+  if (state.phase === "guidance") {
+    return html`<openclaw-update-banner
+      .props=${{
+        statusBanner: {
+          tone: "warn",
+          text: t("connection.scopeUpgrade.guidance"),
+        },
+      }}
+    ></openclaw-update-banner>`;
+  }
+  void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
+  if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
+    return html`<openclaw-device-scope-upgrade-banner
+      .props=${{
+        snapshot,
+      }}
+    ></openclaw-device-scope-upgrade-banner>`;
+  }
+  return html`<openclaw-update-banner
+    .props=${{
+      statusBanner: {
+        tone: "warn",
+        text: t("connection.scopeUpgrade.guidance"),
+      },
+    }}
+  ></openclaw-update-banner>`;
+}
+
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly runtime: ApplicationRuntime | undefined;
@@ -54,6 +99,7 @@ export interface ShellViewHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
+  readonly devicePairSetupElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -80,6 +126,7 @@ export interface ShellViewHost {
   openPalette(): void;
   refreshControlUi(): void;
   replaceChatWithCurrentSession(): boolean;
+  requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
@@ -152,8 +199,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     context.config.current.terminalEnabled ?? false,
   );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
-  const activeSessionRow = findUiSessionRow(context, host.activeSessionKey);
-  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot, activeSessionRow);
+  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
@@ -458,6 +504,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")
@@ -544,25 +591,32 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${renderDevicePairSetup({
-        open: overlaySnapshot.devicePairSetupOpen,
-        loading: overlaySnapshot.devicePairSetupLoading,
-        error: overlaySnapshot.devicePairSetupError,
-        setup: overlaySnapshot.devicePairSetup,
-        access: overlaySnapshot.devicePairSetupAccess,
-        pendingCount: overlaySnapshot.devicePairPendingCount,
-        onRefresh: () => void context.overlays.refreshDevicePairSetup(),
-        onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
-        onClose: () => context.overlays.closeDevicePairSetup(),
-        onManageDevices: () => {
-          context.overlays.closeDevicePairSetup();
-          host.navigate("devices");
-        },
-        onGetApps: () => {
-          context.overlays.closeDevicePairSetup();
-          host.navigate("apps");
-        },
-      })}
+      ${isOptionalElementDefined(host.devicePairSetupElement)
+        ? html`<openclaw-device-pair-setup
+            .props=${{
+              open: overlaySnapshot.devicePairSetupOpen,
+              loading: overlaySnapshot.devicePairSetupLoading,
+              error: overlaySnapshot.devicePairSetupError,
+              setup: overlaySnapshot.devicePairSetup,
+              access: overlaySnapshot.devicePairSetupAccess,
+              nowMs: Date.now(),
+              pendingCount: overlaySnapshot.devicePairPendingCount,
+              onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+              onAccessChange: (
+                access: Parameters<typeof context.overlays.setDevicePairSetupAccess>[0],
+              ) => void context.overlays.setDevicePairSetupAccess(access),
+              onClose: () => context.overlays.closeDevicePairSetup(),
+              onManageDevices: () => {
+                context.overlays.closeDevicePairSetup();
+                host.navigate("devices");
+              },
+              onGetApps: () => {
+                context.overlays.closeDevicePairSetup();
+                host.navigate("apps");
+              },
+            }}
+          ></openclaw-device-pair-setup>`
+        : nothing}
       ${onboarding && activeRoute !== "custodian"
         ? html`<openclaw-onboarding-memory-import
             .active=${true}

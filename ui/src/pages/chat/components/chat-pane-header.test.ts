@@ -302,6 +302,56 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
+  it("renders a quiet cloud placement chip with the canonical stop action", () => {
+    const onPlacementReclaim = vi.fn();
+    const { container } = mount({
+      session: row({
+        placement: {
+          state: "active",
+          generation: 1,
+          createdAtMs: 100_000,
+          updatedAtMs: 300_000,
+          stateChangedAtMs: 300_000,
+          environmentId: "worker:one",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      }),
+      onPlacementReclaim,
+    });
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      "Runs on Cloud",
+    );
+    expect(container.querySelector(".chat-pane__placement-state")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-note")).toBeNull();
+    const actions = container.querySelectorAll(".chat-pane__placement-menu wa-dropdown-item");
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.textContent?.trim()).toBe("Stop cloud worker…");
+    expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(true);
+    expect(actions[0]?.getAttribute("variant")).toBe("danger");
+    expect(actions[0]?.querySelector(".session-menu__icon")).not.toBeNull();
+    actions[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPlacementReclaim).toHaveBeenCalledOnce();
+  });
+
+  it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
+    const { container } = mount({
+      session: row({
+        placement: {
+          state,
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+        },
+      }),
+    });
+    expect(container.querySelector(".chat-pane__placement-chip")).toBeNull();
+  });
+
   it("places pane presence between the identity trail and face control", () => {
     const { container } = mount({
       presence: html`<span data-slot="presence"></span>`,
@@ -456,7 +506,7 @@ describe("chat pane header", () => {
       }),
       canReveal: false,
     });
-    expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
   });

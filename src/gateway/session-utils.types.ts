@@ -122,6 +122,7 @@ export type GatewaySessionRow = {
   placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];

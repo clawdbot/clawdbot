@@ -1,13 +1,60 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-  OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
+
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  policyHash: "onboard-inference-test-empty-plugin-policy",
+  configFingerprint: "onboard-inference-test-empty-plugin-metadata",
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "onboard-inference-test-empty-plugin-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
+  registryDiagnostics: [],
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  plugins: [],
+  diagnostics: [],
+  byPluginId: new Map(),
+  normalizePluginId: (pluginId: string) => pluginId,
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+  metrics: {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  },
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+
+afterAll(() => {
+  vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
+  vi.resetModules();
+});
 
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
@@ -17,11 +64,6 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it("uses canonical GPT-5.6 Sol defaults for direct API and Codex", () => {
-    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-    expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-  });
-
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -84,8 +126,8 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
     expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
-    expect(candidates[2]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
-    expect(candidates[3]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
+    expect(candidates[2]?.modelRef).toBe("openai/gpt-5.6-sol");
+    expect(candidates[3]?.modelRef).toBe("openai/gpt-5.6-sol");
     expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
   });
 

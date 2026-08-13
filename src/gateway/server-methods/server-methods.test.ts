@@ -4839,6 +4839,43 @@ describe("gateway healthHandlers.health cache freshness", () => {
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
+
+  it("refreshes cached health after hot reload removes a runtime account", async () => {
+    const current = createSingleChannelHealthSnapshot({
+      channelId: "discord",
+      label: "Discord",
+      running: true,
+      connected: true,
+    });
+    const cached = {
+      ...current,
+      channels: {
+        discord: {
+          ...current.channels.discord,
+          accounts: {
+            ...current.channels.discord.accounts,
+            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
+          },
+        },
+      },
+    };
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh: current,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          discord: { default: { accountId: "default", running: true, connected: true } },
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, current, undefined);
+  });
 });
 
 describe("logs.tail", () => {

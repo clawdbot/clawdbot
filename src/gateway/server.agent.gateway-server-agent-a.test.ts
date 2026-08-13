@@ -447,6 +447,61 @@ describe("gateway server agent", () => {
     expect(call.sessionId).toBe("sess-ops");
   });
 
+  test("agent resolves a bare key through configured fixed-store ownership", async () => {
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    };
+    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    await setTestSessionStore({
+      agentId: "ops",
+      entries: {
+        global: {
+          sessionId: "sess-ops-global",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey: "global",
+      idempotencyKey: "idem-agent-owned-global",
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+
+    const call = await waitForAgentCommandCall("idem-agent-owned-global");
+    expect(call.agentId).toBe("ops");
+    expect(call.sessionKey).toBe("global");
+    expect(call.sessionId).toBe("sess-ops-global");
+  });
+
+  test("agent rejects an ownerless bare key before session preparation", async () => {
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    };
+    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey: "global",
+      idempotencyKey: "idem-agent-ownerless-global",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has no explicit owner"),
+    });
+    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+  });
+
   test.each(["success", "error"] as const)(
     "agent executes a group-only run without a resolved session key and closes authority after %s",
     async (outcome) => {

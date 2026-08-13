@@ -476,6 +476,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { networkProxy: "default" },
   },
   {
+    commandPath: ["connect"],
+    exact: true,
+    policy: { networkProxy: "default" },
+  },
+  {
     commandPath: ["worker"],
     exact: true,
     policy: {

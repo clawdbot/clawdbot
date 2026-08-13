@@ -295,32 +295,6 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_retention).toBeUndefined();
   });
 
-  it("treats canonical OpenAI Codex responses models as native Codex responses", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        contextWindow: 400000,
-        maxTokens: 128000,
-      }),
-      {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        maxTokens: 16,
-        sessionId: "session-123",
-      },
-    ) as Record<string, unknown>;
-
-    expect(params.instructions).toBe("Follow the user request.");
-    expect(params.max_output_tokens).toBeUndefined();
-    expect(params.prompt_cache_retention).toBeUndefined();
-  });
-
   it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

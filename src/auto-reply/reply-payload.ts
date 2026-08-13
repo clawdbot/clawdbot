@@ -1,5 +1,8 @@
 import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
-import { readNonBlankString as normalizeTtsSupplementSpokenText } from "@openclaw/normalization-core/string-coerce";
+import {
+  readNonBlankString,
+  readNonBlankString as normalizeTtsSupplementSpokenText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
@@ -117,10 +120,6 @@ type PairingQrReplyChannelData = {
   expiresAtMs: number;
 };
 
-function normalizePairingQrSetupCode(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
@@ -129,7 +128,7 @@ export function readPairingQrReplyChannelData(
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const setupCode = readNonBlankString(record.setupCode);
   const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }

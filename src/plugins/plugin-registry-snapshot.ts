@@ -33,6 +33,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
@@ -386,10 +387,10 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
         ? { filePath: params.pluginIndexFilePath }
         : {}),
   });
-  const pluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
-  return Object.keys(installRecords).some(
-    (pluginId) => !index.installRecords?.[pluginId] || !pluginIds.has(pluginId),
-  );
+  // A durable owner can outlive removed package bytes. Lifecycle mutations fail
+  // closed without child rows; registry recovery only needs to detect records
+  // that are absent from the persisted top-level ledger.
+  return Object.keys(installRecords).some((pluginId) => !index.installRecords?.[pluginId]);
 }
 
 function requiresDerivedRegistryValidation(
@@ -405,6 +406,7 @@ function requiresDerivedRegistryValidation(
     params.installRecords !== undefined ||
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
+    hasMissingInstalledPluginOwnerMetadata(index, env) ||
     index.diagnostics.some(({ pluginId, source }) =>
       Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||

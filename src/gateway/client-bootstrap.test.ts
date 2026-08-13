@@ -131,6 +131,129 @@ describe("resolveGatewayClientBootstrap", () => {
     expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
   });
 
+  it("reuses local auth without pinning an exact public-origin target to the local certificate", async () => {
+    const publicUrl = "wss://gateway.example/openclaw";
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails
+      .mockReturnValueOnce({
+        url: publicUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${publicUrl}`,
+      })
+      .mockReturnValueOnce({
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "local",
+          publicOrigin: "https://gateway.example",
+          controlUi: { basePath: "/openclaw" },
+          tls: tlsConfig,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      } as never,
+      gatewayUrl: publicUrl,
+      authPolicy: "interactive",
+      allowConfiguredAuthForExactTarget: true,
+      env: process.env,
+    });
+
+    expect(result.auth.token).toBe("configured-token");
+    expect(result.tlsFingerprint).toBeUndefined();
+    expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it("retains the local certificate pin for an exact direct-local target", async () => {
+    const localUrl = "wss://127.0.0.1:18789/openclaw";
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails
+      .mockReturnValueOnce({
+        url: localUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${localUrl}`,
+      })
+      .mockReturnValueOnce({
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "local",
+          controlUi: { basePath: "/openclaw" },
+          tls: tlsConfig,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      } as never,
+      gatewayUrl: localUrl,
+      explicitAuth: { token: "explicit-token" },
+      authPolicy: "interactive",
+      allowConfiguredAuthForExactTarget: true,
+      env: process.env,
+    });
+
+    expect(result.auth.token).toBe("explicit-token");
+    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
+  });
+
+  it("prefers direct-local TLS ownership when publicOrigin resolves to the same URL", async () => {
+    const localUrl = "wss://127.0.0.1:18789/openclaw";
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails
+      .mockReturnValueOnce({
+        url: localUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${localUrl}`,
+      })
+      .mockReturnValueOnce({
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "local",
+          publicOrigin: "https://127.0.0.1:18789",
+          controlUi: { basePath: "/openclaw" },
+          tls: tlsConfig,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      } as never,
+      gatewayUrl: localUrl,
+      authPolicy: "interactive",
+      allowConfiguredAuthForExactTarget: true,
+      env: process.env,
+    });
+
+    expect(result.auth.token).toBe("configured-token");
+    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
+  });
+
   it.each([
     {
       url: "wss://gateway.example/ws",

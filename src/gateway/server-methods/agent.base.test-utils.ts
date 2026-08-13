@@ -264,10 +264,15 @@ describe("gateway agent handler", () => {
       respond: duplicateRespond,
       flushDispatch: false,
     });
-    expect(duplicateRespond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
-      cached: true,
-      runId,
-    });
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", agentId: "ops" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
     expect(mocks.resolveAgentExplicitRecipientSession).toHaveBeenCalledTimes(1);
 
     finishRoute({ sessionKey });

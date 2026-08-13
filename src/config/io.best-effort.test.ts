@@ -196,7 +196,7 @@ describe("readBestEffortConfig", () => {
       expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
       expect(snapshot.sourceConfig).toEqual({
         update: { channel: "beta" },
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
       });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);

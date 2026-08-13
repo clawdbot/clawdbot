@@ -357,8 +357,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     left: auto;
     z-index: 100;
     width: min(420px, calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px));
-    background: var(--card, #161b22);
-    border: 1px solid var(--border, #30363d);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);

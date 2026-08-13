@@ -1536,36 +1536,6 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              channels: {
-                "*": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    };
-    const ctx: TemplateContext = {
-      Provider: "slack",
-      From: "slack:channel:C123",
-      GroupSubject: "#alerts",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "slack:group:C123",
-      channel: "slack",
-      id: "C123",
-      chatType: "group",
-    };
-
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
-  });
-
   it("uses Discord fallback resolver semantics for guild slug matches", async () => {
     const cfg: OpenClawConfig = {
       channels: {

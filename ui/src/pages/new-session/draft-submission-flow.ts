@@ -1,6 +1,10 @@
-import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ProjectsAddResult,
+  SessionsCatalogStartTerminalResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
+import { navigateWithRouteTransition } from "../../app/route-transition.ts";
 import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
@@ -156,7 +160,7 @@ export class DraftSubmissionFlow {
       thinkingLevel: this.place.modelControl.thinkingLevel,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
-      projectId: this.place.projectId,
+      projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
       worktree: this.place.worktree,
       baseRef: this.place.baseRef,
       worktreeName: this.place.worktreeName,
@@ -173,6 +177,13 @@ export class DraftSubmissionFlow {
   ): SessionMethodAccess {
     const gateway = this.read().context?.gateway.snapshot;
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const remoteProject = this.place.browser.remoteProject;
+    if (!pendingCloud && remoteProject && !remoteProject.projectId) {
+      return readSessionMethodAccess(gateway, {
+        method: "projects.add",
+        requiredScope: "operator.write",
+      });
+    }
     if (!pendingCloud || this.pendingCloud.phase === "creating") {
       const createAccess = readSessionMethodAccess(gateway, {
         method: "sessions.create",
@@ -364,6 +375,22 @@ export class DraftSubmissionFlow {
     this.callbacks.requestUpdate();
   }
 
+  private navigateToStartedSession(
+    context: ApplicationContext,
+    options: ApplicationNavigationOptions,
+  ): Promise<void> {
+    // Keep transition code on the lazy new-session path instead of the startup bundle.
+    return navigateWithRouteTransition({
+      document,
+      from: "new-session",
+      to: "chat",
+      prefersReducedMotion:
+        globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+      prepare: () => context.preload("chat", options),
+      navigate: () => context.navigateAndWait("chat", options),
+    }).catch(() => undefined);
+  }
+
   async submit() {
     const context = this.read().context;
     if (!context || !this.canSubmit()) {
@@ -396,6 +423,18 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     try {
+      const remoteProject = pendingCloud ? null : this.place.browser.remoteProject;
+      if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
+        const project = await submissionClient.request<ProjectsAddResult>(
+          "projects.add",
+          { gitUrl: remoteProject.cloneUrl },
+          { timeoutMs: null },
+        );
+        if (requestId !== this.submitRequestToken || this.gateway.client !== submissionClient) {
+          return;
+        }
+        this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
+      }
       const cloudProfileId = this.cloudProfileForSubmission();
       const draftRetired = this.visibilityValue === "draft" && !this.canStartAsDraft();
       const createParams = this.buildDraftSessionCreateParams({
@@ -528,13 +567,14 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
           agentId: submissionAgentId,
         });
-        context.navigate(
-          "chat",
+        await this.navigateToStartedSession(
+          context,
           sessionNavigationTarget({
             context,
             face: "chat",
             sessionKey: result.key,
             agentId: this.place.agentId,
+            focusComposer: true,
           }).options,
         );
         return;
@@ -571,15 +611,20 @@ export class DraftSubmissionFlow {
         sessionKey: result.key,
         agentId: submissionAgentId,
       });
-      context.navigate(
-        "chat",
+      await this.navigateToStartedSession(
+        context,
         sessionNavigationTarget({
           context,
           face: "chat",
           sessionKey: result.key,
           agentId: this.place.agentId,
+          focusComposer: true,
         }).options,
       );
+    } catch (error) {
+      if (requestId === this.submitRequestToken && this.gateway.client === submissionClient) {
+        this.errorValue = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submittingValue = false;

@@ -37,7 +37,7 @@ import {
   readLocalPiTranscriptPage,
   type PiSessionPage,
 } from "./pi-session-catalog.js";
-import { piSessionStoreAvailable } from "./pi-session-paths.js";
+import { piSessionStore, piSessionStoreAvailable } from "./pi-session-paths.js";
 import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
 const LOCAL_HOST_ID = "gateway";
@@ -248,7 +248,13 @@ async function listPiHosts(
   const canContinue = resolvePiContinuationAvailability(api).available;
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
-  if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
+  const wantsLocal = !requested || requested.has(LOCAL_HOST_ID);
+  const localStore = wantsLocal ? piSessionStore(process.env) : undefined;
+  if (
+    localStore &&
+    (query.allowProcessHomeFallback !== false || !localStore.usesProcessHomeFallback) &&
+    piSessionStoreAvailable(process.env, localStore)
+  ) {
     try {
       hosts.push({
         hostId: LOCAL_HOST_ID,
@@ -507,6 +513,7 @@ async function readPiTranscript(
     throw new Error("cursor is invalid");
   }
   if (request.hostId === LOCAL_HOST_ID) {
+    assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
     return await readLocalPiTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
@@ -542,6 +549,16 @@ async function readPiTranscript(
     hostId: request.hostId,
     label: nodeLabel(node),
   };
+}
+
+function assertPiLocalAccess(hostId: string, allowProcessHomeFallback?: boolean): void {
+  if (
+    hostId === LOCAL_HOST_ID &&
+    allowProcessHomeFallback === false &&
+    piSessionStore(process.env).usesProcessHomeFallback
+  ) {
+    throw new PiCatalogParamsError("local Pi sessions are unavailable in isolated state");
+  }
 }
 
 export async function listPiSessions(paramsJSON?: string | null): Promise<string> {
@@ -587,10 +604,23 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
   return {
     list: async (query) => await listPiHosts(api, query),
     read: async (request) => await readPiTranscript(api.runtime, request),
-    continueSession: async (request) =>
-      await continuePiSession(api, request.hostId, request.threadId),
-    checkUpstreamActivity: checkPiUpstreamActivity,
-    openTerminal: async (request) => await openPiTerminal({ runtime: api.runtime, ...request }),
+    continueSession: async (request) => {
+      assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await continuePiSession(api, request.hostId, request.threadId);
+    },
+    checkUpstreamActivity: (probes, policy) =>
+      checkPiUpstreamActivity(
+        probes.filter(
+          (probe) =>
+            probe.hostId !== LOCAL_HOST_ID ||
+            policy?.allowProcessHomeFallback !== false ||
+            !piSessionStore(process.env).usesProcessHomeFallback,
+        ),
+      ),
+    openTerminal: async (request) => {
+      assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await openPiTerminal({ runtime: api.runtime, ...request });
+    },
   } satisfies Pick<
     SessionCatalogProvider,
     "list" | "read" | "continueSession" | "checkUpstreamActivity" | "openTerminal"

@@ -30,13 +30,9 @@ function normalizeToolHistoryType(value: unknown): string | undefined {
   return normalized ? normalized.replace(/_/g, "") : undefined;
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  return safeParseJsonRecord(value);
-}
-
 function readMaybeJsonRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
-    return parseJsonRecord(value);
+    return safeParseJsonRecord(value);
   }
   return readRecord(value);
 }

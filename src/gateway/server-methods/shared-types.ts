@@ -28,11 +28,13 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
   ChannelRuntimeSnapshot,
@@ -188,11 +190,14 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
+  gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Cancels durable approvals owned by one actively aborted run. */
   cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
@@ -276,6 +281,7 @@ type GatewayKernelContext = {
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
 type GatewayTransportContext = {
+  portalService?: GatewayPortalService;
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
@@ -339,6 +345,8 @@ type GatewayResidentBridgeContext = {
   }) => Promise<HealthSummary>;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
+  hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;

@@ -260,7 +260,8 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
 - Extracted file text is wrapped as untrusted external content before it's appended to the media prompt, using boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` plus a `Source: External` metadata line.
 - This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short; the boundary markers and metadata still apply.
-- Unsupported files get `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]`. If the MIME type is unknown, the marker omits it.
+- Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata; the trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
+- Files rejected by an operator-configured allowlist never include the self-serve path; a policy rejection must not coach the agent around the operator's decision.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
 - Read failures get `[Attachment could not be read]`.
 - URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.

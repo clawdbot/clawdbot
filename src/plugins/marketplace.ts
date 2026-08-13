@@ -19,6 +19,7 @@ import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -1326,31 +1327,33 @@ export async function installPluginFromMarketplace(
     }
     installCleanup = resolved.cleanup;
 
-    const result = await installPluginFromPath({
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      config: params.config,
-      path: resolved.path,
-      logger: params.logger,
-      mode: params.mode,
-      extensionsDir: params.extensionsDir,
-      timeoutMs: params.timeoutMs,
-      dryRun: params.dryRun,
-      expectedPluginId: params.expectedPluginId,
-      installPolicyRequest: {
-        kind: marketplaceInstallPolicyRequestKind({
-          marketplaceOrigin: loaded.marketplace.origin,
-          resolvedPath: resolved.path,
-          source: entry.source,
-        }),
-        requestedSpecifier: `${entry.name}@${params.marketplace}`,
-        source: marketplaceInstallPolicySource({
-          marketplaceOrigin: loaded.marketplace.origin,
-          marketplaceRef: loaded.marketplace.remoteRef,
-          resolvedPath: resolved.path,
-          source: entry.source,
-        }),
-      },
-    });
+    const result = await installPluginFromPath(
+      copyPluginInstallTransactionRequest(params, {
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        config: params.config,
+        path: resolved.path,
+        logger: params.logger,
+        mode: params.mode,
+        extensionsDir: params.extensionsDir,
+        timeoutMs: params.timeoutMs,
+        dryRun: params.dryRun,
+        expectedPluginId: params.expectedPluginId,
+        installPolicyRequest: {
+          kind: marketplaceInstallPolicyRequestKind({
+            marketplaceOrigin: loaded.marketplace.origin,
+            resolvedPath: resolved.path,
+            source: entry.source,
+          }),
+          requestedSpecifier: `${entry.name}@${params.marketplace}`,
+          source: marketplaceInstallPolicySource({
+            marketplaceOrigin: loaded.marketplace.origin,
+            marketplaceRef: loaded.marketplace.remoteRef,
+            resolvedPath: resolved.path,
+            source: entry.source,
+          }),
+        },
+      }),
+    );
     if (!result.ok) {
       return result;
     }

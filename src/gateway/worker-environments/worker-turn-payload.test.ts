@@ -82,8 +82,8 @@ function buildDescriptor(
   operationalRunInstance: OperationalRunInstanceRef,
 ): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath: "/tmp/worker.sock",
+    version: 3,
+    connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker.sock" },
     admission: {
       environmentId: "environment",
       credential: "worker-fixture-credential",

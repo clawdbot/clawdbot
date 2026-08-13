@@ -27,6 +27,7 @@ type WorkerEnvironmentAccessOptions = {
   serviceError: (
     code:
       | "desktop_app_not_found"
+      | "device-runner-transport-unimplemented"
       | "environment_not_found"
       | "invalid_state"
       | "launcher_failure"
@@ -87,10 +88,17 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
-        !record.leaseId ||
-        !record.sshEndpoint ||
-        !record.bootstrapReceipt
+        !record.leaseId
       ) {
+        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
+      }
+      if (!record.sshEndpoint) {
+        throw serviceError(
+          "device-runner-transport-unimplemented",
+          "device-runner-transport-unimplemented: device runner launch is not available in this build",
+        );
+      }
+      if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       if (record.sharedHost === null) {
@@ -163,7 +171,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!tunnels) {
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
-    let startup: Promise<{ localSocketPath: string; vncPassword?: string }> | undefined;
+    let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
     let ownerEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
       stopping = options.isStopping();
@@ -203,18 +211,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
     }
     const acquired = await startup;
-    const { WORKER_DESKTOP_OBSERVE_PATH, mintWorkerDesktopObserverToken } =
-      await import("./desktop-observe.js");
-    const minted = mintWorkerDesktopObserverToken({
-      environmentId: request.environmentId,
+    const { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } =
+      await import("../desktop/observe-bridge.js");
+    const minted = mintDesktopObserverToken({
+      sourceKey: request.environmentId,
       ownerEpoch,
       control: request.control,
-      localSocketPath: acquired.localSocketPath,
+      attachment: acquired.attachment,
       nowMs: now(),
     });
     return {
       transport: "rfb",
-      wsPath: `${WORKER_DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
+      wsPath: `${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
       expiresAtMs: minted.expiresAtMs,
       control: request.control,
       ...(acquired.vncPassword ? { vncPassword: acquired.vncPassword } : {}),
@@ -269,19 +277,19 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           `environment does not advertise desktop app: ${request.app}`,
         );
       }
-      return { app, record };
+      return { app, record, sshEndpoint: record.sshEndpoint };
     };
 
     let startup: Promise<void> | undefined;
     let launchEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
-      const { app, record } = requireLaunchable();
+      const { app, record, sshEndpoint } = requireLaunchable();
       const provider = providerFor(record.providerId);
       launchEpoch = record.ownerEpoch;
       startup = tunnels.desktop.launchApp({
         environmentId: record.environmentId,
         ownerEpoch: record.ownerEpoch,
-        ssh: record.sshEndpoint,
+        ssh: sshEndpoint,
         app,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
       });

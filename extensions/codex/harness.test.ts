@@ -179,13 +179,6 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
-  it("supports the canonical openai routing id (documented Codex path)", () => {
-    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
-      supported: true,
-      priority: 100,
-    });
-  });
-
   it("supports an official route declared compatible with Codex", () => {
     expect(
       harness.supports({

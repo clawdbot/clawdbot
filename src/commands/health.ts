@@ -390,7 +390,9 @@ export async function healthCommand(
         const preferred = resolvePreferredAccountId({
           accountIds,
           defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
+          boundAccounts: defaultAgentId
+            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+            : [],
         });
         return [plugin.id, [preferred] as string[]] as const;
       }),
@@ -455,7 +457,9 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,

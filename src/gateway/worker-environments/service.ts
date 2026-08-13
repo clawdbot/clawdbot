@@ -49,6 +49,7 @@ type WorkerEnvironmentServiceErrorCode =
   | "invalid_profile"
   | "invalid_state"
   | "desktop_app_not_found"
+  | "device-runner-transport-unimplemented"
   | "unsupported_platform"
   | "launcher_failure"
   | "provider_failure"
@@ -86,6 +87,7 @@ type WorkerEnvironmentServiceOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
+  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   tunnelManager?: WorkerTunnelManager;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
@@ -260,6 +262,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareInstallation: options.prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
+    resolveNodeWorkerBuild: options.resolveNodeWorkerBuild,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: options.tunnelManager,
     credentialBroker,

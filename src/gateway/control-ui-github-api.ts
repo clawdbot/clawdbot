@@ -2,6 +2,9 @@
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -21,8 +24,8 @@ export class ControlUiGitHubError extends Error {
 }
 
 export function requiredString(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
     throw new ControlUiGitHubError(502, `GitHub response omitted ${key}`);
   }
   return value;
@@ -32,17 +35,27 @@ export function readOptionalGitHubString(
   record: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return readNonBlankString(record[key]);
 }
 
 export function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
 export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
+}
+
+/** Captures the effective token and a non-secret cache scope from the same env snapshot. */
+export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process.env): {
+  token: string | undefined;
+  cacheScope: string;
+} {
+  const token = githubApiToken(env);
+  return {
+    token,
+    cacheScope: token ? createHash("sha256").update(token).digest("hex") : "anonymous",
+  };
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {

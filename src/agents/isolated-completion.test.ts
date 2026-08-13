@@ -1,8 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  type AgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+
+type IsolatedCliRunParams = {
+  preparedRunAdmission: PreparedAgentRunAdmission;
+  prompt: string;
+  runId: string;
+  sessionId: string;
+};
 
 const mocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(),
@@ -20,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
   resolveEffectiveAgentRuntime: vi.fn(() => "codex"),
-  runCliAgent: vi.fn(),
+  runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 
 vi.mock("./agent-scope.js", () => ({
@@ -128,7 +146,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
     snapshot: {
+      config: {},
+      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/workspace"),
       pluginRegistry: createEmptyPluginRegistry(),
+      workspaceDir: "/tmp/workspace",
       createStores: () => ({ modelRegistry: {} }),
     },
     release: vi.fn(),
@@ -178,6 +199,9 @@ describe("runIsolatedCompletion", () => {
     await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
       text: "native result",
       owner: { kind: "harness", id: "codex" },
+    });
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(expect.any(Object), {
+      catalogMode: "static",
     });
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
@@ -749,6 +773,81 @@ describe("runIsolatedCompletion", () => {
         cliToolAvailability: { native: [], openClaw: [] },
       }),
     );
+  });
+
+  it("keeps concurrent CLI isolated completions independently admitted", async () => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const firstStarted = createDeferred();
+    const bothStarted = createDeferred();
+    const calls: Array<{
+      admitted: AdmittedRunContext;
+      authority: AgentRunDelegatedAuthority;
+      params: IsolatedCliRunParams;
+      release: ReturnType<typeof createDeferred<void>>;
+    }> = [];
+    mocks.runCliAgent.mockImplementation(async (params) => {
+      const admitted = await params.preparedRunAdmission.admit("embedded");
+      const authority = getAdmittedRunDelegatedAuthority(admitted);
+      if (!authority) {
+        throw new Error("expected active isolated completion authority");
+      }
+      const release = createDeferred();
+      calls.push({ admitted, authority, params, release });
+      if (calls.length === 1) {
+        firstStarted.resolve();
+      }
+      if (calls.length === 2) {
+        bothStarted.resolve();
+      }
+      await release.promise;
+      return { payloads: [{ text: `done: ${params.prompt}` }] };
+    });
+
+    const first = runIsolatedCompletion({ ...request(), prompt: "first" });
+    let second: ReturnType<typeof runIsolatedCompletion> | undefined;
+    try {
+      await Promise.race([
+        firstStarted.promise,
+        first.then(() => {
+          throw new Error("first isolated completion settled before reaching the barrier");
+        }),
+      ]);
+      second = runIsolatedCompletion({ ...request(), prompt: "second" });
+      await Promise.race([
+        bothStarted.promise,
+        Promise.all([first, second]).then(() => {
+          throw new Error("isolated completions settled before reaching the barrier");
+        }),
+      ]);
+      const firstCall = calls.find(({ params }) => params.prompt === "first");
+      const secondCall = calls.find(({ params }) => params.prompt === "second");
+      if (!firstCall || !secondCall) {
+        throw new Error("expected both isolated completions to start");
+      }
+      expect(firstCall.params.runId).toBe(firstCall.params.sessionId);
+      expect(secondCall.params.runId).toBe(secondCall.params.sessionId);
+      expect(firstCall.params.runId).not.toBe(secondCall.params.runId);
+      expect(firstCall.admitted.operationalRunInstance.runId).toBe(firstCall.params.runId);
+      expect(secondCall.admitted.operationalRunInstance.runId).toBe(secondCall.params.runId);
+      expect(validateAgentRunDelegatedAuthority(firstCall.authority)).toBe(true);
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(true);
+
+      firstCall.release.resolve();
+      await expect(first).resolves.toMatchObject({ text: "done: first" });
+      expect(validateAgentRunDelegatedAuthority(firstCall.authority)).toBe(false);
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(true);
+
+      secondCall.release.resolve();
+      await expect(second).resolves.toMatchObject({ text: "done: second" });
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(false);
+    } finally {
+      for (const call of calls) {
+        call.release.resolve();
+      }
+      await Promise.allSettled(second ? [first, second] : [first]);
+      clock.mockRestore();
+    }
   });
 
   it("keeps unavailable CLI usage absent", async () => {

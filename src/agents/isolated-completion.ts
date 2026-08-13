@@ -5,6 +5,7 @@
  * transcript, hook, and delivery lifecycle. Execution owners either prove a
  * literal empty native tool surface or fail before inference starts.
  */
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -12,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
@@ -187,7 +188,7 @@ async function runCliIsolatedCompletion(params: {
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
-      const sessionId = `isolated-completion-${Date.now()}`;
+      const sessionId = `isolated-completion-${randomUUID()}`;
       const config = params.request.config ?? getRuntimeConfig();
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         config,
@@ -435,22 +436,25 @@ export async function runIsolatedCompletion(
       config,
       includeSetupRegistry: true,
     }) ?? request.provider;
-  const lease = await acquireAgentRunPreparedModelRuntime({
-    config,
-    agentId,
-    agentDir,
-    workspaceDir,
-    runtimePluginSelections: [
-      {
-        provider,
-        modelId: request.model,
-        ...(request.agentHarnessRuntimeOverride
-          ? { runtime: request.agentHarnessRuntimeOverride }
-          : {}),
-        agentId,
-      },
-    ],
-  });
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config,
+      agentId,
+      agentDir,
+      workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider,
+          modelId: request.model,
+          ...(request.agentHarnessRuntimeOverride
+            ? { runtime: request.agentHarnessRuntimeOverride }
+            : {}),
+          agentId,
+        },
+      ],
+    },
+    { catalogMode: "static" },
+  );
   const pluginRegistry = lease.snapshot.pluginRegistry;
   try {
     const run = async (): Promise<IsolatedCompletionResult> => {
@@ -678,7 +682,7 @@ export async function runIsolatedCompletion(
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeRegistryScope(pluginRegistry, run);
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
   }

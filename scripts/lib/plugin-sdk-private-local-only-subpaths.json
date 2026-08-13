@@ -17,6 +17,7 @@
   "browser-config",
   "bundled-channel-config-schema",
   "channel-activity-runtime",
+  "channel-config-ui-hints",
   "channel-config-writes",
   "channel-contract-testing",
   "channel-mention-gating",

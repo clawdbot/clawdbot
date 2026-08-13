@@ -39,7 +39,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -1200,6 +1200,8 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
 /** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
 export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   sessionKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
   artifactId: string;
   stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
@@ -1209,6 +1211,15 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   }
   const record = readManagedImageRecord(parsed.attachmentId, params.stateDir);
   if (!record || record.sessionKey !== params.sessionKey) {
+    return null;
+  }
+  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const recordAgentId = record.agentId
+    ? normalizeAgentId(record.agentId)
+    : params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  if (requestedAgentId && recordAgentId !== requestedAgentId) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);

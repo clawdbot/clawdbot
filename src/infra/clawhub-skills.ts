@@ -23,6 +23,10 @@ export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  /**
+   * Reference every consumer must send back for detail and install. Search returns the same
+   * slug for several publishers, so the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG.
+   */
   installRef?: string;
   trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
@@ -201,6 +205,12 @@ export async function searchClawHubSkills(params: {
   const results = result.results ?? [];
   for (const entry of results) {
     entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
+    // Publisher identity is recorded once, here, so every consumer reads one reference instead
+    // of rebuilding it. Registry-supplied refs (skills.sh) already name their own source.
+    const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+    if (!entry.installRef && ownerHandle) {
+      entry.installRef = `@${ownerHandle}/${entry.slug}`;
+    }
   }
   return results;
 }

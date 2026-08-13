@@ -452,6 +452,121 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
+  it("reclaims proven-stale reply-only ownership even with zero queued backlog", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("phantom-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "phantom-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 0,
+    });
+
+    // Stale reply-only ownership must expire through the abort-and-drain owner
+    // path even when the queued backlog is empty; previously the zero-depth
+    // gate kept the lane forever (reason=active_reply_work).
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("phantom-reply-session");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("phantom-reply-session", 15_000);
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "phantom-reply-session",
+      activeWorkKind: "embedded_run",
+      aborted: true,
+      drained: true,
+    });
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery reclaiming stale active reply work: sessionId=phantom-reply-session sessionKey=agent:main:main age=720s queueDepth=0 activeSessionId=phantom-reply-session",
+      "stuck session recovery: sessionId=phantom-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=phantom-reply-session sessionKey=agent:main:main activeSessionId=phantom-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
+    ]);
+  });
+
+  it.each(["preflight_compacting", "memory_flushing"])(
+    "keeps zero-backlog maintenance phase %s out of the stale reclaim path",
+    async (phase) => {
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("maintenance-reply-session");
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+      mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+      mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+      mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue(phase);
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+        lastProgressAgeMs: 720_000,
+      });
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId: "maintenance-reply-session",
+        sessionKey: "agent:main:main",
+        ageMs: 720_000,
+        queueDepth: 0,
+      });
+
+      // Preflight compaction and memory flush are recognized maintenance
+      // phases that may legitimately outlive the stale threshold (they honor a
+      // configured compaction timeout). The zero-backlog exemption must not
+      // turn a running maintenance operation into a reclaim target.
+      expect(outcome).toMatchObject({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "active_reply_work",
+        activeSessionId: "maintenance-reply-session",
+      });
+      expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps reply-only ownership with recent progress even with zero queued backlog", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("live-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 1_000 });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "live-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 0,
+    });
+
+    // Recent progress means the reply is genuinely active; the zero-depth
+    // exemption must not turn live work into a reclaim target.
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_reply_work",
+      activeSessionId: "live-reply-session",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps the queue gate for active run handles with zero queued backlog", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(true);
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 720_000 });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 0,
+    });
+
+    // Run-handle recovery keeps the queue gate: without a queued backlog the
+    // active run is presumed to be processing and must not be aborted.
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+  });
+
   it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("ghost-run-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);

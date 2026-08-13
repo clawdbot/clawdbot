@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Dashboard session titles use the shared utility-model completion path.
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -155,8 +154,7 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
-/** Generates the same short title used by dashboard session rows without persisting it. */
-export async function generateDashboardSessionTitle(params: {
+async function generateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;

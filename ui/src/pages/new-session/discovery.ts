@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -30,6 +31,16 @@ export type DraftNode = {
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  trust?: "persistent" | "disposable";
+};
+
+export type DraftEnvironment = {
+  id: string;
+  type: "local" | "node" | "worker";
+  platform?: string;
+  sessionHost?: boolean;
+  trust?: "persistent" | "disposable";
+  capabilities?: string[];
 };
 
 export type BrowserTarget = { nodeId: string; label: string };
@@ -83,14 +94,62 @@ export function readDraftNodes(value: unknown): DraftNode[] {
 
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
-    .flatMap((raw) => {
+    .flatMap<DraftCloudProfile>((raw) => {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const profile = raw as { id?: unknown; providerId?: unknown };
+      const profile = raw as { id?: unknown; providerId?: unknown; trust?: unknown };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
-      return id && providerId ? [{ id, providerId }] : [];
+      if (!id || !providerId) {
+        return [];
+      }
+      const trust: DraftCloudProfile["trust"] =
+        profile.trust === "persistent" || profile.trust === "disposable"
+          ? profile.trust
+          : undefined;
+      return [{ id, providerId, trust }];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
+  return (Array.isArray(value) ? value : [])
+    .flatMap<DraftEnvironment>((raw) => {
+      if (!raw || typeof raw !== "object") {
+        return [];
+      }
+      const environment = raw as {
+        id?: unknown;
+        type?: unknown;
+        platform?: unknown;
+        sessionHost?: unknown;
+        trust?: unknown;
+        capabilities?: unknown;
+      };
+      const id = normalizeOptionalString(environment.id);
+      const type = normalizeOptionalString(environment.type);
+      if (!id || (type !== "local" && type !== "node" && type !== "worker")) {
+        return [];
+      }
+      const platform = normalizeOptionalString(environment.platform);
+      const trust: DraftEnvironment["trust"] =
+        environment.trust === "persistent" || environment.trust === "disposable"
+          ? environment.trust
+          : undefined;
+      const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      return [
+        {
+          id,
+          type,
+          ...(platform ? { platform } : {}),
+          ...(typeof environment.sessionHost === "boolean"
+            ? { sessionHost: environment.sessionHost }
+            : {}),
+          ...(trust ? { trust } : {}),
+          ...(capabilities ? { capabilities } : {}),
+        },
+      ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

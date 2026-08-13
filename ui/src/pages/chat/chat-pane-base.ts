@@ -42,6 +42,7 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
+  type ChatPaneConnectionScope,
   type ChatPageContext,
   type PaneSessionChangeOptions,
 } from "./chat-pane-shared.ts";
@@ -54,6 +55,7 @@ import {
 } from "./chat-session-companion.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
@@ -141,7 +143,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this);
-  protected readonly backgroundTaskTranscript = new ChatTranscriptController(this);
+  protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -160,6 +162,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  protected continueInTerminalDialog: {
+    qualifiedSessionKey: string;
+    selectedGatewayUrl: string;
+    clientGatewayUrl: string;
+    scope: ChatPaneConnectionScope;
+  } | null = null;
+  @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -245,23 +254,28 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = state.sessionKey;
+    const agentId = resolveChatAgentId(state);
     this.requestSessionRail("open");
     if (!state.connected || !state.client) {
-      this.sessionCompanionThreads.setDraft(sessionKey, question);
+      this.sessionCompanionThreads.setDraft(sessionKey, question, agentId);
       return;
     }
     const client = state.client;
-    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
-      requestSessionCompanionAnswer(client, key, value),
+    await this.sessionCompanionThreads.submit(
+      sessionKey,
+      question,
+      (key, value) => requestSessionCompanionAnswer(client, key, value, agentId),
+      agentId,
     );
   };
 
   protected readonly prefillSessionCompanionQuestion = (question: string) => {
-    const sessionKey = this.state?.sessionKey;
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     if (!sessionKey) {
       return;
     }
-    this.sessionCompanionThreads.setDraft(sessionKey, question);
+    this.sessionCompanionThreads.setDraft(sessionKey, question, resolveChatAgentId(state));
     this.requestSessionRail("open");
   };
 
@@ -270,14 +284,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
       return;
     }
-    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
+    const agentId = resolveChatAgentId(state);
+    const hydrationKey = `${this.connectionGeneration}\0${agentId}\0${sessionKey}`;
     if (this.sessionCompanionHydrationKey === hydrationKey) {
       return;
     }
     this.sessionCompanionHydrationKey = hydrationKey;
     this.ensureSessionRail();
-    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
-      requestSessionCompanionState(state.client!, key),
+    void this.sessionCompanionThreads.hydrate(
+      sessionKey,
+      (key) => requestSessionCompanionState(state.client!, key, agentId),
+      agentId,
     );
   }
 
@@ -286,8 +303,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state?.connected || !state.client || !state.sessionKey) {
       return;
     }
+    const agentId = resolveChatAgentId(state);
     await this.sessionCompanionThreads
-      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
+      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key, agentId), agentId)
       .catch(() => undefined);
   };
   protected resetConfirmation:

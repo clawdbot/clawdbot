@@ -951,6 +951,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
+  });
+
   it("keeps serving and deleting an original after the configured media root changes", async () => {
     const fixture = await createFixture(stateDir);
     const externalConfigDir = tempDirs.make("managed-image-moved-config-");

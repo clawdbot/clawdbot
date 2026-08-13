@@ -2175,9 +2175,11 @@ internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
   useTls: Boolean,
+  contextPath: String = "",
 ): String {
   val scheme = if (useTls) "wss" else "ws"
-  return "$scheme://${formatGatewayAuthority(host, port)}"
+  val path = normalizeGatewayContextPath(contextPath)
+  return "$scheme://${formatGatewayAuthority(host, port)}$path"
 }
 
 /** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
@@ -2186,7 +2188,15 @@ internal fun buildGatewayWebSocketUpgradeRequest(
   tls: GatewayTlsParams?,
   customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
 ): Request {
-  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  val request =
+    Request.Builder().url(
+      buildGatewayWebSocketUrl(
+        endpoint.host,
+        endpoint.port,
+        tls != null,
+        endpoint.contextPath,
+      ),
+    )
   if (tls == null) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens

@@ -2,6 +2,7 @@
  * Resolves MCP transport command, environment, and timeout configuration.
  */
 import {
+  asPositiveFiniteNumber,
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -68,8 +69,8 @@ function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number 
   }
   const record = rawServer as Record<string, unknown>;
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    const value = asPositiveFiniteNumber(record[key]);
+    if (value !== undefined) {
       return value;
     }
   }
