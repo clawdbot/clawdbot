@@ -83,6 +83,12 @@ export type {
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
+type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+};
+
 function buildProviderCapabilities(params: {
   config: OpenClawConfig;
   workspaceDir: string;
@@ -345,7 +351,7 @@ function resolveEnvVarName(source: string): string | undefined {
 function resolveProviderApiKeys(
   cfg: OpenClawConfig,
   store: AuthProfileStore,
-  authAliasLookupParams: ProviderAuthAliasLookupParams,
+  authAliasLookupParams: PreparedAuthMetadataLookupParams,
 ): Map<string, ModelAuthStatusProvider["apiKey"]> {
   const lookupMaps = resolveProviderEnvAuthLookupMaps({
     ...authAliasLookupParams,
@@ -421,7 +427,7 @@ function resolveProviderApiKeys(
 function resolveConfigBoundProfileIds(
   cfg: OpenClawConfig,
   store: AuthProfileStore,
-  authAliasLookupParams: ProviderAuthAliasLookupParams,
+  authAliasLookupParams?: ProviderAuthAliasLookupParams,
 ): Set<string> {
   const profileIds = new Set<string>();
   for (const provider of Object.keys(cfg.models?.providers ?? {})) {
@@ -630,7 +636,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
       // Generic auth helpers may consult provider metadata indirectly. Carry this owner's exact
       // snapshot through them so a global miss cannot rediscover plugins on the event loop.
-      const authAliasLookupParams: ProviderAuthAliasLookupParams = {
+      const authAliasLookupParams: PreparedAuthMetadataLookupParams = {
         workspaceDir,
         metadataSnapshot: preparedSnapshot.metadataSnapshot,
         includeUntrustedWorkspacePlugins: false,
