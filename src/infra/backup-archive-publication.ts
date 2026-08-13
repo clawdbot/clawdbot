@@ -7,7 +7,10 @@ import {
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
-import { sweepStaleBackupTempDirectories } from "./backup-temp-sweep.js";
+import {
+  sweepStaleBackupTempArchiveFiles,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
 import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
@@ -24,6 +27,18 @@ type BackupArchiveLogger = (message: string) => void;
 // Matching the whole shape keeps the sweep to directories this module made.
 const STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN =
   /^\.openclaw-backup-publish-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[A-Za-z0-9]{6}$/u;
+
+// Pre-durable-publish releases (before #113302) staged the archive directly
+// as `<output>.<uuid>.tmp` beside the output, instead of inside a staging
+// directory. That shape is fully retired — nothing in current code still
+// writes it — so an operator who hit the leak on that release and later
+// upgraded past this fix would otherwise carry the orphan forever: the
+// directory-only sweep above never looks at loose files. Matching by the
+// UUID+`.tmp` suffix alone, rather than requiring today's specific output
+// basename, also reclaims an orphan left beside a *previous* day's output
+// filename, not only today's.
+const STALE_BACKUP_ARCHIVE_TEMP_FILE_PATTERN =
+  /\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/u;
 
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
@@ -99,6 +114,11 @@ export async function createBackupArchivePublication(
   await sweepStaleBackupTempDirectories({
     directoryPath: canonicalParentPath,
     entryPattern: STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN,
+    log,
+  });
+  await sweepStaleBackupTempArchiveFiles({
+    directoryPath: canonicalParentPath,
+    entryPattern: STALE_BACKUP_ARCHIVE_TEMP_FILE_PATTERN,
     log,
   });
   const stagingDir = await fs.mkdtemp(
