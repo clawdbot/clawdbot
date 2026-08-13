@@ -490,6 +490,7 @@ export async function prepareReplyAgentPayloads(state: {
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
+      agentDir: followupRun.run.agentDir,
     });
     const hasDiagnosticBillableUsageBuckets =
       diagnosticUsage.input !== undefined ||
@@ -537,6 +538,7 @@ export async function prepareReplyAgentPayloads(state: {
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
   const responseUsageLine = resolveResponseUsageLine({
     config: cfg,
+    agentDir: followupRun.run.agentDir,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,
     usage,

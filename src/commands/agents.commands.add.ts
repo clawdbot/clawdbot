@@ -17,6 +17,7 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -256,7 +257,7 @@ export async function agentsAddCommand(
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
       const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
       const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
-      const mainAuthPath = resolveAuthProfileDatabasePath();
+      const mainAuthPath = resolveSharedAuthStorePath();
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));

@@ -45,6 +45,7 @@ import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-tur
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
+import { setupInferenceLog } from "./setup-inference-core.js";
 import { runSetupInferenceTest } from "./setup-inference-persist.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
@@ -2642,23 +2643,14 @@ describe("activateSetupInference", () => {
   it("runs provider-owned local setup from an app-guided discovery choice", async () => {
     const { stateDir, initialConfig } = await createMainAgentFixture();
     const runAuth = vi.fn(async () => ({
-      profiles: [
-        {
-          profileId: "local-test:default",
-          credential: {
-            type: "api_key" as const,
-            provider: "local-test",
-            key: "local-test-key",
-          },
-        },
-      ],
+      profiles: [],
+      defaultModel: "local-test/gemma4",
       configPatch: {
         models: {
           providers: {
             "local-test": {
               baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "local-test-key",
               models: [],
             },
           },
@@ -2666,19 +2658,18 @@ describe("activateSetupInference", () => {
       },
     }));
     const detect = vi.fn(async () => ({
-      modelRef: "local-test/qwen-test",
-      detail: "qwen-test at http://127.0.0.1:12345",
+      modelRef: "local-test/deepseek-r1",
+      detail: "deepseek-r1 at http://127.0.0.1:12345",
     }));
-    const prepare = vi.fn(async () => ({
+    const prepare = vi.fn(async (params: { modelRef: string }) => ({
       profiles: [],
-      defaultModel: "local-test/qwen-test",
+      defaultModel: params.modelRef,
       configPatch: {
         models: {
           providers: {
             "local-test": {
               baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "local-test-key",
               models: [],
             },
           },
@@ -2701,7 +2692,7 @@ describe("activateSetupInference", () => {
     };
     const runEmbeddedAgent = vi.fn(
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-        successfulRun("local-test", "qwen-test", params),
+        successfulRun("local-test", "gemma4", params),
     );
     const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -2729,25 +2720,14 @@ describe("activateSetupInference", () => {
         },
       });
 
-      expect(result).toMatchObject({ ok: true, modelRef: "local-test/qwen-test" });
+      expect(result).toMatchObject({ ok: true, modelRef: "local-test/gemma4" });
       expect(runAuth).toHaveBeenCalledOnce();
-      expect(detect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            models: {
-              providers: {
-                "local-test": expect.objectContaining({
-                  baseUrl: "http://127.0.0.1:12345",
-                  apiKey: "local-test-key",
-                }),
-              },
-            },
-          }),
-        }),
-      );
+      expect(detect).not.toHaveBeenCalled();
       expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ modelRef: "local-test/qwen-test" }),
+        expect.objectContaining({ modelRef: "local-test/gemma4" }),
       );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining({ model: "gemma4" }));
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -5855,6 +5835,7 @@ describe("verifySetupInference", () => {
   });
 
   it("returns a refreshed staged profile when the live inference test fails", async () => {
+    const warn = vi.spyOn(setupInferenceLog, "warn").mockImplementation(() => {});
     const profileId = "openai:default";
     const runEmbeddedAgent = vi.fn(async (params: { agentDir?: string }) => {
       expect(params.agentDir).toBeDefined();
@@ -5903,6 +5884,17 @@ describe("verifySetupInference", () => {
         },
       ],
     });
+    expect(warn).toHaveBeenCalledWith("Inference setup probe failed.", {
+      event: "setup_inference_probe_failed",
+      provider: "openai",
+      model: "gpt-5.5",
+      runner: "embedded",
+      status: "timeout",
+      timeoutMs: 90_000,
+      durationMs: expect.any(Number),
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("request timed out");
+    warn.mockRestore();
   });
 
   it("rejects a staged credential that differs from the configured profile pin", async () => {

@@ -146,12 +146,17 @@ openclaw-chat-page {
 
 /* Transcript search sits above the workbench. Keep the shared SVG icon from
    taking its intrinsic flex width and size the controls as compact chrome. */
+.chat:has(> .agent-chat__search-bar) {
+  border-radius: 0;
+}
+
 .agent-chat__search-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   background: var(--card);
 }
 
