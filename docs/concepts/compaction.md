@@ -22,11 +22,13 @@ The full conversation history stays on disk. Compaction only changes what the mo
 New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter guardrails, summary quality audits). Set `mode: "default"` explicitly to opt out.
 </Note>
 
-With the built-in safeguard quality guard enabled, OpenClaw assembles suffixes,
-applies the final summary budget, and then audits the exact text that would be
-stored. Invalid output gets only the configured number of corrective attempts.
-If no finalized summary passes, compaction stops before writing a transcript
-entry, keeps the original history, and surfaces the existing recovery outcome.
+With the built-in safeguard quality guard enabled, OpenClaw applies the final
+summary budget before validation. Required headings must remain in the retained
+generated body, while pending asks and exact identifiers must remain in the
+exact text that would be stored. Invalid output gets only the configured number
+of corrective attempts. If no finalized summary passes, compaction stops before
+writing a transcript entry, keeps the original history, and surfaces the
+existing recovery outcome.
 
 ## Auto-compaction
 

@@ -418,9 +418,13 @@ describe("AgentSession loop correctness", () => {
     const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
     expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
     const reopened = SessionManager.open(target, dir);
-    expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
-    expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
-    expect(reopened.buildSessionContext()).toEqual(contextBefore);
+    try {
+      expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
+      expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+      expect(reopened.buildSessionContext()).toEqual(contextBefore);
+    } finally {
+      closeOpenClawAgentDatabaseByPath(databasePath);
+    }
   });
 
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
