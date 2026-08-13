@@ -42,7 +42,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext, resolveSandboxContextWithPublishedSkills } from "../../sandbox.js";
-import { releasePublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
+import {
+  releasePublishedSandboxSkills,
+  releasePublishedSandboxSkillsOnThrow,
+} from "../../sandbox/published-skills-handoff.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -128,33 +131,40 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     : retainPublishedCatalog
       ? await resolveSandboxContextWithPublishedSkills(sandboxParams)
       : await resolveSandboxContext(sandboxParams);
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  return {
-    defaultAgentId,
-    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
-    }),
-    effectiveWorkspace,
-    resolvedWorkspace,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-  };
+  return await releasePublishedSandboxSkillsOnThrow(
+    retainPublishedCatalog ? sandbox : null,
+    async () => {
+      const effectiveWorkspace =
+        sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+          ? sandbox.workspaceDir
+          : resolvedWorkspace;
+      const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+      if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+        throw new Error(
+          "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+        );
+      }
+      await fs.mkdir(effectiveWorkspace, { recursive: true });
+      const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      return {
+        defaultAgentId,
+        effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
+        effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
+          config: params.config,
+          sessionAgentId,
+        }),
+        effectiveWorkspace,
+        resolvedWorkspace,
+        sandbox,
+        sandboxSessionKey,
+        sessionAgentId,
+      };
+    },
+  );
 }
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {

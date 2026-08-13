@@ -18,6 +18,7 @@ vi.mock("../../sandbox.js", () => ({
   resolveSandboxContextWithPublishedSkills,
 }));
 
+import { attachPublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
 import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSetup", () => {
@@ -109,6 +110,34 @@ describe("prepareEmbeddedAttemptSetup", () => {
       expect.objectContaining({ workspaceDir, sessionKey: "agent:main:media-only" }),
     );
     expect(resolveSandboxContextWithPublishedSkills).not.toHaveBeenCalled();
+  });
+
+  it("releases the published catalog when sandboxed cwd is rejected", async () => {
+    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-cwd-reject");
+    const sandbox = {
+      enabled: true as const,
+      workspaceDir: path.join(workspaceDir, "sandbox"),
+      workspaceAccess: "ro" as const,
+    };
+    const releaseGeneration = vi.fn();
+    attachPublishedSandboxSkills(sandbox, {
+      releaseGeneration,
+      skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [] },
+    });
+    resolveSandboxContextWithPublishedSkills.mockResolvedValueOnce(sandbox);
+
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "main",
+        config: {},
+        cwd: path.join(os.tmpdir(), "openclaw-attempt-setup-other-cwd"),
+        sessionId: "session-cwd-reject",
+        sessionKey: "agent:main:cwd-reject",
+        workspaceDir,
+      }),
+    ).rejects.toThrow(/cwd override is not supported/);
+
+    expect(releaseGeneration).toHaveBeenCalledOnce();
   });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {

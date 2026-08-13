@@ -43,3 +43,17 @@ export function releasePublishedSandboxSkills(owner: object | null | undefined):
   publishedSkillsByOwner.delete(owner);
   handoff.releaseGeneration();
 }
+
+export async function releasePublishedSandboxSkillsOnThrow<T>(
+  owner: object | null | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  // WeakMap GC does not run the releaser. If preparation throws before a
+  // runtime owner is returned, this must drop the generation lease here.
+  try {
+    return await work();
+  } catch (error) {
+    releasePublishedSandboxSkills(owner);
+    throw error;
+  }
+}

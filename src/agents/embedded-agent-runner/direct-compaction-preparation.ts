@@ -30,6 +30,7 @@ import {
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveSandboxContextWithPublishedSkills } from "../sandbox.js";
+import { releasePublishedSandboxSkillsOnThrow } from "../sandbox/published-skills-handoff.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -328,60 +329,64 @@ export async function prepareDirectCompactionAttempt(
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const isSqliteSessionTranscript = true;
-  const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
+  return await releasePublishedSandboxSkillsOnThrow(sandbox, async () => {
+    const effectiveWorkspace = sandbox?.enabled
+      ? sandbox.workspaceAccess === "rw"
+        ? resolvedWorkspace
+        : sandbox.workspaceDir
+      : resolvedWorkspace;
+    const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+    if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+      throw new Error(
+        "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
+      );
+    }
+    const effectiveCwd = sandbox?.enabled
+      ? effectiveWorkspace
+      : (requestedCwd ?? effectiveWorkspace);
+    await fs.mkdir(effectiveWorkspace, { recursive: true });
+    const isSqliteSessionTranscript = true;
+    const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
 
-  return {
-    ok: true as const,
-    value: {
-      params,
-      startedAt,
-      diagId,
-      trigger,
-      attempt,
-      maxAttempts,
-      runId,
-      compactionModelCallTrace,
-      diagnosticCompactionRunId,
-      nextDiagnosticModelCallId: () =>
-        `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
-      earlyAgentIds,
-      agentDir,
-      provider,
-      contextConfigProvider,
-      modelId,
-      preparedHarnessRuntime,
-      thinkLevel,
-      attemptedThinking,
-      fail,
-      authStorage,
-      modelRegistry,
-      runtimeModel,
-      apiKeyInfo,
-      resolvedRuntimeAuthPlan,
-      hasRuntimeAuthExchange,
-      resolvedWorkspace,
-      sandboxSessionKey,
-      sandbox,
-      effectiveWorkspace,
-      effectiveCwd,
-      isSqliteSessionTranscript,
-      effectiveSkillAgentId,
-    },
-  };
+    return {
+      ok: true as const,
+      value: {
+        params,
+        startedAt,
+        diagId,
+        trigger,
+        attempt,
+        maxAttempts,
+        runId,
+        compactionModelCallTrace,
+        diagnosticCompactionRunId,
+        nextDiagnosticModelCallId: () =>
+          `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
+        earlyAgentIds,
+        agentDir,
+        provider,
+        contextConfigProvider,
+        modelId,
+        preparedHarnessRuntime,
+        thinkLevel,
+        attemptedThinking,
+        fail,
+        authStorage,
+        modelRegistry,
+        runtimeModel,
+        apiKeyInfo,
+        resolvedRuntimeAuthPlan,
+        hasRuntimeAuthExchange,
+        resolvedWorkspace,
+        sandboxSessionKey,
+        sandbox,
+        effectiveWorkspace,
+        effectiveCwd,
+        isSqliteSessionTranscript,
+        effectiveSkillAgentId,
+      },
+    };
+  });
 }
 
 export type DirectCompactionPreparation = Extract<
