@@ -5235,6 +5235,47 @@ describe("subagent registry seam flow", () => {
     },
   );
 
+  it("keeps memory aligned with the durable registration when rollback persistence fails", () => {
+    const childSessionKey = "agent:main:subagent:task-row-rollback-failure";
+    mod.addSubagentRunForTests({
+      runId: "run-task-row-rollback-old",
+      childSessionKey,
+      task: "preserve the durable predecessor state",
+      createdAt: Date.now() - 1_000,
+      endedAt: Date.now() - 500,
+      endedReason: "subagent-killed",
+      suppressAnnounceReason: "killed",
+      killReconciliation: { killedAt: Date.now() - 500 },
+    });
+    mocks.persistSubagentRunsToDiskOrThrow
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("rollback disk full");
+      });
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      createRunningTaskRun: () => null,
+    });
+
+    expect(() =>
+      mod.registerSubagentRun({
+        runId: "run-task-row-rollback-new",
+        childSessionKey,
+        task: "retain the last durable snapshot",
+        taskRowOwnership: "required",
+      }),
+    ).toThrowError("rollback disk full");
+
+    expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
+      runId: "run-task-row-rollback-new",
+      childSessionKey,
+    });
+    expect(
+      findRequesterRun("run-task-row-rollback-old")?.killReconciliation?.supersededAt,
+    ).toBeTypeOf("number");
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
+  });
+
   it("retains an already-running replacement when its durable write fails", () => {
     mockPendingAgentWait();
     mod.registerSubagentRun({

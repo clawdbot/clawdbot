@@ -2,6 +2,19 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
+const PLACE_TOPOLOGY_EVENTS = new Set([
+  "config.changed",
+  "node.pair.requested",
+  "node.pair.resolved",
+  "node.runnerInventory.changed",
+  "device.pair.requested",
+  "device.pair.resolved",
+]);
+
+export function isPlaceTopologyEvent(event: string): boolean {
+  return PLACE_TOPOLOGY_EVENTS.has(event);
+}
+
 export function readPresenceEntries(value: unknown): PresenceEntry[] | null {
   const presence =
     value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;

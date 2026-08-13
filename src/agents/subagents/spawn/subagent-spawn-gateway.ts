@@ -11,11 +11,14 @@ import {
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-export async function callSubagentGateway(
+type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
+type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
+
+async function callSubagentGatewayWithDispatchMode(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   options?: { agentRunTracking?: "native_subagent" },
-): Promise<Awaited<ReturnType<typeof callGateway>>> {
+): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
@@ -60,7 +63,7 @@ export async function callSubagentGateway(
     // Reusing that external identity makes collector preflight treat the launch as spoofed.
     const isChildRunLaunch = request.method === "agent";
     const forceSyntheticClient = isChildRunLaunch || scopes != null;
-    return await deps.dispatchGatewayMethodInProcess(
+    const response = await deps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
       {
@@ -72,8 +75,34 @@ export async function callSubagentGateway(
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
     );
+    return { response, dispatchMode: "in_process" };
   }
-  return await deps.callGateway(request);
+  return { response: await deps.callGateway(request), dispatchMode: "out_of_process" };
+}
+
+export async function callSubagentGateway(
+  params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
+): Promise<SubagentGatewayResponse> {
+  return (await callSubagentGatewayWithDispatchMode(params, authorization)).response;
+}
+
+export async function callNativeSubagentGateway(
+  params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
+): Promise<{
+  response: SubagentGatewayResponse;
+  taskRowOwnership: "required" | "gateway_owned";
+}> {
+  const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
+    agentRunTracking: "native_subagent",
+  });
+  return {
+    response: result.response,
+    // The trusted marker exists only on direct dispatch. A WebSocket fallback
+    // keeps Gateway's CLI row, so registry lifecycle state must not add another.
+    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_owned",
+  };
 }
 
 export function readGatewayRunId(

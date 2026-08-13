@@ -15,8 +15,9 @@
       var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
-  --shell-floating-update-card-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
+      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
   );
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
@@ -73,6 +74,9 @@
 .shell--nav-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
+  --shell-chrome-safe-area-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  );
 }
 
 /* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
@@ -134,6 +138,23 @@
 
 .shell--mobile-nav .shell-chrome-controls {
   display: none;
+}
+
+/* Reserve notice space only while the corresponding in-page chrome remains visible. */
+:is(
+    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--settings),
+    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
+  )
+  .content
+  > :is(
+    openclaw-update-banner,
+    openclaw-device-scope-upgrade-banner,
+    openclaw-device-auth-migration-banner
+  )
+  .callout {
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 html.openclaw-native-macos .shell-chrome-controls {
@@ -1108,7 +1129,7 @@ openclaw-settings-save-indicator {
   flex-shrink: 0;
   width: 14px;
   height: 14px;
-  color: var(--warn, #b7791f);
+  color: var(--warn);
 }
 
 .sidebar-attention__item--error .sidebar-attention__icon {
@@ -1150,8 +1171,8 @@ openclaw-settings-save-indicator {
 
 /* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
-  margin-left: var(--shell-floating-update-card-left);
+  width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
+  margin-left: var(--shell-chrome-safe-area-left);
 }
 
 /* Native hosts hide the web cluster; onboarding never mounts it. */
@@ -2783,8 +2804,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   white-space: nowrap;
 }
 
-/* Keycap hint, not content: fixed-width so letters and digits share one rail. */
-.session-menu__shortcut {
+/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
+   .chat-question-panel__option kbd), fixed-width so letters and digits share
+   one rail beside the labels. */
+.session-menu__shortcut,
+.chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
   color: var(--muted);
@@ -3909,9 +3933,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
-   when the gateway refuses or lacks the terminal surface. */
-.terminal-view-unavailable {
+/* Standalone terminal/desktop documents: centered notice when the gateway
+   refuses or lacks the requested surface. */
+.terminal-view-unavailable,
+.desktop-view-unavailable {
   position: fixed;
   inset: 0;
   display: flex;
@@ -3953,11 +3978,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-pr-indicator--merged {
-  color: #a78bfa;
-}
-
-:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
-  color: #7c3aed;
+  color: var(--pr-merged);
 }
 
 .sidebar-session-pr-indicator svg {

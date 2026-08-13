@@ -28,7 +28,10 @@ import {
   listSetupMigrationOptions,
   runSetupMigrationImport,
 } from "./setup.migration-import.js";
-import { SetupMigrationFreshnessError } from "./setup.migration-snapshot.js";
+import {
+  SetupMigrationFreshnessError,
+  SetupMigrationTargetChangedError,
+} from "./setup.migration-snapshot.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
@@ -272,7 +275,10 @@ async function runSetupWizardOnce(
         continueOnboarding: true,
       });
     } catch (error) {
-      if (!(error instanceof SetupMigrationFreshnessError) || !flowFromPrompt) {
+      const canReturnToSetupMode =
+        error instanceof SetupMigrationFreshnessError ||
+        error instanceof SetupMigrationTargetChangedError;
+      if (!canReturnToSetupMode || !flowFromPrompt) {
         throw error;
       }
       await prompter.note(formatErrorMessage(error), t("wizard.setup.existingConfigTitle"));

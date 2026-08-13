@@ -22,9 +22,6 @@ const incompleteTurnFiles = [
   `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-continuation.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.terminal-evidence.test.ts`,
 ];
 const overflowCompactionFiles = [
   `${embeddedRoot}/run.overflow-compaction.test.ts`,

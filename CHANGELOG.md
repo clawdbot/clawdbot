@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.

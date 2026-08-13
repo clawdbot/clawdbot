@@ -557,6 +557,97 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     },
   );
 
+  it("keeps the Gateway-owned task row on an out-of-process fallback", async () => {
+    const gatewayContext = makeGatewayContext();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const createTaskRun = vi.fn(() => {
+      throw new Error("registry task creation must be skipped");
+    });
+    subagentSpawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => false,
+      callGateway: async <T>(request: { method: string; params?: unknown }) => {
+        requests.push({
+          method: request.method,
+          params: (request.params ?? {}) as Record<string, unknown>,
+        });
+        return {
+          runId: request.method === "agent" ? "gateway-owned-run" : undefined,
+          status: "accepted",
+        } as T;
+      },
+    });
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      createQueuedTaskRun: createTaskRun,
+      createRunningTaskRun: createTaskRun,
+    });
+
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        context: gatewayContext,
+        client: externalCliClient(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        spawnSubagentDirect(
+          { task: "use the remote gateway row", context: "isolated", lightContext: true },
+          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+        ),
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.runId).toBe("gateway-owned-run");
+    expect(createTaskRun).not.toHaveBeenCalled();
+    expect(subagentRuns.get("gateway-owned-run")).toMatchObject({
+      childSessionKey: result.childSessionKey,
+    });
+    expect(requests.filter((request) => request.method === "agent")).toHaveLength(1);
+    expect(requests.some((request) => request.method === "chat.abort")).toBe(false);
+  });
+
+  it("does not abort an out-of-process run when registry persistence fails", async () => {
+    const gatewayContext = makeGatewayContext();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    subagentSpawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => false,
+      callGateway: async <T>(request: { method: string; params?: unknown }) => {
+        requests.push({
+          method: request.method,
+          params: (request.params ?? {}) as Record<string, unknown>,
+        });
+        return {
+          runId: request.method === "agent" ? "gateway-owned-unregistered-run" : undefined,
+          status: "accepted",
+        } as T;
+      },
+    });
+    subagentRegistryTesting.setDepsForTest({
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
+      persistSubagentRunsToDisk: () => {},
+      persistSubagentRunsToDiskOrThrow: () => {
+        throw new Error("state db unavailable");
+      },
+      restoreSubagentRunsFromDisk: () => 0,
+    });
+
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        context: gatewayContext,
+        client: externalCliClient(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        spawnSubagentDirect(
+          { task: "keep remote ownership", context: "isolated", lightContext: true },
+          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+        ),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error ?? "").toContain("Failed to register subagent run");
+    expect(requests.some((request) => request.method === "chat.abort")).toBe(false);
+  });
+
   it("launches child runs as a Gateway client that does not own a second task row", async () => {
     const gatewayContext = makeGatewayContext();
     const agentDispatches: Array<{

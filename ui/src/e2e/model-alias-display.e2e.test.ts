@@ -63,15 +63,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const picker = main.locator("wa-select.chat-controls__model-picker").first();
+      const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
 
       const opus = main.locator(
-        'wa-option[value="anthropic/claude-opus-4-8"] .picker-select__label',
+        '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
       );
       const sonnet = main.locator(
-        'wa-option[value="anthropic/claude-sonnet-5"] .picker-select__label',
+        '[data-chat-model-option="anthropic/claude-sonnet-5"] .chat-controls__model-option-name',
       );
       await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
@@ -84,7 +84,7 @@ suite.define(() => {
       }
 
       const nvidia = main.locator(
-        'wa-option[value="nvidia/moonshotai/kimi-k2.5"] .picker-select__label',
+        '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
       await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);

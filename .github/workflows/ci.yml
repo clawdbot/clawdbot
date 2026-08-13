@@ -57,9 +57,9 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  # PRs want newest-head feedback. Canonical main instead runs one complete
-  # integration cycle while GitHub's single pending slot coalesces later pushes.
+  # Canonical main uses run-number parity for two non-canceling slots. Each
+  # slot keeps GitHub's single coalesced pending tip while its active run finishes.
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -78,6 +78,7 @@ jobs:
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
+      diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -2576,8 +2577,8 @@ jobs:
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-plugin-sdk-api-baseline
-            group: plugin-sdk-api-baseline
+          - check_name: report-plugin-sdk-api-diff
+            group: plugin-sdk-api-diff
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
@@ -2591,6 +2592,18 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
+      - name: Ensure Plugin SDK API diff base commit
+        if: matrix.group == 'plugin-sdk-api-diff'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+      - name: Ensure Plugin SDK API diff head commit
+        if: matrix.group == 'plugin-sdk-api-diff'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
+          fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -2720,6 +2733,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
@@ -2801,8 +2815,23 @@ jobs:
                 run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
               ;;
-            plugin-sdk-api-baseline)
-              run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
+            plugin-sdk-api-diff)
+              if node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
+                mkdir -p .artifacts
+                run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
+                  --base "${{ needs.preflight.outputs.diff_base_revision }}" \
+                  --head "${{ needs.preflight.outputs.diff_head_revision }}" \
+                  --json .artifacts/plugin-sdk-api-diff.json \
+                  --summary "$GITHUB_STEP_SUMMARY"
+              elif [[ "$COMPATIBILITY_TARGET" == "true" ]] && node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:check"] ? 0 : 1);'; then
+                run_check "plugin-sdk:api:check (historical compatibility)" pnpm run plugin-sdk:api:check
+              elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+                echo "::error title=Plugin SDK API check unavailable::Compatibility target provides neither plugin-sdk:api:diff nor plugin-sdk:api:check."
+                failures=1
+              else
+                echo "::error title=Plugin SDK API diff unavailable::Current CI targets must provide plugin-sdk:api:diff."
+                failures=1
+              fi
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -2818,6 +2847,14 @@ jobs:
           esac
 
           exit "$failures"
+
+      - name: Upload Plugin SDK API diff
+        if: always() && matrix.group == 'plugin-sdk-api-diff' && hashFiles('.artifacts/plugin-sdk-api-diff.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-sdk-api-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/plugin-sdk-api-diff.json
+          retention-days: 14
 
       # Only the protected writer refreshes the snapshot (pull_request mounts
       # never commit, so seeding there would burn wall clock on a discarded

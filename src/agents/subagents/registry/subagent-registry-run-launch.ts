@@ -12,6 +12,7 @@ import {
 } from "../../../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
@@ -83,10 +84,9 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
   queued?: boolean;
-  /** Native spawn suppresses the Gateway fallback row and can abort an accepted run.
-      Other backends already own their task row and must not lose registry ownership
-      when this secondary task-row write is unavailable. */
-  requiresTaskRow?: boolean;
+  /** Required when native in-process dispatch suppresses Gateway tracking; Gateway-owned
+      fallback launches skip the registry task row. Other callers keep best-effort creation. */
+  taskRowOwnership?: "required" | "gateway_owned";
 };
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
@@ -129,7 +129,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       requesterOrigin,
       progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
-      requesterAgentId: registerParams.requesterAgentId,
+      requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
       task: registerParams.task,
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
@@ -182,6 +182,12 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     });
     this.options.runs.set(runId, entry);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
+    const registeredKillReconciliationSnapshots = new Map(
+      [...killReconciliationSnapshots.keys()].map((candidate) => [
+        candidate,
+        structuredClone(candidate.killReconciliation),
+      ]),
+    );
     const registeredRunIds = [
       runId,
       ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
@@ -190,52 +196,63 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.options.runs.delete(runId);
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
     };
+    const restoreDurableRegistration = () => {
+      this.options.runs.set(runId, entry);
+      this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
+    };
     try {
       this.options.persistOrThrow(...registeredRunIds);
     } catch (error) {
       rollbackRegistration();
       throw error;
     }
-    try {
-      const taskParams = {
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: requesterSessionKey,
-        scopeKind: "session",
-        // Detached task runtimes are plugin-replaceable. Isolate their input so
-        // mutation cannot change the already-persisted registry record.
-        requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
-        childSessionKey,
-        runId,
-        label: registerParams.label,
-        task: registerParams.task,
-        agentId: registerParams.agentId,
-        requesterAgentId: registerParams.requesterAgentId,
-        deliveryStatus:
-          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
-      } as const;
-      const task = queued
-        ? createQueuedTaskRun(taskParams)
-        : createRunningTaskRun({
-            ...taskParams,
-            startedAt: now,
-            lastEventAt: now,
-          });
-      if (!task) {
-        if (registerParams.requiresTaskRow === true) {
-          throw new Error(`detached task runtime created no task row for run ${runId}`);
+    if (registerParams.taskRowOwnership !== "gateway_owned") {
+      try {
+        const taskParams = {
+          runtime: "subagent",
+          sourceId: runId,
+          ownerKey: requesterSessionKey,
+          scopeKind: "session",
+          // Detached task runtimes are plugin-replaceable. Isolate their input so
+          // mutation cannot change the already-persisted registry record.
+          requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
+          childSessionKey,
+          runId,
+          label: registerParams.label,
+          task: registerParams.task,
+          agentId: registerParams.agentId,
+          requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
+          deliveryStatus:
+            registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        } as const;
+        const task = queued
+          ? createQueuedTaskRun(taskParams)
+          : createRunningTaskRun({
+              ...taskParams,
+              startedAt: now,
+              lastEventAt: now,
+            });
+        if (!task) {
+          if (registerParams.taskRowOwnership === "required") {
+            throw new Error(`detached task runtime created no task row for run ${runId}`);
+          }
+          log.warn("Failed to persist background task for subagent run", { runId });
         }
-        log.warn("Failed to persist background task for subagent run", { runId });
-      }
-    } catch (error) {
-      if (registerParams.requiresTaskRow !== true) {
-        log.warn("Failed to create background task for subagent run", { runId, error });
-      } else {
-        // Native spawn suppresses the Gateway's CLI fallback because this registration owns
-        // the tasks-rail row. Roll back so the caller aborts instead of hiding a live run.
-        rollbackRegistration();
-        this.options.persistOrThrow(...registeredRunIds);
-        throw error;
+      } catch (error) {
+        if (registerParams.taskRowOwnership !== "required") {
+          log.warn("Failed to create background task for subagent run", { runId, error });
+        } else {
+          // Direct dispatch suppressed Gateway's CLI fallback. Persist the rollback before
+          // asking the caller to abort; if that write fails, memory must match durable state.
+          rollbackRegistration();
+          try {
+            this.options.persistOrThrow(...registeredRunIds);
+          } catch (rollbackError) {
+            restoreDurableRegistration();
+            throw rollbackError;
+          }
+          throw error;
+        }
       }
     }
     this.options.ensureListener();

@@ -63,6 +63,7 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
 export type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
+  required?: true;
   healthChecks: readonly HealthCheckInput[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;

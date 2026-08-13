@@ -543,28 +543,13 @@ function createOpenAiHeaderState(overrides: Parameters<typeof createChatHeaderSt
   });
 }
 
-function getChatModelSelect(container: Element): HTMLElement & { value: string } {
-  const select = container.querySelector<HTMLElement & { value: string }>(
-    "wa-select.chat-controls__model-picker",
-  );
+function getChatModelSelect(container: Element): HTMLElement {
+  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
   expect(select).toBeInstanceOf(HTMLElement);
   if (!(select instanceof HTMLElement)) {
     throw new Error("Expected chat model control");
   }
   return select;
-}
-
-function getChatModelOption(container: Element, value: string): HTMLElement | null {
-  return container.querySelector(
-    `wa-select.chat-controls__model-picker wa-option[value="${value}"]`,
-  );
-}
-
-function changeChatModel(container: Element, value: string) {
-  const select = getChatModelSelect(container);
-  Object.defineProperty(select, "value", { configurable: true, value });
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  Reflect.deleteProperty(select, "value");
 }
 
 type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
@@ -5343,7 +5328,7 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.hasAttribute("disabled")).toBe(true);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("shows an empty state instead of a configured default when no usable models exist", () => {
@@ -5354,9 +5339,7 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    const options = container.querySelectorAll("wa-select.chat-controls__model-picker wa-option");
-    expect(options).toHaveLength(1);
-    expect(options[0]?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
     ).toContain("No models available");
@@ -5367,12 +5350,12 @@ describe("chat model controls", () => {
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, { onModelSelect });
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLElement>("wa-select.chat-controls__model-picker wa-option"),
-    ).find((option) => !option.hasAttribute("selected") && option.getAttribute("value"));
-    expect(modelOption).toBeInstanceOf(HTMLElement);
-    changeChatModel(container, modelOption?.getAttribute("value") ?? "");
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.getAttribute("aria-selected") === "false");
+    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    modelOption?.click();
 
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.getAttribute("value"), "main");
+    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
   it("keeps model enabled while write-only access disables effort controls", () => {
@@ -5389,28 +5372,31 @@ describe("chat model controls", () => {
     });
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.hasAttribute("disabled")).toBe(false);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
     expect(modelSelect.getAttribute("title")).not.toBe(reason);
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLElement>("wa-select.chat-controls__model-picker wa-option"),
-    ).find((option) => !option.hasAttribute("selected") && option.getAttribute("value"));
-    changeChatModel(container, modelOption?.getAttribute("value") ?? "");
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.getAttribute("aria-selected") === "false");
+    modelOption?.click();
     container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
     getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onFastModeSelect).not.toHaveBeenCalled();
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.getAttribute("value"), "main");
+    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("preserves the empty-string default override and clears an explicit override", () => {
+  it("marks the inherited default muted and resets an override from the provenance row", () => {
     const { state } = createChatHeaderState({
       model: null,
       models: createOpenAiModelCatalog(),
     });
     const container = renderModelControls(state);
 
-    expect(getChatModelOption(container, "")?.hasAttribute("selected")).toBe(true);
+    expect(
+      container.querySelector(".chat-controls__model-provenance-value--inherit"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
     const onModelSelect = vi.fn(async () => true);
     renderModelControls(
@@ -5419,9 +5405,22 @@ describe("chat model controls", () => {
       container,
     );
 
-    expect(getChatModelOption(container, "")?.hasAttribute("selected")).toBe(false);
-    changeChatModel(container, "");
+    expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    const modelSelect = getChatModelSelect(container);
+    const details = modelSelect.closest<HTMLDetailsElement>("details");
+    document.body.append(container);
+    if (details) {
+      details.open = true;
+    }
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    expect(reset?.textContent?.trim()).toBe("Use default");
+    reset?.focus();
+    reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    expect(details?.open).toBe(false);
+    expect(document.activeElement).toBe(modelSelect);
+    container.remove();
   });
 
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {
@@ -5443,9 +5442,16 @@ describe("chat model controls", () => {
     });
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.hasAttribute("disabled")).toBe(true);
-    expect(modelSelect.querySelectorAll("wa-option")).toHaveLength(1);
-    expect(modelSelect.querySelector("wa-option")?.textContent).toContain("Codex-controlled model");
+    expect(modelSelect.dataset.chatModelLocked).toBe("true");
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      "Codex-controlled model",
+    );
+    expect(
+      container.querySelector(".chat-controls__inline-select-label")?.textContent,
+    ).not.toContain("GPT-5.5");
+    expect(container.querySelectorAll("[data-chat-model-provider]")).toHaveLength(0);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(onModelSelect).not.toHaveBeenCalled();
 
     const slider = getThinkingSlider(container);
@@ -5492,7 +5498,10 @@ describe("chat model controls", () => {
       modelSelectionRuntimeId: runtimeId,
     });
 
-    expect(getChatModelSelect(container).querySelector("wa-option")?.textContent).toContain(
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      expected,
+    );
+    expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
       expected,
     );
     if (runtimeId === "openclaw") {
@@ -5525,13 +5534,16 @@ describe("chat model controls", () => {
     state.chatStream = "Working";
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, { onModelSelect });
-    expect(getChatModelSelect(container).hasAttribute("disabled")).toBe(true);
-    changeChatModel(container, "openai/gpt-5.4");
+    const modelOption = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.getAttribute("aria-selected") === "false");
+    expect(modelOption?.disabled).toBe(true);
+    modelOption?.click();
 
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("renders provider artwork and selects an exact model value", () => {
+  it("groups models and filters them with keyboard selection", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -5543,22 +5555,51 @@ describe("chat model controls", () => {
     });
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, { onModelSelect });
-    const options = Array.from(
-      container.querySelectorAll<HTMLElement>("wa-select.chat-controls__model-picker wa-option"),
+    document.body.append(container);
+
+    const providerHeadings = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-chat-model-provider]"),
     );
-    expect(options.map((option) => option.getAttribute("value"))).toEqual([
-      "",
-      "openai/gpt-5.5",
-      "anthropic/claude-sonnet-4-6",
-      "google/gemini-2.5-pro",
+    expect(providerHeadings.map((heading) => heading.textContent?.trim())).toEqual([
+      "OpenAI",
+      "Anthropic",
+      "Google",
     ]);
+    const anthropicModels = container.querySelector<HTMLElement>(
+      '[data-chat-model-provider-group="anthropic"]',
+    );
+    expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+    const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
+    details!.open = true;
+    search!.value = "anth";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    const visibleOptions = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).filter((option) => !option.hidden);
+    expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(visibleOptions[0]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
     expect(
-      options.map((option) =>
-        option.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon"),
-      ),
-    ).toEqual(["codex", "codex", "claude", "gemini"]);
-    changeChatModel(container, "anthropic/claude-sonnet-4-6");
+      visibleOptions[0]
+        ?.querySelector("[data-chat-model-shortcut]")
+        ?.getAttribute("data-chat-model-shortcut-number"),
+    ).toBe("1");
+    expect(
+      visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
+    ).not.toBeNull();
+
+    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");
+    expect(highlighted?.id).not.toBe("");
+    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+
+    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
+    expect(details?.open).toBe(false);
+    container.remove();
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
@@ -5572,11 +5613,14 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    const options = container.querySelectorAll("wa-select.chat-controls__model-picker wa-option");
-    expect(options).toHaveLength(3);
+    const providerButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
+    );
+    expect(providerButtons.map((button) => button.textContent?.trim())).toEqual(["OpenAI"]);
     expect(
-      [...options].every((option) => option.querySelector('[data-provider-icon="codex"]')),
-    ).toBe(true);
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="openai"]')?.hidden,
+    ).toBe(false);
+    expect(container.querySelector('[data-chat-model-provider-group="codex"]')).toBeNull();
   });
 
   it("merges provider aliases into unique visible groups", () => {
@@ -5596,27 +5640,35 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    const options = Array.from(
-      container.querySelectorAll("wa-select.chat-controls__model-picker wa-option"),
+    const providerButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
-      "Default (gpt-5 · openai)",
-      "Gemini 2.5 Pro",
-      "Gemini CLI",
-      "Sonnet",
-      "Kimi",
-      "GLM",
-      "Kimi K3",
-      "Kimi K2.7",
-      "Kimi K2.6",
-    ]);
+    const providerLabels = providerButtons.map((button) => button.textContent?.trim());
+    expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
+    expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
-      new Set(
-        options.map((option) =>
-          option.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon"),
-        ),
-      ),
-    ).toEqual(new Set(["codex", "gemini", "opencode", "kimi"]));
+      container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,
+    ).toContain("Gemini CLI");
+    const openCodeModels = container.querySelector(
+      '[data-chat-model-provider-group="opencode"]',
+    )?.textContent;
+    expect(openCodeModels).toContain("Sonnet");
+    expect(openCodeModels).toContain("Kimi");
+    expect(openCodeModels).toContain("GLM");
+    expect(openCodeModels).not.toContain("OpenCode Sonnet");
+    expect(
+      container.querySelector('[data-chat-model-provider-group="google-gemini-cli"]'),
+    ).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="opencode-go"]')).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="opencode-zen"]')).toBeNull();
+    const moonshotModels = container.querySelector(
+      '[data-chat-model-provider-group="moonshot"]',
+    )?.textContent;
+    expect(moonshotModels).toContain("Kimi K3");
+    expect(moonshotModels).toContain("Kimi K2.7");
+    expect(moonshotModels).toContain("Kimi K2.6");
+    expect(container.querySelector('[data-chat-model-provider-group="moonshot-ai"]')).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
   });
 
   it("shows model context size inline without a redundant tooltip", () => {
@@ -5633,10 +5685,34 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
-    const modelOption = getChatModelOption(container, "openai/gpt-5.6-sol");
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
 
-    expect(modelOption?.querySelector(".picker-select__description")?.textContent).toBe("1M");
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe("1M");
+    expect(
+      getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
+    ).toBe("1M");
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.2-retired",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" }],
+    });
+    const container = renderModelControls(state);
+
+    const optionValues = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).map((option) => option.getAttribute("data-chat-model-option"));
+    const overrideValue = optionValues.find((value) => value?.includes("gpt-5.2-retired"));
+    expect(overrideValue).toBeDefined();
+    const overrideOption = container.querySelector<HTMLButtonElement>(
+      `[data-chat-model-option="${overrideValue}"]`,
+    );
+    expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
   });
 
   it("distinguishes model rows that use different agent runtimes", () => {
@@ -5683,15 +5759,16 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
     const metaFor = (value: string) =>
-      getChatModelOption(container, value)?.querySelector(".picker-select__description")
-        ?.textContent;
+      container.querySelector(
+        `[data-chat-model-option="${value}"] .chat-controls__model-option-meta`,
+      )?.textContent;
 
-    expect(metaFor("openai/gpt-5.6")).toBe("OpenClaw · 1M");
+    expect(metaFor("openai/gpt-5.6")).toBe("1M · OpenClaw");
     expect(metaFor("openai/gpt-5.6")).not.toContain("Codex");
-    expect(metaFor("openai/gpt-5.6-sol")).toBe("Codex · 1M");
+    expect(metaFor("openai/gpt-5.6-sol")).toBe("1M · Codex");
     // Known CLI runtime ids map to their product labels, not capitalized ids.
-    expect(metaFor("anthropic/claude-opus-4-5")).toBe("Claude CLI · 200k");
-    expect(metaFor("google/gemini-3-pro")).toBe("Gemini CLI · 1M");
+    expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
+    expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
     // Implicitly resolved runtimes stay unlabeled; only operator-pinned
     // (source model/provider) rows carry the runtime meta.
     expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
@@ -5718,13 +5795,22 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
 
+    expect(trigger.dataset.chatModelTools).toBe("unavailable");
     expect(
-      getChatModelOption(container, "lmstudio/qwen3-8b")
-        ?.querySelector(".picker-select__description")
+      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
+    ).toBe("Chat only");
+    expect(trigger.getAttribute("aria-label")).toContain("Chat only");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
+        ?.querySelector(".chat-controls__model-option-meta")
         ?.textContent?.trim(),
     ).toBe("32.8k · Chat only");
-    expect(getChatModelOption(container, "openai/gpt-5.5")?.textContent).not.toContain("Chat only");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).not.toContain("Chat only");
   });
 
   it("shows canonical OpenAI model names instead of command aliases", () => {
@@ -5749,13 +5835,19 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    expect(getChatModelOption(container, "openai/gpt-5.5")?.textContent?.trim()).toBe("GPT-5.5");
+    expect(
+      getChatModelSelect(container)
+        .querySelector(".chat-controls__inline-select-label")
+        ?.textContent?.trim(),
+    ).toBe("GPT-5.5");
     expect(
       getThinkingSelect(container)
         .querySelector(".chat-controls__inline-select-label")
         ?.textContent?.trim(),
     ).toBe("High");
-    expect(getChatModelOption(container, "openai/gpt-5.5")?.textContent).toContain("GPT-5.5");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).toContain("GPT-5.5");
   });
 
   it("marks the actual default model row and selects it when inherited", () => {
@@ -5783,14 +5875,22 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     renderModelControls(state, { modelOverrides: { main: null } }, container);
 
-    const defaultOptions = container.querySelectorAll(
-      'wa-select.chat-controls__model-picker wa-option[value=""]',
+    expect(
+      getChatModelSelect(container)
+        .querySelector(".chat-controls__inline-select-label")
+        ?.textContent?.trim(),
+    ).toBe("GPT-5.5");
+    const defaultOptions = container.querySelectorAll<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
     );
     expect(defaultOptions).toHaveLength(1);
     const defaultOption = defaultOptions[0];
-    expect(defaultOption?.hasAttribute("selected")).toBe(true);
+    expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
+    expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
     expect(defaultOption?.textContent).toContain("GPT-5.5");
     expect(defaultOption?.textContent).toContain("Default");
+    expect(defaultOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
+    expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
   it.each([
@@ -5799,14 +5899,16 @@ describe("chat model controls", () => {
       model: "gpt-5.4",
       models: createOpenAiModelCatalog(),
       sessionKey: "default-clear",
+      selected: "false",
     },
     {
       name: "clears an explicit override that matches the default model",
       model: "gpt-5.5",
       models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
       sessionKey: "explicit-default",
+      selected: "true",
     },
-  ])("$name", async ({ model, models, sessionKey }) => {
+  ])("$name", async ({ model, models, sessionKey, selected }) => {
     const { state } = createChatHeaderState({ model, modelProvider: "openai", models });
     state.sessionsResult = createSessionsListResult({
       defaultsModel: "gpt-5.5",
@@ -5821,12 +5923,15 @@ describe("chat model controls", () => {
       onModelSelect,
     });
 
-    const defaultOption = getChatModelOption(container, "");
-    expect(defaultOption).toBeInstanceOf(HTMLElement);
-    expect(defaultOption?.hasAttribute("selected")).toBe(false);
+    const defaultOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.5"][data-chat-model-default="true"]',
+    );
+    expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
+    expect(defaultOption?.getAttribute("aria-selected")).toBe(selected);
     expect(defaultOption?.textContent).toContain("Default");
-    expect(getChatModelOption(container, `openai/${model}`)?.hasAttribute("selected")).toBe(true);
-    changeChatModel(container, "");
+    const currentOption = container.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    expect(currentOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
+    defaultOption?.click();
 
     await waitForFast(() => {
       expect(onModelSelect).toHaveBeenCalledWith("", sessionKey);
@@ -5855,19 +5960,21 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    const options = Array.from(
-      container.querySelectorAll("wa-select.chat-controls__model-picker wa-option"),
+    const providerButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
-      "Gemma 4 · google",
-      "Default (Gemma 4 · openrouter)",
-      "Gemma 4",
+    expect(providerButtons.map((button) => button.textContent?.trim())).toEqual([
+      "OpenRouter",
+      "Google",
     ]);
     expect(
-      options.map((option) =>
-        option.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon"),
-      ),
-    ).toEqual(["gemini", "openrouter", "openrouter"]);
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')
+        ?.textContent,
+    ).toContain("Gemma 4");
+    expect(
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
+        ?.textContent,
+    ).toContain("Gemma 4");
   });
 
   it("uses a unique catalog provider before an unrelated stale session hint", () => {
@@ -5886,10 +5993,14 @@ describe("chat model controls", () => {
       modelOverrides: { main: "moonshotai/kimi-k2.5" },
     });
 
-    const icon = getChatModelOption(container, "moonshotai/kimi-k2.5")?.querySelector(
-      ".provider-brand-icon--fallback",
-    );
-    expect(icon?.textContent?.trim()).toBe("N");
+    const providers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
+    ).map((button) => button.dataset.chatModelProvider);
+    expect(providers).toContain("nvidia");
+    expect(providers).not.toContain("zai");
+    expect(
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="nvidia"]')?.hidden,
+    ).toBe(false);
   });
 
   it("renders reasoning as a slider and speed as a fast-mode toggle", () => {
@@ -5915,9 +6026,13 @@ describe("chat model controls", () => {
     expect(speedToggle?.getAttribute("aria-checked")).toBe("false");
     expect(speedToggle?.dataset.chatSpeedToggle).toBe("on");
     expect(
-      container.querySelector(
-        'wa-select.chat-controls__model-picker wa-option [data-provider-icon="codex"]',
-      ),
+      container.querySelector('[data-chat-model-select="true"] .chat-controls__provider-icon'),
+    ).toBeNull();
+    expect(
+      container.querySelector("[data-chat-model-option] .chat-controls__provider-icon"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-chat-model-provider="openai"] [data-provider-icon]'),
     ).not.toBeNull();
   });
 
@@ -5935,11 +6050,14 @@ describe("chat model controls", () => {
     });
 
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLElement>("wa-select.chat-controls__model-picker wa-option"),
-    ).find((option) => !option.hasAttribute("selected") && option.getAttribute("value"));
-    expect(modelOption).toBeInstanceOf(HTMLElement);
-    changeChatModel(container, modelOption?.getAttribute("value") ?? "");
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.getAttribute("value"), "main");
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find(
+      (button) =>
+        button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",
+    );
+    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    modelOption?.click();
+    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
 
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
@@ -6293,13 +6411,19 @@ describe("chat model controls", () => {
     };
     render(renderChatModelControls(props), container);
 
-    changeChatModel(container, "openai/gpt-5.4");
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
+      ?.click();
 
     await waitForFast(() => {
       expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main");
     });
     render(renderChatModelControls(props), container);
-    expect(getChatModelOption(container, "openai/gpt-5.5")?.hasAttribute("selected")).toBe(true);
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
   });
 
   it("keeps the speed toggle visible and disabled for unsupported providers", () => {
