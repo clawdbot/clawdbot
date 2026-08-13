@@ -111,6 +111,29 @@ describe("dispatchInboundDirectDm", () => {
     );
   });
 
+  it("preserves the shipped SDK contract for callers without ingress provenance", async () => {
+    await dispatchInboundDirectDm({
+      cfg: {} as OpenClawConfig,
+      channel: "external",
+      channelLabel: "External",
+      accountId: "default",
+      peer: { kind: "direct", id: "peer-1" },
+      senderId: "peer-1",
+      senderAddress: "external:peer-1",
+      recipientAddress: "external:bot-1",
+      conversationLabel: "peer-1",
+      rawBody: "hello",
+      messageId: "event-external-1",
+      deliver: async () => undefined,
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn(),
+    });
+
+    expect(
+      vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress,
+    ).toBeUndefined();
+  });
+
   it("preserves Reef's explicit unsupported trust-path classification", async () => {
     await dispatchInboundDirectDm({
       channelIngress: "unsupported",

@@ -46,7 +46,8 @@ type DispatchInboundDirectDmParams = {
   timestamp?: number;
   commandAuthorized?: boolean;
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
-  channelIngress: ResolvedChannelMessageIngress | "unsupported";
+  /** Shipped SDK callers may omit provenance; bundled callers must classify it explicitly. */
+  channelIngress?: ResolvedChannelMessageIngress | "unsupported";
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
