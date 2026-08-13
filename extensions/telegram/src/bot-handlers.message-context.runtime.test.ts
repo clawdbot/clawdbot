@@ -67,12 +67,16 @@ describe("resolveCachedMessageThreadSpec", () => {
       ownerAgentId: "main",
       opts: { token: "test" },
       telegramCfg: {},
-      telegramDeps: { resolveStorePath } as RegisterTelegramHandlerParams["telegramDeps"],
+      telegramDeps: {
+        resolveStorePath,
+      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
     const sessionRuntime = createTelegramMessageSessionRuntime({
       accountId: "primary",
       resolveTelegramGroupConfig: () => ({ topicConfig: { agentId: "research" } }),
-      telegramDeps: { resolveStorePath } as RegisterTelegramHandlerParams["telegramDeps"],
+      telegramDeps: {
+        resolveStorePath,
+      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
 
     const session = sessionRuntime.resolveTelegramSessionState({
