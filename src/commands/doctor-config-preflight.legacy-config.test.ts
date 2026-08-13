@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 type StateMigrationResult = {
   migrated: boolean;
@@ -50,6 +50,7 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
   repairLegacyCronStoreWithoutPrompt,
 }));
 
+const needsStateMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
 const startupMigrationLease = vi.hoisted(() => ({
@@ -57,14 +58,19 @@ const startupMigrationLease = vi.hoisted(() => ({
   owner: "legacy-config-test",
   release: startupMigrationLeaseRelease,
 }));
-const acquireStartupMigrationLease = vi.hoisted(() =>
-  vi.fn((_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
+// #120959 replaced the synchronous lease acquisition with a wait-for-concurrent-holder variant;
+// this suite only exercises the single-process path, so the mock resolves immediately.
+const acquireStartupMigrationLeaseWithWait = vi.hoisted(() =>
+  vi.fn(async (_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
 );
+const recordSuccessfulStateMigrations = vi.hoisted(() => vi.fn());
 const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
-  acquireStartupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
+  needsStateMigrationCheckpoint,
   needsStartupMigrationCheckpoint,
+  recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
 }));
 
@@ -94,8 +100,8 @@ vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
   })),
 }));
 
-vi.mock("../config/io.js", () => ({
-  readConfigFileSnapshot: vi.fn(async () => ({
+const readConfigFileSnapshot = vi.hoisted(() =>
+  vi.fn(async () => ({
     exists: true,
     valid: true,
     config: { gateway: { mode: "local", port: 19091 } },
@@ -105,6 +111,25 @@ vi.mock("../config/io.js", () => ({
     warnings: [],
     issues: [],
   })),
+);
+// A stable non-null fingerprint across every read is required: runDoctorConfigPreflight
+// compares the pre- and post-convergence checkpoint identity and refuses readiness
+// (throwStartupMigrationIdentityChanged) when either side resolves to a null identity,
+// which happens whenever the plugin migration fingerprint is missing.
+const pluginMigrationFingerprint = vi.hoisted(() => vi.fn(() => "plugin-migrations"));
+// Startup-checkpoint runs (requireStartupMigrationCheckpoint) read the config through this
+// plugin-metadata-aware sibling instead of readConfigFileSnapshot; both must stay mocked so
+// the checkpoint path in doctor-config-preflight.ts resolves a snapshot either way.
+const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
+  vi.fn(async () => ({
+    snapshot: await readConfigFileSnapshot(),
+    pluginMetadataSnapshot: { configFingerprint: pluginMigrationFingerprint() },
+  })),
+);
+
+vi.mock("../config/io.js", () => ({
+  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -115,7 +140,7 @@ async function withHomeFixture(run: (root: string) => Promise<void>): Promise<vo
   const savedHome = process.env.HOME;
   const savedOpenClawHome = process.env.OPENCLAW_HOME;
   try {
-    await withTempDir({ prefix: "openclaw-legacy-config-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-legacy-config-" }, async (root) => {
       process.env.HOME = root;
       process.env.OPENCLAW_HOME = root;
       await run(root);
@@ -141,6 +166,10 @@ describe("runDoctorConfigPreflight legacy config migration", () => {
     // default explicitly; a test that opts into checkpointing would otherwise
     // leak `true` into every case after it.
     needsStartupMigrationCheckpoint.mockReturnValue(false);
+    // #120959 gates the state-dir migration behind its own needsStateMigrationCheckpoint
+    // check, decoupled from needsStartupMigrationCheckpoint. Mirror it by default so this
+    // suite's startup-checkpoint tests still reach autoMigrateLegacyStateDir.
+    needsStateMigrationCheckpoint.mockImplementation(() => needsStartupMigrationCheckpoint());
     for (const mock of [
       autoMigrateLegacyStateDir,
       autoMigrateLegacyState,
@@ -157,6 +186,11 @@ describe("runDoctorConfigPreflight legacy config migration", () => {
 
   it("does not plant the canonical config from an unresolved legacy state dir", async () => {
     await withHomeFixture(async (root) => {
+      // A bare canonical root makes it the resolved state dir (config/paths.ts
+      // resolveStateDir), so the copy target actually is ~/.openclaw and the
+      // targetsDefaultStateRoot guard runs. Without it, resolveStateDir falls
+      // through to the legacy dir itself and the guard is never reached.
+      fs.mkdirSync(path.join(root, ".openclaw"), { recursive: true });
       const legacyDir = path.join(root, ".clawdbot");
       fs.mkdirSync(legacyDir, { recursive: true });
       fs.writeFileSync(path.join(legacyDir, "clawdbot.json"), "{}", "utf-8");
@@ -174,6 +208,10 @@ describe("runDoctorConfigPreflight legacy config migration", () => {
 
   it("does not copy when the legacy symlink points somewhere other than the canonical root", async () => {
     await withHomeFixture(async (root) => {
+      // Same reasoning as the unresolved-dir case above: a bare canonical root
+      // is required so the copy target resolves to ~/.openclaw and the guard's
+      // realpath comparison against the symlink target actually runs.
+      fs.mkdirSync(path.join(root, ".openclaw"), { recursive: true });
       const elsewhere = path.join(root, "elsewhere");
       fs.mkdirSync(elsewhere, { recursive: true });
       fs.writeFileSync(path.join(elsewhere, "clawdbot.json"), "{}", "utf-8");
@@ -222,9 +260,14 @@ describe("runDoctorConfigPreflight legacy config migration", () => {
       requireStartupMigrationCheckpoint: true,
     });
 
-    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
+    const pinnedEnv = acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env;
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
       env: pinnedEnv,
+      identity: {
+        effectiveConfigFingerprint: expect.any(String),
+        pluginDoctorConfigFingerprint: expect.any(String),
+        pluginMigrationFingerprint: "plugin-migrations",
+      },
       lease: startupMigrationLease,
     });
     expect(note).toHaveBeenCalledWith(`- ${skipNotice}`, "Doctor notices");

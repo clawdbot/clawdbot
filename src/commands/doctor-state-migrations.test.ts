@@ -4400,7 +4400,7 @@ describe("doctor legacy state migrations", () => {
   it("reports a notice instead of a warning when the existing target is an initialized state root (#112395)", async () => {
     // Config file marks the target as the state root the gateway already runs on;
     // the skipped legacy dir is inert residue and must not block startup readiness.
-    const configRoot = await makeTempRoot();
+    const configRoot = makeDoctorStateDir();
     const config = ensureLegacyAndTargetStateDirs(configRoot);
     fs.writeFileSync(path.join(config.legacyDir, "sessions.json"), "{}", "utf-8");
     fs.writeFileSync(path.join(config.targetDir, "openclaw.json"), "{}", "utf-8");
@@ -4409,7 +4409,7 @@ describe("doctor legacy state migrations", () => {
     // Auto-created runtime dirs (state/agents/credentials) are NOT initialization
     // markers: DB bootstrap creates them before startup migrations run, so they must
     // not flip an otherwise-unowned target to non-blocking.
-    const autoCreatedRoot = await makeTempRoot();
+    const autoCreatedRoot = makeDoctorStateDir();
     const autoCreated = ensureLegacyAndTargetStateDirs(autoCreatedRoot);
     fs.mkdirSync(path.join(autoCreated.targetDir, "state"), { recursive: true });
     fs.mkdirSync(path.join(autoCreated.targetDir, "agents"), { recursive: true });
