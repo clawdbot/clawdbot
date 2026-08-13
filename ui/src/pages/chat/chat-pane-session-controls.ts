@@ -63,7 +63,7 @@ export function renderChatPaneComposerControls(params: {
         modelCatalog: state.chatModelCatalog,
         modelCatalogState: {
           hasSnapshot: hasModelSnapshot,
-          onRetry: refreshModelCatalog,
+          onRetry: () => void refreshModelCatalog(),
           status: state.chatModelCatalogError
             ? "error"
             : state.chatModelsLoading
