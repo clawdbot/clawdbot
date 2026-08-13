@@ -3050,7 +3050,7 @@ NODE
     // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
     // runtime patches belong in the marker, not the backing-disk key.
     expect(mountStep.with.key).toBe(
-      "${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}",
+      "${{ github.repository }}-node-deps-bind-v7-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
       "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
