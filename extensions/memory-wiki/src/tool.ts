@@ -2,6 +2,7 @@
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -277,7 +278,7 @@ export function createWikiGetTool(
       "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.",
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as {
+      const params = asNonArrayRecord(rawParams) as {
         lookup?: string;
         fromLine?: number;
         lineCount?: number;
@@ -287,12 +288,7 @@ export function createWikiGetTool(
       const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
       if (!lookup) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "wiki_get requires a non-empty `lookup` path or id.",
-            },
-          ],
+          content: [{ type: "text", text: "wiki_get requires a non-empty `lookup` path or id." }],
           details: { found: false },
         };
       }
@@ -312,7 +308,7 @@ export function createWikiGetTool(
       });
       if (!result) {
         return {
-          content: [{ type: "text", text: `Wiki page not found: ${params.lookup}` }],
+          content: [{ type: "text", text: `Wiki page not found: ${lookup}` }],
           details: { found: false },
         };
       }

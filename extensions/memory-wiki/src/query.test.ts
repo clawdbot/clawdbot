@@ -1785,28 +1785,27 @@ describe("getMemoryWikiPage", () => {
     );
   });
 
-  it("reports a clean error instead of crashing when lookup is missing or wrong-typed", async () => {
+  it("reports a clean error instead of crashing for malformed wiki_get params", async () => {
     const { config } = await createQueryVault({
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
     });
-    const manager = createMemoryManager({
-      readResult: { path: "memory/notes.md", text: "durable notes", from: 1, lines: 1 },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
     const tool = createWikiGetTool(config, createAppConfig());
+    const malformedParams = [
+      null,
+      { path: "sources/example/note.md" },
+      { lookup: "   " },
+      { lookup: 42 },
+    ];
 
-    // Wrong parameter name (e.g. `path` instead of `lookup`) leaves lookup undefined.
-    // This used to throw "Cannot read properties of undefined (reading 'trim')".
-    const missing = await tool.execute("wiki-get-bad-param", {
-      path: "sources/example/note.md",
-    } as never);
+    for (const params of malformedParams) {
+      const result = await tool.execute("wiki-get-bad-param", params);
 
-    expect(missing.details).toEqual({ found: false });
-    expect(missing.content).toEqual([
-      { type: "text", text: "wiki_get requires a non-empty `lookup` path or id." },
-    ]);
+      expect(result.details).toEqual({ found: false });
+      expect(result.content).toEqual([
+        { type: "text", text: "wiki_get requires a non-empty `lookup` path or id." },
+      ]);
+    }
   });
 
   it("normalizes extensionless shared memory lookups before reading", async () => {
