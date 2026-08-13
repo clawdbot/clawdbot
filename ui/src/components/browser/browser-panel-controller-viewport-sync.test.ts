@@ -18,6 +18,12 @@ function actionRequests(request: ReturnType<typeof createBrowserClient>["request
     .filter((envelope) => envelope.path === "/act" && envelope.body?.kind === kind);
 }
 
+function requestsForPath(request: ReturnType<typeof createBrowserClient>["request"], path: string) {
+  return request.mock.calls
+    .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+    .filter((envelope) => envelope.path === path);
+}
+
 describe("BrowserPanelController viewport sync", () => {
   it("debounces resize requests, clamps dimensions, and refreshes the screenshot", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -61,15 +67,11 @@ describe("BrowserPanelController viewport sync", () => {
     ]);
 
     await vi.advanceTimersByTimeAsync(349);
-    expect(
-      request.mock.calls.filter(([, envelope]) => envelope.path === "/screenshot"),
-    ).toHaveLength(0);
+    expect(requestsForPath(request, "/screenshot")).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     await flushBrowserResponses();
 
-    expect(
-      request.mock.calls.filter(([, envelope]) => envelope.path === "/screenshot"),
-    ).toHaveLength(1);
+    expect(requestsForPath(request, "/screenshot")).toHaveLength(1);
   });
 
   it("does not repeat a requested size or resize an already matching viewport", async () => {
