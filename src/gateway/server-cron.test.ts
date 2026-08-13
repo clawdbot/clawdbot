@@ -2682,6 +2682,33 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("routes a targetless cron wake through the configured system agent", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-system-owner-wake"),
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: { default: true }, ops: {} },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    try {
+      expect(state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
+
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
+      expect(enqueueCall?.[1]).toMatchObject({ sessionKey: "agent:ops:main" });
+      expect(wakeCall?.[0]).toMatchObject({
+        source: "manual",
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("forwards cron system events to the resolved session", () => {
     const cfg = createCronConfig("server-cron-system-event");
     loadConfigMock.mockReturnValue(cfg);
