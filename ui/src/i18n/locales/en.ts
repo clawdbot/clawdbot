@@ -3001,7 +3001,6 @@ export const en: TranslationMap = {
     sectionCommunity: "Community",
     badgeBundledIos: "Included with the iOS app",
     badgeBundledAndroid: "Included with the Android app",
-    badgeStoreComingSoon: "Chrome Web Store · coming soon",
     ctaAppStore: "App Store",
     ctaPlayStore: "Google Play",
     ctaDownload: "Download",
