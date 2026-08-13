@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
@@ -1752,6 +1753,7 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).not.toHaveProperty("list");
     expect(result.cfg.agents?.entries?.main).not.toHaveProperty("default");
     expect(result.cfg.agents?.ownership).toBe("explicit");
+    expect(tryResolveLegacyCompatibilityAgentId(result.cfg)).toBe("main");
 
     const secondRun = await runDoctorConfigWithInput({
       config: result.cfg,

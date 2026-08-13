@@ -277,9 +277,10 @@ function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | un
 }
 
 function tryResolveDoctorSessionMigrationAgentId(cfg: OpenClawConfig): string | undefined {
+  const hasExplicitSessionStoreOwner = Boolean(cfg.agents?.defaults?.sessionStore?.agentId?.trim());
   return (
     tryResolveDoctorStateMigrationAgentId(cfg) ??
-    (!isPerAgentSessionStoreConfig(cfg.session?.store)
+    (hasExplicitSessionStoreOwner || !isPerAgentSessionStoreConfig(cfg.session?.store)
       ? resolveSessionStoreCompatibilityAgentId(cfg)
       : undefined)
   );

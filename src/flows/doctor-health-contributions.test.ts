@@ -108,6 +108,9 @@ const mocks = vi.hoisted(() => ({
     () => "/tmp/openclaw-workspace",
   ),
   tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  tryResolveLegacyCompatibilityAgentId: vi.fn<(_cfg: OpenClawConfig) => string | undefined>(
+    () => undefined,
+  ),
   resolveDefaultAgentId: vi.fn<(_cfg: OpenClawConfig) => string>(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
@@ -391,6 +394,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   listAgentEntries: mocks.listAgentEntries,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
+  tryResolveLegacyCompatibilityAgentId: mocks.tryResolveLegacyCompatibilityAgentId,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
@@ -708,6 +712,8 @@ describe("doctor health contributions", () => {
     mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.listAgentEntries.mockReset();
     mocks.listAgentEntries.mockReturnValue([{ id: "default" }]);
+    mocks.tryResolveLegacyCompatibilityAgentId.mockReset();
+    mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue(undefined);
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentContextLimits.mockReset();
@@ -860,6 +866,44 @@ describe("doctor health contributions", () => {
       "doctor:test-failure run failed: media migration required",
       "Doctor warnings",
     );
+  });
+
+  it("uses retained migration ownership for plugin metadata health scopes", async () => {
+    const run = vi.fn(async () => undefined);
+    const runWithPluginMetadataSnapshot = vi.fn(
+      async (
+        params: { config: OpenClawConfig; workspaceDir?: string },
+        scopedRun: () => Promise<void>,
+      ) => {
+        expect(params.workspaceDir).toBe("/tmp/openclaw-workspace");
+        await scopedRun();
+      },
+    );
+    mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue("main");
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("raw default resolver must not run");
+    });
+    const cfg = { agents: { entries: { main: {}, ops: {} } } } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: { cfg },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+      runWithPluginMetadataSnapshot,
+    } as DoctorContributionRunContext;
+
+    await runDoctorHealthContributionList(ctx, [
+      createDoctorHealthContribution({ id: "doctor:test-owner", label: "Test owner", run }),
+    ]);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "main", {});
+    expect(runWithPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {

@@ -134,6 +134,7 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
           },
           contextTokens: 64000,
           skills: ["memory"],
+          sessionStore: { agentId: "main" },
         },
         entries: {
           main: {
@@ -478,7 +479,10 @@ OPENCLAW_TEST_STATE_JSON
       "contextTokens": 64000,
       "skills": [
         "memory"
-      ]
+      ],
+      "sessionStore": {
+        "agentId": "main"
+      }
     },
     "entries": {
       "main": {

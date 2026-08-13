@@ -1253,6 +1253,42 @@ describe("state migrations", () => {
     await expectMissingPath(path.join(stateDir, "credentials", "chatapp-allowFrom.json"));
   });
 
+  it("migrates the legacy session store for an explicit fixed-store owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "agent:main:main": { sessionId: "legacy-main", updatedAt: 20 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.targetAgentId).toBe("main");
+    expect(detected.sessions.hasLegacy).toBe(true);
+
+    await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const store = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string }
+    >;
+    expect(store["agent:main:main"]?.sessionId).toBe("legacy-main");
+    await expectMissingPath(legacyStorePath);
+  });
+
   it("canonicalizes parsed owners before removing the legacy store", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

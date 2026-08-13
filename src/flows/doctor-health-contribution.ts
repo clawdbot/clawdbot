@@ -80,6 +80,15 @@ function deriveCoreHealthCheckId(contributionId: string): string {
     : `core/doctor/${contributionId}`;
 }
 
+export async function resolveDoctorHealthWorkspaceDir(
+  ctx: DoctorHealthFlowContext,
+): Promise<string> {
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId, tryResolveLegacyCompatibilityAgentId } =
+    await import("../agents/agent-scope.js");
+  const agentId = tryResolveLegacyCompatibilityAgentId(ctx.cfg) ?? resolveDefaultAgentId(ctx.cfg);
+  return resolveAgentWorkspaceDir(ctx.cfg, agentId, ctx.env ?? process.env);
+}
+
 async function runStructuredDoctorHealthContribution(params: {
   contributionId: string;
   ctx: DoctorHealthFlowContext;
@@ -89,12 +98,7 @@ async function runStructuredDoctorHealthContribution(params: {
     throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
   }
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.ctx.cfg,
-    resolveDefaultAgentId(params.ctx.cfg),
-  );
+  const workspaceDir = await resolveDoctorHealthWorkspaceDir(params.ctx);
   const dryRun = !params.ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {

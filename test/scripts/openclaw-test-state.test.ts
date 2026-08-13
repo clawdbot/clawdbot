@@ -234,6 +234,7 @@ describe("scripts/lib/openclaw-test-state", () => {
         },
       });
       expect(payload.config.agents.ownership).toBe("explicit");
+      expect(payload.config.agents.defaults.sessionStore).toEqual({ agentId: "main" });
       expect(Object.keys(payload.config.agents.entries)).toEqual(["main", "ops"]);
       expect(payload.config.agents).not.toHaveProperty("list");
       for (const agent of Object.values(payload.config.agents.entries)) {
@@ -285,6 +286,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       ]);
       const upgradeConfig = JSON.parse(upgradeProbe.stdout);
       expect(upgradeConfig.agents.ownership).toBe("explicit");
+      expect(upgradeConfig.agents.defaults.sessionStore).toEqual({ agentId: "main" });
       expect(Object.keys(upgradeConfig.agents.entries)).toEqual(["main", "ops"]);
       expect(upgradeConfig.agents).not.toHaveProperty("list");
       for (const agent of Object.values(upgradeConfig.agents.entries)) {
