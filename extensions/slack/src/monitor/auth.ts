@@ -128,14 +128,8 @@ const slackIngressIdentity = defineStableChannelIngressIdentity({
 function createSlackIngressSubject(params: {
   senderId: string;
   senderName?: string;
-  teamId?: string;
-  workspaceScoped?: boolean;
 }) {
-  const bareSenderId = normalizeSlackUserId(params.senderId);
-  const senderId =
-    params.workspaceScoped && params.teamId
-      ? `team:${params.teamId.toLowerCase()}:user:${bareSenderId}`
-      : bareSenderId;
+  const senderId = normalizeSlackUserId(params.senderId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
   return {
@@ -191,7 +185,6 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[]
   return resolveSlackUserAllowListForTeam({
     allowList: ctx.allowFrom,
     teamId,
-    allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
   });
 }
 
@@ -215,28 +208,10 @@ export async function resolveSlackEffectiveAllowFrom(
   } catch {
     storeAllowFrom = [];
   }
-  if (ctx.installationIdentity?.kind !== "enterprise") {
-    return resolveSlackUserAllowListForTeam({
-      allowList: [...base, ...storeAllowFrom],
-      teamId,
-      allowUnscoped: true,
-    });
-  }
-  const normalizedTeamId = teamId?.toLowerCase();
-  if (!normalizedTeamId) {
-    return base;
-  }
-  const workspaceAllowFrom = storeAllowFrom.flatMap((entry) => {
-    try {
-      const target = parseSlackTarget(entry);
-      return target?.kind === "user" && target.teamId?.toLowerCase() === normalizedTeamId
-        ? [entry]
-        : [];
-    } catch {
-      return [];
-    }
+  return resolveSlackUserAllowListForTeam({
+    allowList: [...base, ...storeAllowFrom],
+    teamId,
   });
-  return normalizeAllowListLower([...base, ...workspaceAllowFrom]);
 }
 
 async function fetchSlackChannelMemberIds(
@@ -341,7 +316,6 @@ export async function authorizeSlackBotRoomMessage(params: {
       id: params.senderId,
       name: params.senderName,
       allowNameMatching: params.ctx.allowNameMatching,
-      allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
     })
   ) {
     return true;
@@ -406,16 +380,13 @@ export async function resolveSlackCommandIngress(params: {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFrom = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
-    allowUnscoped,
   });
   const channelUsers = resolveSlackUserAllowListForTeam({
     allowList: params.channelUsers,
     teamId,
-    allowUnscoped,
   });
   const channelUsersConfigured =
     !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
@@ -426,8 +397,6 @@ export async function resolveSlackCommandIngress(params: {
     subject: createSlackIngressSubject({
       senderId: params.senderId,
       senderName: params.senderName,
-      teamId,
-      workspaceScoped: !allowUnscoped,
     }),
     conversation: {
       kind: slackIngressConversationKind(params.channelType),
@@ -474,16 +443,13 @@ async function decideSlackSystemIngress(params: {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFromLower = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
-    allowUnscoped,
   });
   const channelUsers = resolveSlackUserAllowListForTeam({
     allowList: params.channelUsers,
     teamId,
-    allowUnscoped,
   });
   const channelUsersConfigured =
     !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
@@ -511,8 +477,6 @@ async function decideSlackSystemIngress(params: {
     createSlackIngressSubject({
       senderId: params.senderId,
       senderName,
-      teamId,
-      workspaceScoped: !allowUnscoped,
     });
   const resolver = createSlackIngressResolver(params.ctx);
   const input: Parameters<typeof resolver.message>[0] = {
