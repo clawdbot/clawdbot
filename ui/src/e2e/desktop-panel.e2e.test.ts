@@ -764,7 +764,7 @@ suite.define(() => {
               this.deliver(new TextEncoder().encode("RFB 003.008\n"));
             }, 0);
           }
-          private deliver(bytes: Uint8Array): void {
+          private deliver(bytes: Uint8Array<ArrayBuffer>): void {
             setTimeout(() => {
               if (this.readyState === 1) {
                 this.onmessage?.(new MessageEvent("message", { data: bytes.buffer }));
