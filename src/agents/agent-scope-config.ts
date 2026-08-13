@@ -1,6 +1,9 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -214,6 +217,26 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
   return retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
     ? retainedAgentId
     : tryResolveDefaultAgentId(cfg);
+}
+
+/** Resolves the configured owner for ambient system work and explicit consults. */
+export function resolveSystemAgentTargetAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  const configuredAgentId =
+    normalizeOptionalString(requestedAgentId) ??
+    normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
+  if (configuredAgentId) {
+    return normalizeAgentId(configuredAgentId);
+  }
+  return normalizeAgentId(
+    tryResolveLegacyCompatibilityAgentId(cfg) ??
+      resolveDefaultAgentId(cfg, {
+        surface: "system-agent consult routing",
+        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+      }),
+  );
 }
 
 /** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { listAgentEntries, resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import { resolveSystemAgentTargetAgentId } from "../../../agents/agent-scope-config.js";
 import { materializeLegacyDefaultAgentRoles } from "../../../config/legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-runner.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveSystemAgentTargetAgentId } from "../../../system-agent/inference-route.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../../talk/agent-target.js";
 
 function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
