@@ -437,12 +437,17 @@ async function runDoctorHealthContributionList(
     try {
       if (!runWithPluginMetadataSnapshot) {
         await contribution.run(ctx);
-        continue;
+      } else {
+        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+          contribution.run(ctx),
+        );
       }
-      const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-      await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
-        contribution.run(ctx),
-      );
+      if (ctx.configWriteDeferredByCronOwnership === true) {
+        // Later repairs consume the candidate config. Stop before they persist state under an
+        // ownership topology that the config writer deliberately left non-durable.
+        return;
+      }
     } catch (error) {
       await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
       const { note } = await loadNoteModule();

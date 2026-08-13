@@ -1093,6 +1093,51 @@ describe("doctor health contributions", () => {
     expect(mocks.collectActiveToolSchemaProjectionWarnings).not.toHaveBeenCalled();
   });
 
+  it("defers every config write after a cron ownership handoff refusal", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const cfg = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Config write refused: cannot inspect cron ownership. Run "openclaw doctor --fix", then retry.',
+        ),
+        { code: "CONFIG_WRITE_REJECTED", refusal: "cron-owner-safety" },
+      ),
+    );
+
+    await runDoctorHealthContributionList(ctx, [
+      requireDoctorContribution("doctor:write-config-migrations"),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ]);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.configWriteDeferredByCronOwnership).toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("preserving any retained legacy owner"),
+      "Doctor warnings",
+    );
+  });
+
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,
