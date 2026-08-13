@@ -43,9 +43,9 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { logCliInvocation } from "./cli-runner/execute-logging.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
-  buildCliEnvAuthLog,
   buildCliExecLogLine,
   createManagedRun,
   setCliRunnerExecuteTestDeps,
@@ -2617,33 +2617,40 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.OTEL_SDK_DISABLED).toBeUndefined();
   });
 
-  it("formats CLI auth env diagnostics as key names without secret values", () => {
+  it("logs CLI auth env diagnostics as key names without secret values", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
     vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
     vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
+    const log = vi.fn();
 
-    const log = buildCliEnvAuthLog({
-      ANTHROPIC_API_TOKEN: "token-child",
-      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-      GEMINI_CLI_HOME: "/tmp/child-gemini-home",
-      OPENAI_API_KEY: "sk-openai-child",
+    logCliInvocation({
+      args: [],
+      command: "claude",
+      env: {
+        ANTHROPIC_API_TOKEN: "token-child",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+        GEMINI_CLI_HOME: "/tmp/child-gemini-home",
+        OPENAI_API_KEY: "sk-openai-child",
+      },
+      log,
     });
 
-    expect(log).toMatch(/host=.*ANTHROPIC_API_KEY/);
-    expect(log).toMatch(/host=.*ANTHROPIC_API_TOKEN/);
-    expect(log).toMatch(/host=.*OPENAI_API_KEY/);
-    expect(log).toMatch(/child=.*ANTHROPIC_API_TOKEN/);
-    expect(log).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
-    expect(log).toMatch(/child=.*OPENAI_API_KEY/);
-    expect(log).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
-    expect(log).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(log).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
-    expect(log).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(log).not.toContain("sk-ant-host");
-    expect(log).not.toContain("token-child");
-    expect(log).not.toContain("/tmp/child-gemini-home");
-    expect(log).not.toContain("sk-openai-child");
+    const authLog = log.mock.calls.map(([message]) => String(message)).join("\n");
+    expect(authLog).toMatch(/host=.*ANTHROPIC_API_KEY/);
+    expect(authLog).toMatch(/host=.*ANTHROPIC_API_TOKEN/);
+    expect(authLog).toMatch(/host=.*OPENAI_API_KEY/);
+    expect(authLog).toMatch(/child=.*ANTHROPIC_API_TOKEN/);
+    expect(authLog).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
+    expect(authLog).toMatch(/child=.*OPENAI_API_KEY/);
+    expect(authLog).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
+    expect(authLog).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
+    expect(authLog).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
+    expect(authLog).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
+    expect(authLog).not.toContain("sk-ant-host");
+    expect(authLog).not.toContain("token-child");
+    expect(authLog).not.toContain("/tmp/child-gemini-home");
+    expect(authLog).not.toContain("sk-openai-child");
   });
 
   it("prepends bootstrap warnings to the CLI prompt body", async () => {
