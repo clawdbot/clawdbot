@@ -19,7 +19,10 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
-import { SetupMigrationFreshnessError } from "./setup.migration-snapshot.js";
+import {
+  SetupMigrationFreshnessError,
+  SetupMigrationTargetChangedError,
+} from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -1465,14 +1468,25 @@ describe("runSetupWizard", () => {
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
   });
 
-  it("returns to setup mode after an interactive import freshness rejection", async () => {
-    const workspaceDir = await makeCaseDir("import-freshness-retry-");
-    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
-    runSetupMigrationImport.mockRejectedValueOnce(
-      new SetupMigrationFreshnessError(
+  it.each([
+    {
+      label: "freshness rejection",
+      error: new SetupMigrationFreshnessError(
         "Migration import during onboarding requires a fresh OpenClaw setup.\nExisting setup:\n- state agents/ exists",
       ),
-    );
+      detail: "state agents/ exists",
+    },
+    {
+      label: "target change",
+      error: new SetupMigrationTargetChangedError(
+        "Migration target changed before promotion. Review it and retry.",
+      ),
+      detail: "Migration target changed before promotion",
+    },
+  ])("returns to setup mode after an interactive import $label", async ({ error, detail }) => {
+    const workspaceDir = await makeCaseDir("import-retry-");
+    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
+    runSetupMigrationImport.mockRejectedValueOnce(error);
     const setupChoices: Array<"import:hermes" | "quickstart"> = ["import:hermes", "quickstart"];
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
       if (message === "Setup mode") {
@@ -1501,7 +1515,7 @@ describe("runSetupWizard", () => {
     expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
     expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("state agents/ exists"),
+      expect.stringContaining(detail),
       "Existing config detected",
     );
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();

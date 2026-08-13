@@ -432,13 +432,7 @@ suite.define(() => {
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
       await expect
-        .poll(() =>
-          page
-            .locator("wa-select.chat-controls__model-picker .picker-select__label", {
-              hasText: "Startup Model",
-            })
-            .count(),
-        )
+        .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
         .toBe(1);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page

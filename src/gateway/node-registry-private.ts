@@ -7,7 +7,11 @@ import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_SUPERVISOR_COMMANDS,
 } from "../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-worker-supervisor-dialect.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryDeclaration,
+} from "../infra/node-runner-inventory.js";
+import { sameWorkerBuild, sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type {
   NodeInvokeStreamController,
@@ -67,8 +71,8 @@ export type NodeWorkerSupervisorNodeProof = {
   clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
-  commands: readonly string[];
   workerRuns?: WorkerAdmissionHandshake;
+  commands: readonly string[];
 };
 
 export type NodeWorkerSupervisorTransport = {
@@ -85,11 +89,12 @@ export type NodeWorkerSupervisorTransport = {
   }): Promise<NodeInvokeResult>;
 };
 
-type NodeProtocolFeatureDeclaration = Omit<
+type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
   "commands" | "pairingGeneration" | "workerRuns"
 > & {
   protocolFeatures: readonly string[];
+  workerRuns?: WorkerAdmissionHandshake;
 };
 
 type NodeRegistryPrivateContext = {
@@ -119,16 +124,21 @@ type GenerationBoundPendingInvoke = {
   controller: AbortController;
 };
 
+type NodeRunnerInventoryUpdateResult = {
+  changed: boolean;
+};
+
 type NodeRegistryPrivateState = {
   context: NodeRegistryPrivateContext;
-  protocolFeaturesByConn: Map<string, NodeProtocolFeatureDeclaration>;
+  runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
+  publishRunnerInventoryChanged: (nodeId: string) => void;
   invokeCore: (params: NodeInvokeParams, allowPrivateCommand: boolean) => Promise<NodeInvokeResult>;
-  updateProtocolFeatures: (params: {
+  updateRunnerInventory: (params: {
     nodeId: string;
     connId: string | undefined;
-    protocolFeatures: readonly string[];
-  }) => boolean;
+    declaration: NodeRunnerInventoryDeclaration;
+  }) => NodeRunnerInventoryUpdateResult | null;
   workerSupervisorTransport: NodeWorkerSupervisorTransport;
 };
 
@@ -178,11 +188,18 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   return normalized;
 }
 
+function sameOptionalWorkerBuild(
+  left: WorkerAdmissionHandshake | undefined,
+  right: WorkerAdmissionHandshake | undefined,
+): boolean {
+  return left === undefined || right === undefined ? left === right : sameWorkerBuild(left, right);
+}
+
 function resolveWorkerSupervisorProof(
   node: NodeRegistryPrivateSession,
-  protocolFeaturesByConn: ReadonlyMap<string, NodeProtocolFeatureDeclaration>,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeWorkerSupervisorNodeProof | undefined {
-  const declaration = protocolFeaturesByConn.get(node.connId);
+  const declaration = runnerInventoryByConn.get(node.connId);
   if (
     !declaration ||
     !node.pairingIdentity ||
@@ -194,7 +211,9 @@ function resolveWorkerSupervisorProof(
     declaration.clientId !== node.clientId ||
     declaration.clientMode !== node.clientMode ||
     declaration.protocolFeature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
-    !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE)
+    !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
+    (declaration.workerRuns !== undefined &&
+      !sameOptionalWorkerBuild(declaration.workerRuns, node.workerRuns))
   ) {
     return undefined;
   }
@@ -206,8 +225,8 @@ function resolveWorkerSupervisorProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    ...(declaration.workerRuns ? { workerRuns: structuredClone(declaration.workerRuns) } : {}),
     commands: [...node.commands],
-    ...(node.workerRuns ? { workerRuns: structuredClone(node.workerRuns) } : {}),
   };
 }
 
@@ -219,27 +238,28 @@ function isWorkerSupervisorProofCurrent(
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
     return false;
   }
-  const current = resolveWorkerSupervisorProof(node, state.protocolFeaturesByConn);
+  const current = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
   return (
     current?.pairingIdentity === proof.pairingIdentity &&
     current.pairingGeneration === proof.pairingGeneration &&
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
-    current.protocolFeature === proof.protocolFeature
+    current.protocolFeature === proof.protocolFeature &&
+    sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns)
   );
 }
 
-function updateWorkerSupervisorProtocolFeatures(
+function updateWorkerRunnerInventory(
   state: NodeRegistryPrivateState,
   params: {
     nodeId: string;
     connId: string | undefined;
-    protocolFeatures: readonly string[];
+    declaration: NodeRunnerInventoryDeclaration;
   },
-): boolean {
+): NodeRunnerInventoryUpdateResult | null {
   const node = state.context.getNode(params.nodeId);
-  const publishesSupervisorDialect = params.protocolFeatures.includes(
-    NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  const publishesSupervisorDialect = params.declaration.protocolFeatures.some(
+    (feature) => feature === NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   );
   if (
     !node ||
@@ -248,24 +268,39 @@ function updateWorkerSupervisorProtocolFeatures(
     node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
     node.clientMode !== "node"
   ) {
-    return false;
+    return null;
   }
+  const previous = state.runnerInventoryByConn.get(node.connId);
   if (!publishesSupervisorDialect) {
-    state.protocolFeaturesByConn.delete(node.connId);
-    state.context.publishActiveNodeContext();
-    return true;
+    const changed = state.runnerInventoryByConn.delete(node.connId);
+    if (changed) {
+      state.context.publishActiveNodeContext();
+      state.publishRunnerInventoryChanged(node.nodeId);
+    }
+    return { changed };
   }
-  state.protocolFeaturesByConn.set(node.connId, {
+  const next: NodeRunnerInventoryRecord = {
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    protocolFeatures: [...params.protocolFeatures],
-  });
-  state.context.publishActiveNodeContext();
-  return true;
+    protocolFeatures: [...params.declaration.protocolFeatures],
+    ...(params.declaration.workerRuns
+      ? { workerRuns: structuredClone(params.declaration.workerRuns) }
+      : {}),
+  };
+  const changed =
+    !previous ||
+    !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
+    !sameOptionalWorkerBuild(previous.workerRuns, next.workerRuns);
+  if (changed) {
+    state.runnerInventoryByConn.set(node.connId, next);
+    state.context.publishActiveNodeContext();
+    state.publishRunnerInventoryChanged(node.nodeId);
+  }
+  return { changed };
 }
 
 async function invokeNodeRegistryCore(
@@ -431,16 +466,17 @@ export function registerNodeRegistryPrivateRuntime(
 ): void {
   const state = {} as NodeRegistryPrivateState;
   state.context = context;
-  state.protocolFeaturesByConn = new Map();
+  state.runnerInventoryByConn = new Map();
   state.generationBoundInvokes = new WeakMap();
+  state.publishRunnerInventoryChanged = () => {};
   state.invokeCore = async (params, allowPrivateCommand) =>
     await invokeNodeRegistryCore(state, params, allowPrivateCommand);
-  state.updateProtocolFeatures = (params) => updateWorkerSupervisorProtocolFeatures(state, params);
+  state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
   state.workerSupervisorTransport = {
     listCurrentNodes: async () => {
       const current = await context.listCurrentConnected();
       return current.flatMap((node) => {
-        const proof = resolveWorkerSupervisorProof(node, state.protocolFeaturesByConn);
+        const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
         return proof ? [proof] : [];
       });
     },
@@ -499,6 +535,17 @@ export function createNodeRegistryRuntime<TRegistry extends object>(
   };
 }
 
+export function setNodeRunnerInventoryChangedListener(
+  nodeRegistry: object,
+  listener: (nodeId: string) => void,
+): void {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  state.publishRunnerInventoryChanged = listener;
+}
+
 export function invokePublicNodeRegistry(
   nodeRegistry: object,
   params: NodeInvokeParams,
@@ -510,26 +557,45 @@ export function invokePublicNodeRegistry(
   return state.invokeCore(params, false);
 }
 
-export function updateNodeWorkerSupervisorProtocolFeatures(params: {
+export function updateNodeRunnerInventory(params: {
   registry: object;
   nodeId: string;
   connId: string | undefined;
-  protocolFeatures: readonly string[];
-}): boolean {
+  declaration: NodeRunnerInventoryDeclaration;
+}): NodeRunnerInventoryUpdateResult | null {
   return (
-    NODE_REGISTRY_PRIVATE_STATES.get(params.registry)?.updateProtocolFeatures({
+    NODE_REGISTRY_PRIVATE_STATES.get(params.registry)?.updateRunnerInventory({
       nodeId: params.nodeId,
       connId: params.connId,
-      protocolFeatures: params.protocolFeatures,
-    }) ?? false
+      declaration: params.declaration,
+    }) ?? null
   );
 }
 
-export function forgetNodeWorkerSupervisorProtocolFeatures(
-  nodeRegistry: object,
-  connId: string,
-): void {
-  NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry)?.protocolFeaturesByConn.delete(connId);
+export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string): void {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  const declaration = state?.runnerInventoryByConn.get(connId);
+  if (!state || !declaration || !state.runnerInventoryByConn.delete(connId)) {
+    return;
+  }
+  state.publishRunnerInventoryChanged(declaration.nodeId);
+}
+
+export function isNodeRunnerSessionHost(params: {
+  registry: object;
+  nodeId: string;
+  connId: string;
+  pairingGeneration?: string;
+}): boolean {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
+  const node = state?.context.getNode(params.nodeId);
+  if (!state || !node || node.connId !== params.connId) {
+    return false;
+  }
+  const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
+  return Boolean(
+    proof && proof.pairingGeneration === params.pairingGeneration && proof.workerRuns !== undefined,
+  );
 }
 
 export function isNodeRegistryPendingInvokeConnectionActive(params: {

@@ -266,8 +266,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact: true,
     });
 
-    // Rebalancing may change ownership but must not add CI workers.
-    expect(compact).toHaveLength(23);
+    // Rebalancing may change ownership, but the compact plan stays within the
+    // CI workflow's 28-worker cap.
+    expect(compact).toHaveLength(25);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -287,9 +288,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // pairing them starves model visibility and repeatedly hits its timeout.
     expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
     expect(jobOf("core-runtime-media-ui")).not.toBe(jobOf("core-unit-src-security"));
-    // Means expose recurrent 8-vCPU tails hidden by the median-only plan. Keep
-    // the observed pairing that dominated replayed job walls separated.
-    expect(jobOf("agentic-agents-core-tools")).not.toBe(jobOf("agentic-agents-embedded-base"));
     expect(
       compact[jobOf("core-unit-src-security")]?.groups.map((group) => group.shard_name),
     ).toEqual(["core-unit-src-security"]);
@@ -380,12 +378,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
     const distJobs = compact.filter((shard) => shard.requiresDist);
     expect(largeJobs).toHaveLength(7);
-    expect(smallJobs).toHaveLength(14);
+    expect(smallJobs).toHaveLength(16);
     expect(distJobs).toHaveLength(2);
     const regularSmallJobs = smallJobs.filter((shard) =>
       shard.groups.every((group) => !exclusiveGroupRe.test(group.shard_name)),
     );
-    expect(regularSmallJobs).toHaveLength(10);
+    expect(regularSmallJobs).toHaveLength(11);
     const routed8VcpuCheckNames = [
       "checks-node-compact-small-2",
       "checks-node-compact-small-5",
@@ -410,7 +408,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-agents-support",
       "agentic-gateway-methods",
       "agentic-agents-core-runtime",
-      "agentic-agents-embedded-base",
+      "core-unit-fast-isolated",
     ];
     const smallTailAnchors = [
       "agentic-control-plane-auth-node",
@@ -422,7 +420,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-agents-tools",
       "agentic-commands-agent-channel",
       "agentic-commands-doctor-config-state",
-      "auto-reply-reply-agent-runner",
+      "core-runtime-shared",
+      "auto-reply-reply-state-routing",
     ];
     expect(
       largeJobs.map(

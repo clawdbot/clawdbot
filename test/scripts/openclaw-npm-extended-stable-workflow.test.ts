@@ -20,6 +20,11 @@ type Workflow = {
       inputs?: {
         bypass_extended_stable_guard?: { default?: boolean; type?: string };
         npm_dist_tag?: { options?: string[] };
+        plugin_sdk_api_acknowledgement?: {
+          default?: string;
+          required?: boolean;
+          type?: string;
+        };
         plugin_npm_run_id?: { required?: boolean; type?: string };
         release_candidate_branch?: { default?: string; required?: boolean; type?: string };
       };
@@ -43,8 +48,10 @@ function step(job: Job | undefined, name: string): Step {
 describe("minimal npm extended-stable workflow", () => {
   it("bounds every git fetch operation", () => {
     const source = readFileSync(workflowPath, "utf8");
-    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
-    expect(gitFetchLines).toHaveLength(7);
+    const gitFetchLines = source
+      .split("\n")
+      .filter((line) => /\bgit(?: -C "[^"]+")? fetch\b/u.test(line));
+    expect(gitFetchLines).toHaveLength(9);
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);
@@ -68,6 +75,70 @@ describe("minimal npm extended-stable workflow", () => {
     ]) {
       expect(raw).not.toContain(forbidden);
     }
+  });
+
+  it("binds intentional Plugin SDK release changes to the reported digest", () => {
+    const parsed = workflow();
+    const input = parsed.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const preflightDiff = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Verify Plugin SDK API changes",
+    );
+    const publishProvenance = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify prepared tarball provenance",
+    );
+    const downloadPreflight = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Download prepared npm tarball",
+    );
+    const verifyPreflightRun = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify preflight run metadata",
+    );
+    const trustedToolingCheckout = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Checkout trusted Plugin SDK API tooling",
+    );
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(preflightDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBeUndefined();
+    expect(publishProvenance.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(preflightDiff.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(preflightDiff.run).not.toContain("--require-acknowledgement");
+    expect(preflightDiff.run).not.toContain("--acknowledge");
+    expect(preflightDiff.run).toContain(
+      '--evidence "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-evidence.json"',
+    );
+    expect(trustedToolingCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(preflightDiff.run).toContain('git -C "$tooling_dir" status --porcelain');
+    expect(preflightDiff.run).not.toContain('pkg.scripts?.["plugin-sdk:api:diff"]');
+    expect(preflightDiff.run).toContain('pnpm --dir "$tooling_dir" run plugin-sdk:api:diff');
+    expect(publishProvenance.run).toContain("plugin-sdk-api-release-evidence.mjs");
+    expect(publishProvenance.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(publishProvenance.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(publishProvenance.run).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(publishProvenance.run).toContain('--current-selector-sha "$current_selector_sha"');
+    expect(publishProvenance.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    expect(downloadPreflight.run).toContain(
+      '"plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}"',
+    );
+    expect(publishProvenance.run).toContain(
+      "Prepared Plugin SDK API evidence does not match its immutable artifact",
+    );
+    expect(verifyPreflightRun.run).toContain(
+      '"$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH"',
+    );
+    expect(verifyPreflightRun.run).toContain('"$extended_stable_preflight" != "true"');
+    expect(readFileSync(workflowPath, "utf8")).toContain("pluginSdkApi,");
   });
 
   it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {

@@ -186,7 +186,7 @@
 }
 
 .chat-tool-row--running .chat-tool-msg-summary__icon {
-  color: var(--accent-2, #14b8a6);
+  color: var(--accent-2);
 }
 
 /* Active-task text wave: a subtle left-to-right color sweep across the
@@ -243,7 +243,7 @@
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full, 999px);
-  background: var(--accent-2, #14b8a6);
+  background: var(--accent-2);
   animation: chatToolRowPulse 1.1s ease-in-out infinite;
 }
 
@@ -272,8 +272,8 @@
   margin-left: auto;
   padding: 1px 6px;
   border-radius: var(--radius-full, 999px);
-  background: color-mix(in srgb, var(--destructive, #ef4444) 14%, transparent);
-  color: var(--destructive, #ef4444);
+  background: color-mix(in srgb, var(--destructive) 14%, transparent);
+  color: var(--destructive);
   font-size: 11px;
   font-weight: 600;
   line-height: 1.5;
@@ -291,11 +291,11 @@
 }
 
 .chat-diffstat__add {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-diffstat__del {
-  color: var(--destructive, #ef4444);
+  color: var(--destructive);
 }
 
 /* ── Inline diff ── */
@@ -319,19 +319,19 @@
 }
 
 .chat-diff__row--add {
-  background: color-mix(in srgb, var(--ok, #22c55e) 13%, transparent);
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
 }
 
 .chat-diff__row--add .chat-diff__sign {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-diff__row--del {
-  background: color-mix(in srgb, var(--destructive, #ef4444) 12%, transparent);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 
 .chat-diff__row--del .chat-diff__sign {
-  color: var(--destructive, #ef4444);
+  color: var(--destructive);
 }
 
 .chat-diff__row--file {
@@ -432,7 +432,7 @@
 }
 
 .chat-tool-term--error .chat-tool-term__out {
-  color: color-mix(in srgb, var(--destructive, #ef4444) 70%, var(--text) 30%);
+  color: color-mix(in srgb, var(--destructive) 70%, var(--text) 30%);
 }
 
 /* Command/diff text reuses <code> for semantics only; kill the markdown pill. */
@@ -449,16 +449,16 @@
 
 /* ── Command token colors (display-only highlighting) ── */
 .chat-cmd--name {
-  color: var(--accent-2, #14b8a6);
+  color: var(--accent-2);
   font-weight: 600;
 }
 
 .chat-cmd--str {
-  color: color-mix(in srgb, var(--ok, #22c55e) 78%, var(--text) 22%);
+  color: color-mix(in srgb, var(--ok) 78%, var(--text) 22%);
 }
 
 .chat-cmd--num {
-  color: color-mix(in srgb, var(--accent, #ff5c5c) 82%, var(--text) 18%);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text) 18%);
 }
 
 .chat-cmd--flag {
@@ -466,7 +466,7 @@
 }
 
 .chat-cmd--op {
-  color: color-mix(in srgb, var(--accent-2, #14b8a6) 60%, var(--muted) 40%);
+  color: color-mix(in srgb, var(--accent-2) 60%, var(--muted) 40%);
 }
 
 /* ── Key-value args (generic tools) ── */

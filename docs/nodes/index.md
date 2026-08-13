@@ -419,15 +419,19 @@ its local installation:
 }
 ```
 
-Restart the node host after enabling this setting. At startup it advertises the
+Restart the node host after enabling this setting. At startup it freezes the
 exact OpenClaw version, worker-bundle hash, and worker protocol features of its
-own installation. The Gateway offers the device as a session host only while
-that advertisement is live, and provisioning requires the node and Gateway
-versions to match exactly. If they differ, update the node before retrying.
+own installation in the connection handshake, then repeats that build in its
+live runner inventory. The Gateway reports prepared session-host eligibility
+only while those declarations match, and provisioning requires the node and
+Gateway versions to match exactly. If they differ, update the node before
+retrying.
 
-This setting completes device-environment provisioning but does not yet enable
-turn launch on the device. The local-install chain adds supervised launch and
-workspace transport in subsequent steps.
+This setting completes device-environment provisioning and session-host status;
+it does **not** yet make device turn dispatch succeed. The Gateway still returns
+`device-runner-transport-unimplemented` until the local-install chain adds
+supervised launch and workspace transport. Do not treat the status as proof that
+a complete turn can run on the device yet.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

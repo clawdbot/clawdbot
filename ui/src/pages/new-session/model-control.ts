@@ -2,15 +2,12 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
-import { html, nothing } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { icons } from "../../components/icons.ts";
-import { renderPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import {
   buildQualifiedChatModelValue,
@@ -603,31 +600,7 @@ export class NewSessionModelControl {
       thinkingDefault:
         options.agent?.thinkingDefault ?? sourceResult?.defaults.thinkingDefault ?? "medium",
     };
-    const targetPicker =
-      this.catalogTargets.length > 0
-        ? renderPicker({
-            label: t("newSession.cliAgentsGroup"),
-            value: "",
-            options: [
-              { value: "", label: t("newSession.cliAgentsGroup"), disabled: true },
-              ...this.catalogTargets.map(({ id, label }) => ({ value: id, label })),
-            ],
-            disabled: options.sending || snapshot?.phase !== "connected",
-            className: "new-session-page__target-picker",
-            renderLeading: (option) =>
-              option.value
-                ? html`<span class="new-session-page__target-icon" aria-hidden="true"
-                    >${icons.terminal}</span
-                  >`
-                : nothing,
-            onChange: (catalogId) => {
-              if (catalogId) {
-                this.onCatalogTargetSelect(catalogId);
-              }
-            },
-          })
-        : nothing;
-    return html`${targetPicker}${renderChatModelControls({
+    return renderChatModelControls({
       activeRunId: null,
       agentDefaultModel,
       connected: snapshot?.phase === "connected",
@@ -645,6 +618,16 @@ export class NewSessionModelControl {
             : this.metadataState.status,
       },
       modelOverrides: { [sessionKey]: this.selected },
+      modelPickerTargetGroups:
+        this.catalogTargets.length > 0
+          ? [
+              {
+                id: "cliAgents",
+                label: t("newSession.cliAgentsGroup"),
+                options: this.catalogTargets.map(({ id, label }) => ({ value: id, label })),
+              },
+            ]
+          : undefined,
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
@@ -660,16 +643,19 @@ export class NewSessionModelControl {
         this.selected = selection.model;
         this.thinkingLevel = selection.thinkingLevel;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
-        this.notify();
+      },
+      onModelPickerTargetSelect: (groupId, catalogId) => {
+        if (groupId === "cliAgents") {
+          this.onCatalogTargetSelect(catalogId);
+        }
       },
       onThinkingSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
-        this.notify();
       },
       onRequestUpdate: this.notify,
-    })}`;
+    });
   }
 }

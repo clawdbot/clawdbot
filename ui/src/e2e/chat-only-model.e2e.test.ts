@@ -1,6 +1,5 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
@@ -27,19 +26,6 @@ const models = [
     supportsTools: true,
   },
 ];
-
-async function selectModel(picker: Locator, value: string) {
-  await picker
-    .locator(`wa-option[value="${value}"]`)
-    .waitFor({ state: "attached", timeout: 10_000 });
-  await expect.poll(() => picker.isDisabled()).toBe(false);
-  await picker.evaluate(async (element, next) => {
-    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
-    select.value = next;
-    await select.updateComplete;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
-}
 
 function sessionsList(model: string, modelProvider: string) {
   return {
@@ -98,10 +84,12 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       const composer = main.locator(".agent-chat__composer-shell");
-      const picker = composer.locator("wa-select.chat-controls__model-picker");
-      const badge = composer.locator(".chat-controls__model-capability-badge");
+      const picker = composer.locator('[data-chat-model-select="true"]');
+      const badge = picker.locator(".chat-controls__model-capability-badge");
 
+      await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("unavailable");
       await expect.poll(async () => (await badge.textContent())?.trim()).toBe("Chat only");
+      await expect.poll(() => picker.getAttribute("aria-label")).toContain("Chat only");
 
       if (proofDir) {
         await composer.screenshot({
@@ -111,8 +99,8 @@ suite.define(() => {
       }
 
       await picker.click();
-      const localOption = picker.locator('wa-option[value=""]');
-      const openAiOption = picker.locator('wa-option[value="openai/gpt-5.5"]');
+      const localOption = composer.locator('[data-chat-model-option="lmstudio/qwen3-8b"]');
+      const openAiOption = composer.locator('[data-chat-model-option="openai/gpt-5.5"]');
       await expect
         .poll(async () => (await localOption.textContent())?.replace(/\s+/g, " ").trim())
         .toContain("32.8k · Chat only");
@@ -128,13 +116,21 @@ suite.define(() => {
         });
       }
 
-      await selectModel(picker, "openai/gpt-5.5");
+      await openAiOption.click();
       const patch = await gateway.waitForRequest("sessions.patch");
       expect(patch.params).toMatchObject({ key: sessionKey, model: "openai/gpt-5.5" });
+      await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("available");
       await expect.poll(() => badge.count()).toBe(0);
 
-      await selectModel(picker, "");
-      await expect.poll(() => badge.count()).toBe(1);
+      const pickerDetails = composer.locator("details.chat-controls__model-picker");
+      if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
+        await picker.click();
+      }
+      await localOption.click();
+      await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("unavailable");
+      if (await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open)) {
+        await picker.click();
+      }
       await page.setViewportSize({ height: 844, width: 390 });
       await expect.poll(() => picker.isVisible()).toBe(true);
 
@@ -146,10 +142,13 @@ suite.define(() => {
         });
       }
 
-      await picker.click();
+      if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
+        await picker.click();
+      }
+      const menu = composer.locator(".chat-controls__model-menu");
       await expect
         .poll(async () => {
-          const box = await localOption.boundingBox();
+          const box = await menu.boundingBox();
           return box !== null && box.x >= 0 && box.x + box.width <= 390;
         })
         .toBe(true);

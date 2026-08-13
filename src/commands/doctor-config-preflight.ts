@@ -666,23 +666,21 @@ export async function runDoctorConfigPreflight(
       });
     }
     if (gatewayStartupCheckpointRequired) {
-      if (shouldRecordStartupCheckpoint) {
-        if (startupMigrationWarnings.length > 0) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: startupMigrationWarnings,
-              blockers: [],
-            }),
-          );
-        }
-        if (!snapshot.valid) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: [],
-              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-            }),
-          );
-        }
+      if (startupMigrationWarnings.length > 0) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: startupMigrationWarnings,
+            blockers: [],
+          }),
+        );
+      }
+      if (shouldRecordStartupCheckpoint && !snapshot.valid) {
+        throwStartupMigrationRefusal(
+          formatStartupMigrationFailure({
+            warnings: [],
+            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+          }),
+        );
       }
       // This state is established before the first Gateway plugin load and remains
       // fixed for the boot. Refresh it on every process start because migration

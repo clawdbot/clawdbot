@@ -1,6 +1,20 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { clearChatModelSearchOnEscape } from "../chat/components/chat-model-picker.ts";
+
+const PLACE_TOPOLOGY_EVENTS = new Set([
+  "config.changed",
+  "node.pair.requested",
+  "node.pair.resolved",
+  "node.runnerInventory.changed",
+  "device.pair.requested",
+  "device.pair.resolved",
+]);
+
+export function isPlaceTopologyEvent(event: string): boolean {
+  return PLACE_TOPOLOGY_EVENTS.has(event);
+}
 
 export function readPresenceEntries(value: unknown): PresenceEntry[] | null {
   const presence =
@@ -55,7 +69,8 @@ export function handleSessionPickerEvent(root: ParentNode, event: Event) {
   }
   if (event.type === "keydown") {
     const keyEvent = event as KeyboardEvent;
-    if (keyEvent.key !== "Escape") {
+    clearChatModelSearchOnEscape(keyEvent);
+    if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
       return;
     }
     const picker =

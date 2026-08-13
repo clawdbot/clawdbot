@@ -12,6 +12,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
@@ -438,17 +439,12 @@ async function runDoctorHealthContributionList(
         await contribution.run(ctx);
         continue;
       }
-      const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-        await import("../agents/agent-scope.js");
-      const workspaceDir = resolveAgentWorkspaceDir(
-        ctx.cfg,
-        resolveDefaultAgentId(ctx.cfg),
-        ctx.env ?? process.env,
-      );
+      const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
       await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
         contribution.run(ctx),
       );
     } catch (error) {
+      await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
       const { note } = await loadNoteModule();
       note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
     }

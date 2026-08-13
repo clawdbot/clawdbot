@@ -866,7 +866,7 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
     expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
-    expect(isGatewayMethodClassified("node.protocolFeatures.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.runnerInventory.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

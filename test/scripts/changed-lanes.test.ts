@@ -36,7 +36,6 @@ import {
   shouldRunDoctorContractOwnerTests,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunNpmLockGuard,
-  shouldRunPluginSdkApiBaselineCheck,
   shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
@@ -1181,16 +1180,13 @@ describe("scripts/changed-lanes", () => {
     expect(changedCheckRequiresRemote(mixedResult)).toBe(true);
   });
 
-  it("delegates generated docs baselines with heavy owner checks", () => {
-    for (const changedPath of [
-      "docs/.generated/plugin-sdk-api-baseline/core.json",
+  it("delegates generated schema baselines with heavy owner checks", () => {
+    const result = detectChangedLanes([
       "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
-    ]) {
-      const result = detectChangedLanes([changedPath]);
-      expect(result.docsOnly).toBe(true);
-      expect(changedCheckRequiresRemote(result)).toBe(true);
-      expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
-    }
+    ]);
+    expect(result.docsOnly).toBe(true);
+    expect(changedCheckRequiresRemote(result)).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {
@@ -1779,32 +1775,6 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("runs Plugin SDK API checks for transitive public contract changes", () => {
-    expect(
-      shouldRunPluginSdkApiBaselineCheck([
-        "src/config/sessions/session-accessor.ts",
-        "packages/gateway-protocol/src/schema/approvals.ts",
-        "extensions/memory-core/index.ts",
-        "scripts/generate-plugin-sdk-api-baseline.ts",
-        "scripts/lib/plugin-sdk-doc-metadata.ts",
-        "scripts/lib/plugin-sdk-entries.mts",
-        "docs/.generated/plugin-sdk-api-baseline/core.json",
-      ]),
-    ).toBe(true);
-    expect(shouldRunPluginSdkApiBaselineCheck(["docs/help/troubleshooting.md"])).toBe(false);
-
-    const result = detectChangedLanes(["src/config/sessions/session-accessor.ts"]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API contract manifest",
-      args: ["plugin-sdk:api:check"],
-    });
-    expect(plan.commands.map((command) => command.args[0])).not.toContain(
-      "plugin-sdk:surface:check",
-    );
-  });
-
   it("runs Plugin SDK export and surface checks for direct SDK changes", () => {
     expect(
       shouldRunPluginSdkSurfaceChecks([
@@ -1823,10 +1793,6 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
     const plan = createChangedCheckPlan(result);
 
-    expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API contract manifest",
-      args: ["plugin-sdk:api:check"],
-    });
     expect(plan.commands).toContainEqual({
       name: "Plugin SDK package exports",
       args: ["plugin-sdk:check-exports"],
