@@ -2509,6 +2509,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "sessions.sqlite") },
+    });
     await replaceTestSessionEntry(
       {
         agentId: "main",
@@ -2547,12 +2551,24 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(deletedFixture.originalPath);
   });
 
-  it("uses the recorded owner for unscoped session keys", async () => {
-    const fixture = await createFixture(stateDir, {
-      agentId: "work",
+  it.each([
+    {
+      label: "uses the recorded owner for unscoped session keys",
       sessionKey: "legacy-session",
+      recordAgentId: "work",
+    },
+    {
+      label: "uses an agent-scoped session key owner when the record omits agentId",
+      sessionKey: "agent:work:main",
+      recordAgentId: undefined,
+    },
+  ])("$label", async ({ sessionKey, recordAgentId }) => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey,
+      ...(recordAgentId ? { agentId: recordAgentId } : {}),
     });
     getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
       session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
     });
     prepareAgentSessionStore(stateDir, "work");
@@ -2560,7 +2576,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       {
         agentId: "work",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "legacy-session",
+        sessionKey,
       },
       { sessionId: "sess-work", updatedAt: Date.now() },
     );
@@ -2643,6 +2659,27 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("retains ownerless global records when no compatibility owner exists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("does not retain selected-agent global records during full cleanup", async () => {
