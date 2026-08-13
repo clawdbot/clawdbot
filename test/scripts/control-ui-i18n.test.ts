@@ -26,6 +26,7 @@ import {
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("control-ui-i18n generated ownership", () => {
@@ -467,7 +468,7 @@ describe("control-ui-i18n process runner", () => {
           }),
         ).rejects.toThrow(`timed out after 500ms`);
 
-        const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+        const grandchildPid = await waitForPidFile(markerPath, 1_000);
         await waitForProcessExit(grandchildPid);
       } finally {
         tempDirs.cleanup();
@@ -541,13 +542,11 @@ describe("control-ui-i18n process runner", () => {
 
         try {
           const deadline = Date.now() + 30_000;
+          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
           let fastReady = false;
           while (Date.now() < deadline) {
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            try {
-              grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
             } catch {}
             if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
               break;
