@@ -7,6 +7,7 @@ import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
+  countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -172,6 +173,9 @@ export function buildGatewaySessionRow(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun);
+  const hasActiveSubagentRun =
+    liveSubagentRunActive ||
+    (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
   const persistedSessionStatus = entry?.status;
   const persistedSessionEndedAt = entry?.endedAt;
   const persistedSessionStartedAt = entry?.startedAt;
@@ -491,7 +495,7 @@ export function buildGatewaySessionRow(params: {
     lastRunError: entry?.lastRunError,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
-    hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
+    hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
