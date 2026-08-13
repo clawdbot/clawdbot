@@ -27,9 +27,8 @@ const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTes
   await import("./channel-bootstrap.runtime.js");
 const { resolveChannelOutboundDirectiveOptions, resolveOutboundDurableFinalDeliverySupport } =
   await import("./deliver-channel.js");
-const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } = await import(
-  "../../cron/isolated-agent/delivery-target.runtime.js"
-);
+const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } =
+  await import("../../cron/isolated-agent/delivery-target.runtime.js");
 
 const discordConfig = {
   channels: {
