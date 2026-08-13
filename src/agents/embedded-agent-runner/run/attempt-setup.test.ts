@@ -6,13 +6,17 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContextWithPublishedSkills = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePluginHandle,
 }));
 
-vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+vi.mock("../../sandbox.js", () => ({
+  resolveSandboxContext,
+  resolveSandboxContextWithPublishedSkills,
+}));
 
 import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 
@@ -20,6 +24,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
     resolveSandboxContext.mockClear();
+    resolveSandboxContextWithPublishedSkills.mockClear();
   });
 
   it("prepares the default and session agent identities together", async () => {
@@ -64,8 +69,9 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-sandbox-skills"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(resolveSandboxContext).toHaveBeenCalledWith(
-      expect.objectContaining({ skillsSnapshot, retainPublishedSkills: true }),
+    expect(resolveSandboxContext).not.toHaveBeenCalled();
+    expect(resolveSandboxContextWithPublishedSkills).toHaveBeenCalledWith(
+      expect.objectContaining({ skillsSnapshot }),
     );
   });
 
@@ -83,9 +89,27 @@ describe("prepareEmbeddedAttemptSetup", () => {
       });
 
       expect(resolveSandboxContext).not.toHaveBeenCalled();
+      expect(resolveSandboxContextWithPublishedSkills).not.toHaveBeenCalled();
       expect(setup.effectiveWorkspace).toBe(workspaceDir);
     },
   );
+
+  it("does not lease a published catalog for media-only workspace resolution", async () => {
+    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-media-only");
+    await resolveAttemptWorkspaceSandbox({
+      agentId: "main",
+      config: {},
+      sessionId: "session-media-only",
+      sessionKey: "agent:main:media-only",
+      workspaceDir,
+      retainPublishedSkills: false,
+    });
+
+    expect(resolveSandboxContext).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir, sessionKey: "agent:main:media-only" }),
+    );
+    expect(resolveSandboxContextWithPublishedSkills).not.toHaveBeenCalled();
+  });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
     const metadataSnapshot = { plugins: [] } as never;

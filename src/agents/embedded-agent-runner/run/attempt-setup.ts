@@ -41,7 +41,7 @@ import { resolveCodeModeSkills, type CodeModeSkillReader } from "../../code-mode
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveSandboxContext } from "../../sandbox.js";
+import { resolveSandboxContext, resolveSandboxContextWithPublishedSkills } from "../../sandbox.js";
 import { releasePublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -102,7 +102,9 @@ type AttemptWorkspaceParams = Pick<
   | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
->;
+> & {
+  retainPublishedSkills?: boolean;
+};
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
@@ -112,16 +114,20 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   // Collection review is a host-owned maintenance run with one restricted tool.
   // Sandboxing would hide that tool or redirect it to a disposable workspace.
+  const sandboxParams = {
+    config: params.config,
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir: resolvedWorkspace,
+  };
+  // Media-only callers pass false; they never reach skill restore/release.
+  const retainPublishedCatalog = params.retainPublishedSkills !== false;
   const sandbox = params.skillWorkshopCollectionReconcile
     ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-        retainPublishedSkills: true,
-      });
+    : retainPublishedCatalog
+      ? await resolveSandboxContextWithPublishedSkills(sandboxParams)
+      : await resolveSandboxContext(sandboxParams);
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;

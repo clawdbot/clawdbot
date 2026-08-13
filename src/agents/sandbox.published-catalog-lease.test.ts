@@ -12,7 +12,9 @@ import type { SkillSnapshot } from "../skills/types.js";
 
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<{
+    async (_params?: {
+      targetWorkspaceDir: string;
+    }): Promise<{
       skillUsagePaths: never[];
       skillsSnapshot: SkillSnapshot;
       generation: number;

@@ -139,6 +139,7 @@ vi.mock("../provider-request-config.js", () => ({
 
 vi.mock("../sandbox.js", () => ({
   resolveSandboxContext: vi.fn(async () => undefined),
+  resolveSandboxContextWithPublishedSkills: vi.fn(async () => undefined),
 }));
 
 vi.mock("./compaction-runtime-context.js", () => ({

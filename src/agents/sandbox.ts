@@ -10,7 +10,11 @@ export {
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
 } from "./sandbox/constants.js";
-export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+export {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxContext,
+  resolveSandboxContextWithPublishedSkills,
+} from "./sandbox/context.js";
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,

@@ -225,6 +225,9 @@ type ResolveSandboxContextParams = {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
+};
+
+type ResolveSandboxContextInternalParams = ResolveSandboxContextParams & {
   retainPublishedSkills?: boolean;
 };
 
@@ -262,7 +265,7 @@ function bindOrReleasePublishedSandboxSkills(
 }
 
 async function resolveProvisionedSandboxContext(
-  params: ResolveSandboxContextParams,
+  params: ResolveSandboxContextInternalParams,
   resolved: ResolvedSandboxSession,
 ): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
@@ -402,16 +405,9 @@ async function resolveProvisionedSandboxContext(
   }
 }
 
-export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  execOverrides?: ExecPolicyOverrides;
-  requireCurrentConfig?: boolean;
-  sessionKey?: string;
-  skillsSnapshot?: SkillSnapshot;
-  workspaceDir?: string;
-  retainPublishedSkills?: boolean;
-}): Promise<SandboxContext | null> {
+async function resolveSandboxContextInternal(
+  params: ResolveSandboxContextInternalParams,
+): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
@@ -425,6 +421,27 @@ export async function resolveSandboxContext(params: {
   } catch (error) {
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
   }
+}
+
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
+  sessionKey?: string;
+  skillsSnapshot?: SkillSnapshot;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
+  return resolveSandboxContextInternal(params);
+}
+
+// Prompt-assembly owners keep the published catalog until their cleanup path
+// releases it. The public Plugin SDK resolver stays lease-free so plugin
+// readiness, cron, /btw, and harness dispatch cannot retain generations.
+export async function resolveSandboxContextWithPublishedSkills(
+  params: ResolveSandboxContextParams,
+): Promise<SandboxContext | null> {
+  return resolveSandboxContextInternal({ ...params, retainPublishedSkills: true });
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

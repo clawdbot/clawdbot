@@ -29,7 +29,7 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
-import { resolveSandboxContext } from "../sandbox.js";
+import { resolveSandboxContextWithPublishedSkills } from "../sandbox.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -322,12 +322,11 @@ export async function prepareDirectCompactionAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
+  const sandbox = await resolveSandboxContextWithPublishedSkills({
     config: params.config,
     execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
-    retainPublishedSkills: true,
   });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
