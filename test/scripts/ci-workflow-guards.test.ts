@@ -2912,6 +2912,48 @@ NODE
     }
   });
 
+  it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
+    const workflow = readCiWorkflow();
+    const jobs = workflow.jobs as Record<string, { "timeout-minutes": unknown }>;
+    const expectedHostedTimeouts = {
+      "build-artifacts": 35,
+      "macos-swift": 30,
+    } as const;
+    const routeDependentTimeoutJobs = Object.entries(jobs)
+      .filter(([, job]) => {
+        const timeout = job["timeout-minutes"];
+        return typeof timeout === "string" && timeout.includes("github.");
+      })
+      .map(([jobName]) => jobName)
+      .toSorted();
+    const canonicalPullRequest = {
+      eventName: "pull_request",
+      headRepository: "openclaw/openclaw",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+
+    expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
+    for (const [jobName, hostedTimeout] of Object.entries(expectedHostedTimeouts)) {
+      const expression = jobs[jobName]?.["timeout-minutes"];
+      expect(expression, jobName).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          runnerBackend: "github",
+        }),
+        jobName,
+      ).toBe(hostedTimeout);
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          runnerBackend: "blacksmith",
+        }),
+        jobName,
+      ).toBe(20);
+    }
+  });
+
   it("scans only the pull request commit range for leaked credentials", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const fetchScanHistoryIndex = securitySteps.findIndex(
@@ -3734,7 +3776,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(source).toContain("createNodeTestShardBundles");
     expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-32vcpu-ubuntu-2404");
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}",
+      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
     expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
       "blacksmith-16vcpu-ubuntu-2404",

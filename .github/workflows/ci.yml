@@ -1167,7 +1167,7 @@ jobs:
     # check-lint/check-dependencies; tsdown parallelizes across the extra
     # cores for roughly the same billed core-minutes.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}
+    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
@@ -3202,7 +3202,7 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     # Hosted runs may still be finalizing large Swift caches after every test
     # passes; keep that post-job work non-blocking.
-    timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
+    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
       SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
