@@ -33,7 +33,7 @@
 // per inbound message.
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRetryableError, type MattermostClient, type MattermostPost } from "./client.js";
-import type { HistoryEntry } from "./runtime-api.js";
+import { createChannelHistoryWindow, type HistoryEntry } from "./runtime-api.js";
 
 /** Mattermost rejects `perPage` above this; the API contract documents 200. */
 const MATTERMOST_THREAD_PER_PAGE_MAX = 200;
@@ -138,6 +138,10 @@ export function createMattermostThreadBackfill(
   const markers = new Map<string, string>();
   const inFlight = new Map<string, Promise<void>>();
   const retries = new Map<string, RetryRecord>();
+  // Markers whose recovery actually wrote a window, so an absent history key can
+  // be read as eviction rather than as "this thread never had anything to seed".
+  const seeded = new Map<string, string>();
+  const historyWindow = createChannelHistoryWindow({ historyMap: channelHistories });
 
   // Re-inserting before eviction keeps the map in least-recently-touched order,
   // so an active thread is never the entry that gets dropped.
@@ -241,7 +245,15 @@ export function createMattermostThreadBackfill(
       // how many posts came back; drop any budget it had spent.
       retries.delete(params.historyKey);
       if (entries.length > 0) {
-        channelHistories.set(params.historyKey, entries);
+        // Seed through the shared window rather than writing the map directly:
+        // it owns the per-key limit, the LRU ordering that decides which thread
+        // is evicted next, and the 1000-key cap that keeps a long-lived gateway
+        // from retaining every thread it ever recovered.
+        historyWindow.clear({ historyKey: params.historyKey, limit: historyLimit });
+        for (const entry of entries) {
+          historyWindow.record({ historyKey: params.historyKey, entry, limit: historyLimit });
+        }
+        boundedSet(seeded, params.historyKey, params.marker);
         logVerboseMessage?.(
           `mattermost: thread backfill seeded ${entries.length} entries historyKey=${params.historyKey}`,
         );
@@ -274,7 +286,25 @@ export function createMattermostThreadBackfill(
 
     if (currentMarker === marker) {
       await settleInFlight(historyKey);
-      return;
+      // A marker only means "this session has been serviced", and the shared
+      // history owner can evict a recovered window under LRU pressure from
+      // unrelated threads. An emptied window keeps its key — the kernel clears
+      // it after every turn — so an absent key is the one signal that the window
+      // is gone rather than merely empty. Without this the marker would suppress
+      // recovery forever and the thread would reach the agent contextless.
+      //
+      // Only a marker that actually seeded a window may be invalidated this way.
+      // A marker held by a permanent failure, or by a fetch that legitimately
+      // returned nothing, has no window to lose, and re-reading an absent key as
+      // eviction would turn "gave up" back into "retry on every turn".
+      if (seeded.get(historyKey) !== marker || channelHistories.has(historyKey)) {
+        return;
+      }
+      markers.delete(historyKey);
+      seeded.delete(historyKey);
+      logVerboseMessage?.(
+        `mattermost: thread backfill window evicted, recovering again historyKey=${historyKey}`,
+      );
     }
 
     if (sessionId && currentMarker === pendingMarker) {

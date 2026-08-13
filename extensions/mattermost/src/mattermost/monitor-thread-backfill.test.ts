@@ -176,6 +176,48 @@ describe("createMattermostThreadBackfill", () => {
     expect(harness.requests).toHaveLength(0);
   });
 
+  it("seeds through the bounded history owner so the map stays capped", async () => {
+    // One key short of the shared 1,000-key cap, so seeding one recovered thread
+    // has to evict rather than grow the map.
+    const channelHistories = new Map<string, HistoryEntry[]>(
+      Array.from({ length: 1000 }, (_, index): [string, HistoryEntry[]] => [
+        `agent:main:mattermost:channel:unrelated-${index}:thread:root-${index}`,
+        [{ sender: "u0", body: `unrelated ${index}` }],
+      ]),
+    );
+    const harness = createHarness({ responses: [threadResponse(3)], channelHistories });
+
+    await harness.turn();
+
+    expect(harness.requests).toHaveLength(1);
+    expect(channelHistories.get(HISTORY_KEY)).toHaveLength(3);
+    expect(channelHistories.size).toBe(1000);
+  });
+
+  it("recovers again after the shared owner evicts the recovered window", async () => {
+    const channelHistories = new Map<string, HistoryEntry[]>();
+    const harness = createHarness({
+      responses: [threadResponse(3), threadResponse(4)],
+      channelHistories,
+    });
+
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    // An emptied window keeps its key, so that alone must not trigger a refetch.
+    channelHistories.set(HISTORY_KEY, []);
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    // LRU eviction removes the key outright; the marker now vouches for a window
+    // that no longer exists, so the next turn has to rebuild it.
+    channelHistories.delete(HISTORY_KEY);
+    await harness.turn();
+
+    expect(harness.requests).toHaveLength(2);
+    expect(channelHistories.get(HISTORY_KEY)).toHaveLength(4);
+  });
+
   it("makes one request when concurrent cold turns race", async () => {
     const harness = createHarness({ responses: [threadResponse(3), threadResponse(3)] });
 
