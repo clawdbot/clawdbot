@@ -120,6 +120,10 @@ export async function executeFollowupTurn(params: {
     options: sourceOpts,
     resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
   });
+  const draftOwnsCommentaryProgress =
+    sourceOpts?.commentaryPayloadsEnabled === true &&
+    sourceOpts.shouldDeliverCommentaryPayloads !== undefined &&
+    !commentaryPayloadsEnabled;
   let visibleToolError = false;
   let progressChain: Promise<void> = Promise.resolve();
   let pendingProgressTaskFailure: unknown;
@@ -225,9 +229,10 @@ export async function executeFollowupTurn(params: {
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
-            // When durable commentary yields, the channel draft owns queued preambles.
+            // Only an explicit draft-vs-durable owner contract may bypass hidden
+            // tool-progress filtering for queued preambles.
             const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && !commentaryPayloadsEnabled;
+              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
             if (!draftOwnsPreamble && !shouldEmitToolResult()) {
               return false;
             }

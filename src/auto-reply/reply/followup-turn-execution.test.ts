@@ -323,6 +323,44 @@ describe("executeFollowupTurn", () => {
     });
   });
 
+  it("suppresses queued verbose-off preambles without an explicit commentary owner", async () => {
+    const onItemEvent = vi.fn(async () => true as const);
+    let preambleVisible: boolean | void = true;
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      preambleVisible = await params.opts?.onItemEvent?.({
+        kind: "preamble",
+        progressText: "Checking the queued request",
+      });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(result.commentaryPayloadsEnabled).toBe(false);
+    expect(preambleVisible).toBe(false);
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps room-event progress, tool summaries, and typing silent", async () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
