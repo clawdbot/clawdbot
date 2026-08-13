@@ -4,7 +4,7 @@ extension OnboardingAISetupModel {
         let status: String?
         let error: String?
 
-        var presentation: Failure {
+        @MainActor var presentation: Failure {
             OnboardingAISetupModel.failure(
                 label: "Configured AI",
                 status: self.status,
