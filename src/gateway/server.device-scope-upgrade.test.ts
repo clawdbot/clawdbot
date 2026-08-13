@@ -1,9 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import * as devicePairing from "../infra/device-pairing.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { issueOperatorToken, openTrackedWs } from "./device-authz.test-helpers.js";
+import {
+  issueOperatorToken,
+  loadDeviceIdentity,
+  openTrackedWs,
+} from "./device-authz.test-helpers.js";
 import {
   connectOk,
+  connectReq,
   installGatewayTestHooks,
   rpcReq,
   startConnectedServerWithClient,
@@ -22,6 +31,19 @@ const FULL_SCOPES = [
   "operator.pairing",
 ];
 const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
+const BROWSER_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+const WRONG_BROWSER_ORIGIN = "chrome-extension://bcdefghijklmnopabcdefghijklmnopa";
+const BROWSER_CLIENT = {
+  id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+  version: "test",
+  platform: "chrome",
+  deviceFamily: "extension",
+  mode: GATEWAY_CLIENT_MODES.UI,
+};
+const BROWSER_CAPS = [
+  GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS,
+  GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
+];
 
 describe("live device scope upgrade", () => {
   let started: Awaited<ReturnType<typeof startConnectedServerWithClient>>;
@@ -40,7 +62,7 @@ describe("live device scope upgrade", () => {
     const paired = await issueOperatorToken({
       name,
       approvedScopes: ["operator.read"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientId: GATEWAY_CLIENT_IDS.TEST,
       clientMode: GATEWAY_CLIENT_MODES.TEST,
     });
     const ws = await openTrackedWs(started.port);
@@ -51,6 +73,28 @@ describe("live device scope upgrade", () => {
       scopes: ["operator.read"],
     });
     return { ...paired, ws, hello };
+  }
+
+  async function openLimitedBrowserDevice(name: string) {
+    const { identityPath, identity } = loadDeviceIdentity(name);
+    const ws = await openTrackedWs(started.port, { origin: BROWSER_ORIGIN });
+    const hello = await connectOk(ws, {
+      token: "secret",
+      scopes: ["operator.read"],
+      caps: BROWSER_CAPS,
+      client: BROWSER_CLIENT,
+      deviceIdentityPath: identityPath,
+      prePairDevice: true,
+      browserOrigin: BROWSER_ORIGIN,
+    });
+    const auth = (hello as { auth?: { deviceToken?: string } }).auth;
+    expect(auth?.deviceToken).toBeTruthy();
+    return {
+      ws,
+      identityPath,
+      deviceId: identity.deviceId,
+      deviceToken: auth?.deviceToken ?? "",
+    };
   }
 
   test("returns the rotated token after approval and reconnects with admin scopes", async () => {
@@ -102,6 +146,70 @@ describe("live device scope upgrade", () => {
     } finally {
       limited.ws.close();
       reconnected?.close();
+    }
+  });
+
+  test("preserves a browser origin through approval and reconnects from the same origin", async () => {
+    const limited = await openLimitedBrowserDevice("live-scope-upgrade-browser-origin");
+    let reconnected: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+    try {
+      const registration = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      const requestId = registration.payload?.requestId;
+      const wait = rpcReq<{
+        status: string;
+        deviceToken: string;
+        scopes: string[];
+      }>(limited.ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
+      expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+      const resolved = await wait;
+      expect(resolved).toMatchObject({
+        ok: true,
+        payload: { status: "approved", scopes: expect.arrayContaining(["operator.admin"]) },
+      });
+
+      expect((await devicePairing.getPairedDevice(limited.deviceId))?.browserOrigin).toBe(
+        BROWSER_ORIGIN,
+      );
+
+      limited.ws.close();
+      reconnected = await openTrackedWs(started.port, { origin: BROWSER_ORIGIN });
+      const hello = await connectOk(reconnected, {
+        skipDefaultAuth: true,
+        deviceToken: resolved.payload?.deviceToken,
+        deviceIdentityPath: limited.identityPath,
+        scopes: resolved.payload?.scopes,
+        caps: BROWSER_CAPS,
+        client: BROWSER_CLIENT,
+      });
+      expect((hello as { auth?: { scopes?: string[] } }).auth?.scopes).toContain("operator.admin");
+    } finally {
+      limited.ws.close();
+      reconnected?.close();
+    }
+  });
+
+  test("rejects a scope-upgrade connection from a mismatched browser origin", async () => {
+    const limited = await openLimitedBrowserDevice("live-scope-upgrade-wrong-browser-origin");
+    limited.ws.close();
+    const wrongOrigin = await openTrackedWs(started.port, { origin: WRONG_BROWSER_ORIGIN });
+    try {
+      const response = await connectReq(wrongOrigin, {
+        skipDefaultAuth: true,
+        deviceToken: limited.deviceToken,
+        deviceIdentityPath: limited.identityPath,
+        scopes: ["operator.read"],
+        caps: BROWSER_CAPS,
+        client: BROWSER_CLIENT,
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("NOT_PAIRED");
+      expect(response.error?.message).toContain("dedicated paired device identity");
+    } finally {
+      wrongOrigin.close();
     }
   });
 
@@ -197,7 +305,7 @@ describe("live device scope upgrade", () => {
         device: null,
         scopes: ["operator.read"],
         client: {
-          id: GATEWAY_CLIENT_NAMES.CLI,
+          id: GATEWAY_CLIENT_IDS.CLI,
           version: "1.0.0",
           platform: "test",
           mode: GATEWAY_CLIENT_MODES.CLI,

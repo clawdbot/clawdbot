@@ -100,6 +100,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       deviceFamily: client?.connect.client.deviceFamily,
       clientId: client?.connect.client.id,
       clientMode: client?.connect.client.mode,
+      browserOrigin: paired.browserOrigin,
       role: "operator",
       scopes: requestedScopes,
       remoteIp: client?.clientIp,
