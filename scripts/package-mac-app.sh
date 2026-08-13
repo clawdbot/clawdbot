@@ -612,7 +612,11 @@ stop_packaged_app_if_running() {
 
 stop_packaged_app_if_running
 
-echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  echo "🔏 Signing bundle with explicit SIGN_IDENTITY"
+else
+  echo "🔏 Signing bundle (auto-selecting signing identity)"
+fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 
 echo "✅ Bundle ready at $APP_ROOT"

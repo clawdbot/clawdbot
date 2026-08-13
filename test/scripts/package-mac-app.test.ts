@@ -954,6 +954,36 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("passes an explicit signing identity unchanged to the signer", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const start = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
+    const signingBlock = script.slice(start, script.indexOf('echo "✅ Bundle ready', start));
+    const tempRoot = tempDirs.make("openclaw-package-signing-identity-");
+    const scriptsDir = path.join(tempRoot, "scripts");
+    const signerPath = path.join(scriptsDir, "codesign-mac-app.sh");
+    const identity = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(
+      signerPath,
+      '#!/usr/bin/env bash\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\n',
+    );
+    chmodSync(signerPath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      APP_ROOT=${JSON.stringify(path.join(tempRoot, "OpenClaw.app"))}
+      SIGN_IDENTITY=${JSON.stringify(identity)}
+      export SIGN_IDENTITY
+      ${signingBlock}
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Signing bundle with explicit SIGN_IDENTITY");
+    expect(result.stdout).toContain(`identity=${identity}`);
+    expect(result.stderr).toBe("");
+  });
+
   it("fails when the packaged app survives forced shutdown", () => {
     const result = runStopPackagedAppHarness(0);
 
