@@ -284,13 +284,13 @@ suite.define(() => {
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
         await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
         const wizardBody = page.locator(".model-setup-wizard__body");
-        expect(
-          await wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth),
-        ).toBe(true);
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
         await page.setViewportSize({ height: 844, width: 390 });
-        expect(
-          await wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth),
-        ).toBe(true);
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
         await page.getByRole("button", { name: "Continue" }).waitFor();
         await page.getByRole("button", { name: "Cancel" }).waitFor();
 
