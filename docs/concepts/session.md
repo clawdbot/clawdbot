@@ -196,6 +196,15 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+The cap only removes unprotected entries. Protected ones — active work
+admissions, thread- and channel-scoped conversation pointers, archived sessions
+— reduce the budget left for the rest rather than being deletion targets, so a
+store whose protected population alone reaches `maxEntries` stays above the cap
+by design. In that state the cap keeps up to `min(maxEntries, 25)` of the newest
+unprotected entries and trims the rest, instead of deleting every unprotected
+entry on every write and still ending up over the cap. See
+[Session maintenance](/gateway/config-agents#sessions) for the full contract.
+
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
 pressure-gated: it only removes stale probe rows when session-entry

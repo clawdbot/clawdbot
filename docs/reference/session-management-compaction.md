@@ -44,14 +44,14 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 
 `session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-| Key                     | Default               | Notes                                                                                       |
-| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
-| `maxEntries`            | `500`                 | cap on session entries                                                                      |
-| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
+| Key                     | Default               | Notes                                                                                         |
+| ----------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                        |
+| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                        |
+| `maxEntries`            | `500`                 | cap on unprotected session entries; protected rows reduce the budget instead of being removed |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion   |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                               |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                   |
 
 Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
@@ -72,7 +72,7 @@ openclaw sessions cleanup --enforce
 
 Maintenance keeps durable external conversation pointers such as group sessions and thread-scoped chat sessions, but synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run probe retention.
 
-Normal Gateway writes flow through the session accessor, which serializes per-agent SQLite mutations through the runtime writer path. Runtime code should prefer the accessor helpers in `src/config/sessions/session-accessor.ts`; legacy `sessions.json` helpers are migration and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for a selected legacy store and always stays local (as does `--dry-run`). `maxEntries` cleanup is batched for production-sized stores, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it down. Reads never prune or cap entries during Gateway startup - only writes or `openclaw sessions cleanup --enforce` do, and the latter also applies the cap immediately and prunes old unreferenced legacy transcript, checkpoint, and trajectory artifacts even with no disk budget configured.
+Normal Gateway writes flow through the session accessor, which serializes per-agent SQLite mutations through the runtime writer path. Runtime code should prefer the accessor helpers in `src/config/sessions/session-accessor.ts`; legacy `sessions.json` helpers are migration and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for a selected legacy store and always stays local (as does `--dry-run`). `maxEntries` cleanup is batched for production-sized stores, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it down. A store can also stay above the cap indefinitely, without any pending cleanup: the cap only removes unprotected rows, and once protected rows alone reach `maxEntries` the remaining budget falls back to a floor of `min(maxEntries, 25)` newest unprotected rows rather than deleting every unprotected row on every write. `maxEntries` is therefore a bound on the unprotected population, not a hard bound on total rows. Reads never prune or cap entries during Gateway startup - only writes or `openclaw sessions cleanup --enforce` do, and the latter also applies the cap immediately and prunes old unreferenced legacy transcript, checkpoint, and trajectory artifacts even with no disk budget configured.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 
