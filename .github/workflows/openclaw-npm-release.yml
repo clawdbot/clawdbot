@@ -1149,11 +1149,21 @@ jobs:
             echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
             exit 1
           fi
+          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          current_selector_ref="v${current_selector_version}"
+          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
+          fi
+          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
           node "${RUNNER_TEMP}/plugin-sdk-api-release-evidence.mjs" \
             --manifest "$MANIFEST_FILE" \
             --head "$EXPECTED_RELEASE_SHA" \
             --target-package package.json \
-            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+            --current-selector-ref "$current_selector_ref" \
+            --current-selector-sha "$current_selector_sha" \
+            --target-ref "$RELEASE_TAG"
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
             exit 1

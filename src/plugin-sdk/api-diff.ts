@@ -248,8 +248,11 @@ function collectDeclarationChanges(
 
 function exportSections(
   surface: PluginSdkApiDiffSurface,
-  exportSurface: PluginSdkApiDiffExport,
+  exportSurface: PluginSdkApiDiffExport | undefined,
 ): PluginSdkApiDeclarationSection[] {
+  if (!exportSurface) {
+    return [];
+  }
   return (exportSurface.closureSectionIds ?? []).map((id) => {
     const section = surface.declarationSections[id];
     if (!section) {
@@ -296,18 +299,17 @@ export function diffPluginSdkApi(
     const afterModule = afterModules.get(entrypoint);
     if (!beforeModule && afterModule) {
       payload.entrypointsAdded.push(moduleChange(afterModule));
-      continue;
     }
     if (beforeModule && !afterModule) {
       payload.entrypointsRemoved.push(moduleChange(beforeModule));
-      continue;
     }
-    if (!beforeModule || !afterModule) {
-      continue;
+    const moduleSurface = afterModule ?? beforeModule;
+    if (!moduleSurface) {
+      throw new Error(`Plugin SDK API diff lost entrypoint ${entrypoint}`);
     }
 
-    const beforeExports = exportMap(beforeModule);
-    const afterExports = exportMap(afterModule);
+    const beforeExports = beforeModule ? exportMap(beforeModule) : new Map();
+    const afterExports = afterModule ? exportMap(afterModule) : new Map();
     const exportNames = new Set([...beforeExports.keys(), ...afterExports.keys()]);
     for (const exportName of [...exportNames].toSorted(compareText)) {
       const beforeExport = beforeExports.get(exportName);
@@ -317,10 +319,10 @@ export function diffPluginSdkApi(
           after: snapshot(afterExport),
           before: null,
           change: "added",
-          declarationChanges: [],
+          declarationChanges: collectDeclarationChanges([], exportSections(after, afterExport)),
           entrypoint,
           exportName,
-          importSpecifier: afterModule.importSpecifier,
+          importSpecifier: moduleSurface.importSpecifier,
         });
         continue;
       }
@@ -329,10 +331,10 @@ export function diffPluginSdkApi(
           after: null,
           before: snapshot(beforeExport),
           change: "removed",
-          declarationChanges: [],
+          declarationChanges: collectDeclarationChanges(exportSections(before, beforeExport), []),
           entrypoint,
           exportName,
-          importSpecifier: beforeModule.importSpecifier,
+          importSpecifier: moduleSurface.importSpecifier,
         });
         continue;
       }
@@ -347,10 +349,13 @@ export function diffPluginSdkApi(
           after: snapshot(afterExport),
           before: snapshot(beforeExport),
           change: "signature",
-          declarationChanges: [],
+          declarationChanges: collectDeclarationChanges(
+            exportSections(before, beforeExport),
+            exportSections(after, afterExport),
+          ),
           entrypoint,
           exportName,
-          importSpecifier: afterModule.importSpecifier,
+          importSpecifier: moduleSurface.importSpecifier,
         });
       } else if (beforeExport.closureHash !== afterExport.closureHash) {
         payload.exports.push({
@@ -363,7 +368,7 @@ export function diffPluginSdkApi(
           ),
           entrypoint,
           exportName,
-          importSpecifier: afterModule.importSpecifier,
+          importSpecifier: moduleSurface.importSpecifier,
         });
       }
     }
@@ -425,16 +430,13 @@ function appendExportChanges(
   }
 }
 
-type ReachableReportChange = PluginSdkApiDeclarationChange & { affectedExports: string[] };
+type DeclarationReportChange = PluginSdkApiDeclarationChange & { affectedExports: string[] };
 
-function collectReachableReportChanges(
+function collectDeclarationReportChanges(
   changes: readonly PluginSdkApiExportChange[],
-): ReachableReportChange[] {
-  const grouped = new Map<string, ReachableReportChange>();
+): DeclarationReportChange[] {
+  const grouped = new Map<string, DeclarationReportChange>();
   for (const change of changes) {
-    if (change.change !== "reachable") {
-      continue;
-    }
     const affectedExport = `${change.importSpecifier} :: ${change.exportName}`;
     for (const declaration of change.declarationChanges) {
       const key = `${declaration.name}\0${declaration.before ?? ""}\0${declaration.after ?? ""}`;
@@ -503,9 +505,11 @@ export function formatPluginSdkApiDiffReport(params: {
     diff.exports.filter((change) => change.change === "signature"),
   );
 
-  const reachable = collectReachableReportChanges(diff.exports);
+  const reachable = collectDeclarationReportChanges(diff.exports);
   if (reachable.length > 0) {
-    const affectedCount = diff.exports.filter((change) => change.change === "reachable").length;
+    const affectedCount = diff.exports.filter(
+      (change) => change.declarationChanges.length > 0,
+    ).length;
     lines.push(
       "",
       `## Reachable declarations changed (${reachable.length}; affects ${affectedCount} exports)`,

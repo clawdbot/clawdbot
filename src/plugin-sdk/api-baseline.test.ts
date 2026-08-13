@@ -343,20 +343,48 @@ describe("Plugin SDK API baseline", () => {
     const before = await renderSourceFixture({
       "fixture.ts": "export type Fixture = string;\n",
     });
-    const after = await renderSourceFixture(
-      {
-        "added.ts": "export type Added = number;\n",
-        "fixture.ts": "export type Fixture = string;\n",
-      },
-      ["fixture", "added"],
-    );
-    expect(diffPluginSdkApi(before, after).entrypointsAdded).toEqual([
+    const renderAdded = (valueType: "number" | "string") =>
+      renderSourceFixture(
+        {
+          "added.ts": [
+            `type AddedShape = { value: ${valueType} };`,
+            "export declare function createAdded(input: AddedShape): AddedShape;",
+          ].join("\n"),
+          "fixture.ts": "export type Fixture = string;\n",
+        },
+        ["fixture", "added"],
+      );
+    const after = await renderAdded("number");
+    const sameNamesDifferentContents = await renderAdded("string");
+    const addedDiff = diffPluginSdkApi(before, after);
+    const removedDiff = diffPluginSdkApi(after, before);
+    expect(addedDiff.entrypointsAdded).toEqual([
       {
         entrypoint: "added",
-        exportNames: ["Added"],
+        exportNames: ["createAdded"],
         importSpecifier: "openclaw/plugin-sdk/added",
       },
     ]);
+    expect(addedDiff.exports).toEqual([
+      expect.objectContaining({
+        change: "added",
+        declarationChanges: expect.arrayContaining([
+          expect.objectContaining({ after: expect.stringContaining("value: number") }),
+        ]),
+        entrypoint: "added",
+        exportName: "createAdded",
+      }),
+    ]);
+    expect(removedDiff.exports[0]).toMatchObject({
+      change: "removed",
+      declarationChanges: expect.arrayContaining([
+        expect.objectContaining({ before: expect.stringContaining("value: number") }),
+      ]),
+    });
+    expect(addedDiff.digest).not.toBe(diffPluginSdkApi(before, sameNamesDifferentContents).digest);
+    expect(
+      formatPluginSdkApiDiffReport({ baseLabel: "base", diff: addedDiff, headLabel: "head" }),
+    ).toContain("value: number");
   });
 
   it("classifies exported signature changes separately from reachable-only changes", async () => {
@@ -373,10 +401,12 @@ describe("Plugin SDK API baseline", () => {
       ].join("\n"),
     });
 
-    expect(diffPluginSdkApi(baseline, changed).exports).toEqual([
+    const diff = diffPluginSdkApi(baseline, changed);
+    expect(diff.exports).toEqual([
       expect.objectContaining({ change: "signature", exportName: "SendOptions" }),
       expect.objectContaining({ change: "reachable", exportName: "send" }),
     ]);
+    expect(diff.exports.every((change) => change.declarationChanges.length > 0)).toBe(true);
   });
 
   it("validates renderer artifacts at the subprocess boundary", async () => {

@@ -76,6 +76,29 @@ describe("Plugin SDK API release evidence", () => {
     ).toThrow("digest does not match");
   });
 
+  it("rejects a preflight receipt when the npm dist-tag predecessor moved", () => {
+    const receipt = evidence();
+    const validate = (currentSelectorRef: string, currentSelectorSha: string) =>
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement: "",
+        currentSelectorRef,
+        currentSelectorSha,
+        evidence: receipt,
+        expectedHeadSha: headSha,
+        targetPackage: { scripts: { "plugin-sdk:api:diff": "node diff.mjs" } },
+        targetRef: "v2026.8.2",
+      });
+
+    expect(validate("v2026.8.1", baseSha)).toMatchObject({ status: "checked" });
+    expect(() => validate("v2026.8.1-1", "c".repeat(40))).toThrow(
+      "predecessor no longer matches the npm dist-tag",
+    );
+    expect(validate("v2026.8.2", headSha)).toMatchObject({ status: "checked" });
+    expect(() => validate("v2026.8.2", "c".repeat(40))).toThrow(
+      "dist-tag target does not match the release SHA",
+    );
+  });
+
   it("permits unavailable evidence only for historical targets without the diff command", () => {
     const unavailable = {
       schema: "openclaw.plugin-sdk-api-release-evidence/v1",

@@ -72,8 +72,11 @@ export function createPluginSdkApiReleaseEvidence({ baseRef, baseSha, diff, head
 
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
+  currentSelectorRef = "",
+  currentSelectorSha = "",
   evidence,
   expectedHeadSha,
+  targetRef = "",
   targetPackage,
 }) {
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
@@ -103,6 +106,31 @@ export function validatePluginSdkApiReleaseEvidence({
   }
   if (typeof evidence.baseRef !== "string" || evidence.baseRef.length === 0) {
     throw new Error("Plugin SDK API evidence base ref is missing");
+  }
+  const selectorValues = [currentSelectorRef, currentSelectorSha, targetRef];
+  const selectorValueCount = selectorValues.filter((value) => value !== "").length;
+  if (selectorValueCount !== 0 && selectorValueCount !== selectorValues.length) {
+    throw new Error("Current Plugin SDK API selector validation is incomplete");
+  }
+  if (selectorValueCount > 0) {
+    if (
+      typeof currentSelectorRef !== "string" ||
+      currentSelectorRef.length === 0 ||
+      typeof targetRef !== "string" ||
+      targetRef.length === 0
+    ) {
+      throw new Error("Current Plugin SDK API selector refs are invalid");
+    }
+    assertSha(currentSelectorSha, "Current Plugin SDK API selector SHA");
+    if (currentSelectorRef === targetRef && currentSelectorSha !== expectedHeadSha) {
+      throw new Error("Current npm dist-tag target does not match the release SHA");
+    }
+    if (
+      currentSelectorRef !== targetRef &&
+      (evidence.baseRef !== currentSelectorRef || evidence.baseSha !== currentSelectorSha)
+    ) {
+      throw new Error("Plugin SDK API evidence predecessor no longer matches the npm dist-tag");
+    }
   }
   const payload = diffPayload(evidence.diff);
   const digest = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
@@ -138,7 +166,7 @@ function readArgs(argv) {
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) {
       throw new Error(
-        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --target-package <path> [--acknowledge <digest>]",
+        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --target-package <path> [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
       );
     }
     values.set(flag, value);
@@ -156,8 +184,11 @@ function main() {
   const manifest = readJson(args.get("--manifest"));
   const result = validatePluginSdkApiReleaseEvidence({
     acknowledgement: args.get("--acknowledge") ?? "",
+    currentSelectorRef: args.get("--current-selector-ref"),
+    currentSelectorSha: args.get("--current-selector-sha"),
     evidence: manifest.pluginSdkApi,
     expectedHeadSha: args.get("--head"),
+    targetRef: args.get("--target-ref"),
     targetPackage: readJson(args.get("--target-package")),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);

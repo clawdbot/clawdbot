@@ -94,7 +94,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: openclaw-release-publish-${{ inputs.tag }}
+  group: openclaw-release-publish-${{ inputs.npm_dist_tag }}
   cancel-in-progress: false
 
 env:
@@ -474,11 +474,21 @@ jobs:
             echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
             exit 1
           fi
+          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          current_selector_ref="v${current_selector_version}"
+          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
+          fi
+          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
           node "$PLUGIN_SDK_API_VALIDATOR" \
             --manifest "$manifest" \
             --head "$EXPECTED_SHA" \
             --target-package package.json \
-            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+            --current-selector-ref "$current_selector_ref" \
+            --current-selector-sha "$current_selector_sha" \
+            --target-ref "$RELEASE_TAG"
           if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
             exit 1

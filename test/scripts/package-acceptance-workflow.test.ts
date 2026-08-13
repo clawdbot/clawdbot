@@ -1050,6 +1050,10 @@ describe("package acceptance workflow", () => {
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
 
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
+    );
+
     expect(input).toEqual({
       default: "",
       description:
@@ -1068,6 +1072,9 @@ describe("package acceptance workflow", () => {
     );
     expect(validateEvidence.run).toContain('node "$PLUGIN_SDK_API_VALIDATOR"');
     expect(validateEvidence.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(validateEvidence.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(validateEvidence.run).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
     expect(publishJob.needs).toEqual(["resolve_release_target"]);
     expect(dispatch.run).toContain(
       '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
