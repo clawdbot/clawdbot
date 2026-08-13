@@ -11,6 +11,7 @@ import {
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
@@ -27,6 +28,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearMemoryPluginState();
 });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Codex app-server attempt context", () => {
   it("treats missing mirrored session history as empty without hook warning", async () => {
@@ -148,7 +151,7 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("does not load OpenClaw-managed workspace context when injection is never", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-context-injection-never-"));
+    const workspaceDir = tempDirs.make("codex-context-injection-never-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "must not reach the prompt");
 
     const context = await buildCodexWorkspaceBootstrapContext({
