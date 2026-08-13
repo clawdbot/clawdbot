@@ -2147,19 +2147,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
-    const callGateway = createGatewayMock({
-      result: { payloads: [{ text: "NO_REPLY" }] },
-    });
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
-    const result = await deliverSlackThreadAnnouncement({
+    const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
+      sendMessage,
       isActive: true,
-      sessionId: "requester-session-1",
-      directIdempotencyKey: "announce-completion-steer-dropped",
       queueEmbeddedAgentMessageWithOutcome,
       internalEvents: taskCompletionEvents({
         childSessionId: "child-session-id",
-        taskLabel: "completion drop smoke",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
       }),
     });
 
@@ -2186,8 +2186,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
     expect(result.terminal).toBeUndefined();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("reports failure for Telegram DMs when announce-agent delivery fails", async () => {
