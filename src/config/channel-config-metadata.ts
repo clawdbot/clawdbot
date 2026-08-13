@@ -20,11 +20,6 @@ type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   // Rank of the closest record that has claimed this channel, which decides who may still replace
   // the schema.
   originRank: number;
-  // Rank of the record that actually supplied the schema, never closer than `originRank`: a nearer
-  // claimant shipping no channel config lowers `originRank` while the schema stays put.
-  // Reading `originRank` as the owner's rank would call a farther owner same-origin and let the
-  // preference tie-break below keep its schema over a genuinely closer plugin.
-  schemaOriginRank: number;
 };
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
@@ -142,6 +137,13 @@ export type ChannelOwnershipPolicy = {
    */
   isPluginActive: (pluginId: string) => boolean;
   /**
+   * Whether the operator selected this plugin by hand. Auto-enable leaves such a plugin enabled
+   * even when another claimant declares it in `preferOver`, so both stay active and the runtime
+   * channel facade falls back to registration order. Ownership must stop applying the declaration
+   * there instead of handing the schema to the replacement.
+   */
+  isPluginExplicitlySelected: (pluginId: string) => boolean;
+  /**
    * Replacement preference for one record on one channel. Defaults to the manifest declaration,
    * which is all config-independent metadata can see; a caller holding the operator config passes
    * auto-enable's full resolution so a built-in or catalog preference counts here too.
@@ -154,6 +156,7 @@ export type ChannelOwnershipPolicy = {
 
 const DEFAULT_CHANNEL_OWNERSHIP_POLICY: ChannelOwnershipPolicy = {
   isPluginActive: () => true,
+  isPluginExplicitlySelected: () => false,
   resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
 };
 
@@ -222,6 +225,12 @@ function collectDisplacedChannelOwners(
     const declarants = activeClaimants.length > 0 ? activeClaimants : claimants;
     for (const record of declarants) {
       for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
+        // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
+        // skips the self comparison, so a self-edge would strand ownership on another claimant
+        // while that plugin stays active.
+        if (replacedId === record.id || policy.isPluginExplicitlySelected(replacedId)) {
+          continue;
+        }
         const replacedIds = displaced.get(claimedId) ?? new Set<string>();
         displaced.set(claimedId, replacedIds);
         replacedIds.add(replacedId);
@@ -320,26 +329,34 @@ export function collectChannelSchemaMetadataWithOwnership(
         // name above the replacement's fields. Two ways to lose it: a same-origin claimant settled
         // by the preference below, or an inactive plugin that operator policy already ruled out
         // however close its origin sits. The winner re-sets both below.
-        const ownerActive =
-          current?.schemaPluginId === undefined || policy.isPluginActive(current.schemaPluginId);
+        const ownerId = current?.schemaPluginId;
+        const claimedId = normalizeClaimedChannelId(channelId);
+        // Ranks tie by the time the schema pass reaches this record, since the entry adopts this
+        // record's rank right here, so only policy and the declaration separate the two.
         const keepOwnerPresentation =
-          current?.schemaPluginId !== undefined &&
-          current.schemaPluginId !== record.id &&
-          (current.schemaOriginRank === originRank || (ownerActive && !recordActive));
+          ownerId !== undefined &&
+          ownerId !== record.id &&
+          decideChannelSchemaOwnership({
+            currentActive: policy.isPluginActive(ownerId),
+            incomingActive: recordActive,
+            currentDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
+            incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
+            currentOriginRank: originRank,
+            incomingOriginRank: originRank,
+          }) === "keepCurrent";
         byChannelId.set(channelId, {
           id: channelId,
           label: keepOwnerPresentation
-            ? (current.label ?? rootLabel)
+            ? (current?.label ?? rootLabel)
             : (rootLabel ?? current?.label),
           description: keepOwnerPresentation
-            ? (current.description ?? rootDescription)
+            ? (current?.description ?? rootDescription)
             : (rootDescription ?? current?.description),
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
           schemaPluginOrigin: current?.schemaPluginOrigin,
           originRank,
-          schemaOriginRank: current?.schemaOriginRank ?? originRank,
         });
       }
     }
@@ -384,14 +401,13 @@ export function collectChannelSchemaMetadataWithOwnership(
         schemaPluginId: configSchema === undefined ? undefined : record.id,
         schemaPluginOrigin: configSchema === undefined ? undefined : record.origin,
         originRank,
-        schemaOriginRank: originRank,
       });
     }
   }
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, schemaOriginRank: _schemaOriginRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, ...entry }) => entry);
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */

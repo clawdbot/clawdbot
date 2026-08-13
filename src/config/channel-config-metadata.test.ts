@@ -45,6 +45,7 @@ function claimant({
 function policyFor(overrides: Partial<ChannelOwnershipPolicy>): ChannelOwnershipPolicy {
   return {
     isPluginActive: () => true,
+    isPluginExplicitlySelected: () => false,
     resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
     ...overrides,
   };
@@ -236,6 +237,54 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(entry?.schemaPluginId).toBe("clickclack-core");
     expect(entry?.label).toBe("ClickClack");
     expect(entry?.description).toBe("the active one");
+  });
+
+  // Codex review P2 on #123209: a manifest that names itself declares nothing. Candidate discovery
+  // skips the self comparison, so a self-edge would strand ownership on another claimant while the
+  // self-naming plugin stays active.
+  it("ignores a claimant that declares itself in preferOver", () => {
+    const core = claimant({ id: "clickclack-core" });
+    const confused = claimant({ id: "clickclack-plus", preferOver: ["clickclack-plus"] });
+
+    expect(ownerOf([confused, core])).toBe("clickclack-core");
+    expect(ownerOf([core, confused])).toBe("clickclack-plus");
+  });
+
+  // Codex review P2 on #123209: auto-enable leaves an explicitly selected plugin enabled even when
+  // another claimant declares it in `preferOver`, so both stay active and the runtime channel
+  // facade falls back to registration order. Ownership must stop applying the declaration.
+  it("leaves an explicitly selected fallback in place of the declared replacement", () => {
+    const core = claimant({ id: "clickclack-core" });
+    const replacement = claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] });
+    const policy = policyFor({
+      isPluginExplicitlySelected: (id) => id === "clickclack-core",
+    });
+
+    expect(ownerOf([core, replacement], policy)).toBe("clickclack-plus");
+    expect(ownerOf([replacement, core], policy)).toBe("clickclack-core");
+  });
+
+  // Codex review P2 on #123209: once the declaration crosses origins the presentation pass has to
+  // follow it too, or a closer active fallback relabels a channel whose schema stays with the
+  // farther replacement and the config UI shows fallback branding over replacement fields.
+  it("keeps the cross-origin replacement's label when the fallback is visited later", () => {
+    const replacement = {
+      ...claimant({ id: "clickclack-plus", origin: "bundled", preferOver: ["clickclack-core"] }),
+      channelCatalogMeta: { id: "clickclack", label: "ClickClack Plus", blurb: "the replacement" },
+    };
+    const core = {
+      ...claimant({ id: "clickclack-core", origin: "workspace" }),
+      channelCatalogMeta: { id: "clickclack", label: "ClickClack", blurb: "the fallback" },
+    };
+
+    const entry = entryFor(
+      [replacement, core] as unknown as ReturnType<typeof claimant>[],
+      "clickclack",
+    );
+
+    expect(entry?.schemaPluginId).toBe("clickclack-plus");
+    expect(entry?.label).toBe("ClickClack Plus");
+    expect(entry?.description).toBe("the replacement");
   });
 
   // Codex review P2 on #123209: with plugins switched off globally every claimant is inactive, so

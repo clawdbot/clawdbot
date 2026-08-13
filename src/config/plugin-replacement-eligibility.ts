@@ -2,6 +2,7 @@
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
+  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizePluginId } from "../plugins/config-state.js";
@@ -66,4 +67,33 @@ export function isPluginPolicyDisabled(
   }
   const channels = cfg.channels as Record<string, unknown> | undefined;
   return asOptionalRecord(channels?.[builtInChannelId])?.enabled === false;
+}
+
+function hasMaterialPluginEntryConfig(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  return (
+    entry.enabled === true ||
+    isRecord(entry.config) ||
+    isRecord(entry.hooks) ||
+    isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
+    entry.apiKey !== undefined ||
+    entry.env !== undefined
+  );
+}
+
+/**
+ * Whether the operator selected this plugin by hand rather than letting auto-enable decide.
+ * Auto-enable leaves such a plugin enabled even when another claimant declares it in `preferOver`
+ * (see `disableImplicitPreferredOverPlugin`), so both stay active and channel ownership falls back
+ * to registration order.
+ */
+export function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
+  const allow = cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.includes(pluginId)) {
+    return true;
+  }
+  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
 }

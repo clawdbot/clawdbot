@@ -21,6 +21,7 @@ const log = createSubsystemLogger("config/plugin-catalog");
 type ExternalCatalogChannelEntry = {
   id: string;
   preferOver: string[];
+  packageName?: string;
 };
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
@@ -75,18 +76,17 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
     const preferOver = Array.isArray(channel.preferOver)
       ? channel.preferOver.filter((value): value is string => typeof value === "string")
       : [];
-    channels.push({ id, preferOver });
+    const packageName = normalizeOptionalString(entry.name);
+    channels.push({ id, preferOver, ...(packageName ? { packageName } : {}) });
   }
   return channels;
 }
 
 function readExternalCatalogChannels(
-  paths: readonly string[],
-  env: NodeJS.ProcessEnv,
+  resolvedPaths: readonly string[],
 ): ExternalCatalogChannelEntry[] {
   const channels: ExternalCatalogChannelEntry[] = [];
-  for (const rawPath of paths) {
-    const resolved = resolveUserPath(rawPath, env);
+  for (const resolved of resolvedPaths) {
     if (!fs.existsSync(resolved)) {
       continue;
     }
@@ -132,16 +132,23 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
   externalCatalogSnapshot = null;
 });
 
-function resolveExternalCatalogPreferOver(
+function resolveExternalCatalogEntry(
   channelId: string,
   env: NodeJS.ProcessEnv,
-): readonly string[] {
-  const paths = resolveExternalCatalogPaths(env);
-  const pathsKey = JSON.stringify(paths);
+): ExternalCatalogChannelEntry | undefined {
+  // Key on the resolved absolute paths: the same configured `~/catalog.json` resolves differently
+  // per HOME, so a raw-path key would hand one environment another's parsed catalog.
+  const resolvedPaths = resolveExternalCatalogPaths(env).map((rawPath) =>
+    resolveUserPath(rawPath, env),
+  );
+  const pathsKey = JSON.stringify(resolvedPaths);
   if (externalCatalogSnapshot?.pathsKey !== pathsKey) {
-    externalCatalogSnapshot = { pathsKey, channels: readExternalCatalogChannels(paths, env) };
+    externalCatalogSnapshot = {
+      pathsKey,
+      channels: readExternalCatalogChannels(resolvedPaths),
+    };
   }
-  return externalCatalogSnapshot.channels.find((entry) => entry.id === channelId)?.preferOver ?? [];
+  return externalCatalogSnapshot.channels.find((entry) => entry.id === channelId);
 }
 
 function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
@@ -158,6 +165,26 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
  * plugin catalog. Channel schema ownership resolves through the same function so validation and
  * the runtime cannot disagree about which plugin owns a contested channel.
  */
+/**
+ * Whether a channel-level declaration speaks for this record. The built-in registration and the
+ * external catalog name a channel, not a plugin, so every claimant of a contested channel would
+ * otherwise inherit the same declaration and displace the same fallback. An uninstalled candidate
+ * has no record to check, and describing those is what the catalog is for.
+ */
+function ownsChannelLevelDeclaration(
+  record: PluginManifestRecord | undefined,
+  channelId: string,
+  packageName?: string,
+): boolean {
+  if (!record) {
+    return true;
+  }
+  if (packageName) {
+    return record.packageName === packageName || record.id === packageName;
+  }
+  return record.id === channelId || normalizeChatChannelId(record.id) === channelId;
+}
+
 export function resolveChannelPreferOverIds(params: {
   record: PluginManifestRecord | undefined;
   channelId: string;
@@ -170,10 +197,20 @@ export function resolveChannelPreferOverIds(params: {
     return manifestPreferOver;
   }
   const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(params.channelId);
-  if (builtInChannelPreferOver.length) {
+  if (
+    builtInChannelPreferOver.length &&
+    ownsChannelLevelDeclaration(params.record, params.channelId)
+  ) {
     return builtInChannelPreferOver;
   }
-  return resolveExternalCatalogPreferOver(params.channelId, params.env);
+  const catalogEntry = resolveExternalCatalogEntry(params.channelId, params.env);
+  if (
+    catalogEntry?.preferOver.length &&
+    ownsChannelLevelDeclaration(params.record, params.channelId, catalogEntry.packageName)
+  ) {
+    return catalogEntry.preferOver;
+  }
+  return [];
 }
 
 function resolvePreferredOverIds(

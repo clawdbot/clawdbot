@@ -8,6 +8,26 @@ import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js
 
 const tempRoots: string[] = [];
 
+function writeCatalogEntry(entry: {
+  name?: string;
+  channel: { id: string; preferOver: string[] };
+}): string {
+  // macOS `os.tmpdir()` is a symlink, and the reader resolves symlinks before the bounded read.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
+  tempRoots.push(root);
+  const catalogPath = path.join(root, "plugins.json");
+  fs.writeFileSync(
+    catalogPath,
+    JSON.stringify({
+      entries: [
+        { ...(entry.name ? { name: entry.name } : {}), openclaw: { channel: entry.channel } },
+      ],
+    }),
+    "utf-8",
+  );
+  return catalogPath;
+}
+
 function writeCatalog(channel: { id: string; preferOver: string[] }): string {
   // macOS `os.tmpdir()` is a symlink, and the reader resolves symlinks before the bounded read.
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
@@ -78,6 +98,62 @@ describe("resolveChannelPreferOverIds", () => {
     expect(
       resolveChannelPreferOverIds({ record: undefined, channelId: "clickclack", env }),
     ).toEqual(["reinstalled"]);
+  });
+
+  // Codex review P2 on #123209: a catalog entry names a channel and a package, not every plugin
+  // claiming that channel. Without the package check each claimant inherits the same declaration
+  // and displaces the same fallback, so an unrelated third claimant can win the schema.
+  it("applies a catalog preference only to the package that declared it", () => {
+    const catalogPath = writeCatalogEntry({
+      name: "@openclaw/clickclack-plus",
+      channel: { id: "clickclack", preferOver: ["clickclack-core"] },
+    });
+    const env = { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath };
+    const declaring = {
+      id: "clickclack-plus",
+      packageName: "@openclaw/clickclack-plus",
+      channels: ["clickclack"],
+    } as unknown as Parameters<typeof resolveChannelPreferOverIds>[0]["record"];
+    const unrelated = {
+      id: "clickclack-other",
+      packageName: "@openclaw/clickclack-other",
+      channels: ["clickclack"],
+    } as unknown as Parameters<typeof resolveChannelPreferOverIds>[0]["record"];
+
+    expect(
+      resolveChannelPreferOverIds({ record: declaring, channelId: "clickclack", env }),
+    ).toEqual(["clickclack-core"]);
+    expect(
+      resolveChannelPreferOverIds({ record: unrelated, channelId: "clickclack", env }),
+    ).toEqual([]);
+  });
+
+  // Codex review P2 on #123209: the snapshot key was the configured path, but the reader resolves
+  // it against the caller's environment, so `~/plugins.json` under two homes shared one entry.
+  it("keys the snapshot by resolved path, not the configured one", () => {
+    const first = writeCatalogEntry({ channel: { id: "clickclack", preferOver: ["from-first"] } });
+    const second = writeCatalogEntry({
+      channel: { id: "clickclack", preferOver: ["from-second"] },
+    });
+    const homeOf = (catalogPath: string) => ({
+      HOME: path.dirname(catalogPath),
+      OPENCLAW_PLUGIN_CATALOG_PATHS: "~/plugins.json",
+    });
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: undefined,
+        channelId: "clickclack",
+        env: homeOf(first),
+      }),
+    ).toEqual(["from-first"]);
+    expect(
+      resolveChannelPreferOverIds({
+        record: undefined,
+        channelId: "clickclack",
+        env: homeOf(second),
+      }),
+    ).toEqual(["from-second"]);
   });
 
   it("prefers the manifest declaration over the catalog", () => {

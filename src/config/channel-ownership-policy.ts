@@ -4,7 +4,10 @@ import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-al
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { ChannelOwnershipPolicy } from "./channel-config-metadata.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
-import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
+import {
+  isPluginExplicitlySelected,
+  isPluginPolicyDisabled,
+} from "./plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function createConfiguredChannelOwnershipPolicy(params: {
@@ -17,6 +20,8 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   const resolveAlias = createManifestPluginAliasResolver(params.registry);
   return {
     isPluginActive: (pluginId) => !isPluginPolicyDisabled(params.config, pluginId, resolveAlias),
+    isPluginExplicitlySelected: (pluginId) =>
+      isPluginExplicitlySelected(params.config, resolveAlias(pluginId)),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({ record, channelId, env: params.env }),
   };

@@ -42,7 +42,10 @@ import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
-import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
+import {
+  isPluginExplicitlySelected,
+  isPluginPolicyDisabled,
+} from "./plugin-replacement-eligibility.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -798,14 +801,6 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   }
 
   return changes;
-}
-
-function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
-  const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
-    return true;
-  }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
 }
 
 function disableImplicitPreferredOverPlugin(params: {
