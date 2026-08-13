@@ -2,10 +2,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   diffPluginSdkApi,
   formatPluginSdkApiDiffReport,
   hasPluginSdkApiChanges,
+  parsePluginSdkApiDiffSurface,
   pluginSdkApiAcknowledgement,
   renderPluginSdkApiRoot,
 } from "../src/plugin-sdk/api-diff.ts";
@@ -20,6 +22,7 @@ type Args = {
 };
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 function usage(): never {
   console.error(
@@ -108,6 +111,43 @@ async function writeFile(filePath: string, content: string): Promise<void> {
   await fs.writeFile(filePath, content, "utf8");
 }
 
+function renderRevision(repoRoot: string, revisionRoot: string, outputPath: string): void {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--max-old-space-size=6144",
+      "--import",
+      "tsx",
+      SCRIPT_PATH,
+      "--render-root",
+      revisionRoot,
+      "--output",
+      outputPath,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || "Plugin SDK API render failed");
+  }
+}
+
+async function renderWorker(argv: string[]): Promise<boolean> {
+  if (argv[0] !== "--render-root") {
+    return false;
+  }
+  const repoRoot = argv[1];
+  const outputPath = argv[2] === "--output" ? argv[3] : undefined;
+  if (!repoRoot || !outputPath || argv.length !== 4) {
+    throw new Error("Invalid Plugin SDK API renderer invocation");
+  }
+  await writeFile(outputPath, JSON.stringify(await renderPluginSdkApiRoot(repoRoot)));
+  return true;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
@@ -128,13 +168,19 @@ async function main(): Promise<void> {
   try {
     for (const root of roots) {
       const worktree = path.join(temporaryRoot, root.name);
-      git(repoRoot, ["worktree", "add", "--detach", worktree, root.commit]);
+      git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, root.commit]);
       addedWorktrees.push(worktree);
+      git(worktree, ["sparse-checkout", "set", "src", "packages", "scripts"]);
+      git(worktree, ["checkout", "--detach", root.commit]);
       await fs.symlink(nodeModules, path.join(worktree, "node_modules"), "junction");
     }
 
-    const before = await renderPluginSdkApiRoot(path.join(temporaryRoot, "base"));
-    const after = await renderPluginSdkApiRoot(path.join(temporaryRoot, "head"));
+    const baseRenderPath = path.join(temporaryRoot, "base.json");
+    const headRenderPath = path.join(temporaryRoot, "head.json");
+    renderRevision(repoRoot, path.join(temporaryRoot, "base"), baseRenderPath);
+    renderRevision(repoRoot, path.join(temporaryRoot, "head"), headRenderPath);
+    const before = parsePluginSdkApiDiffSurface(await fs.readFile(baseRenderPath, "utf8"));
+    const after = parsePluginSdkApiDiffSurface(await fs.readFile(headRenderPath, "utf8"));
     const diff = diffPluginSdkApi(before, after);
     const report = formatPluginSdkApiDiffReport({
       baseLabel: baseCommit.slice(0, 12),
@@ -166,7 +212,8 @@ async function main(): Promise<void> {
   }
 }
 
-await main().catch((error: unknown) => {
+const run = renderWorker(process.argv.slice(2)).then((handled) => (handled ? undefined : main()));
+await run.catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

@@ -21,6 +21,7 @@ import {
   diffPluginSdkApi,
   formatPluginSdkApiDiffReport,
   hasPluginSdkApiChanges,
+  parsePluginSdkApiDiffSurface,
   pluginSdkApiAcknowledgement,
   readPluginSdkApiEntrypoints,
 } from "./api-diff.js";
@@ -350,6 +351,18 @@ describe("Plugin SDK API baseline", () => {
     ]);
   });
 
+  it("validates renderer artifacts at the subprocess boundary", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": "export type Fixture = { value: string };\n",
+    });
+    const parsed = parsePluginSdkApiDiffSurface(JSON.stringify(baseline));
+
+    expect(hasPluginSdkApiChanges(diffPluginSdkApi(baseline, parsed))).toBe(false);
+    expect(() =>
+      parsePluginSdkApiDiffSurface('{"declarationSections":[],"modules":[{"entrypoint":1}]}'),
+    ).toThrow("invalid module");
+  });
+
   it("renders byte-identical surfaces deterministically", async () => {
     const firstRender = await renderPrivateDeclarationFixture();
     const secondRender = await renderPrivateDeclarationFixture();
@@ -509,7 +522,7 @@ describe("Plugin SDK API baseline", () => {
       }),
     );
     expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(declaration?.closureSections).toEqual(
+    expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: "FixtureOptionLeaf",

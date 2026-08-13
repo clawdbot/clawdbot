@@ -43,8 +43,8 @@ export type PluginSdkApiSourceLink = {
 export type PluginSdkApiExport = {
   /** Hash of repo-owned declarations reachable from this export. */
   closureHash: string | null;
-  /** Repo-owned declarations reachable from this export. */
-  closureSections: PluginSdkApiDeclarationSection[] | null;
+  /** References into the baseline's deduplicated declaration section pool. */
+  closureSectionIds: number[] | null;
   /** Normalized TypeScript declaration text, or null when TypeScript cannot print it. */
   declaration: string | null;
   /** Exported symbol name as plugin authors import it. */
@@ -71,8 +71,16 @@ export type PluginSdkApiModule = {
 
 /** Full SDK API surface payload. */
 export type PluginSdkApiBaseline = {
+  /** Deduplicated repo-owned declarations reachable from public exports. */
+  declarationSections: PluginSdkApiDeclarationSection[];
   /** Public SDK modules included in the baseline. */
   modules: PluginSdkApiModule[];
+};
+type RenderedPluginSdkApiExport = Omit<PluginSdkApiExport, "closureSectionIds"> & {
+  closureSections: PluginSdkApiDeclarationSection[] | null;
+};
+type RenderedPluginSdkApiModule = Omit<PluginSdkApiModule, "exports"> & {
+  exports: RenderedPluginSdkApiExport[];
 };
 type DeclarationClosureRenderer = ReturnType<typeof createDeclarationClosureRenderer>;
 
@@ -232,7 +240,7 @@ function buildExportSurface(params: {
   printer: ts.Printer;
   repoRoot: string;
   symbol: ts.Symbol;
-}): PluginSdkApiExport {
+}): RenderedPluginSdkApiExport {
   const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   const exportName = symbol.getName();
@@ -269,7 +277,7 @@ const EXPORT_KIND_SORT_RANK: Record<PluginSdkApiExportKind, number> = {
   unknown: 8,
 };
 
-function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): number {
+function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkApiExport): number {
   return (
     EXPORT_KIND_SORT_RANK[left.kind] - EXPORT_KIND_SORT_RANK[right.kind] ||
     compareText(left.exportName, right.exportName)
@@ -283,7 +291,7 @@ function buildModuleSurface(params: {
   program: ts.Program;
   repoRoot: string;
   entrypoint: string;
-}): PluginSdkApiModule {
+}): RenderedPluginSdkApiModule {
   const { checker, declarationClosure, printer, program, repoRoot, entrypoint } = params;
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
@@ -344,10 +352,46 @@ export async function renderPluginSdkApiBaseline(params?: {
     }),
   );
 
+  const declarationSections = [
+    ...new Map(
+      modules.flatMap((moduleSurface) =>
+        moduleSurface.exports.flatMap((exportSurface) =>
+          (exportSurface.closureSections ?? []).map((section) => [
+            `${section.name}\0${section.text}`,
+            section,
+          ]),
+        ),
+      ),
+    ).values(),
+  ].toSorted(
+    (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
+  );
+  const sectionIds = new Map(
+    declarationSections.map((section, index) => [`${section.name}\0${section.text}`, index]),
+  );
   return {
-    modules: [...modules].toSorted((left, right) =>
-      compareText(left.importSpecifier, right.importSpecifier),
-    ),
+    declarationSections,
+    modules: modules
+      .map((moduleSurface) => ({
+        category: moduleSurface.category,
+        entrypoint: moduleSurface.entrypoint,
+        exports: moduleSurface.exports.map((exportSurface) => ({
+          closureHash: exportSurface.closureHash,
+          closureSectionIds:
+            exportSurface.closureSections?.map((section) => {
+              const id = sectionIds.get(`${section.name}\0${section.text}`);
+              assert(id !== undefined, "Missing Plugin SDK declaration section");
+              return id;
+            }) ?? null,
+          declaration: exportSurface.declaration,
+          exportName: exportSurface.exportName,
+          kind: exportSurface.kind,
+          source: exportSurface.source,
+        })),
+        importSpecifier: moduleSurface.importSpecifier,
+        source: moduleSurface.source,
+      }))
+      .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
   };
 }
 

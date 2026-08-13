@@ -1,13 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginSdkApiDeclarationSection } from "./api-baseline-declaration-closure.js";
-import {
-  renderPluginSdkApiBaseline,
-  type PluginSdkApiBaseline,
-  type PluginSdkApiExport,
-  type PluginSdkApiModule,
-} from "./api-baseline.js";
+import { renderPluginSdkApiBaseline, type PluginSdkApiExport } from "./api-baseline.js";
 
 const ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-entrypoints.json";
 const PRIVATE_ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-private-local-only-subpaths.json";
@@ -20,6 +16,22 @@ export type PluginSdkApiExportSnapshot = Pick<
   PluginSdkApiExport,
   "closureHash" | "declaration" | "kind"
 >;
+
+type PluginSdkApiDiffExport = Pick<
+  PluginSdkApiExport,
+  "closureHash" | "closureSectionIds" | "declaration" | "exportName" | "kind"
+>;
+
+type PluginSdkApiDiffModule = {
+  entrypoint: string;
+  exports: PluginSdkApiDiffExport[];
+  importSpecifier: string;
+};
+
+export type PluginSdkApiDiffSurface = {
+  declarationSections: PluginSdkApiDeclarationSection[];
+  modules: PluginSdkApiDiffModule[];
+};
 
 export type PluginSdkApiDeclarationChange = {
   after: string | null;
@@ -77,15 +89,113 @@ export async function readPluginSdkApiEntrypoints(repoRoot: string): Promise<str
 }
 
 /** Render the public SDK surface using the inventory from that same repository revision. */
-export async function renderPluginSdkApiRoot(repoRoot: string): Promise<PluginSdkApiBaseline> {
+export async function renderPluginSdkApiRoot(repoRoot: string): Promise<PluginSdkApiDiffSurface> {
   return renderPluginSdkApiBaseline({
     entrypoints: await readPluginSdkApiEntrypoints(repoRoot),
     repoRoot,
   });
 }
 
+function readNullableString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`Plugin SDK API render has invalid ${key}`);
+  }
+  return value;
+}
+
+function parseSections(value: unknown): PluginSdkApiDeclarationSection[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Plugin SDK API render has invalid declarationSections");
+  }
+  return value.map((section) => {
+    if (
+      !isRecord(section) ||
+      typeof section.name !== "string" ||
+      typeof section.text !== "string"
+    ) {
+      throw new Error("Plugin SDK API render has invalid declaration section");
+    }
+    return { name: section.name, text: section.text };
+  });
+}
+
+function parseSectionIds(value: unknown, sectionCount: number): number[] | null {
+  if (value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Plugin SDK API render has invalid closureSectionIds");
+  }
+  return value.map((id) => {
+    if (typeof id !== "number" || !Number.isInteger(id) || id < 0 || id >= sectionCount) {
+      throw new Error("Plugin SDK API render has invalid closureSectionIds");
+    }
+    return id;
+  });
+}
+
+function isExportKind(value: unknown): value is PluginSdkApiExport["kind"] {
+  return (
+    value === "class" ||
+    value === "const" ||
+    value === "enum" ||
+    value === "function" ||
+    value === "interface" ||
+    value === "namespace" ||
+    value === "type" ||
+    value === "unknown" ||
+    value === "variable"
+  );
+}
+
+/** Validate and project the renderer artifact consumed across the subprocess boundary. */
+export function parsePluginSdkApiDiffSurface(content: string): PluginSdkApiDiffSurface {
+  const parsed: unknown = JSON.parse(content);
+  if (!isRecord(parsed) || !Array.isArray(parsed.modules)) {
+    throw new Error("Plugin SDK API render has invalid modules");
+  }
+  const declarationSections = parseSections(parsed.declarationSections);
+  return {
+    declarationSections,
+    modules: parsed.modules.map((moduleSurface) => {
+      if (
+        !isRecord(moduleSurface) ||
+        typeof moduleSurface.entrypoint !== "string" ||
+        typeof moduleSurface.importSpecifier !== "string" ||
+        !Array.isArray(moduleSurface.exports)
+      ) {
+        throw new Error("Plugin SDK API render has invalid module");
+      }
+      return {
+        entrypoint: moduleSurface.entrypoint,
+        importSpecifier: moduleSurface.importSpecifier,
+        exports: moduleSurface.exports.map((exportSurface) => {
+          if (
+            !isRecord(exportSurface) ||
+            typeof exportSurface.exportName !== "string" ||
+            !isExportKind(exportSurface.kind)
+          ) {
+            throw new Error("Plugin SDK API render has invalid export");
+          }
+          return {
+            closureHash: readNullableString(exportSurface, "closureHash"),
+            closureSectionIds: parseSectionIds(
+              exportSurface.closureSectionIds,
+              declarationSections.length,
+            ),
+            declaration: readNullableString(exportSurface, "declaration"),
+            exportName: exportSurface.exportName,
+            kind: exportSurface.kind,
+          };
+        }),
+      };
+    }),
+  };
+}
+
 function snapshot(
-  exportSurface: PluginSdkApiExport | undefined,
+  exportSurface: PluginSdkApiDiffExport | undefined,
 ): PluginSdkApiExportSnapshot | null {
   return exportSurface
     ? {
@@ -101,8 +211,8 @@ function sectionKey(section: PluginSdkApiDeclarationSection): string {
 }
 
 function collectDeclarationChanges(
-  before: readonly PluginSdkApiDeclarationSection[] | null,
-  after: readonly PluginSdkApiDeclarationSection[] | null,
+  before: readonly PluginSdkApiDeclarationSection[],
+  after: readonly PluginSdkApiDeclarationSection[],
 ): PluginSdkApiDeclarationChange[] {
   const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
   const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
@@ -136,7 +246,20 @@ function collectDeclarationChanges(
   return changes;
 }
 
-function moduleChange(moduleSurface: PluginSdkApiModule): PluginSdkApiEntrypointChange {
+function exportSections(
+  surface: PluginSdkApiDiffSurface,
+  exportSurface: PluginSdkApiDiffExport,
+): PluginSdkApiDeclarationSection[] {
+  return (exportSurface.closureSectionIds ?? []).map((id) => {
+    const section = surface.declarationSections[id];
+    if (!section) {
+      throw new Error(`Plugin SDK API render references missing declaration section ${id}`);
+    }
+    return section;
+  });
+}
+
+function moduleChange(moduleSurface: PluginSdkApiDiffModule): PluginSdkApiEntrypointChange {
   return {
     entrypoint: moduleSurface.entrypoint,
     exportNames: moduleSurface.exports.map((exportSurface) => exportSurface.exportName).toSorted(),
@@ -144,7 +267,7 @@ function moduleChange(moduleSurface: PluginSdkApiModule): PluginSdkApiEntrypoint
   };
 }
 
-function exportMap(moduleSurface: PluginSdkApiModule): Map<string, PluginSdkApiExport> {
+function exportMap(moduleSurface: PluginSdkApiDiffModule): Map<string, PluginSdkApiDiffExport> {
   return new Map(
     moduleSurface.exports.map((exportSurface) => [exportSurface.exportName, exportSurface]),
   );
@@ -152,8 +275,8 @@ function exportMap(moduleSurface: PluginSdkApiModule): Map<string, PluginSdkApiE
 
 /** Compare two rendered SDK surfaces without consulting committed approval state. */
 export function diffPluginSdkApi(
-  before: PluginSdkApiBaseline,
-  after: PluginSdkApiBaseline,
+  before: PluginSdkApiDiffSurface,
+  after: PluginSdkApiDiffSurface,
 ): PluginSdkApiDiff {
   const beforeModules = new Map(
     before.modules.map((moduleSurface) => [moduleSurface.entrypoint, moduleSurface]),
@@ -235,8 +358,8 @@ export function diffPluginSdkApi(
           before: snapshot(beforeExport),
           change: "reachable",
           declarationChanges: collectDeclarationChanges(
-            beforeExport.closureSections,
-            afterExport.closureSections,
+            exportSections(before, beforeExport),
+            exportSections(after, afterExport),
           ),
           entrypoint,
           exportName,
