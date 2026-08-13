@@ -105,7 +105,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
                 id=${UTILITY_MODEL_HELP_POPOVER_ID}
                 class="settings-section__help-popover model-providers__utility-help-popover"
                 for=${UTILITY_MODEL_HELP_ID}
-                placement="bottom-end"
+                placement="top"
                 @keydown=${claimUtilityHelpEscape}
               >
                 <div class="settings-section__help-panel">

@@ -405,26 +405,41 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await expect.poll(() => popover.textContent()).toContain("short background tasks");
         await expect.poll(() => popover.textContent()).toContain("primary model provider");
 
+        expect(
+          await popover.evaluate((node) => ({
+            distance: Reflect.get(node, "distance"),
+            placement: Reflect.get(node, "placement"),
+            skidding: Reflect.get(node, "skidding"),
+          })),
+        ).toEqual({ distance: 8, placement: "top", skidding: 0 });
+        const helpButtonBox = await helpButton.boundingBox();
+        const labelBox = await utilityLabel.boundingBox();
+        const popoverBox = await popoverBody.boundingBox();
+        if (!helpButtonBox || !labelBox || !popoverBox) {
+          throw new Error("expected utility label, help trigger, and popover bounds");
+        }
+        expect(popoverBox.y + popoverBox.height).toBeLessThan(helpButtonBox.y);
+        const helpButtonCenter = helpButtonBox.x + helpButtonBox.width / 2;
+        const popoverCenter = popoverBox.x + popoverBox.width / 2;
+        expect(Math.abs(helpButtonCenter - popoverCenter)).toBeLessThanOrEqual(1);
+
         if (recordVisuals) {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
             path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-full.png`),
           });
-          const labelBox = await utilityLabel.boundingBox();
-          const popoverBox = await popoverBody.boundingBox();
-          if (!labelBox || !popoverBox) {
-            throw new Error("expected utility label and help popover bounds");
-          }
-          const x = popoverBox.x;
-          const y = Math.max(0, labelBox.y - 4);
+          const x = Math.min(labelBox.x, popoverBox.x);
+          const y = Math.max(0, popoverBox.y);
+          const right = Math.max(labelBox.x + labelBox.width, popoverBox.x + popoverBox.width);
+          const bottom = Math.max(labelBox.y + labelBox.height, popoverBox.y + popoverBox.height);
           await page.screenshot({
             animations: "disabled",
             clip: {
               x,
               y,
-              width: popoverBox.width,
-              height: popoverBox.y + popoverBox.height - y,
+              width: right - x,
+              height: bottom - y,
             },
             path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-crop.png`),
           });
