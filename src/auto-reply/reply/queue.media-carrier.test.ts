@@ -10,7 +10,10 @@ import {
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { createOverflowSummaryRetrySource } from "./queue/drain.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryContextKey,
+} from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
 
 const queueKeys = new Set<string>();
@@ -28,6 +31,33 @@ afterEach(() => {
 });
 
 describe("followup prompt metadata carrier", () => {
+  it("keeps participant evidence out of sender-scoped collect routing", () => {
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    evidenceCleanups.add(clearCollection);
+    const runs = ["person-1", "person-2"].map((senderId) => {
+      const item = createQueueTestRun({
+        prompt: `from ${senderId}`,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+      item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "slack",
+        accountId: "default",
+        participantId: senderId,
+      });
+      item.run = {
+        ...item.run,
+        senderId,
+        senderE164: `+1555000${senderId.at(-1)}`,
+        senderIsOwner: false,
+      };
+      return item;
+    });
+
+    expect(resolveFollowupDeliveryContextKey(runs[0]!)).not.toBe(
+      resolveFollowupDeliveryContextKey(runs[1]!),
+    );
+  });
   it("keeps collected prompt bytes and ordered facts stable across deferred admission", async () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     evidenceCleanups.add(clearCollection);

@@ -164,8 +164,6 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Keep this key aligned with the fields that affect per-message authorization or
 // exec-context propagation in collect-mode batching. Display-only sender fields
 // stay out of the key so profile/name drift does not force conservative splits.
-// Raw sender keys remain the default; only verified opaque admission carriers
-// may group participants before the aggregate clears mixed sender authority.
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
@@ -175,12 +173,11 @@ function hasVerifiedAdmissionParticipant(run: FollowupRun): boolean {
 
 function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
-  const useOpaqueParticipant = hasVerifiedAdmissionParticipant(run);
   return JSON.stringify([
-    useOpaqueParticipant ? "" : (execution.senderId ?? ""),
+    execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
-    useOpaqueParticipant ? "" : (execution.senderE164 ?? ""),
+    execution.senderE164 ?? "",
     execution.senderIsOwner === true,
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",

@@ -2105,7 +2105,7 @@ describe("followup queue collect routing", () => {
     }
   });
 
-  it("keeps same-participant evidence and clears authority for a mixed-participant batch", async () => {
+  it("keeps same-participant evidence for a collected batch", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
       const sameCase = createQueueCase(`test-collect-identity-same-${Date.now()}`);
@@ -2138,53 +2138,6 @@ describe("followup queue collect routing", () => {
       ).toMatchObject({
         ingressState: "present",
         invoker: { state: "present", kind: "person" },
-      });
-
-      const mixedCase = createQueueCase(`test-collect-identity-mixed-${Date.now()}`);
-      for (const senderId of ["user-1", "user-2"]) {
-        const item = createRun({
-          prompt: `mixed ${senderId}`,
-          originatingChannel: "slack",
-          originatingTo: "channel:A",
-        });
-        enqueueFollowupRun(
-          mixedCase.key,
-          {
-            ...item,
-            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
-              channelId: "slack",
-              accountId: "default",
-              participantId: senderId,
-            }),
-            run: {
-              ...item.run,
-              senderId,
-              senderName: senderId,
-              senderE164: `+1555000${senderId.at(-1)}`,
-              senderIsOwner: false,
-              traceAuthorized: true,
-              ownerNumbers: ["+15550000000"],
-            },
-          },
-          mixedCase.settings,
-        );
-      }
-      await drainRecordedQueue(mixedCase.key, mixedCase.runFollowup, mixedCase.done);
-      await vi.waitFor(() => expect(getExistingFollowupQueue(mixedCase.key)).toBeUndefined());
-
-      expect(mixedCase.calls).toHaveLength(1);
-      expect(mixedCase.calls[0]?.run).toMatchObject({
-        senderIsOwner: false,
-        traceAuthorized: false,
-        ownerNumbers: [],
-      });
-      expect(mixedCase.calls[0]?.run.senderId).toBeUndefined();
-      expect(mixedCase.calls[0]?.run.senderE164).toBeUndefined();
-      expect(
-        consumeChannelAdmissionEvidence(mixedCase.calls[0]?.channelAdmissionEvidence),
-      ).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
       });
     } finally {
       cleanup();

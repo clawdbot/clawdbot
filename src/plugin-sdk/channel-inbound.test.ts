@@ -3,10 +3,17 @@
  */
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  configureChannelAdmissionEvidenceCollection,
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+} from "../channels/message-access/admission-evidence.js";
+import {
   buildChannelInboundEventContext,
+  buildChannelTurnContext,
   type BuildChannelInboundEventContextParams,
   type PluginHookChannelSenderContext,
 } from "./channel-inbound.js";
+import { createChannelParticipantAdmissionEvidence } from "./channel-ingress-runtime.js";
 
 declare module "./channel-inbound.js" {
   interface PluginHookChannelSenderContext {
@@ -70,5 +77,34 @@ describe("channel-inbound public helpers", () => {
     );
 
     expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
+  });
+
+  it("preserves participant evidence through the deprecated turn-context wrapper", () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const ctx = buildChannelTurnContext({
+        ...createInboundParams({
+          channelParticipantEvidence: createChannelParticipantAdmissionEvidence({
+            channelId: "test",
+            accountId: "default",
+            participantId: "u1",
+          }),
+        }),
+        message: {
+          rawBody: "hello",
+          inboundTurnKind: "user_request",
+        },
+      });
+
+      expect(ctx.InboundTurnKind).toBe("user_request");
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(ctx)),
+      ).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+      });
+    } finally {
+      cleanup();
+    }
   });
 });

@@ -15,6 +15,7 @@ import {
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import { copyChannelParticipantAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -184,10 +185,12 @@ export function buildChannelTurnContext(
       ...(inboundEventKind ? { inboundEventKind } : {}),
     },
   });
-  return {
+  const legacyContext = {
     ...ctx,
     InboundTurnKind: ctx.InboundEventKind,
   };
+  copyChannelParticipantAdmissionEvidence(ctx, legacyContext);
+  return legacyContext;
 }
 
 /**
