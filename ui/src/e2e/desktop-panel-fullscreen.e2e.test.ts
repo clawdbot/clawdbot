@@ -170,9 +170,7 @@ suite.define(() => {
                     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
                     for (let index = 0; index < pixels.length; index += 128) {
                       if (
-                        (pixels[index] ?? 0) +
-                          (pixels[index + 1] ?? 0) +
-                          (pixels[index + 2] ?? 0) >
+                        (pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0) >
                         0
                       ) {
                         return true;
