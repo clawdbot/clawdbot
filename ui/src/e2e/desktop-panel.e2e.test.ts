@@ -823,7 +823,15 @@ suite.define(() => {
       await openDirectDesktop(page, "worker-desktop-1");
       const panel = page.locator("openclaw-desktop-panel");
       await panel.locator("section[aria-label='Desktop']").waitFor();
-      await panel.locator(".desktop-surface canvas").waitFor();
+      const canvas = panel.locator(".desktop-surface canvas");
+      await canvas.waitFor();
+      const canvasHandle = await canvas.elementHandle();
+      await panel.getByRole("button", { name: "Enter fullscreen", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+      expect(await canvas.evaluate((element, original) => element === original, canvasHandle)).toBe(
+        true,
+      );
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
 
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       await takeControl.waitFor();
@@ -838,6 +846,9 @@ suite.define(() => {
       });
       await panel.locator(".desktop-surface canvas").waitFor();
       expect(await takeControl.count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+      await panel.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
     });
   });
 

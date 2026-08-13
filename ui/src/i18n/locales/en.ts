@@ -2019,6 +2019,9 @@ export const en: TranslationMap = {
     resize: "Resize desktop panel",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    enterFullscreen: "Enter fullscreen",
+    exitFullscreen: "Exit fullscreen",
+    fullscreenUnavailable: "Fullscreen is unavailable in this browser",
     pickerTitle: "Desktop sources",
     thisMachine: "This machine",
     refresh: "Refresh",
@@ -2052,6 +2055,7 @@ export const en: TranslationMap = {
     unknownReason: "unknown reason",
     errors: {
       listFailed: "Could not load desktop sources: {error}",
+      fullscreenFailed: "Could not change fullscreen mode: {error}",
       securityFailed: "Desktop security negotiation failed: {reason}",
     },
   },
