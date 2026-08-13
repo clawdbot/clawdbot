@@ -1,5 +1,8 @@
 // Discord tests cover message handler.queue plugin behavior.
 import { getEventListeners } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
 import {
   type ChannelIngressQueue,
@@ -11,8 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler as createDurableDiscordMessageHandler } from "./message-handler.js";
 import {
@@ -66,12 +68,11 @@ type DiscordIngressPayload = {
   rawMessage: APIMessage;
 };
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 async function withDiscordQueue<T>(
   run: (queue: ChannelIngressQueue<DiscordIngressPayload>) => Promise<T>,
 ): Promise<T> {
-  const stateDir = tempDirs.make("openclaw-discord-handler-");
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-handler-"));
+  const stateDir = await fs.realpath(created);
   const queue = createChannelIngressQueueForTests<DiscordIngressPayload>({
     channelId: "discord",
     accountId: "default",
@@ -81,6 +82,7 @@ async function withDiscordQueue<T>(
     return await run(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 

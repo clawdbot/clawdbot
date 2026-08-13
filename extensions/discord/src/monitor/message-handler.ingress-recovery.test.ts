@@ -1,4 +1,7 @@
 // Discord tests cover durable retry recovery through full handler replacement.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
 import {
   type ChannelIngressQueue,
@@ -9,8 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor } from "./ingress.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import { createDiscordHandlerParams } from "./message-handler.test-helpers.js";
@@ -22,8 +24,6 @@ type DiscordIngressPayload = {
 };
 
 type DiscordQueue = ChannelIngressQueue<DiscordIngressPayload>;
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function rawMessage(id: string, channelId = "lane-a"): APIMessage {
   return {
@@ -51,7 +51,8 @@ function rawMessage(id: string, channelId = "lane-a"): APIMessage {
 }
 
 async function withQueue(run: (queue: DiscordQueue) => Promise<void>): Promise<void> {
-  const stateDir = tempDirs.make("openclaw-discord-recovery-");
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-recovery-"));
+  const stateDir = await fs.realpath(created);
   const queue = createChannelIngressQueueForTests<DiscordIngressPayload>({
     channelId: "discord",
     accountId: "default",
@@ -61,6 +62,7 @@ async function withQueue(run: (queue: DiscordQueue) => Promise<void>): Promise<v
     await run(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 

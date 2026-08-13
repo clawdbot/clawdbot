@@ -1,12 +1,14 @@
 // Signal tests cover retry behavior for reply session initialization conflicts.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
@@ -14,8 +16,6 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
 ] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const {
   sendTypingMock,
@@ -339,7 +339,8 @@ describe("signal reply session init conflict retry", () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const stateDir = tempDirs.make("openclaw-signal-abandon-");
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-abandon-"));
+    const stateDir = await fs.realpath(created);
     type Queue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
     type Payload = Parameters<Queue["enqueue"]>[1];
     const queue = createChannelIngressQueueForTests<Payload>({
@@ -450,6 +451,7 @@ describe("signal reply session init conflict retry", () => {
       await blockedRestart.monitor.stop();
     } finally {
       closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
