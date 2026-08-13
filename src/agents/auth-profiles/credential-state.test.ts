@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   evaluateStoredCredentialEligibility,
+  hasOAuthTokenMaterialChanged,
   hasUsableOAuthCredential,
   resolveTokenExpiryState,
 } from "./credential-state.js";
@@ -62,6 +63,19 @@ describe("hasUsableOAuthCredential", () => {
         { now },
       ),
     ).toBe(false);
+  });
+});
+
+describe("hasOAuthTokenMaterialChanged", () => {
+  const base = { access: "access", refresh: "refresh", expires: 100 };
+
+  it.each([
+    ["unchanged", base, false],
+    ["access", { ...base, access: "next-access" }, true],
+    ["refresh", { ...base, refresh: "next-refresh" }, true],
+    ["expires", { ...base, expires: 200 }, true],
+  ])("classifies %s token material", (_name, current, expected) => {
+    expect(hasOAuthTokenMaterialChanged(base, current)).toBe(expected);
   });
 });
 

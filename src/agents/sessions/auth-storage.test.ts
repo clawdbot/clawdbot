@@ -638,19 +638,12 @@ describe("SQLite auth storage", () => {
 
   it("throws without changing memory when the durable write fails", () => {
     const writeError = new Error("simulated durable write failure");
-    let persisted = "{}";
+    const persisted = "{}";
     const backend: AuthStorageBackend = {
       withLock: (fn) => {
         const update = fn(persisted);
         if (update.next !== undefined) {
           throw writeError;
-        }
-        return update.result;
-      },
-      withLockAsync: async (fn) => {
-        const update = await fn(persisted);
-        if (update.next !== undefined) {
-          persisted = update.next;
         }
         return update.result;
       },

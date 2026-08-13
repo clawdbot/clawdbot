@@ -114,9 +114,8 @@ describe("formatAssistantErrorText", () => {
       expected: "Authentication refresh failed. Re-authenticate this provider and try again.",
     },
     {
-      title: "returns a timeout-specific message for OAuth refresh hard timeouts",
-      errorText:
-        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+      title: "returns a timeout-specific message for OAuth refresh caller deadlines",
+      errorText: "OAuth refresh call exceeded caller deadline (120000ms)",
       expected:
         "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     },

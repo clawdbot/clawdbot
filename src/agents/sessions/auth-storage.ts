@@ -16,21 +16,27 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
+import {
+  AUTH_STORE_VERSION,
+  OAUTH_REFRESH_CALL_TIMEOUT_MS,
+  OAUTH_REFRESH_LOCK_OPTIONS,
+} from "../auth-profiles/constants.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
 } from "../auth-profiles/legacy-source-diagnostic.js";
+import { runRetainedOAuthRefreshOperation } from "../auth-profiles/oauth-manager.js";
+import { resolveOAuthRefreshConflict } from "../auth-profiles/oauth-shared.js";
 import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
-  resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
@@ -38,7 +44,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStore,
 } from "../auth-profiles/store.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
   getAuthStorageOAuthProviderRegistry,
@@ -128,7 +134,6 @@ type LockResult<T> = {
 export interface AuthStorageBackend {
   readonly migrationOwnerAgentDir?: string;
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
-  withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
 
 function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
@@ -303,11 +308,6 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
   }
 
-  private readRaw(): AuthProfileStore {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return loadSqliteAuthStorageStore(this.agentDir);
-  }
-
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
@@ -330,46 +330,6 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
       }
       return result;
     });
-  }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return await withFileLock(
-      resolveAuthProfileDatabasePath(this.agentDir),
-      OAUTH_REFRESH_LOCK_OPTIONS,
-      async () => {
-        const initialRaw = this.readRaw();
-        const initialData = projectAuthoritativeAuthStorageData(
-          initialRaw,
-          this.resolveMaterializedRuntimeStores(),
-        );
-        const { result, next } = await fn(JSON.stringify(initialData));
-        if (next === undefined) {
-          return result;
-        }
-        assertAuthProfileMigrationReady(this.agentDir);
-        runAuthProfileWriteTransaction(this.agentDir, (database) => {
-          const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
-          if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
-            throw new AuthStoragePersistenceError(
-              "Cannot update auth storage because its SQLite credentials changed concurrently.",
-              undefined,
-            );
-          }
-          saveAuthProfileStore(
-            applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
-            this.agentDir,
-            {
-              filterExternalAuthProfiles: false,
-              preserveStateProfileIds: collectStateOnlyAuthProfileIds(authoritative),
-              syncExternalCli: false,
-            },
-            database,
-          );
-        });
-        return result;
-      },
-    );
   }
 }
 
@@ -399,10 +359,6 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     return this.delegate.withLock(fn);
   }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    return await this.delegate.withLockAsync(fn);
-  }
 }
 
 export class InMemoryAuthStorageBackend implements AuthStorageBackend {
@@ -410,14 +366,6 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     const { result, next } = fn(this.value);
-    if (next !== undefined) {
-      this.value = next;
-    }
-    return result;
-  }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    const { result, next } = await fn(this.value);
     if (next !== undefined) {
       this.value = next;
     }
@@ -436,6 +384,7 @@ export class AuthStorage {
   private errors: Error[] = [];
   private storage: AuthStorageBackend;
   private migrationOwnerAgentDir?: string;
+  private oauthRefreshQueue = new KeyedAsyncQueue();
 
   private constructor(storage: AuthStorageBackend, migrationOwnerAgentDir?: string) {
     this.storage = storage;
@@ -698,62 +647,96 @@ export class AuthStorage {
   private async refreshOAuthTokenWithLock(
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-
-    const refresh = async () =>
-      await this.storage.withLockAsync(async (current) => {
-        const currentData = this.parseStorageData(current);
-        this.data = currentData;
-        this.loadError = null;
-
-        const cred = currentData[providerId];
-        if (cred?.type !== "oauth") {
-          return { result: null };
-        }
-
-        if (Date.now() < cred.expires) {
-          if (provider) {
-            return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+    return runRetainedOAuthRefreshOperation({
+      timeoutMs: OAUTH_REFRESH_CALL_TIMEOUT_MS,
+      run: async (signal) => {
+        const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
+        const resolveCredential = async (credential: OAuthCredentials, forceRefresh = false) => {
+          signal.throwIfAborted();
+          if (!provider) {
+            return await resolveAuthStoragePluginOAuthCredential(
+              providerId,
+              credential,
+              forceRefresh,
+            );
           }
-          return { result: await resolveAuthStoragePluginOAuthCredential(providerId, cred, false) };
-        }
-
-        const oauthCreds: Record<string, OAuthCredentials> = {};
-        for (const [key, value] of Object.entries(currentData)) {
-          if (value.type === "oauth") {
-            oauthCreds[key] = value;
+          if (!forceRefresh) {
+            return { apiKey: provider.getApiKey(credential), newCredentials: credential };
           }
-        }
-
-        const refreshed = provider
-          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
-          : await resolveAuthStoragePluginOAuthCredential(providerId, cred, true);
-        if (!refreshed) {
-          return { result: null };
-        }
-
-        const refreshedCredential: OAuthCredential = {
-          type: "oauth",
-          ...refreshed.newCredentials,
+          const refreshed = await provider.refreshToken(credential);
+          return { apiKey: provider.getApiKey(refreshed), newCredentials: refreshed };
         };
-        const merged: AuthStorageData = {
-          ...currentData,
-          [providerId]: refreshedCredential,
-        };
-        this.data = merged;
-        this.loadError = null;
-        return { result: refreshed, next: JSON.stringify(merged, null, 2) };
-      });
+        signal.throwIfAborted();
+        return await this.oauthRefreshQueue.enqueue(providerId, async () => {
+          signal.throwIfAborted();
+          const refresh = async () => {
+            signal.throwIfAborted();
+            const snapshot = this.storage.withLock((current) => {
+              const currentData = this.parseStorageData(current);
+              return { result: { currentData, credential: currentData[providerId] } };
+            });
+            this.data = snapshot.currentData;
+            this.loadError = null;
+            if (snapshot.credential?.type !== "oauth") {
+              return null;
+            }
+            const credential = snapshot.credential;
+            if (Date.now() < credential.expires) {
+              return await resolveCredential(credential);
+            }
 
-    const result = this.migrationOwnerAgentDir
-      ? await withFileLock(
-          resolveOAuthRefreshLockPath(providerId, `${providerId}:default`),
-          OAUTH_REFRESH_LOCK_OPTIONS,
-          refresh,
-        )
-      : await refresh();
+            const refreshed = await resolveCredential(credential, true);
+            if (!refreshed) {
+              return null;
+            }
+            const refreshedCredential = {
+              ...credential,
+              ...refreshed.newCredentials,
+              type: "oauth",
+              provider: providerId,
+            } satisfies Extract<AuthProfileCredential, { type: "oauth" }>;
+            if (Date.now() >= refreshedCredential.expires) {
+              throw new Error("OAuth provider returned an expired credential");
+            }
 
-    return result;
+            const persisted = this.storage.withLock((current) => {
+              const data = this.parseStorageData(current);
+              const decision = resolveOAuthRefreshConflict({
+                authoritative: data[providerId]
+                  ? ({ ...data[providerId], provider: providerId } as AuthProfileCredential)
+                  : undefined,
+                attempted: { ...credential, provider: providerId },
+                refreshed: refreshedCredential,
+              });
+              if (!decision?.persist) {
+                return { result: { data, credential: decision?.credential ?? null } };
+              }
+              const nextData = { ...data, [providerId]: decision.credential };
+              return {
+                result: { data: nextData, credential: decision.credential },
+                next: JSON.stringify(nextData, null, 2),
+              };
+            });
+            this.data = persisted.data;
+            this.loadError = null;
+            if (!persisted.credential) {
+              return null;
+            }
+            return persisted.credential === refreshedCredential
+              ? { apiKey: refreshed.apiKey, newCredentials: persisted.credential }
+              : await resolveCredential(persisted.credential);
+          };
+
+          return this.migrationOwnerAgentDir
+            ? await withFileLock(
+                resolveOAuthRefreshLockPath(providerId, `${providerId}:default`),
+                OAUTH_REFRESH_LOCK_OPTIONS,
+                refresh,
+              )
+            : await refresh();
+        });
+      },
+    });
   }
 
   /**

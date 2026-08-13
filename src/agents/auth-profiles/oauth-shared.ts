@@ -11,7 +11,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-identity.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
@@ -89,6 +89,40 @@ export function hasMatchingOAuthIdentity(
   incoming: Pick<OAuthCredential, "accountId" | "email">,
 ): boolean {
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
+}
+
+/**
+ * Resolve a refresh result against the credential authoritative at commit time.
+ * Same-identity rotations persist; only a usable different login supersedes them.
+ */
+export function resolveOAuthRefreshConflict(params: {
+  authoritative: AuthProfileCredential | undefined;
+  attempted: OAuthCredential;
+  refreshed: OAuthCredential;
+  now?: number;
+}): { credential: OAuthCredential; persist: boolean } | null {
+  const { authoritative, attempted, refreshed } = params;
+  if (
+    refreshed.provider !== attempted.provider ||
+    !isSafeToCopyOAuthIdentity(attempted, refreshed)
+  ) {
+    throw new Error("OAuth credential identity changed during refresh; sign in again");
+  }
+  if (authoritative?.type !== "oauth") {
+    return null;
+  }
+  if (authoritative.provider !== attempted.provider) {
+    return null;
+  }
+  if (
+    areOAuthCredentialsEquivalent(authoritative, attempted) ||
+    hasMatchingOAuthIdentity(authoritative, refreshed)
+  ) {
+    return { credential: refreshed, persist: true };
+  }
+  return hasUsableOAuthCredential(authoritative, { now: params.now })
+    ? { credential: authoritative, persist: false }
+    : null;
 }
 
 // Different adoption paths have different safety thresholds. Bootstrap can

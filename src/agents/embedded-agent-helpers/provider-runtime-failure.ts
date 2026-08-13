@@ -1,6 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
-import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
+import {
+  classifyOAuthRefreshFailure,
+  OAUTH_REFRESH_CALLER_DEADLINE_MESSAGE,
+} from "../auth-profiles/oauth-refresh-failure.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
   inferSignalStatus,
@@ -151,7 +154,7 @@ function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   return false;
 }
 function isOAuthRefreshTimeoutMessage(raw: string): boolean {
-  return /\boauth refresh call\b.*\bexceeded hard timeout\b/i.test(raw);
+  return raw.toLowerCase().includes(OAUTH_REFRESH_CALLER_DEADLINE_MESSAGE.toLowerCase());
 }
 function isOAuthRefreshContentionMessage(raw: string): boolean {
   return (

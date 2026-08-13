@@ -112,9 +112,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
     expect(
-      classifyProviderRuntimeFailureKind(
-        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-      ),
+      classifyProviderRuntimeFailureKind("OAuth refresh call exceeded caller deadline (120000ms)"),
     ).toBe("refresh_timeout");
     expect(
       classifyProviderRuntimeFailureKind("file lock timeout for /tmp/openclaw-oauth-refresh.lock"),

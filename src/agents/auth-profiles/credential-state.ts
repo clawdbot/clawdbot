@@ -73,6 +73,18 @@ export function hasUsableOAuthCredential(
   );
 }
 
+/** Returns true when provider-issued OAuth token material differs. */
+export function hasOAuthTokenMaterialChanged(
+  previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+  current: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+): boolean {
+  return (
+    previous.access !== current.access ||
+    previous.refresh !== current.refresh ||
+    previous.expires !== current.expires
+  );
+}
+
 // SecretRef and literal secret strings are both valid configured credentials;
 // unresolved refs are classified separately so callers can surface useful copy.
 function hasConfiguredSecretRef(value: unknown): boolean {

@@ -9,6 +9,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { describe, expect, it, vi } from "vitest";
 import {
   overlayRuntimeExternalOAuthProfiles,
+  resolveOAuthRefreshConflict,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -181,4 +182,81 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
 
     expect(shouldReplaceStoredOAuthCredential(existing, incoming)).toBe(true);
   });
+});
+
+describe("resolveOAuthRefreshConflict", () => {
+  const attempted: OAuthCredential = {
+    type: "oauth",
+    provider: "openai",
+    access: "attempted-access",
+    refresh: "attempted-refresh",
+    expires: 1,
+    accountId: "acct-1",
+    email: "user@example.com",
+  };
+
+  it.each([
+    {
+      name: "matching account",
+      refreshed: { accountId: "acct-1", email: "other@example.com" },
+    },
+    {
+      name: "matching email",
+      refreshed: { email: "USER@example.com" },
+    },
+  ])("accepts a refreshed $name identity", ({ refreshed }) => {
+    expect(
+      resolveOAuthRefreshConflict({
+        authoritative: attempted,
+        attempted,
+        refreshed: { ...attempted, ...refreshed, access: "refreshed-access" },
+      }),
+    ).toMatchObject({ credential: { access: "refreshed-access" }, persist: true });
+  });
+
+  it("accepts identity learned while refreshing an identity-less credential", () => {
+    const identityLess = { ...attempted, accountId: undefined, email: undefined };
+    expect(
+      resolveOAuthRefreshConflict({
+        authoritative: identityLess,
+        attempted: identityLess,
+        refreshed: { ...identityLess, accountId: "acct-1" },
+      }),
+    ).toMatchObject({ credential: { accountId: "acct-1" }, persist: true });
+  });
+
+  it.each([
+    {
+      name: "provider",
+      refreshed: { provider: "anthropic" },
+      message: "OAuth credential identity changed during refresh; sign in again",
+    },
+    {
+      name: "account",
+      refreshed: { accountId: "acct-2" },
+      message: "OAuth credential identity changed during refresh; sign in again",
+    },
+    {
+      name: "email",
+      attempted: { ...attempted, accountId: undefined },
+      refreshed: { accountId: undefined, email: "other@example.com" },
+      message: "OAuth credential identity changed during refresh; sign in again",
+    },
+    {
+      name: "missing identity",
+      refreshed: { accountId: undefined, email: undefined },
+      message: "OAuth credential identity changed during refresh; sign in again",
+    },
+  ])(
+    "rejects a refreshed $name mismatch",
+    ({ attempted: input = attempted, refreshed, message }) => {
+      expect(() =>
+        resolveOAuthRefreshConflict({
+          authoritative: input,
+          attempted: input,
+          refreshed: { ...input, ...refreshed, access: "refreshed-access" },
+        }),
+      ).toThrow(message);
+    },
+  );
 });

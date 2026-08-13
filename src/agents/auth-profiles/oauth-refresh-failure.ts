@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import type { AuthProfileFailureReason } from "./types.js";
 
+export const OAUTH_REFRESH_CALLER_DEADLINE_MESSAGE = "OAuth refresh call exceeded caller deadline";
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
   | "invalid_grant"

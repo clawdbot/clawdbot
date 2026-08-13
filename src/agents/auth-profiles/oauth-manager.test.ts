@@ -23,7 +23,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -34,6 +34,12 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
     expires: Date.now() + 60_000,
     ...overrides,
   };
+}
+
+function prepareRefresh(
+  refresh: (credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredentials | null>,
+) {
+  return async () => refresh;
 }
 
 const tempDirs: string[] = [];
@@ -265,7 +271,7 @@ describe("createOAuthManager", () => {
     const buildApiKey = vi.fn(async (_provider, value: OAuthCredential) => value.access);
     const manager = createOAuthManager({
       buildApiKey,
-      refreshCredential: vi.fn(async () => null),
+      prepareRefresh: prepareRefresh(vi.fn(async () => null)),
       readBootstrapCredential: () => null,
       isRefreshTokenReusedError: () => false,
     });
@@ -347,7 +353,7 @@ describe("createOAuthManager", () => {
       });
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential,
+        prepareRefresh: prepareRefresh(refreshCredential),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -400,7 +406,7 @@ describe("createOAuthManager", () => {
       });
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential,
+        prepareRefresh: prepareRefresh(refreshCredential),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -451,14 +457,16 @@ describe("createOAuthManager", () => {
 
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential: vi.fn(async (credential) => {
-          expect(credential.refresh).toBe("external-refresh");
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 60_000,
-          };
-        }),
+        prepareRefresh: prepareRefresh(
+          vi.fn(async (credential) => {
+            expect(credential.refresh).toBe("external-refresh");
+            return {
+              access: "rotated-access",
+              refresh: "rotated-refresh",
+              expires: Date.now() + 60_000,
+            };
+          }),
+        ),
         readBootstrapCredential: () =>
           createCredential({
             provider: "minimax-portal",
@@ -509,7 +517,7 @@ describe("createOAuthManager", () => {
       const refreshCredential = vi.fn(async () => null);
       const manager = createOAuthManager({
         buildApiKey: async (_provider, value) => value.access,
-        refreshCredential,
+        prepareRefresh: prepareRefresh(refreshCredential),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -552,28 +560,30 @@ describe("createOAuthManager", () => {
 
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential: vi.fn(async () => {
-          saveAuthProfileStore(
-            {
-              version: 1,
-              profiles: {
-                [profileId]: createCredential({
-                  access: "stale-race-access",
-                  refresh: "consumed-race-refresh",
-                  expires: Date.now() + 10 * 60_000,
-                  accountId: "acct-123",
-                }),
+        prepareRefresh: prepareRefresh(
+          vi.fn(async () => {
+            saveAuthProfileStore(
+              {
+                version: 1,
+                profiles: {
+                  [profileId]: createCredential({
+                    access: "stale-race-access",
+                    refresh: "consumed-race-refresh",
+                    expires: Date.now() + 10 * 60_000,
+                    accountId: "acct-123",
+                  }),
+                },
               },
-            },
-            agentDir,
-            { filterExternalAuthProfiles: false },
-          );
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 60_000,
-          };
-        }),
+              agentDir,
+              { filterExternalAuthProfiles: false },
+            );
+            return {
+              access: "rotated-access",
+              refresh: "rotated-refresh",
+              expires: Date.now() + 60_000,
+            };
+          }),
+        ),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -599,6 +609,86 @@ describe("createOAuthManager", () => {
       });
     });
   });
+
+  it.each([
+    {
+      name: "matching identity",
+      refreshedIdentity: { accountId: "acct-123" },
+      expectedAccess: "rotated-access",
+    },
+    {
+      name: "omitted identity",
+      refreshedIdentity: {},
+      expectedAccess: "rotated-access",
+    },
+    {
+      name: "different identity",
+      refreshedIdentity: { accountId: "acct-456" },
+      expectedError: "OAuth credential identity changed during refresh; sign in again",
+    },
+  ])(
+    "validates $name on an ordinary refresh before persistence",
+    async ({ name, refreshedIdentity, expectedAccess, expectedError }) => {
+      await withOAuthTempRoot(`oauth-manager-refresh-identity-${name}-`, async (tempRoot) => {
+        const agentDir = path.join(tempRoot, "agents", "main", "agent");
+        await fs.mkdir(agentDir, { recursive: true });
+        const profileId = "openai:oauth";
+        const expired = createCredential({
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: 1,
+          accountId: "acct-123",
+        });
+        saveAuthProfileStore({ version: 1, profiles: { [profileId]: expired } }, agentDir, {
+          filterExternalAuthProfiles: false,
+        });
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          prepareRefresh: prepareRefresh(async () => ({
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: Date.now() + 60_000,
+            ...refreshedIdentity,
+          })),
+          readBootstrapCredential: () => null,
+          isRefreshTokenReusedError: () => false,
+        });
+        const input = {
+          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+          profileId,
+          credential: expired,
+          agentDir,
+        };
+
+        if (expectedError) {
+          try {
+            await manager.resolveOAuthAccess(input);
+            throw new Error("expected refresh failure");
+          } catch (error) {
+            expect(error).toBeInstanceOf(OAuthManagerRefreshError);
+            expect((error as OAuthManagerRefreshError).cause).toMatchObject({
+              message: expectedError,
+            });
+          }
+          expect(
+            ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+          ).toEqual(expired);
+          return;
+        }
+
+        await expect(manager.resolveOAuthAccess(input)).resolves.toMatchObject({
+          apiKey: expectedAccess,
+        });
+        expect(
+          ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+        ).toMatchObject({
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+          accountId: "acct-123",
+        });
+      });
+    },
+  );
 
   it("uses a different-identity stored credential after a CAS race", async () => {
     await withOAuthTempRoot("oauth-manager-cas-different-identity-", async (tempRoot) => {
@@ -632,23 +722,25 @@ describe("createOAuthManager", () => {
 
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential: vi.fn(async () => {
-          saveAuthProfileStore(
-            {
-              version: 1,
-              profiles: {
-                [profileId]: relogged,
+        prepareRefresh: prepareRefresh(
+          vi.fn(async () => {
+            saveAuthProfileStore(
+              {
+                version: 1,
+                profiles: {
+                  [profileId]: relogged,
+                },
               },
-            },
-            agentDir,
-            { filterExternalAuthProfiles: false },
-          );
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 60_000,
-          };
-        }),
+              agentDir,
+              { filterExternalAuthProfiles: false },
+            );
+            return {
+              access: "rotated-access",
+              refresh: "rotated-refresh",
+              expires: Date.now() + 60_000,
+            };
+          }),
+        ),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -697,9 +789,11 @@ describe("createOAuthManager", () => {
       );
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential: vi.fn(async () => {
-          throw new Error("refresh rejected managed profile");
-        }),
+        prepareRefresh: prepareRefresh(
+          vi.fn(async () => {
+            throw new Error("refresh rejected managed profile");
+          }),
+        ),
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
@@ -748,11 +842,13 @@ describe("createOAuthManager", () => {
 
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential: vi.fn(async () => {
-          throw new Error(
-            "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
-          );
-        }),
+        prepareRefresh: prepareRefresh(
+          vi.fn(async () => {
+            throw new Error(
+              "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
+            );
+          }),
+        ),
         readBootstrapCredential: () => externalCredential,
         isRefreshTokenReusedError: () => false,
       });
@@ -779,6 +875,86 @@ describe("createOAuthManager", () => {
         expect(surfacedCauseMessage).not.toContain("external-attempt-refresh");
         expect(surfacedCauseMessage).not.toContain("external-attempt-id-token");
       }
+    });
+  });
+
+  it("persists late refresh success and reuses it after the caller deadline", async () => {
+    await withOAuthAgentDirs("oauth-manager-late-success-", async ({ agentDir }) => {
+      const profileId = "openai:oauth";
+      const credential = createCredential({ expires: 1 });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+      const stalled = Promise.withResolvers<OAuthCredentials>();
+      const refreshCredential = vi.fn(async () => await stalled.promise);
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, value) => value.access,
+        prepareRefresh: prepareRefresh(refreshCredential),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+        refreshTimeoutMs: 10,
+      });
+      const input = () => {
+        const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+        return {
+          store,
+          profileId,
+          credential: store.profiles[profileId] as OAuthCredential,
+          agentDir,
+        };
+      };
+
+      await expect(manager.resolveOAuthAccess(input())).rejects.toThrow("exceeded caller deadline");
+      stalled.resolve({
+        access: "late-access",
+        refresh: "late-refresh",
+        expires: Date.now() + 10 * 60_000,
+      });
+      await vi.waitFor(() => {
+        expect(
+          ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+        ).toMatchObject({ access: "late-access", refresh: "late-refresh" });
+      });
+      await expect(manager.resolveOAuthAccess(input())).resolves.toMatchObject({
+        apiKey: "late-access",
+      });
+      expect(refreshCredential).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("times out queued callers independently without invoking an expired follower", async () => {
+    await withOAuthAgentDirs("oauth-manager-follower-timeout-", async ({ agentDir }) => {
+      const profileId = "openai:oauth";
+      const credential = createCredential({ expires: 1 });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+      const stalled = Promise.withResolvers<OAuthCredentials>();
+      const refreshCredential = vi.fn(async () => await stalled.promise);
+      const prepareRefreshCall = vi.fn(async () => refreshCredential);
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, value) => value.access,
+        prepareRefresh: prepareRefreshCall,
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+        refreshTimeoutMs: 10,
+      });
+      const input = () => ({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+        profileId,
+        credential,
+        agentDir,
+      });
+
+      const first = manager.resolveOAuthAccess(input());
+      const firstAssertion = expect(first).rejects.toThrow("exceeded caller deadline");
+      await vi.waitFor(() => expect(refreshCredential).toHaveBeenCalledOnce());
+      const follower = manager.resolveOAuthAccess(input());
+      const followerAssertion = expect(follower).rejects.toThrow("exceeded caller deadline");
+      await Promise.all([firstAssertion, followerAssertion]);
+      stalled.reject(new Error("late provider failure"));
+      await vi.waitFor(() => expect(prepareRefreshCall).toHaveBeenCalledTimes(2));
+      expect(refreshCredential).toHaveBeenCalledOnce();
     });
   });
 });

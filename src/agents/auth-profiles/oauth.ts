@@ -230,7 +230,10 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
-  refreshCredential: refreshOAuthCredential,
+  prepareRefresh: async (_credential, context) => async (credential, signal) => {
+    signal.throwIfAborted();
+    return await refreshOAuthCredential(credential, { cfg: context.cfg });
+  },
   readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
       store,
