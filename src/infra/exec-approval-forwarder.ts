@@ -689,52 +689,20 @@ function createApprovalHandlers<
   };
 
   const handleResolved = async (resolved: TResolved) => {
-    const resolvedId = params.strategy.getResolvedId(resolved);
-    const entry = pending.get(resolvedId);
-    if (entry?.timeoutId) {
-      clearTimeout(entry.timeoutId);
-    }
-    if (entry) {
-      pending.delete(resolvedId);
-    }
-
+    // Gate the outcome echo via config
     const cfg = params.getConfig();
     const forwardingConfig = params.strategy.config(cfg);
     const outcome = forwardingConfig?.outcome ?? "message";
-    // Contract: `outcome` gates only the resolved-outcome echo for target
-    // forwarding; native approval clients deliver their own resolved
-    // outcomes through channel adapters and are intentionally unaffected.
     if (outcome === "none") {
+      // Still settle to avoid leaks, but suppress delivery
+      pending.settle(params.strategy.getResolvedId(resolved), () => {});
       return;
     }
 
-    let targets = entry?.targets;
-    if (!targets) {
-      const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
-      if (routeRequest) {
-        const config = params.strategy.config(cfg);
-        targets = [
-          ...(shouldForwardRoute({ config, routeRequest })
-            ? await resolveForwardTargets({
-                cfg,
-                config,
-                approvalKind: params.strategy.kind,
-                routeRequest,
-                resolveSessionTarget: params.resolveSessionTarget,
-              })
-            : []),
-        ].filter(
-          (target) =>
-            !shouldSkipForwardingFallback({
-              approvalKind: params.strategy.kind,
-              target,
-              cfg,
-              routeRequest,
-            }),
-        );
-      }
-    }
-    if (!targets?.length) {
+    const settled = pending.settle(params.strategy.getResolvedId(resolved), (entry) =>
+      deliverResolved(resolved, entry.value),
+    );
+    if (settled.status === "queued") {
       return;
     }
     if (settled.status === "taken") {
