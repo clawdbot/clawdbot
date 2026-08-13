@@ -55,6 +55,7 @@ export const TARGET_KEYS = [
   "memory.search.inputType",
   "memory.search.queryInputType",
   "memory.search.documentInputType",
+  "memory.search.queryInstructionTemplate",
   "memory.search.outputDimensionality",
   "memory.search.store.vector.extensionPath",
   "memory.search.cache.enabled",

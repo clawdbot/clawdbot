@@ -351,6 +351,28 @@ describe("createEmbeddingProvider", () => {
     expect(genericProvider.closed).toBe(true);
   });
 
+  it("preserves provider-owned query template options through the generic adapter bridge", async () => {
+    const create = vi.fn<EmbeddingProviderAdapter["create"]>(async (options) => {
+      expect(Reflect.get(options, "queryInstructionTemplate")).toBe(true);
+      return {
+        provider: {
+          id: "generic",
+          model: "qwen3-embedding-4b",
+          embed: async () => [1],
+          embedBatch: async (inputs) => inputs.map(() => [1]),
+        },
+      };
+    });
+    registerGenericEmbeddingProvider({ id: "openai-compatible", create });
+
+    await createEmbeddingProvider({
+      ...createOptions("openai-compatible"),
+      queryInstructionTemplate: true,
+    });
+
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {
     const observedHooks: unknown[] = [];
     registerGenericEmbeddingProvider({

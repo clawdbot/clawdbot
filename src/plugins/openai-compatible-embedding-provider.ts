@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import { applyOpenAICompatibleEmbeddingQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/host/openai-compatible-query-instruction-templates.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -27,7 +28,6 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
-
 /** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
   providerId: string;
@@ -42,6 +42,7 @@ type OpenAICompatibleEmbeddingClient = {
   documentInputType?: string;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
+  queryInstructionTemplate?: boolean;
 };
 
 type ConfiguredEmbeddingProvider = {
@@ -57,8 +58,9 @@ type ResolvedConfiguredEmbeddingProvider = {
   config: ConfiguredEmbeddingProvider;
 };
 
-type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
+type OpenAICompatibleEmbeddingProviderCreateOptions = EmbeddingProviderCreateOptions & {
   acquireLocalService?: AcquireConfiguredProviderLocalService;
+  queryInstructionTemplate?: boolean;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -279,9 +281,15 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
+  const requestInput =
+    client.queryInstructionTemplate && params.inputType === "query"
+      ? input.map((text) =>
+          applyOpenAICompatibleEmbeddingQueryInstructionTemplate(client.model, text),
+        )
+      : input;
   const body = {
     model: client.model,
-    input,
+    input: requestInput,
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
@@ -322,9 +330,8 @@ async function postEmbeddingRequest(params: {
   }
 }
 
-/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
 async function createOpenAICompatibleEmbeddingClient(
-  options: EmbeddingProviderCreateOptions,
+  options: OpenAICompatibleEmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const resolvedProvider = resolveConfiguredProvider(options);
   const configuredProvider = resolvedProvider?.config;
@@ -358,7 +365,6 @@ async function createOpenAICompatibleEmbeddingClient(
       headers.authorization = `Bearer ${providerApiKey}`;
     }
   }
-  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     providerId,
     baseUrl,
@@ -373,7 +379,7 @@ async function createOpenAICompatibleEmbeddingClient(
             baseUrl,
             headers,
           },
-          acquireLocalService: localServiceOptions.acquireLocalService,
+          acquireLocalService: options.acquireLocalService,
         }
       : {}),
     ...(options.dimensions !== undefined
@@ -382,12 +388,12 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),
+    ...(options.queryInstructionTemplate === true ? { queryInstructionTemplate: true } : {}),
   };
 }
 
-/** Creates an OpenAI-compatible embedding provider and its backing client. */
 async function createOpenAICompatibleEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
+  options: OpenAICompatibleEmbeddingProviderCreateOptions,
 ): Promise<{
   provider: EmbeddingProvider;
   client: OpenAICompatibleEmbeddingClient;
@@ -422,7 +428,6 @@ async function createOpenAICompatibleEmbeddingProvider(
   };
 }
 
-/** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",

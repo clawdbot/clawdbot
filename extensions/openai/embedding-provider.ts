@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import {
+  applyOpenAICompatibleEmbeddingQueryInstructionTemplate,
   fetchRemoteEmbeddingVectors,
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingClient,
@@ -18,6 +19,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   outputDimensionality?: number;
 };
 
@@ -27,6 +29,10 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-small": 8192,
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
+};
+
+type OpenAiEmbeddingProviderCreateOptions = MemoryEmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
 };
 
 function normalizeOpenAiModel(model: string): string {
@@ -47,7 +53,7 @@ function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
 }
 
 export async function createOpenAiEmbeddingProvider(
-  options: MemoryEmbeddingProviderCreateOptions,
+  options: OpenAiEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
@@ -93,7 +99,10 @@ export async function createOpenAiEmbeddingProvider(
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
         : {}),
       embedQuery: async (text, optionsValue) => {
-        const [vec] = await embed([text], "query", optionsValue?.signal);
+        const query = client.queryInstructionTemplate
+          ? applyOpenAICompatibleEmbeddingQueryInstructionTemplate(client.model, text)
+          : text;
+        const [vec] = await embed([query], "query", optionsValue?.signal);
         return vec ?? [];
       },
       embedBatch: async (texts, optionsLocal) =>
@@ -104,7 +113,7 @@ export async function createOpenAiEmbeddingProvider(
 }
 
 async function resolveOpenAiEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
+  options: OpenAiEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({
@@ -124,6 +133,7 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    queryInstructionTemplate: options.queryInstructionTemplate === true,
     outputDimensionality: options.outputDimensionality,
   };
 }

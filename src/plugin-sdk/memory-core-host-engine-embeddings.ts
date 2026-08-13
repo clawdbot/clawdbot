@@ -15,6 +15,7 @@ export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never
 
 export {
   applyEmbeddingBatchOutputLine,
+  applyOpenAICompatibleEmbeddingQueryInstructionTemplate,
   buildBatchHeaders,
   buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,

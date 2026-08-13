@@ -116,6 +116,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
   inputType: ResolvedMemorySearchConfig["inputType"];
   queryInputType: ResolvedMemorySearchConfig["queryInputType"];
   documentInputType: ResolvedMemorySearchConfig["documentInputType"];
+  queryInstructionTemplate: ResolvedMemorySearchConfig["queryInstructionTemplate"];
   outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
   fallback: ResolvedMemorySearchConfig["fallback"];
   local: ResolvedMemorySearchConfig["local"];
@@ -127,6 +128,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
     inputType: params.settings.inputType,
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,
+    queryInstructionTemplate: params.settings.queryInstructionTemplate,
     outputDimensionality: params.settings.outputDimensionality,
     fallback: params.settings.fallback,
     local: params.settings.local,
@@ -193,6 +195,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   inputType: ResolvedMemorySearchConfig["inputType"];
   queryInputType: ResolvedMemorySearchConfig["queryInputType"];
   documentInputType: ResolvedMemorySearchConfig["documentInputType"];
+  queryInstructionTemplate: ResolvedMemorySearchConfig["queryInstructionTemplate"];
   outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
   fallback: "none";
   local: ResolvedMemorySearchConfig["local"];
@@ -213,6 +216,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
     inputType: params.settings.inputType,
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,
+    queryInstructionTemplate: params.settings.queryInstructionTemplate,
     outputDimensionality: params.settings.outputDimensionality,
     fallback: "none",
     local: params.settings.local,

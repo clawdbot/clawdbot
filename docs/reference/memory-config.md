@@ -241,9 +241,10 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     | Key                 | Type     | Default | Description                                             |
     | ------------------- | -------- | ------- | -------------------------------------------------------- |
-    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
-    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
-    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+    | `inputType`                | `string`  | unset   | Shared `input_type` for query and document embeddings                       |
+    | `queryInputType`           | `string`  | unset   | Query-time `input_type`; overrides `inputType`                              |
+    | `documentInputType`        | `string`  | unset   | Index/document `input_type`; overrides `inputType`                          |
+    | `queryInstructionTemplate` | `boolean` | `false` | Apply a known retrieval query template for supported Qwen3 Embedding IDs or exact `mxbai-embed-large-v1` IDs |
 
     ```json5
     {
@@ -262,7 +263,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     }
     ```
 
-    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
+    Changing `inputType`, `queryInputType`, or `documentInputType` affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently. Changing `queryInstructionTemplate` affects only query embeddings and does not require reindexing.
 
   </Accordion>
   <Accordion title="Bedrock">

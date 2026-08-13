@@ -55,9 +55,13 @@ type OversizedStreamServer = {
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 
+type OpenAICompatibleEmbeddingTestOptions = EmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
+};
+
 function createOptions(
-  overrides: Partial<EmbeddingProviderCreateOptions> = {},
-): EmbeddingProviderCreateOptions {
+  overrides: Partial<OpenAICompatibleEmbeddingTestOptions> = {},
+): OpenAICompatibleEmbeddingTestOptions {
   return {
     config: {} as EmbeddingProviderCreateOptions["config"],
     provider: "openai-compatible",
@@ -779,6 +783,154 @@ describe("openai-compatible generic embedding provider", () => {
       "document",
       "default",
     ]);
+  });
+
+  it("leaves instruction-aware openai-compatible query models raw unless opted in", async () => {
+    const server = await startEmbeddingServer({
+      respond: ({ body }) => {
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 1],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "qwen3-embedding-4b",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("find workshop notes", { inputType: "query" })).resolves.toEqual([
+      19, 0.25, 1,
+    ]);
+
+    expect(server.requests[0]?.body.input).toEqual(["find workshop notes"]);
+  });
+
+  it.each([
+    {
+      model: "qwen3-embedding-4b",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
+    },
+    {
+      model: "qwen3-embedding:0.6b",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
+    },
+    {
+      model: "Qwen/Qwen3-Embedding-4B",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
+    },
+    {
+      model: "mixedbread-ai/mxbai-embed-large-v1",
+      expected: "Represent this sentence for searching relevant passages: find workshop notes",
+    },
+  ])(
+    "applies query instruction templates for $model while leaving document inputs raw",
+    async ({ model, expected }) => {
+      const server = await startEmbeddingServer({
+        respond: ({ body }) => {
+          const input = body.input;
+          const texts = Array.isArray(input) ? input : [input];
+          return {
+            object: "list",
+            data: texts.map((text, index) => ({
+              object: "embedding",
+              embedding: [String(text).length, index + 0.25, 1],
+              index,
+            })),
+            model: String(body.model),
+          };
+        },
+      });
+
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model,
+          queryInstructionTemplate: true,
+          remote: { baseUrl: server.baseUrl },
+        }),
+      );
+
+      await expect(provider.embed("find workshop notes", { inputType: "query" })).resolves.toEqual([
+        expected.length,
+        0.25,
+        1,
+      ]);
+      await expect(
+        provider.embedBatch(["stored memory chunk"], { inputType: "document" }),
+      ).resolves.toEqual([[19, 0.25, 1]]);
+
+      expect(server.requests[0]?.body.input).toEqual([expected]);
+      expect(server.requests[1]?.body.input).toEqual(["stored memory chunk"]);
+    },
+  );
+
+  it.each([
+    "qwen3-embedding-4b-custom",
+    "mxbai-embed-large",
+    "mxbai-embed-large-v1-custom",
+    "deepset-mxbai-embed-de-large-v1",
+  ])("does not generalize query templates to suffixed lookalike %s", async (model) => {
+    const server = await startEmbeddingServer({
+      respond: ({ body }) => ({
+        object: "list",
+        data: [{ object: "embedding", embedding: [1, 2, 3], index: 0 }],
+        model: String(body.model),
+      }),
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model,
+        queryInstructionTemplate: true,
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await provider.embed("find workshop notes", { inputType: "query" });
+
+    expect(server.requests[0]?.body.input).toEqual(["find workshop notes"]);
+  });
+
+  it("leaves unknown openai-compatible query models raw", async () => {
+    const server = await startEmbeddingServer({
+      respond: ({ body }) => {
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 1],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("find workshop notes", { inputType: "query" })).resolves.toEqual([
+      19, 0.25, 1,
+    ]);
+
+    expect(server.requests[0]?.body.input).toEqual(["find workshop notes"]);
   });
 
   it("omits Authorization when no apiKey is configured", async () => {

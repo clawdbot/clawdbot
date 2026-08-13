@@ -1,4 +1,3 @@
-// Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -808,6 +807,7 @@ export const MemorySearchSchema = z
     inputType: z.string().min(1).optional(),
     queryInputType: z.string().min(1).optional(),
     documentInputType: z.string().min(1).optional(),
+    queryInstructionTemplate: z.boolean().optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({

@@ -63,7 +63,13 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 type EmbeddingProviderRequest = string;
 type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-  "local" | "remote" | "outputDimensionality" | "inputType" | "queryInputType" | "documentInputType"
+  | "local"
+  | "remote"
+  | "outputDimensionality"
+  | "inputType"
+  | "queryInputType"
+  | "documentInputType"
+  | "queryInstructionTemplate"
 >;
 
 const EMBEDDING_PROVIDER_RETIREMENTS = new Map<string, Set<MemoryEmbeddingProvider>>();
@@ -265,6 +271,7 @@ async function createConfiguredEmbeddingProvider(params: {
     inputType: params.memorySearch?.inputType,
     queryInputType: params.memorySearch?.queryInputType,
     documentInputType: params.memorySearch?.documentInputType,
+    queryInstructionTemplate: params.memorySearch?.queryInstructionTemplate,
     outputDimensionality: params.memorySearch?.outputDimensionality,
     acquireLocalService,
   };

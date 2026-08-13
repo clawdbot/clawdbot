@@ -60,6 +60,8 @@ export type MemorySearchConfig = {
   queryInputType?: string;
   /** Optional provider-specific embedding input_type for document/index embeddings. */
   documentInputType?: string;
+  /** OpenAI-style providers only: apply known retrieval query templates for selected models. */
+  queryInstructionTemplate?: boolean;
   /**
    * Provider-specific output vector dimensions. Gemini supports 128 to 3072.
    * Google recommends 768, 1536, or 3072 dimensions.

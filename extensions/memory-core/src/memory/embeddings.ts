@@ -31,6 +31,7 @@ export type EmbeddingProviderResult = {
 type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  queryInstructionTemplate?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 

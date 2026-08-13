@@ -1,4 +1,3 @@
-// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
@@ -501,6 +500,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.search.inputType": "Memory Search Input Type",
   "memory.search.queryInputType": "Memory Search Query Input Type",
   "memory.search.documentInputType": "Memory Search Document Input Type",
+  "memory.search.queryInstructionTemplate": "Query Instruction Template",
   "memory.search.outputDimensionality": "Memory Search Output Dimensionality",
   "memory.search.fallback": "Memory Search Fallback",
   "memory.search.local.modelPath": "Local Embedding Model Path",
