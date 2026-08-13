@@ -11,11 +11,25 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { parseStreamingJson } from "../internal/runtime.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
   guardedFetchMock: vi.fn(),
 }));
+
+// Wrap the tool-argument JSON parser so a test can count how often the streaming
+// path reparses the accumulated buffer; the wrapper delegates to the real parser.
+const { parseUnsafeIntegersSpy } = vi.hoisted(() => ({
+  parseUnsafeIntegersSpy: vi.fn(),
+}));
+
+vi.mock("./json-unsafe-integers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./json-unsafe-integers.js")>();
+  parseUnsafeIntegersSpy.mockImplementation(actual.parseJsonObjectPreservingUnsafeIntegers);
+  return { ...actual, parseJsonObjectPreservingUnsafeIntegers: parseUnsafeIntegersSpy };
+});
 
 const coreTransportHost = getAiTransportHost();
 
@@ -198,6 +212,18 @@ function delay<T>(ms: number, value: T): Promise<T> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(value), ms);
   });
+}
+
+function chunkString(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function referenceParseToolCallArguments(inputJson: string): unknown {
+  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
 }
 
 function latestAnthropicRequest() {
@@ -1871,6 +1897,194 @@ describe("anthropic transport stream", () => {
       maxSafe: 9007199254740991,
       nested: { ids: ["9007199254740993", "-9007199254740992"] },
     });
+  });
+
+  it("keeps coalesced tool-call arguments byte-identical to a full-buffer parse", async () => {
+    const unsafeIntegerJson =
+      '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}';
+    const corpus = [
+      JSON.stringify({ path: "C:\\Users\\dev\\x.ts" }),
+      JSON.stringify({ note: 'first\nsecond "quoted" end \\ done' }),
+      unsafeIntegerJson,
+      JSON.stringify({ outer: { inner: [1, 2, { k: "v" }], flags: [true, false, null] } }),
+      JSON.stringify({ text: "café 日本語 🚀", symbol: "π≈3.14" }),
+      JSON.stringify({}),
+    ];
+
+    for (const fullJson of corpus) {
+      guardedFetchMock.mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "message_start",
+            message: { id: "msg_coalesce", usage: { input_tokens: 4, output_tokens: 0 } },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "tool_coalesce", name: "emit", input: {} },
+          },
+          ...chunkString(fullJson, 17).map((piece) => ({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: piece },
+          })),
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "tool_use" },
+            usage: { input_tokens: 4, output_tokens: 6 },
+          },
+        ]),
+      );
+
+      const result = await runTransportStream(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "emit args" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      );
+
+      const toolCall = findRecord(
+        result.content,
+        (record) => record.type === "toolCall" && record.name === "emit",
+      );
+      const expected = referenceParseToolCallArguments(fullJson);
+      expect(toolCall.arguments).toEqual(expected);
+      expect(JSON.stringify(toolCall.arguments)).toBe(JSON.stringify(expected));
+    }
+  });
+
+  it("coalesces streamed tool-call argument parses far below one parse per delta", async () => {
+    const bigArgumentsJson = JSON.stringify({
+      path: "C:\\Users\\dev\\big.txt",
+      blob: "x".repeat(20_000),
+    });
+    const deltas = chunkString(bigArgumentsJson, 17);
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_big", usage: { input_tokens: 4, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "tool_big", name: "write", input: {} },
+        },
+        ...deltas.map((piece) => ({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: piece },
+        })),
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 4, output_tokens: 6 },
+        },
+      ]),
+    );
+
+    const parsesBefore = parseUnsafeIntegersSpy.mock.calls.length;
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "write file" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+    const parseCount = parseUnsafeIntegersSpy.mock.calls.length - parsesBefore;
+
+    const toolCall = findRecord(
+      result.content,
+      (record) => record.type === "toolCall" && record.name === "write",
+    );
+    expect(toolCall.arguments).toEqual(referenceParseToolCallArguments(bigArgumentsJson));
+    expect(parseCount).toBeGreaterThan(0);
+    expect(parseCount).toBeLessThan(deltas.length / 10);
+  });
+
+  it("streams a tool-call argument larger than 256KB without truncation or error", async () => {
+    const largeArgumentsJson = JSON.stringify({
+      path: "C:\\Users\\dev\\large.txt",
+      blob: "y".repeat(300_000),
+    });
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_large", usage: { input_tokens: 4, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "tool_large", name: "write", input: {} },
+        },
+        ...chunkString(largeArgumentsJson, 4096).map((piece) => ({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: piece },
+        })),
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 4, output_tokens: 6 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "write file" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.errorMessage).toBeUndefined();
+    const toolCall = findRecord(
+      result.content,
+      (record) => record.type === "toolCall" && record.name === "write",
+    );
+    const expected = referenceParseToolCallArguments(largeArgumentsJson);
+    expect(toolCall.arguments).toEqual(expected);
+    expect(JSON.stringify(toolCall.arguments)).toBe(JSON.stringify(expected));
+  });
+
+  it("preserves inline tool-call input when no argument deltas stream", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_inline", usage: { input_tokens: 4, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool_inline",
+            name: "read",
+            input: { path: "/tmp/a", limit: 5 },
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 4, output_tokens: 6 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "read the file" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const toolCall = findRecord(
+      result.content,
+      (record) => record.type === "toolCall" && record.name === "read",
+    );
+    expect(toolCall.arguments).toEqual({ path: "/tmp/a", limit: 5 });
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {

@@ -1,5 +1,11 @@
 // Coverage for repairing malformed streamed tool-call arguments.
-import { describe, expect, it } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import {
+  createAnthropicMessagesTransportStreamFn,
+  parseJsonObjectPreservingUnsafeIntegers,
+} from "@openclaw/ai/transports";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -41,6 +47,9 @@ async function invokeProviderStream(params: {
   provider: string;
   modelApi: string;
   baseFn: FakeStreamFn;
+  model?: unknown;
+  context?: unknown;
+  options?: unknown;
 }): Promise<FakeWrappedStream> {
   // Repair is provider/API gated; this helper mirrors the production wrapper
   // selection before invoking the fake stream.
@@ -50,7 +59,13 @@ async function invokeProviderStream(params: {
   })
     ? (wrapStreamFnRepairMalformedToolCallArguments(params.baseFn as never) as FakeStreamFn)
     : params.baseFn;
-  return await Promise.resolve(streamFn({} as never, {} as never, {} as never));
+  return await Promise.resolve(
+    streamFn(
+      (params.model ?? {}) as never,
+      (params.context ?? {}) as never,
+      (params.options ?? {}) as never,
+    ),
+  );
 }
 
 type ToolCallRepairCaseResult = {
@@ -521,4 +536,197 @@ const re = /\d+/;
     });
     expect(result.finalArgs).not.toHaveProperty("foo");
   });
+});
+
+// The anthropic-messages transport publishes parsed tool arguments on this growth
+// cadence plus one whole-buffer parse at content_block_stop; it used to publish on
+// every delta. Repair output has to land on the same arguments either way.
+const ANTHROPIC_TOOL_ARGS_REPARSE_MIN_GROWTH_CHARS = 4096;
+const KIMI_ANTHROPIC_MODEL = {
+  id: "kimi-k2-thinking",
+  name: "Kimi K2 Thinking",
+  api: "anthropic-messages",
+  provider: "kimi",
+  baseUrl: "https://api.moonshot.test",
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 262144,
+  maxTokens: 8192,
+};
+
+function parseTransportToolCallArguments(partialJson: string): unknown {
+  return parseJsonObjectPreservingUnsafeIntegers(partialJson) ?? parseStreamingJson(partialJson);
+}
+
+function chunkToolCallArguments(rawArguments: string, size: number): string[] {
+  const deltas: string[] = [];
+  for (let index = 0; index < rawArguments.length; index += size) {
+    deltas.push(rawArguments.slice(index, index + size));
+  }
+  return deltas;
+}
+
+function createToolCallCadenceStream(params: {
+  deltas: string[];
+  coalesce: boolean;
+}): FakeWrappedStream {
+  const toolCall = { type: "toolCall", name: "write", arguments: {} as unknown };
+  const message = { role: "assistant", content: [toolCall] };
+  return {
+    async result() {
+      return message;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        let partialJson = "";
+        let parsedLength = 0;
+        for (const delta of params.deltas) {
+          partialJson += delta;
+          if (
+            !params.coalesce ||
+            partialJson.length - parsedLength >= ANTHROPIC_TOOL_ARGS_REPARSE_MIN_GROWTH_CHARS
+          ) {
+            toolCall.arguments = parseTransportToolCallArguments(partialJson);
+            parsedLength = partialJson.length;
+          }
+          yield { type: "toolcall_delta", contentIndex: 0, delta, partial: message };
+        }
+        if (params.coalesce && partialJson) {
+          toolCall.arguments = parseTransportToolCallArguments(partialJson);
+        }
+        yield { type: "toolcall_end", contentIndex: 0, toolCall, partial: message };
+      })();
+    },
+  };
+}
+
+type StreamedToolCallArguments = {
+  streamedArgs: unknown;
+  messageArgs: unknown;
+};
+
+async function drainToolCallArguments(
+  stream: FakeWrappedStream,
+): Promise<StreamedToolCallArguments> {
+  let streamedArgs: unknown;
+  for await (const event of stream) {
+    const typedEvent = event as { type?: string; toolCall?: { arguments?: unknown } };
+    if (typedEvent.type === "toolcall_end") {
+      streamedArgs = typedEvent.toolCall?.arguments;
+    }
+  }
+  const message = (await stream.result()) as { content?: { arguments?: unknown }[] };
+  return { streamedArgs, messageArgs: message.content?.[0]?.arguments };
+}
+
+async function runToolCallCadenceCase(params: {
+  deltas: string[];
+  coalesce: boolean;
+}): Promise<StreamedToolCallArguments> {
+  const stream = await invokeProviderStream({
+    provider: "kimi",
+    modelApi: "anthropic-messages",
+    baseFn: () => createToolCallCadenceStream(params),
+  });
+  return await drainToolCallArguments(stream);
+}
+
+function createAnthropicToolCallSseResponse(deltas: string[]): Response {
+  const events = [
+    {
+      type: "message_start",
+      message: { id: "msg_repair", usage: { input_tokens: 4, output_tokens: 0 } },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_repair", name: "write", input: {} },
+    },
+    ...deltas.map((delta) => ({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: delta },
+    })),
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 12 } },
+    { type: "message_stop" },
+  ];
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+async function runKimiAnthropicTransportCase(params: {
+  host: ReturnType<typeof getAiTransportHost>;
+  deltas: string[];
+}): Promise<StreamedToolCallArguments> {
+  configureAiTransportHost({
+    ...params.host,
+    buildModelFetch: () => async () => createAnthropicToolCallSseResponse(params.deltas),
+  });
+  const stream = await invokeProviderStream({
+    provider: "kimi",
+    modelApi: "anthropic-messages",
+    baseFn: createAnthropicMessagesTransportStreamFn() as unknown as FakeStreamFn,
+    model: KIMI_ANTHROPIC_MODEL,
+    context: { messages: [{ role: "user", content: "write the report" }], tools: [] },
+    options: { apiKey: "test-key" },
+  });
+  return await drainToolCallArguments(stream);
+}
+
+const TOOL_CALL_CADENCE_CASES = [
+  {
+    name: "well-formed arguments",
+    rawArguments: '{"path":"notes/report.md","content":"first draft body"}',
+    deltaSize: 24,
+    expectedArgs: { path: "notes/report.md", content: "first draft body" },
+  },
+  {
+    name: "a repaired leading prefix",
+    rawArguments: 'functions.write:0 {"path":"notes/report.md","content":"first draft"}',
+    deltaSize: 21,
+    expectedArgs: { path: "notes/report.md", content: "first draft" },
+  },
+  {
+    name: "a repair invalidated by a later delta",
+    rawArguments: '{"path":"a.txt"} then some trailing prose here',
+    deltaSize: 16,
+    expectedArgs: { path: "a.txt" },
+  },
+  {
+    name: "arguments larger than the coalesce window",
+    rawArguments: `{"path":"big.txt","content":"${"y".repeat(9000)}"}`,
+    deltaSize: 32,
+    expectedArgs: { path: "big.txt", content: "y".repeat(9000) },
+  },
+];
+
+describe("kimi anthropic-messages tool-call repair across transport parse cadences", () => {
+  let transportHost: ReturnType<typeof getAiTransportHost>;
+
+  beforeAll(() => {
+    transportHost = getAiTransportHost();
+  });
+
+  afterAll(() => {
+    configureAiTransportHost(transportHost);
+  });
+
+  it.each(TOOL_CALL_CADENCE_CASES)(
+    "repairs $name identically however the transport parses streamed arguments",
+    async ({ rawArguments, deltaSize, expectedArgs }) => {
+      const deltas = chunkToolCallArguments(rawArguments, deltaSize);
+      const coalesced = await runToolCallCadenceCase({ deltas, coalesce: true });
+      const perDelta = await runToolCallCadenceCase({ deltas, coalesce: false });
+      const transported = await runKimiAnthropicTransportCase({ host: transportHost, deltas });
+
+      expect(JSON.stringify(coalesced.streamedArgs)).toBe(JSON.stringify(perDelta.streamedArgs));
+      expect(JSON.stringify(coalesced.messageArgs)).toBe(JSON.stringify(perDelta.messageArgs));
+      expect(coalesced.streamedArgs).toEqual(expectedArgs);
+      expect(transported.streamedArgs).toEqual(expectedArgs);
+      expect(transported.messageArgs).toEqual(expectedArgs);
+    },
+  );
 });
