@@ -588,6 +588,9 @@ suite.define(() => {
         }
         await capture(page, "06-companion");
 
+        await page.getByRole("button", { name: "Hide discussion" }).click();
+        await expect.poll(() => discussion.count()).toBe(0);
+
         await page.evaluate(() =>
           window.dispatchEvent(
             new CustomEvent("openclaw:browser-toggle", { detail: { open: true } }),
