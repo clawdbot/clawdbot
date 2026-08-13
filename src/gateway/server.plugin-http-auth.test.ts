@@ -488,6 +488,15 @@ describe("gateway plugin HTTP auth boundary", () => {
             return true;
           },
         },
+        {
+          pluginId: "diffs",
+          source: "diffs-viewer",
+          path: "/plugins/diffs",
+          auth: "plugin",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) =>
+            respondJsonRoute(res, "plugin-prefix"),
+        },
       ],
     });
     const handlePluginRequest = createGatewayPluginRequestHandler({
@@ -496,12 +505,19 @@ describe("gateway plugin HTTP auth boundary", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
+    const handleHooksRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (!req.url?.startsWith("/plugins/diffs")) {
+        return false;
+      }
+      return respondJsonRoute(res, "hooks");
+    });
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-unattributable-webhook-test-",
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
+        handleHooksRequest,
         shouldEnforcePluginGatewayAuth: (pathContext) =>
           shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
         isPluginAuthenticatedRoute: (pathContext) =>
@@ -526,6 +542,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         const webhook = await dispatchProxyRequest("/googlechat", "POST");
         expect(webhook.res.statusCode).toBe(200);
         expect(observedClientIps).toEqual(["127.0.0.1"]);
+
+        const overlappingPrefix = await dispatchProxyRequest("/plugins/diffs/view");
+        expect(overlappingPrefix.res.statusCode).toBe(200);
+        expect(overlappingPrefix.getBody()).toContain('"route":"plugin-prefix"');
+        expect(handleHooksRequest).not.toHaveBeenCalled();
 
         const gatewayRoute = await dispatchProxyRequest("/ready");
         expect(gatewayRoute.res.statusCode).toBe(403);
