@@ -304,6 +304,122 @@ describe("loadConfigForInstall", () => {
     expect(result.config.plugins?.load?.paths).toEqual(["/keep"]);
   });
 
+  it("allows install when the outgoing plugin schema rejects channel config written for the incoming version", async () => {
+    const snapshotCfg = {
+      channels: {
+        signal: {
+          account: "+15550001234",
+          apiMode: "native",
+          autoStart: false,
+          httpHost: "127.0.0.1",
+          httpPort: 8081,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: {
+          channels: {
+            signal: {
+              account: "+15550001234",
+              apiMode: "native",
+              autoStart: false,
+              httpHost: "127.0.0.1",
+              httpPort: 8081,
+            },
+          },
+        },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "channels.signal",
+            message:
+              'invalid config for plugin signal: must not have additional properties: "apiMode", "autoStart", "httpHost", "httpPort"',
+          },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "@openclaw/signal@2026.7.2-beta.7",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    expect(request.request.bundledPluginId).toBe("signal");
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
+
+    const result = await loadConfigForInstall(request.request);
+    // The config written for the incoming schema survives the swap instead of
+    // deadlocking the upgrade against the outgoing plugin's schema.
+    expect(result.config.channels?.signal).toEqual(snapshotCfg.channels?.signal);
+  });
+
+  it("allows nested channel schema rejections for the requested plugin during recovery", async () => {
+    const snapshotCfg = {
+      channels: {
+        signal: { transport: { kind: "external-native", url: "http://127.0.0.1:8081" } },
+      },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: {
+          channels: { signal: { transport: { kind: "external-native" } } },
+        },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "channels.signal.transport.kind",
+            message: "invalid config for plugin signal: must be equal to one of the allowed values",
+          },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({ rawSpec: "@openclaw/signal" });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    const result = await loadConfigForInstall(request.request);
+    expect(result.config.channels?.signal).toEqual(snapshotCfg.channels?.signal);
+  });
+
+  it("still rejects channel schema rejections for a different plugin during recovery", async () => {
+    // signal's schema rejection must not be swept into a discord install recovery.
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { channels: { signal: { apiMode: "native" } } },
+        config: { channels: { signal: { apiMode: "native" } } } as unknown as OpenClawConfig,
+        issues: [
+          {
+            path: "channels.signal",
+            message:
+              'invalid config for plugin signal: must not have additional properties: "apiMode"',
+          },
+        ],
+      }),
+    );
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "Config invalid outside the plugin recovery path for discord",
+    );
+  });
+
+  it("still rejects channel issues that are not schema rejections of the requested plugin", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { channels: { discord: { token: 1 } } },
+        config: { channels: { discord: { token: 1 } } } as unknown as OpenClawConfig,
+        issues: [{ path: "channels.discord", message: "must be object" }],
+      }),
+    );
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "Config invalid outside the plugin recovery path for discord",
+    );
+  });
+
   it("does not let a stale legacy install record override the canonical record", async () => {
     const snapshotCfg = {
       plugins: {

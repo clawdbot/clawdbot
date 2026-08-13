@@ -84,9 +84,18 @@ function isAllowedPluginRecoveryIssue(
   if (!pluginId) {
     return false;
   }
+  const channelPath = `channels.${pluginId}`;
   return (
-    (issue.path === `channels.${pluginId}` &&
-      issue.message === `unknown channel id: ${pluginId}`) ||
+    (issue.path === channelPath && issue.message === `unknown channel id: ${pluginId}`) ||
+    // The installed (outgoing) plugin's schema rejects channels.<pluginId>
+    // config written for the incoming version (e.g. flat keys vs a nested
+    // transport object). The install swaps that schema, so the rejection must
+    // not deadlock the upgrade: the incoming version validates the config
+    // after the swap, and genuinely malformed config still surfaces there.
+    (typeof issue.path === "string" &&
+      (issue.path === channelPath || issue.path.startsWith(`${channelPath}.`)) &&
+      typeof issue.message === "string" &&
+      issue.message.startsWith(`invalid config for plugin ${pluginId}:`)) ||
     isOwnedMissingPluginLoadPathIssue(issue, ownedLoadPaths) ||
     (issue.path === `plugins.entries.${pluginId}` &&
       typeof issue.message === "string" &&
