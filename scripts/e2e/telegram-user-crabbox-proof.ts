@@ -1139,7 +1139,7 @@ function killTree(child: ChildProcess | undefined) {
   }
 }
 
-function killPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
+export function signalPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
   if (!pid) {
     return;
   }
@@ -1190,11 +1190,11 @@ async function waitForPidTreeExit(pid: number, timeoutMs: number) {
 }
 
 async function stopPidTreeAndWait(pid: number) {
-  killPidTree(pid);
+  signalPidTree(pid);
   if (await waitForPidTreeExit(pid, 5_000)) {
     return;
   }
-  killPidTree(pid, "SIGKILL");
+  signalPidTree(pid, "SIGKILL");
   if (!(await waitForPidTreeExit(pid, 2_000))) {
     throw new Error(`Local SUT process group ${pid} did not exit.`);
   }
@@ -2377,7 +2377,7 @@ async function stopTailscaleFunnelBridge(
       timeoutMs: 30_000,
     });
   } finally {
-    killPidTree(bridge.tunnelPid);
+    signalPidTree(bridge.tunnelPid);
   }
 }
 
@@ -3429,7 +3429,9 @@ async function restartSessionGateway(root: string, opts: Options, outputDir: str
   const pid = session.localSut.gatewayPid;
   process.kill(pid, 0);
   const offset = fs.statSync(session.localSut.gatewayLog).size;
-  process.kill(pid, "SIGUSR1");
+  // The saved PID owns a detached pnpm process group; the Gateway signal handler
+  // may run in its child, so target the group and retain direct-PID fallback.
+  signalPidTree(pid, "SIGUSR1");
   await waitForLogAfterOffset({
     label: "Gateway restart boundary",
     logPath: session.localSut.gatewayLog,

@@ -31,6 +31,7 @@ import {
   runSutContainerAction,
   selectCrabboxSshPort,
   signalCommandTree,
+  signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
@@ -755,6 +756,53 @@ describe("telegram user Crabbox proof log polling", () => {
         timeoutMs: 100,
       }),
     ).resolves.toContain("gateway ready");
+  });
+
+  posixIt("signals a detached Gateway through its launcher process group", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const gatewayPath = path.join(root, "gateway.mjs");
+    const launcherPath = path.join(root, "launcher.mjs");
+    const logPath = path.join(root, "gateway.log");
+    const readyPath = path.join(root, "gateway.ready");
+    writeExecutable(
+      gatewayPath,
+      `import fs from "node:fs";
+const [logPath, readyPath] = process.argv.slice(2);
+process.on("SIGUSR1", () => fs.appendFileSync(logPath, "received SIGUSR1; restarting\\ngateway ready\\n"));
+fs.writeFileSync(readyPath, String(process.pid));
+setInterval(() => {}, 1000);
+`,
+    );
+    writeExecutable(
+      launcherPath,
+      `import { spawn } from "node:child_process";
+const [gatewayPath, logPath, readyPath] = process.argv.slice(2);
+spawn(process.execPath, [gatewayPath, logPath, readyPath], { stdio: "ignore" });
+process.on("SIGUSR1", () => {});
+setInterval(() => {}, 1000);
+`,
+    );
+    const launcher = spawn(process.execPath, [launcherPath, gatewayPath, logPath, readyPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    try {
+      await waitFor(() => fs.existsSync(readyPath));
+
+      signalPidTree(launcher.pid, "SIGUSR1");
+
+      await waitFor(
+        () =>
+          fs.existsSync(logPath) &&
+          fs.readFileSync(logPath, "utf8").includes("received SIGUSR1; restarting"),
+      );
+    } finally {
+      if (launcher.pid) {
+        try {
+          process.kill(-launcher.pid, "SIGKILL");
+        } catch {}
+      }
+    }
   });
 
   it("keeps byte-cut log tails UTF-8 safe and reads at least one byte", () => {
