@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import {
   boundOutputToLimit,
-  boundResultToLimit,
   isCodeModeEngagedForModel,
   prepareSource,
   resolveCodeModeConfig,
@@ -31,14 +31,16 @@ describe("Code Mode output bounding", () => {
       Buffer.byteLength(JSON.stringify(output), "utf8") +
       Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(
-      boundResultToLimit({ output, value, config: { ...config, maxOutputBytes } }),
-    ).toMatchObject({ output, value, truncated: false });
-
-    const bounded = boundResultToLimit({
+    expect(boundCodeModeResult({ output, value, maxOutputBytes })).toMatchObject({
       output,
       value,
-      config: { ...config, maxOutputBytes: maxOutputBytes - 1 },
+      truncated: false,
+    });
+
+    const bounded = boundCodeModeResult({
+      output,
+      value,
+      maxOutputBytes: maxOutputBytes - 1,
     });
     expect(bounded.truncated).toBe(true);
     expect(
@@ -51,9 +53,11 @@ describe("Code Mode output bounding", () => {
     const value = "ok";
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(
-      boundResultToLimit({ output: [], value, config: { ...config, maxOutputBytes } }),
-    ).toMatchObject({ output: [], value, truncated: false });
+    expect(boundCodeModeResult({ output: [], value, maxOutputBytes })).toMatchObject({
+      output: [],
+      value,
+      truncated: false,
+    });
   });
 });
 

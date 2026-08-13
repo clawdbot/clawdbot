@@ -241,42 +241,20 @@ export function resolveCodeModeHeadlessConfig(
   >,
 ): CodeModeConfig {
   const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
-  return {
-    ...base,
-    timeoutMs: clampNumber(readPositiveInteger(overrides?.timeoutMs, base.timeoutMs), 100, 60_000),
-    memoryLimitBytes: clampNumber(
-      readPositiveInteger(overrides?.memoryLimitBytes, base.memoryLimitBytes),
-      1024 * 1024,
-      1024 * 1024 * 1024,
-    ),
-    maxOutputBytes: clampNumber(
-      readPositiveInteger(overrides?.maxOutputBytes, base.maxOutputBytes),
-      1024,
-      10 * 1024 * 1024,
-    ),
-    maxSnapshotBytes: clampNumber(
-      readPositiveInteger(overrides?.maxSnapshotBytes, base.maxSnapshotBytes),
-      1024,
-      256 * 1024 * 1024,
-    ),
-    maxPendingToolCalls: clampNumber(
-      readPositiveInteger(overrides?.maxPendingToolCalls, base.maxPendingToolCalls),
-      1,
-      128,
-    ),
-  };
+  const definedOverrides = Object.fromEntries(
+    Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),
+  );
+  return resolveCodeModeConfig({
+    tools: { codeMode: { ...base, ...definedOverrides } },
+  } as OpenClawConfig);
 }
 
 class CodeModeLimitError extends ToolInputError {
-  readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
+  readonly code = "snapshot_limit_exceeded" as const;
 
-  constructor(
-    code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">,
-    message: string,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "CodeModeLimitError";
-    this.code = code;
   }
 }
 
@@ -304,18 +282,6 @@ export function boundOutputToLimit(output: unknown[], config: CodeModeConfig): b
   const bounded = boundCodeModeResult({ output, maxOutputBytes: config.maxOutputBytes });
   output.splice(0, output.length, ...bounded.output);
   return bounded.truncated;
-}
-
-export function boundResultToLimit(params: {
-  output: unknown[];
-  value?: unknown;
-  config: CodeModeConfig;
-}): { output: unknown[]; value?: unknown; truncated: boolean } {
-  return boundCodeModeResult({
-    output: params.output,
-    ...(Object.hasOwn(params, "value") ? { value: params.value } : {}),
-    maxOutputBytes: params.config.maxOutputBytes,
-  });
 }
 
 export function readCode(args: unknown): {
@@ -628,12 +594,10 @@ export function createCodeModeApiFilesForRun(
 export function enforceSnapshotPayloadLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
 }) {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
+    throw new CodeModeLimitError("code mode snapshot limit exceeded");
   }
-  boundOutputToLimit(params.output, params.config);
 }
 
 export const codeModeRuntimeTesting = {

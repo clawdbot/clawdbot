@@ -7,7 +7,6 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
@@ -547,7 +546,7 @@ export async function runBridgeRequest(params: {
     return {
       id: params.request.id,
       ok: true,
-      value: boundCodeModeValue(toCodeModeJsonSafe(value), params.maxOutputBytes),
+      value: boundCodeModeValue(value, params.maxOutputBytes),
     };
   } catch (error) {
     return { id: params.request.id, ok: false, error: formatErrorMessage(error) };

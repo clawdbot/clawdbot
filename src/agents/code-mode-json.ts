@@ -1,3 +1,6 @@
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
     return null;
@@ -29,50 +32,23 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
 
 const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 
-function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value) ?? "null", "utf8");
-}
-
-function utf8Prefix(buffer: Buffer, byteLength: number): { bytes: number; text: string } {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let bytes = Math.min(byteLength, buffer.byteLength);
-  while (bytes > 0) {
-    try {
-      return { bytes, text: decoder.decode(buffer.subarray(0, bytes)) };
-    } catch {
-      bytes -= 1;
-    }
-  }
-  return { bytes: 0, text: "" };
-}
-
 function truncationMarker(serialized: string, maxBytes: number): unknown {
-  const source = Buffer.from(serialized, "utf8");
-  let low = 0;
-  let high = source.byteLength;
-  let best = {
-    truncated: true,
-    omittedBytes: source.byteLength,
-    guidance: TRUNCATION_GUIDANCE,
-    prefix: "",
-  };
-  while (low <= high) {
-    const midpoint = Math.floor((low + high) / 2);
-    const candidatePrefix = utf8Prefix(source, midpoint);
+  const sourceBytes = Buffer.byteLength(serialized, "utf8");
+  let prefix = truncateUtf8Prefix(serialized, maxBytes);
+  while (true) {
+    const prefixBytes = Buffer.byteLength(prefix, "utf8");
     const candidate = {
       truncated: true,
-      omittedBytes: source.byteLength - candidatePrefix.bytes,
+      omittedBytes: sourceBytes - prefixBytes,
       guidance: TRUNCATION_GUIDANCE,
-      prefix: candidatePrefix.text,
+      prefix,
     };
-    if (jsonByteLength(candidate) <= maxBytes) {
-      best = candidate;
-      low = midpoint + 1;
-    } else {
-      high = midpoint - 1;
+    const overflow = jsonUtf8Bytes(candidate) - maxBytes;
+    if (overflow <= 0 || prefixBytes === 0) {
+      return candidate;
     }
+    prefix = truncateUtf8Prefix(prefix, Math.max(0, prefixBytes - overflow));
   }
-  return best;
 }
 
 /** Bound one JSON-compatible value, preserving a UTF-8-safe serialized prefix. */
@@ -85,11 +61,10 @@ export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
 }
 
 function boundOutputArray(output: unknown[], maxBytes: number): unknown[] {
-  const safe = output.map(toCodeModeJsonSafe);
-  if (jsonByteLength(safe) <= maxBytes) {
-    return safe;
+  if (jsonUtf8Bytes(output) <= maxBytes) {
+    return output;
   }
-  return [truncationMarker(JSON.stringify(safe), maxBytes - 2)];
+  return [truncationMarker(JSON.stringify(output), maxBytes - 2)];
 }
 
 /** Bound cumulative guest output and the final value under one serialized byte budget. */
@@ -101,26 +76,28 @@ export function boundCodeModeResult(params: {
   const hasValue = Object.hasOwn(params, "value");
   const safeOutput = params.output.map(toCodeModeJsonSafe);
   const safeValue = hasValue ? toCodeModeJsonSafe(params.value) : undefined;
-  const outputBytes = safeOutput.length > 0 ? jsonByteLength(safeOutput) : 0;
-  const valueBytes = hasValue ? jsonByteLength(safeValue) : 0;
+  const outputBytes = safeOutput.length > 0 ? jsonUtf8Bytes(safeOutput) : 0;
+  const valueBytes = hasValue ? jsonUtf8Bytes(safeValue) : 0;
   if (outputBytes + valueBytes <= params.maxOutputBytes) {
     return { output: safeOutput, ...(hasValue ? { value: safeValue } : {}), truncated: false };
-  }
-  if (!hasValue) {
-    return { output: boundOutputArray(safeOutput, params.maxOutputBytes), truncated: true };
   }
   if (safeOutput.length === 0) {
     return {
       output: [],
-      value: boundCodeModeValue(safeValue, params.maxOutputBytes),
+      ...(hasValue ? { value: boundCodeModeValue(safeValue, params.maxOutputBytes) } : {}),
       truncated: true,
     };
   }
 
   // Preserve both channels when both overflow: reserve half for the final
   // value, then let short values donate their unused share to guest output.
-  const reservedValueBytes = Math.min(valueBytes, Math.floor(params.maxOutputBytes / 2));
+  const reservedValueBytes = hasValue
+    ? Math.min(valueBytes, Math.floor(params.maxOutputBytes / 2))
+    : 0;
   const output = boundOutputArray(safeOutput, params.maxOutputBytes - reservedValueBytes);
-  const remainingBytes = params.maxOutputBytes - jsonByteLength(output);
+  if (!hasValue) {
+    return { output, truncated: true };
+  }
+  const remainingBytes = params.maxOutputBytes - jsonUtf8Bytes(output);
   return { output, value: boundCodeModeValue(safeValue, remainingBytes), truncated: true };
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeResult, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceDescriptor,
@@ -17,7 +17,6 @@ import {
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
   boundOutputToLimit,
-  boundResultToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   readPositiveInteger,
@@ -255,7 +254,11 @@ export async function runCodeModeScriptHeadless(params: {
       output.push(...result.output);
       boundOutputToLimit(output, config);
       if (result.status === "completed") {
-        const bounded = boundResultToLimit({ output, value: result.value, config });
+        const bounded = boundCodeModeResult({
+          output,
+          value: result.value,
+          maxOutputBytes: config.maxOutputBytes,
+        });
         return {
           status: "completed",
           value: bounded.value,
@@ -272,7 +275,7 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
 
-      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
+      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
       // Node discovery invokes the generic nodes tool for live status too;

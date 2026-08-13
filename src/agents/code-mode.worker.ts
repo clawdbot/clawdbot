@@ -18,29 +18,10 @@ import type {
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
 
-  constructor(
-    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+  constructor(code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"], message: string) {
+    super(message);
     this.name = "CodeModeWorkerFailure";
     this.code = code;
-  }
-}
-
-class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
-  readonly output: unknown[];
-
-  constructor(
-    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
-    message: string,
-    output: unknown[],
-    options?: ErrorOptions,
-  ) {
-    super(code, message, options);
-    this.name = "CodeModeWorkerFailureWithOutput";
-    this.output = output;
   }
 }
 
@@ -229,55 +210,52 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function boundWorkerResult(params: { output: unknown[]; value?: unknown; config: CodeModeConfig }) {
-  try {
-    return boundCodeModeResult({
-      output: params.output,
-      ...(Object.hasOwn(params, "value") ? { value: params.value } : {}),
-      maxOutputBytes: params.config.maxOutputBytes,
-    });
-  } catch (error) {
-    throw new CodeModeWorkerFailure(
-      "output_limit_exceeded",
-      "code mode output could not be serialized within the output limit",
-      { cause: error },
-    );
+function boundWorkerResult(
+  result: CodeModeWorkerResult,
+  config: CodeModeConfig,
+): CodeModeWorkerResult {
+  const bounded = boundCodeModeResult({
+    output: result.output,
+    ...(result.status === "completed" ? { value: result.value } : {}),
+    maxOutputBytes: config.maxOutputBytes,
+  });
+  if (result.status === "completed") {
+    return { ...result, output: bounded.output, value: bounded.value };
   }
+  return { ...result, output: bounded.output };
 }
 
-function throwWorkerFailureWithOutput(params: {
+function failedWorkerResult(
+  code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+  error: string,
+  output: unknown[] = [],
+): Extract<CodeModeWorkerResult, { status: "failed" }> {
+  return {
+    status: "failed",
+    code,
+    error,
+    failurePhase: code === "invalid_input" ? "input" : "guest",
+    bridgeDispatchStarted: false,
+    output,
+  };
+}
+
+function workerFailureResult(params: {
   error: unknown;
   didTimeout: () => boolean;
   output: unknown[];
   vm: QuickJS;
-  config: CodeModeConfig;
-}): never {
+}): CodeModeWorkerResult {
   const timedOut = params.didTimeout() || isQuickJsInterruptedError(params.error);
-  const failureOutput = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
-  const boundedOutput = boundWorkerResult({ output: failureOutput, config: params.config }).output;
+  const output = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
   if (timedOut) {
-    throw new CodeModeWorkerFailureWithOutput(
-      "timeout",
-      "code mode timeout exceeded",
-      boundedOutput,
-      { cause: params.error },
-    );
+    return failedWorkerResult("timeout", "code mode timeout exceeded", output);
   }
   if (params.error instanceof CodeModeWorkerFailure) {
-    throw new CodeModeWorkerFailureWithOutput(
-      params.error.code,
-      params.error.message,
-      boundedOutput,
-      { cause: params.error },
-    );
+    return failedWorkerResult(params.error.code, params.error.message, output);
   }
-  if (boundedOutput.length > 0) {
-    throw new CodeModeWorkerFailureWithOutput(
-      "internal_error",
-      errorMessage(params.error),
-      boundedOutput,
-      { cause: params.error },
-    );
+  if (output.length > 0) {
+    return failedWorkerResult("internal_error", errorMessage(params.error), output);
   }
   throw params.error;
 }
@@ -344,7 +322,7 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
-    output = boundWorkerResult({ output: takeOutput(params.vm), config: params.config }).output;
+    output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       const promisePending = resultHandle.isPromise && resultHandle.promiseState === 0;
@@ -366,22 +344,16 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
-      const bounded = boundWorkerResult({ output, value, config: params.config });
-      return {
-        status: "completed",
-        value: bounded.value,
-        output: bounded.output,
-      };
+      return { status: "completed", value, output };
     } finally {
       resultHandle.dispose();
     }
   } catch (error) {
-    return throwWorkerFailureWithOutput({
+    return workerFailureResult({
       error,
       didTimeout: params.didTimeout,
       output,
       vm: params.vm,
-      config: params.config,
     });
   } finally {
     params.vm.dispose();
@@ -459,52 +431,47 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
 async function main(): Promise<CodeModeWorkerResult> {
   const input = workerData as unknown;
   if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
-    return {
-      status: "failed",
-      error: "invalid code mode worker input",
-      code: "invalid_input",
-      failurePhase: "input",
-      bridgeDispatchStarted: false,
-      output: [],
-    };
+    return failedWorkerResult("invalid_input", "invalid code mode worker input");
   }
+  const config = input.config as CodeModeConfig;
   try {
     if (input.kind === "exec" && typeof input.source === "string") {
-      return await runExec({
-        kind: "exec",
-        wasmModule: input.wasmModule,
-        source: input.source,
-        config: input.config as CodeModeConfig,
-        catalog: Array.isArray(input.catalog) ? input.catalog : [],
-        apiFiles: Array.isArray(input.apiFiles) ? (input.apiFiles as CodeModeApiVirtualFile[]) : [],
-        namespaces: Array.isArray(input.namespaces)
-          ? (input.namespaces as CodeModeNamespaceDescriptor[])
-          : [],
-        swarmEnabled: input.swarmEnabled === true,
-      });
+      return boundWorkerResult(
+        await runExec({
+          kind: "exec",
+          wasmModule: input.wasmModule,
+          source: input.source,
+          config,
+          catalog: Array.isArray(input.catalog) ? input.catalog : [],
+          apiFiles: Array.isArray(input.apiFiles)
+            ? (input.apiFiles as CodeModeApiVirtualFile[])
+            : [],
+          namespaces: Array.isArray(input.namespaces)
+            ? (input.namespaces as CodeModeNamespaceDescriptor[])
+            : [],
+          swarmEnabled: input.swarmEnabled === true,
+        }),
+        config,
+      );
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
-      return await runResume({
-        kind: "resume",
-        wasmModule: input.wasmModule,
-        snapshotBytes: input.snapshotBytes,
-        config: input.config as CodeModeConfig,
-        settledRequests: Array.isArray(input.settledRequests)
-          ? (input.settledRequests as SettledBridgeRequest[])
-          : [],
-        pendingRequests: Array.isArray(input.pendingRequests)
-          ? (input.pendingRequests as PendingBridgeRequest[])
-          : [],
-      });
+      return boundWorkerResult(
+        await runResume({
+          kind: "resume",
+          wasmModule: input.wasmModule,
+          snapshotBytes: input.snapshotBytes,
+          config,
+          settledRequests: Array.isArray(input.settledRequests)
+            ? (input.settledRequests as SettledBridgeRequest[])
+            : [],
+          pendingRequests: Array.isArray(input.pendingRequests)
+            ? (input.pendingRequests as PendingBridgeRequest[])
+            : [],
+        }),
+        config,
+      );
     }
-    return {
-      status: "failed",
-      error: "invalid code mode worker input",
-      code: "invalid_input",
-      failurePhase: "input",
-      bridgeDispatchStarted: false,
-      output: [],
-    };
+    return failedWorkerResult("invalid_input", "invalid code mode worker input");
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut
@@ -512,14 +479,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       : error instanceof CodeModeWorkerFailure
         ? error.code
         : "internal_error";
-    return {
-      status: "failed",
-      error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
-      code,
-      failurePhase: code === "invalid_input" ? "input" : "guest",
-      bridgeDispatchStarted: false,
-      output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
-    };
+    return failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error));
   }
 }
 

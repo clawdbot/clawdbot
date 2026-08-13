@@ -271,7 +271,6 @@ export function pendingBridgeRequestsReplaySafe(
 function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
   reservedActiveRunSlot?: boolean;
 }) {
   if (!params.reservedActiveRunSlot) {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
@@ -11,7 +12,6 @@ import {
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
   boundOutputToLimit,
-  boundResultToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   resolveCodeModeConfig,
@@ -300,7 +300,6 @@ async function settleCodeModeResult(params: {
       enforceSnapshotPayloadLimits({
         snapshotBytes: result.snapshotBytes,
         config: params.config,
-        output,
       });
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
@@ -430,7 +429,6 @@ async function settleCodeModeResult(params: {
         enforceSnapshotPayloadLimits({
           snapshotBytes: result.snapshotBytes,
           config: params.config,
-          output,
         });
         // Reserve before launching fresh work; transferred snapshots must
         // obey the same process-wide active-run cap as initial suspensions.
@@ -504,10 +502,10 @@ async function settleCodeModeResult(params: {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  const bounded = boundResultToLimit({
+  const bounded = boundCodeModeResult({
     output,
     ...(result.status === "completed" ? { value: result.value } : {}),
-    config: params.config,
+    maxOutputBytes: params.config.maxOutputBytes,
   });
   return {
     ...result,
