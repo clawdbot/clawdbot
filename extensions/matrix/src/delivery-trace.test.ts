@@ -8,8 +8,8 @@
 // observed at a recording client. The room is plain (E2EE out of scope), so
 // goldens capture wire content and event-id semantics: every m.replace edit
 // mints a new event id while the logical target id stays stable, and previews
-// are mentions-inert until a final either edits in place or gets redacted and
-// re-sent as a fresh mention-bearing event.
+// are mentions-inert until a final either edits in place or is sent as a fresh
+// mention-bearing event before the inert preview is redacted.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
   deliveryTraceScenarios,
@@ -329,8 +329,8 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
     ],
   },
   // Previews are mentions-inert and an edit cannot retro-notify, so a final
-  // whose text would activate mentions redacts the preview and re-sends the
-  // final as a fresh mention-bearing event.
+  // whose text would activate mentions sends a fresh mention-bearing event
+  // before redacting the preview.
   {
     name: "final-mentions-fresh",
     steps: [
