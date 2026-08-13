@@ -26,7 +26,7 @@ export <PROVIDER>_API_KEY="..."
 ./scripts/k8s/deploy.sh
 
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
-open http://localhost:18789
+open http://127.0.0.1:18789
 ```
 
 `deploy.sh` creates token auth by default. Retrieve the generated gateway token for the Control UI:
@@ -76,7 +76,7 @@ Add `--show-token` to either command to print the token to stdout for local test
 
 ```bash
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
-open http://localhost:18789
+open http://127.0.0.1:18789
 ```
 
 ## What gets deployed

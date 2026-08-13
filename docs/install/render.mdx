@@ -101,9 +101,12 @@ From the Render Dashboard shell, export state, config, auth profiles, and worksp
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-This creates a portable backup archive. See [Backup](/cli/backup).
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Troubleshooting
 
