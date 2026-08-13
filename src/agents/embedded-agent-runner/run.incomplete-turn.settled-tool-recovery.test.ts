@@ -1,5 +1,6 @@
 // Focused incomplete-turn behavior coverage.
 import { beforeEach, describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   REASONING_ONLY_RETRY_INSTRUCTION,
   SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
@@ -451,10 +452,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       .mockReturnValueOnce([])
       .mockReturnValueOnce([{ text: "Write completed. Here is the final answer." }]);
 
-    const result = await runEmbeddedAgent(makeRunParams("run-tool-use-terminal-continuation"));
+    const result = await runEmbeddedAgent(
+      makeRunParams("run-tool-use-terminal-continuation", {
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
+    expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
     expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-after-tools" });
     expect(result.successfulCronAdds).toBe(1);
     expect(result.meta.toolSummary).toEqual({
