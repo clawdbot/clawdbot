@@ -54,6 +54,28 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 
+type TerminalPresentationObservation = {
+  terminalPresentation?: string;
+  toolCallOrdinal?: number;
+};
+
+export function createTerminalToolPresentationTracker() {
+  let latestOrdinal = -1;
+  let nextOrdinal = 0;
+  let value: string | undefined;
+  return {
+    allocateOrdinal: () => nextOrdinal++,
+    observe: (observation: TerminalPresentationObservation): void => {
+      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
+      if (ordinal >= latestOrdinal) {
+        latestOrdinal = ordinal;
+        value = observation.terminalPresentation;
+      }
+    },
+    read: () => value,
+  };
+}
+
 type TerminalRunParams = RunEmbeddedAgentParams & {
   authProfileStateMode?: "read-write" | "read-only";
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;

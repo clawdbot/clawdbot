@@ -8,6 +8,7 @@ import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   copyAttemptDeliveryState,
+  createTerminalToolPresentationTracker,
   resolveEmbeddedRunTerminal,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
@@ -106,6 +107,27 @@ function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInpu
 }
 
 describe("terminal resolution", () => {
+  it("carries presentation across retries until a newer tool outcome replaces it", () => {
+    const tracker = createTerminalToolPresentationTracker();
+    const firstOrdinal = tracker.allocateOrdinal();
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "Fetched https://example.com",
+    });
+
+    expect(tracker.read()).toBe("Fetched https://example.com");
+
+    const retryOrdinal = tracker.allocateOrdinal();
+    expect(tracker.read()).toBe("Fetched https://example.com");
+    tracker.observe({ toolCallOrdinal: retryOrdinal });
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "stale presentation",
+    });
+
+    expect(tracker.read()).toBeUndefined();
+  });
+
   it("keeps only the bounded latest MCP App view identity", () => {
     expect(
       copyAttemptDeliveryState({
@@ -155,6 +177,41 @@ describe("terminal resolution", () => {
     }
     expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
     expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(resolved.result.meta.livenessState).toBe("working");
+    expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it("completes a cron turn from a trailing silent tool result", async () => {
+    const assistant = emptyAssistant();
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+          details: { aggregated: SILENT_REPLY_TOKEN },
+        } as never,
+        assistant,
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const activateInternalPrompt = vi.fn();
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "cron", terminalReplyExpectation: "required" },
+      activateInternalPrompt,
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
     expect(resolved.result.meta.livenessState).toBe("working");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });

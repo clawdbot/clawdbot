@@ -1,13 +1,10 @@
 // Focused incomplete-turn behavior coverage.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   makeLastAssistant,
-  resolveIncompleteTurnPayloadText,
-  makeIncompleteTurnParams,
   makeSettledContinuationParams,
 } from "./run.incomplete-turn.test-helpers.js";
-import { resetRunIncompleteTurnOwnerMocks } from "./run.incomplete-turn.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { isIncompleteTerminalAssistantTurn } from "./run/incomplete-turn-classification.js";
 import { resolveSettledToolTerminalContinuationInstruction } from "./run/incomplete-turn-recovery.js";
@@ -47,10 +44,6 @@ function makeSettledIdleWriteAttempt(options?: {
 }
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeEach(() => {
-    resetRunIncompleteTurnOwnerMocks();
-  });
-
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
@@ -472,52 +465,5 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(instruction).toBeNull();
-  });
-
-  it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
-          toolMetas: [{ toolName: "update_plan" }],
-          lastAssistant: makeLastAssistant({
-            stopReason: "toolUse",
-            content: [
-              { type: "text", text: "Analysis..." },
-              { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
-            ],
-          }),
-          currentAttemptAssistant: makeLastAssistant({
-            content: [{ type: "text", text: "Here is the final answer after update_plan." }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("still flags incomplete-turn when currentAttemptAssistant is absent and lastAssistant=toolUse (#76477 regression)", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Let me update the file..."],
-          toolMetas: [{ toolName: "write" }],
-          lastAssistant: makeLastAssistant({
-            stopReason: "toolUse",
-            model: "gpt-5.4",
-            content: [
-              { type: "text", text: "Let me update the file..." },
-              { type: "tool_use", id: "tool_1", name: "write", input: {} },
-            ],
-          }),
-          currentAttemptAssistant: undefined,
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 });

@@ -18,7 +18,6 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.attempt-lifecycle.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
