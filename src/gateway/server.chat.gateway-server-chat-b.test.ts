@@ -903,13 +903,15 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.history exposes persisted and synthetic session metadata for startup hydration", async () => {
+  test("chat.history exposes selected and synthetic session metadata for startup hydration", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       await createSessionDir();
       const updatedAt = Date.now();
       await writeStoredMainSession({
         updatedAt,
+        providerOverride: "openai",
+        modelOverride: "gpt-5",
         modelProvider: "openai",
         model: "gpt-5",
         contextTokens: 128_000,

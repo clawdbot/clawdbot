@@ -401,6 +401,7 @@ describe("skills cli commands", () => {
       {
         slug: "calendar",
         ownerHandle: "demo-owner",
+        installRef: "@demo-owner/calendar",
         displayName: "Calendar",
         summary: "CalDAV helpers",
         version: "1.2.3",
@@ -408,6 +409,7 @@ describe("skills cli commands", () => {
       {
         slug: "calendar",
         ownerHandle: "work-owner",
+        installRef: "@work-owner/calendar",
         displayName: "Team Calendar",
       },
     ]);
@@ -464,6 +466,7 @@ describe("skills cli commands", () => {
       {
         slug: "oauth-helper",
         ownerHandle: "demo-owner",
+        installRef: "@demo-owner/oauth-helper",
         displayName: "Oauth\nHelper",
         summary:
           "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",

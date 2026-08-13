@@ -58,7 +58,6 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
     gateway,
     () => ({
       context,
-      projectId: "",
       nodes: [],
       folder: "",
       execNode: "",
@@ -68,7 +67,6 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
       requestUpdate: vi.fn(),
       onProjectMissing: vi.fn(),
       onSelectProject: vi.fn(),
-      onApplyFolder: vi.fn(),
       onApprovedListing: vi.fn(),
       querySelector: () => null,
       activeElement: () => null,

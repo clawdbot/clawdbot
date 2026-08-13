@@ -73,6 +73,7 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  deviceId?: string;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;

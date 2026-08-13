@@ -337,9 +337,10 @@ retain raw stable channel IDs and `channel:<id>` compatibility. The channel
 prefixes `slack:`, `group:`, and `mpim:` fail startup.
 
 Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
-per-channel `users` must use `team:<team-id>:user:<user-id>` or `"*"`. A
-workspace-scoped sender never matches a bare user ID. Workspace installations
-retain raw stable user IDs, `slack:<user-id>`, and `user:<user-id>` compatibility.
+per-channel `users` accept raw stable Slack user IDs, `slack:<user-id>`,
+`user:<user-id>`, `team:<team-id>:user:<user-id>`, or `"*"`. Unqualified
+entries compare only the user ID and can match an org-wide user in any
+workspace. Qualified entries compare both the workspace and user ID.
 Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
 `channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
 addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
@@ -359,9 +360,9 @@ rejected before authorization or system-event handling.
 Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
 policies as workspace installs. Pairing approvals are stored as
 `team:<team-id>:user:<user-id>` and are applied only to events from that
-workspace. Explicit account `allowFrom` entries use the same qualified form and
-apply only to that workspace; channel and sender policy continues to apply to
-channel messages.
+workspace. Explicit account `allowFrom` entries can omit the workspace for an
+org-wide user ID or include it to limit access to one workspace; channel and
+sender policy continues to apply to channel messages.
 
 ## Install
 

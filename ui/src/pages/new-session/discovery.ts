@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -36,6 +37,10 @@ export type DraftCloudProfile = {
 export type DraftEnvironment = {
   id: string;
   type: "local" | "node" | "worker";
+  platform?: string;
+  sessionHost?: boolean;
+  trust?: "persistent" | "disposable";
+  capabilities?: string[];
 };
 
 export type BrowserTarget = { nodeId: string; label: string };
@@ -117,13 +122,34 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const environment = raw as {
         id?: unknown;
         type?: unknown;
+        platform?: unknown;
+        sessionHost?: unknown;
+        trust?: unknown;
+        capabilities?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
       if (!id || (type !== "local" && type !== "node" && type !== "worker")) {
         return [];
       }
-      return [{ id, type }];
+      const platform = normalizeOptionalString(environment.platform);
+      const trust: DraftEnvironment["trust"] =
+        environment.trust === "persistent" || environment.trust === "disposable"
+          ? environment.trust
+          : undefined;
+      const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      return [
+        {
+          id,
+          type,
+          ...(platform ? { platform } : {}),
+          ...(typeof environment.sessionHost === "boolean"
+            ? { sessionHost: environment.sessionHost }
+            : {}),
+          ...(trust ? { trust } : {}),
+          ...(capabilities ? { capabilities } : {}),
+        },
+      ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

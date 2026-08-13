@@ -69,6 +69,33 @@ describe("worker environment service", () => {
     });
   });
 
+  it("rejects node tunnel startup with the typed milestone gate before SSH", async () => {
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(
+      support.createProvider({
+        provision: async () => ({ leaseId: "device-lease", node: { deviceId: "device-1" } }),
+      }),
+      { tunnelManager },
+    );
+    const environment = await workerService.create("development", "device-tunnel-gate");
+
+    await expect(
+      workerService.startTunnel({
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+      }),
+    ).rejects.toMatchObject({
+      code: "device-runner-transport-unimplemented",
+      message: expect.stringContaining("device-runner-transport-unimplemented"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+  });
+
   it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {
     support.seedReady("worker-legacy-shared");
     support.testState.stateDb.db

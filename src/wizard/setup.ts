@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
-import { ConfigMutationConflictError, resolveGatewayPort } from "../config/config.js";
+import { ConfigMutationConflictError } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -28,6 +28,7 @@ import {
   listSetupMigrationOptions,
   runSetupMigrationImport,
 } from "./setup.migration-import.js";
+import { SetupMigrationFreshnessError } from "./setup.migration-snapshot.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
@@ -201,30 +202,30 @@ async function runSetupWizardOnce(
   const importIntent = Boolean(
     opts.importFrom?.trim() || opts.importSource?.trim() || opts.importSecrets,
   );
-  let flow: SetupFlowChoice =
-    explicitFlow ??
-    (importIntent
-      ? "import"
-      : await prompter.select({
-          message: t("wizard.setup.setupMode"),
-          options: [
-            ...(keepModelOption ? [keepModelOption] : []),
-            { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
-            { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-            ...importOptions,
-          ],
-          initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
-        }));
-
-  let keepExistingModelConfig = flow === "keep-model";
-  if (keepExistingModelConfig) {
-    flow = "quickstart";
-  }
-
-  if (opts.mode === "remote" && flow === "quickstart") {
-    await prompter.note(t("wizard.setup.quickstartOnlyLocal"), t("wizard.setup.quickstartTitle"));
-    flow = "advanced";
-  }
+  const promptSetupFlow = async (): Promise<SetupFlowChoice> =>
+    await prompter.select({
+      message: t("wizard.setup.setupMode"),
+      options: [
+        ...(keepModelOption ? [keepModelOption] : []),
+        { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
+        { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
+        ...importOptions,
+      ],
+      initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
+    });
+  const normalizeSetupFlow = async (choice: SetupFlowChoice) => {
+    const keepExistingModelConfig = choice === "keep-model";
+    let flow = keepExistingModelConfig ? "quickstart" : choice;
+    if (opts.mode === "remote" && flow === "quickstart") {
+      await prompter.note(t("wizard.setup.quickstartOnlyLocal"), t("wizard.setup.quickstartTitle"));
+      flow = "advanced";
+    }
+    return { flow, keepExistingModelConfig };
+  };
+  const flowFromPrompt = explicitFlow === undefined && !importIntent;
+  let { flow, keepExistingModelConfig } = await normalizeSetupFlow(
+    explicitFlow ?? (importIntent ? "import" : await promptSetupFlow()),
+  );
 
   if (snapshot.exists && !keepExistingModelConfig) {
     await prompter.note(
@@ -233,41 +234,52 @@ async function runSetupWizardOnce(
     );
   }
 
-  const usedImportFlow = Boolean(opts.importFrom || isSetupImportFlowChoice(flow));
+  let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  if (usedImportFlow) {
+  while (opts.importFrom || isSetupImportFlowChoice(flow)) {
     const importFrom = opts.importFrom ?? resolveImportProviderFromFlowChoice(flow);
     prompter.disableBackNavigation?.();
-    const migrationOutcome = await runSetupMigrationImport({
-      opts: {
-        ...opts,
-        ...(importFrom ? { importFrom } : {}),
-      },
-      baseConfig,
-      detections: migrationDetections,
-      prompter,
-      runtime,
-      readConfigFile: readValidSetupConfigFile,
-      async commitConfigFile(cfg, expectedConfig) {
-        const latest = await readSetupConfigFileSnapshot();
-        if (!latest.valid) {
-          throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
-        }
-        const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
-        if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-          throw new ConfigMutationConflictError("config changed during migration promotion", {
-            currentHash: latest.hash ?? null,
+    let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
+    try {
+      migrationOutcome = await runSetupMigrationImport({
+        opts: {
+          ...opts,
+          ...(importFrom ? { importFrom } : {}),
+        },
+        baseConfig,
+        detections: migrationDetections,
+        prompter,
+        runtime,
+        readConfigFile: readValidSetupConfigFile,
+        async commitConfigFile(cfg, expectedConfig) {
+          const latest = await readSetupConfigFileSnapshot();
+          if (!latest.valid) {
+            throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+          }
+          const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+          if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+            throw new ConfigMutationConflictError("config changed during migration promotion", {
+              currentHash: latest.hash ?? null,
+            });
+          }
+          return await writeWizardConfigFile(cfg, {
+            allowConfigSizeDrop: true,
+            baseSnapshot: latest,
+            ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
           });
-        }
-        return await writeWizardConfigFile(cfg, {
-          allowConfigSizeDrop: true,
-          baseSnapshot: latest,
-          ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
-        });
-      },
-      continueOnboarding: true,
-    });
+        },
+        continueOnboarding: true,
+      });
+    } catch (error) {
+      if (!(error instanceof SetupMigrationFreshnessError) || !flowFromPrompt) {
+        throw error;
+      }
+      await prompter.note(formatErrorMessage(error), t("wizard.setup.existingConfigTitle"));
+      ({ flow, keepExistingModelConfig } = await normalizeSetupFlow(await promptSetupFlow()));
+      continue;
+    }
+    usedImportFlow = true;
     acknowledgeMigrationPromotion = migrationOutcome.acknowledgePromotion;
     const migratedSnapshot = await readSetupConfigFileSnapshot();
     if (!migratedSnapshot.valid) {
@@ -282,6 +294,7 @@ async function runSetupWizardOnce(
       importedModelRef === migrationOutcome.modelRef;
     keepExistingModelConfig = importedInferenceVerified;
     flow = "quickstart";
+    break;
   }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
   const hasExplicitQuickstartGatewayOverrides =
@@ -289,7 +302,7 @@ async function runSetupWizardOnce(
 
   const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(
     baseConfig,
-    wizardFlow === "quickstart" ? opts : undefined,
+    opts,
   );
 
   if (flow === "quickstart") {
@@ -341,13 +354,13 @@ async function runSetupWizardOnce(
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
-  const localPort = resolveGatewayPort(baseConfig);
+  const localPort = quickstartGateway.port;
   const localUrl = `ws://127.0.0.1:${localPort}`;
   let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   try {
     const resolvedGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
+      value: quickstartGateway.token,
       path: "gateway.auth.token",
       env: process.env,
     });
@@ -367,7 +380,7 @@ async function runSetupWizardOnce(
   try {
     const resolvedGatewayPassword = await resolveSetupSecretInputString({
       config: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
+      value: quickstartGateway.password,
       path: "gateway.auth.password",
       env: process.env,
     });

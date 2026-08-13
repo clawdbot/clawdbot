@@ -29,6 +29,10 @@ describe("normalizeAgentLabel", () => {
       normalizeAgentLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
     ).toBe("research");
   });
+
+  it("preserves the id when an older Gateway omits name provenance", () => {
+    expect(normalizeAgentLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
+  });
 });
 
 const TOOLS_CATALOG_RESULT: ToolsCatalogResult = {

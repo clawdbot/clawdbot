@@ -11,6 +11,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
@@ -705,6 +706,7 @@ export async function directSessionReq<TPayload = unknown>(
       };
     },
     context: {
+      ...createDirectChatContext(),
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),

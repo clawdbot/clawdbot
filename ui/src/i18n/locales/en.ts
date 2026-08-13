@@ -718,6 +718,14 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
+    capabilityCamera: "Camera",
+    capabilityLocation: "Location",
+    capabilityTalk: "Talk",
+    capabilityScreenCapture: "Screen capture",
+    capabilityCanvas: "Canvas",
+    capabilityVoice: "Voice",
+    environmentDisposable: "Disposable",
+    environmentPersistent: "Persistent",
     projects: "Projects",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
@@ -730,7 +738,8 @@ export const en: TranslationMap = {
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
-    browseRequiresAdmin: "Browsing outside agent workspaces needs an admin connection",
+    browseRequiresAdmin:
+      "To browse outside agent workspaces, request admin in the access banner, then approve in Devices.",
     connectMachine: "Connect a machine…",
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
@@ -775,6 +784,13 @@ export const en: TranslationMap = {
     cloudSetupInterrupted:
       "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
+    what: "What",
+    detail: "Detail",
+    local: "Local",
+    nodePath: "Node path",
+    nodeCwd: "Working directory",
+    runsDirectly: "Runs directly",
+    runsDirectlyNote: "Runs directly in the selected folder.",
   },
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
@@ -3606,6 +3622,21 @@ export const en: TranslationMap = {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     retryNow: "Retry now",
+    scopeUpgrade: {
+      limited: "This browser has limited access.",
+      guidance:
+        "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
+      request: "Request admin",
+      requesting: "Requesting administrator access…",
+      requestingAction: "Requesting…",
+      pending:
+        "Approve this browser by running openclaw devices on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
+      retry: "Retry",
+      cancel: "Cancel",
+      rejected: "The administrator access request was rejected.",
+      expired: "The administrator access request expired.",
+      error: "Administrator access request failed: {error}",
+    },
     access: {
       title: "Gateway Access",
       subtitle: "Where the dashboard connects and how it authenticates.",
@@ -4616,6 +4647,18 @@ export const en: TranslationMap = {
       openParent: "Open parent session {title}",
       panels: "Panels",
       layout: "Layout",
+      continueInTerminal: {
+        action: "Continue in terminal…",
+        title: "Continue in terminal",
+        description:
+          "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
+        authNote:
+          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
+        disconnected: "Connect to the Gateway to continue this session in a terminal.",
+        queryRouted:
+          "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+        unavailable: "This session or Gateway address cannot be continued in a terminal.",
+      },
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",
@@ -4783,6 +4826,10 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    restartRecoveryTitle: "This session ended during a restart.",
+    restartRecoveryDisabled: "Its transcript is safe.",
+    resumeInNewSession: "Resume in new session",
+    resumingSession: "Resuming…",
     systemNotice: {
       restartRecovery: {
         label: "System · restart recovery",
@@ -5406,6 +5453,8 @@ export const en: TranslationMap = {
       transcriptLoading: "Loading task transcript…",
       transcriptEmpty: "No transcript messages yet.",
       transcriptFailed: "Could not load task transcript.",
+      subagentDetailTitle: "Subagent details",
+      subagentUnavailable: "This subagent task is no longer available.",
       prompt: "Prompt",
       output: "Output",
       promptUnavailable: "Prompt unavailable.",
@@ -5416,6 +5465,7 @@ export const en: TranslationMap = {
         finished: "Subagent finished",
         failed: "Subagent failed",
         cancelled: "Subagent cancelled",
+        openDetails: "Open subagent details for {title}",
         moreWorking: "+{count} more working",
       },
     },

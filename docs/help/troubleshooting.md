@@ -147,7 +147,7 @@ openclaw plugins inspect <plugin-id> --runtime --json
 openclaw plugins enable <plugin-id>
 ```
 
-Reference: [Operator install policy](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+Reference: [Operator install policy](/tools/skills-config#operator-install-policy-security-installpolicy)
 
 ## Plugin present but blocked by suspicious ownership
 

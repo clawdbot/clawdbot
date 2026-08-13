@@ -19,7 +19,7 @@ import {
   startSkillCollectionMaintenance,
 } from "../skills/workshop/collection-review.js";
 import {
-  abortTrackedChatRunById,
+  abortChatRunById,
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
@@ -309,7 +309,7 @@ export function startGatewayMaintenanceTimers(params: {
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
         continue;
       }
-      abortTrackedChatRunById(params, {
+      abortChatRunById(params, {
         runId,
         sessionKey: entry.sessionKey,
         stopReason: "timeout",

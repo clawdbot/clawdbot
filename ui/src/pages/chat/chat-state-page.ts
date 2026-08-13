@@ -1,6 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
+import {
+  dispatchCommandClientPresentation,
+  type CommandClientPresentationAction,
+} from "../../app/command-client-presentation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   autoPromptNotificationsOnSend,
@@ -222,6 +226,8 @@ export function createPageState(
     chatSendingScopeKey: null,
     chatMessagesBySession,
     eventLogBuffer: [],
+    dispatchClientPresentation: (action: CommandClientPresentationAction) =>
+      dispatchCommandClientPresentation(context, action),
     basePath: context.basePath,
     chatNewMessagesBelow: false,
     chatLocalInputHistoryBySession: {},

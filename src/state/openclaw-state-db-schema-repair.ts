@@ -186,8 +186,7 @@ const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibili
 function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
-  expectedIndexNames: readonly string[],
-  compatibility: SqliteSchemaCompatibility = {},
+  compatibility: SqliteSchemaCompatibility,
 ): boolean {
   if (collectSqliteSchemaIssues(db, schemaSql, compatibility).length > 0) {
     return false;
@@ -202,7 +201,7 @@ function hasSupportedRetiredCommitmentsSchema(
           ORDER BY type, name`,
     )
     .all() as Array<{ name: string; type: string }>;
-  const expectedIndexes = new Set(expectedIndexNames);
+  const expectedIndexes = new Set<string>(RETIRED_COMMITMENTS_INDEX_NAMES);
   return attachedObjects.every(
     (object) => object.type === "index" && expectedIndexes.has(object.name),
   );
@@ -228,13 +227,11 @@ function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
     hasSupportedRetiredCommitmentsSchema(
       db,
       RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_INDEX_NAMES,
       RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     ) ||
     hasSupportedRetiredCommitmentsSchema(
       db,
       ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_INDEX_NAMES,
       ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     )
   );

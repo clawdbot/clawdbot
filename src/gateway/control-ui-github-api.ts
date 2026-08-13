@@ -2,6 +2,7 @@
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -43,6 +44,18 @@ export function optionalNumber(record: Record<string, unknown>, key: string): nu
 
 export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
+}
+
+/** Captures the effective token and a non-secret cache scope from the same env snapshot. */
+export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process.env): {
+  token: string | undefined;
+  cacheScope: string;
+} {
+  const token = githubApiToken(env);
+  return {
+    token,
+    cacheScope: token ? createHash("sha256").update(token).digest("hex") : "anonymous",
+  };
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {

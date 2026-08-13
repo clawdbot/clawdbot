@@ -111,8 +111,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      await page.locator("#new-session-place-trigger").click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await page.locator("#new-session-project-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
 
@@ -163,7 +163,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       const browse = page.getByRole("button", { name: "Browse folders" });
       await expect.poll(() => browse.isEnabled()).toBe(true);
@@ -230,7 +230,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       await page.getByRole("button", { name: "packages" }).click();
       const useFolder = page.getByRole("button", { name: "Use this folder" });
@@ -277,7 +277,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
       await expect.poll(() => pathInput.inputValue()).toBe(workspace);

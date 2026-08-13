@@ -5,7 +5,10 @@ import type {
 } from "../../config/sessions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  inspectMainRestartRecoveryRolloverEligibility,
+  transitionMainSessionRecovery,
+} from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
 function recoveryState(
@@ -84,6 +87,47 @@ function projectLifecycle(
 }
 
 describe("main session recovery state", () => {
+  it("allows rollover until the tombstone records its successor", () => {
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          mainRestartRecovery: recoveryState({ tombstone: { reason: "exhausted" } }),
+        }),
+      ),
+    ).toEqual({ eligible: true });
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          archivedAt: 101,
+          mainRestartRecovery: recoveryState({ tombstone: { reason: "exhausted" } }),
+        }),
+      ),
+    ).toEqual({ eligible: true });
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          archivedAt: 101,
+          mainRestartRecovery: recoveryState({
+            tombstone: {
+              reason: "exhausted",
+              recoveredSessionId: "recovered-id",
+              recoveredSessionKey: "agent:main:dashboard:recovered",
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      eligible: false,
+      reason: "already_recovered",
+      recoveredSessionId: "recovered-id",
+      recoveredSessionKey: "agent:main:dashboard:recovered",
+    });
+    expect(inspectMainRestartRecoveryRolloverEligibility(interruptedEntry())).toEqual({
+      eligible: false,
+      reason: "not_tombstoned",
+    });
+  });
+
   it("gives a legacy interrupted row a stable cycle before exposing it to a scan", () => {
     const entry = interruptedEntry({ mainRestartRecovery: undefined });
 

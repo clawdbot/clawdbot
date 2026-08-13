@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
+  it("keeps explicit restart recovery at write scope", () => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.recover")).toBe("operator.write");
+  });
+
   it.each([
     { agentId: "main", message: "hello", worktree: true },
     { agentId: "main", message: "hello", projectId: "openclaw" },

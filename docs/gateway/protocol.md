@@ -400,6 +400,10 @@ method scope (`operator.pairing`), based on the pending request's declared
 | ordinary commands                                                                                                                                        | `operator.pairing` + `operator.write` |
 | includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
+In this table, `fs.listDir` is the node command relayed through `node.invoke`.
+The top-level Gateway `fs.listDir` RPC needs `operator.write` for
+workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+
 ### Caps/commands/permissions (node)
 
 Nodes declare capability claims at connect time:

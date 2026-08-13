@@ -297,15 +297,15 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => page.locator(".new-session-page__start-split").count()).toBe(1);
 
-      await page.locator("#new-session-place-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__place-popover");
+      await page.locator("#new-session-detail-trigger").click();
+      const placePopover = page.locator("wa-popover.new-session-page__detail-popover");
       const worktreeButton = placePopover.getByRole("button", { name: "Worktree" });
       await worktreeButton.waitFor({ state: "visible" });
       const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
       await worktreeButton.click();
       await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
       await placePopover.getByLabel("Worktree name").fill("terminal-task");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-detail-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
 
       if (captureCliAgentsProof) {
@@ -947,7 +947,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
       await pollLocatorText(
-        page.locator("#new-session-place-trigger .new-session-page__trigger-label"),
+        page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -957,8 +957,8 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__detail-popover");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
       await placeTrigger.click();
       const worktreeItem = placeSelect.getByRole("button", { name: "Worktree" });
       await worktreeItem.click();

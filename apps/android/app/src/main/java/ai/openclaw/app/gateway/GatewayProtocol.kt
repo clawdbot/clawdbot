@@ -396,6 +396,7 @@ enum class GatewayMethod(
   SessionsRewind("sessions.rewind"),
   SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
+  SessionsRecover("sessions.recover"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
@@ -574,6 +575,8 @@ enum class GatewayMethod(
   ProjectsSearchRemote("projects.searchRemote"),
   DesktopObserve("desktop.observe"),
   DesktopLaunch("desktop.launch"),
+  DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
+  DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
 }
 
 enum class GatewayEvent(

@@ -332,7 +332,7 @@ export function normalizeAgentLabel(
   return (
     normalizeOptionalString(agent.name) ??
     normalizeOptionalString(agent.identity?.name) ??
-    (hydratedIdentity?.nameSource !== "default"
+    (hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
       ? normalizeOptionalString(hydratedIdentity?.name)
       : undefined) ??
     agent.id

@@ -77,6 +77,13 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         props.mode === "prepare" && props.state.step.type === "confirm"
                           ? t("modelSetup.wizard.continue")
                           : undefined,
+                      leadingAction: html`<button
+                        type="button"
+                        class="btn"
+                        @click=${props.onCancel}
+                      >
+                        ${t("common.cancel")}
+                      </button>`,
                       onValueChange: props.onValueChange,
                       onAnswer: props.onAnswer,
                     })}
@@ -85,9 +92,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       : nothing}
                   `}
         </div>
-        ${props.mode === "prepare" &&
-        props.state.phase === "step" &&
-        props.state.step.type === "confirm"
+        ${props.state.phase === "step"
           ? nothing
           : html`
               <div class="model-setup-wizard__footer">

@@ -183,3 +183,18 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   pendingSessionChanges.add(next);
   broadcastSessionsChanged(context, payload);
 }
+
+export function emitSessionArchived(
+  context: SessionChangeContext,
+  sessionKey: string | undefined,
+  agentId?: string,
+): void {
+  if (!sessionKey) {
+    return;
+  }
+  emitSessionsChanged(context, {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    reason: "archive",
+  });
+}

@@ -42,6 +42,21 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
+  it("allows runtime-only state scaffolding before import", async () => {
+    const root = tempRoots.make("openclaw-setup-migration-");
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
+    await writeFile(path.join(stateDir, "tmp", "startup"), "runtime scratch\n");
+
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {},
+      stateDir,
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
   it("preserves the first-launch acknowledgement across the lock-time config reread", () => {
     expect(
       preserveSetupMigrationSecurityAcknowledgement(
@@ -68,11 +83,13 @@ describe("setup migration import freshness", () => {
     expect(result.reasons).toEqual(["existing config values are loaded"]);
   });
 
-  it("rejects existing config, workspace files, and state", async () => {
+  it("rejects existing config, workspace files, credentials, sessions, and agents", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");
+    await writeFile(path.join(stateDir, "credentials", "provider.json"), "{}\n");
+    await writeFile(path.join(stateDir, "sessions", "session.json"), "{}\n");
     await writeFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "{}\n");
 
     const result = await inspectSetupMigrationFreshness({
@@ -85,6 +102,8 @@ describe("setup migration import freshness", () => {
     expect(result.reasons).toEqual([
       "existing config values are loaded",
       "workspace MEMORY.md exists",
+      "state credentials/ exists",
+      "state sessions/ exists",
       "state agents/ exists",
     ]);
     expect(() => assertFreshSetupMigrationTarget(result)).toThrow(

@@ -720,6 +720,10 @@ openclaw-session-owner-chip {
   stroke-linejoin: round;
 }
 
+openclaw-github-link-hovercard-provider {
+  display: contents;
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -3944,6 +3948,12 @@ td.data-table-key-col {
     width var(--duration-normal) var(--ease-out),
     max-height var(--duration-normal) var(--ease-out),
     margin var(--duration-normal) var(--ease-out);
+}
+
+/* A refusal or empty-state message is a few lines; without this the reader height reserved for
+   long skill documents leaves the dialog looking broken rather than deliberate. */
+.md-preview-dialog__panel--message-only {
+  min-height: 0;
 }
 
 .md-preview-dialog__header {

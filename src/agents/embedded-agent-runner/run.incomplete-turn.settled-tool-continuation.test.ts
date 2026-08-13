@@ -534,12 +534,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(runAttemptCall(1)).toMatchObject({
       prompt: REASONING_ONLY_RETRY_INSTRUCTION,
       skipPreparedUserTurnMessage: true,
-      suppressNextUserMessagePersistence: false,
+      suppressNextUserMessagePersistence: true,
     });
     expect(runAttemptCall(2)).toMatchObject({
       prompt: REASONING_ONLY_RETRY_INSTRUCTION,
       skipPreparedUserTurnMessage: true,
-      suppressNextUserMessagePersistence: false,
+      suppressNextUserMessagePersistence: true,
     });
   });
 });

@@ -14,8 +14,13 @@ export async function prepareAndAdmitChatSend(
     client,
   }: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
   onAdmissionOwned?: () => Promise<boolean>,
+  options?: { trustedSystemInput?: boolean },
 ) {
-  const normalizedRequest = normalizeChatSendRequest({ params, client });
+  const normalizedRequest = normalizeChatSendRequest({
+    params,
+    client,
+    ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
+  });
   if (!normalizedRequest.ok) {
     respond(
       false,

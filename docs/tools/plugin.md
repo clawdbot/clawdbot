@@ -154,7 +154,7 @@ deprecated `--dangerously-force-unsafe-install` flag is accepted for
 compatibility but is a no-op: it does not bypass install policy or
 `before_install` hook blocks.
 
-See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+See [Skills config](/tools/skills-config#operator-install-policy-security-installpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and
 plugins.
 

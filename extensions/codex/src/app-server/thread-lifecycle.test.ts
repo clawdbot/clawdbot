@@ -1048,7 +1048,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("Other generated work = pending proposal");
     expect(instructions).toContain("only explicit user ask");
   });
 
@@ -1083,7 +1083,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("set `final=true`");
+    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {

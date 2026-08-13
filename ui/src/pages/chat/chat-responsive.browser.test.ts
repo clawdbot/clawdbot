@@ -425,6 +425,18 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </openclaw-chat-session-rail>`
                   : ""
               }
+              ${
+                opts.crowdedComposerFooter
+                  ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
+                    <span class="agent-chat__typing-avatars" aria-hidden="true">
+                      <span class="chat-author-avatar">A</span>
+                      <span class="chat-author-avatar">B</span>
+                      <span class="chat-author-avatar">C</span>
+                    </span>
+                    <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
+                  </div>`
+                  : ""
+              }
               <div class="agent-chat__composer-shell">
                 <div class="agent-chat__input">
                   ${
@@ -483,18 +495,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </div>
                   <div class="agent-chat__composer-footer">
                     ${composerControlsHtml(opts.crowdedComposerFooter)}
-                    ${
-                      opts.crowdedComposerFooter
-                        ? `<div class="agent-chat__typing-indicator" role="status">
-                      <span class="agent-chat__typing-avatars" aria-hidden="true">
-                        <span class="chat-author-avatar">A</span>
-                        <span class="chat-author-avatar">B</span>
-                        <span class="chat-author-avatar">C</span>
-                      </span>
-                      <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
-                    </div>`
-                        : ""
-                    }
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
@@ -2533,7 +2533,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
           status: rectFor(".agent-chat__composer-run-status"),
-          typing: rectFor(".agent-chat__typing-indicator"),
+          typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
       });
 
@@ -2559,11 +2559,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         [layout.status, layout.overrides],
         [layout.overrides, layout.model],
         [layout.model, layout.effort],
-        [layout.effort, layout.typing],
-        [layout.typing, layout.meta],
+        [layout.effort, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
       }
+      expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
     } finally {
       await closeBrowserPage(page);
     }
