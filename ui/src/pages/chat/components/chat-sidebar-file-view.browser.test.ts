@@ -331,4 +331,30 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
     expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
   });
+
+  it("stops retrying after the editor chunk fails to load", async () => {
+    type LoadFailPanel = DetailPanel & {
+      loadFileEditorModule: () => Promise<unknown>;
+      fileEditorLoadFailed: boolean;
+    };
+    const panel = document.createElement("openclaw-chat-detail-panel") as LoadFailPanel;
+    let attempts = 0;
+    panel.loadFileEditorModule = () => {
+      attempts += 1;
+      return Promise.reject(new Error("Failed to fetch dynamically imported module"));
+    };
+    panel.content = { kind: "file", path: "src/broken.ts", name: "broken.ts", content: "x" };
+    document.body.append(panel);
+    mounted.push(panel);
+
+    await expect.poll(() => panel.fileEditorLoadFailed, { timeout: 5_000 }).toBe(true);
+    expect(attempts).toBe(1);
+
+    for (let i = 0; i < 3; i++) {
+      panel.requestUpdate();
+      await panel.updateComplete;
+    }
+    expect(attempts).toBe(1);
+    expect(panel.textContent).toContain("Could not load the file editor");
+  });
 });

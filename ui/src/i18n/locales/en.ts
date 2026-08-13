@@ -5222,6 +5222,7 @@ export const en: TranslationMap = {
       reloadFailed: "Failed to reload the latest file.",
       overwriteLoadFailed: "Failed to load the latest file before overwriting.",
       fullContentLoadFailed: "Failed to load full content: {error}",
+      editorLoadFailed: "Could not load the file editor. Try reloading the page.",
     },
     sidebarColumns: {
       chat: "Chat",
