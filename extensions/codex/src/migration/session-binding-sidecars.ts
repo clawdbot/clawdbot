@@ -42,12 +42,6 @@ type SessionSurface = {
   agentIds: Set<string>;
 };
 
-function resolveLegacyMigrationFallbackAgentId(
-  config: MigrationEnvironment["config"],
-): string | undefined {
-  return config.agents?.defaults?.systemAgent?.agentId?.trim() || undefined;
-}
-
 type LegacyBindingSource = {
   sidecarPath: string;
   transcriptPath: string;

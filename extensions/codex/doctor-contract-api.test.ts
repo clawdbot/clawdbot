@@ -69,9 +69,12 @@ async function createBindingMigrationFixture(options: {
 }) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionsDir = options.legacySharedRoot
-    ? path.join(stateDir, "sessions")
-    : path.join(stateDir, "agents", "main", "sessions");
+  const sessionsDir =
+    options.storeRoot === "fixed"
+      ? path.join(stateDir, "fixed-sessions")
+      : options.legacySharedRoot
+        ? path.join(stateDir, "sessions")
+        : path.join(stateDir, "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   const transcriptPath = path.join(sessionsDir, `${options.name}.jsonl`);
   const sidecarPath = `${transcriptPath}.codex-app-server.json`;
@@ -211,42 +214,6 @@ describe("codex doctor contract", () => {
       appServer: { mode: "guardian" },
     });
     expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
-  });
-
-  it("uses the persisted system owner for legacy bindings in a multi-agent config", async () => {
-    const fixture = await createBindingMigrationFixture({
-      name: "session-current",
-      sessionIndex: {
-        "agent:main:session-1": {
-          sessionId: "session-current",
-          sessionFile: "session-current.jsonl",
-          updatedAt: 1,
-        },
-      },
-      threadId: "thread-1",
-    });
-    const params = {
-      ...fixture.params,
-      config: {
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, ops: {} },
-        },
-      },
-    };
-
-    try {
-      await expect(fixture.migration.detectLegacyState(params)).resolves.toMatchObject({
-        preview: [expect.stringContaining("legacy sidecar")],
-      });
-      await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
-        changes: [expect.stringContaining("Migrated 1")],
-        warnings: [],
-      });
-    } finally {
-      await fs.rm(fixture.stateDir, { recursive: true, force: true });
-    }
   });
 
   it("preserves the fixed-store owner when it differs from the system owner", async () => {
