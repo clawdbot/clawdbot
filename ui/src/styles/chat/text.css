@@ -344,6 +344,14 @@
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
+  /* The glyph below is an atomic inline, so prose could end a line on the icon
+     and strand its label on the next. An atomic chip has no interior line box to
+     break, keeping one reference whole; prose still wraps around it. max-width
+     caps the shrink-to-fit width so a label the parser could not shorten below
+     the column wraps inside the chip instead of overflowing into the chat
+     scroller's overflow-x: hidden, which would clip it away. */
+  display: inline-block;
+  max-width: 100%;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link:hover {

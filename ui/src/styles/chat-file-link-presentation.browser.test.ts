@@ -70,6 +70,73 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
   </body></html>`;
 }
 
+// The reported scenario: a numbered list whose prose puts a parenthesized file
+// reference near the line edge. The second chip carries a label the parser could
+// not shorten to a basename, which is the case that has to stay inside the column.
+const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
+function wrapFixtureDocument(themeMode: "dark" | "light"): string {
+  const themeAttributes =
+    themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
+  return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head><body>
+    <div class="chat-text" id="column">
+      <ol><li>Reproduce the failing run, then read the harness entry point
+        (<a id="wrap-chip" class="markdown-file-link" data-file-kind="code"
+          data-file-path="test/harness.ts" data-file-line="182">harness.ts:182</a>)
+        before landing the fix.</li></ol>
+      <p><a id="long-chip" class="markdown-file-link" data-file-kind="code"
+        data-file-path="${LONG_CHIP_PATH}">${LONG_CHIP_PATH}</a></p>
+    </div>
+  </body></html>`;
+}
+
+type WrapSample = {
+  readonly chipLineCount: number;
+  readonly chipTop: number;
+  readonly columnWidth: number;
+  readonly longChipLineCount: number;
+  readonly longChipWidth: number;
+};
+
+// Sweeping the column instead of hand-picking one width: the chip has to be
+// atomic at every position it can land in, and a single tuned width would stop
+// exercising the boundary as soon as the prose or the font metrics move.
+async function probeWrap(themeMode: "dark" | "light"): Promise<readonly WrapSample[]> {
+  const fixtureFile = path.join(fixtureDirectory, `${themeMode}-wrap.html`);
+  fs.writeFileSync(fixtureFile, wrapFixtureDocument(themeMode), "utf8");
+  const page = await browser.newPage();
+  try {
+    await page.goto(`file://${fixtureFile}`);
+    return await page.evaluate<readonly WrapSample[]>(() => {
+      const resolve = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) {
+          throw new Error(`Missing wrap fixture element for ${selector}`);
+        }
+        return element;
+      };
+      const column = resolve("#column");
+      const chip = resolve("#wrap-chip");
+      const longChip = resolve("#long-chip");
+      const samples: WrapSample[] = [];
+      for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
+        column.style.width = `${columnWidth}px`;
+        samples.push({
+          // One client rect per line fragment: a chip split between its glyph and
+          // its label reports two, an atomic chip always reports one.
+          chipLineCount: chip.getClientRects().length,
+          chipTop: chip.getBoundingClientRect().top,
+          columnWidth,
+          longChipLineCount: longChip.getClientRects().length,
+          longChipWidth: longChip.getBoundingClientRect().width,
+        });
+      }
+      return samples;
+    });
+  } finally {
+    await page.close();
+  }
+}
+
 type StyleSnapshot = Record<(typeof CHIP_PROPERTIES)[number], string>;
 type PresentationProbe = {
   readonly chatGlyph: { readonly maskImage: string };
@@ -175,6 +242,33 @@ describeFileLinkPresentation("chat file link presentation", () => {
       expect(probed.panelFromCode).toEqual(probed.fromCode);
       expect(probed.panelGlyph).toEqual(probed.chatGlyph);
       expect(probed.panelGlyph.maskImage).toContain("svg");
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "wraps a file link as one unit at every column width in %s",
+    async (themeMode) => {
+      const samples = await probeWrap(themeMode);
+      // Vacuity guard: the chip must actually change lines across the sweep, or
+      // the assertion below would pass on a fixture that never wraps at all.
+      expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
+      const split = samples.filter((sample) => sample.chipLineCount !== 1);
+      expect(split).toEqual([]);
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "keeps an unshortened file label inside the column in %s",
+    async (themeMode) => {
+      const samples = await probeWrap(themeMode);
+      // A label wider than the column wraps inside the chip rather than spilling
+      // past it; chat scroll containers set overflow-x: hidden, so an overflowing
+      // chip would be clipped away instead of merely looking wide.
+      const overflowing = samples.filter(
+        (sample) => sample.longChipWidth > sample.columnWidth + 0.5,
+      );
+      expect(overflowing).toEqual([]);
+      expect(samples.every((sample) => sample.longChipLineCount === 1)).toBe(true);
     },
   );
 });
