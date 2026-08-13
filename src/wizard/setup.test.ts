@@ -19,6 +19,7 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
+import { SetupMigrationFreshnessError } from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -34,6 +35,8 @@ type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuth
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
+type ListSetupMigrationOptions =
+  typeof import("./setup.migration-import.js").listSetupMigrationOptions;
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
 type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
@@ -129,7 +132,9 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
   })),
 );
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
-const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
+const listSetupMigrationOptions = vi.hoisted(() =>
+  vi.fn<ListSetupMigrationOptions>(async () => []),
+);
 const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
@@ -1458,6 +1463,48 @@ describe("runSetupWizard", () => {
 
     expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+  });
+
+  it("returns to setup mode after an interactive import freshness rejection", async () => {
+    const workspaceDir = await makeCaseDir("import-freshness-retry-");
+    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
+    runSetupMigrationImport.mockRejectedValueOnce(
+      new SetupMigrationFreshnessError(
+        "Migration import during onboarding requires a fresh OpenClaw setup.\nExisting setup:\n- state agents/ exists",
+      ),
+    );
+    const setupChoices: Array<"import:hermes" | "quickstart"> = ["import:hermes", "quickstart"];
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Setup mode") {
+        return setupChoices.shift();
+      }
+      return "__skip__";
+    });
+    const prompter = buildWizardPrompter({ select: select as unknown as WizardPrompter["select"] });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("state agents/ exists"),
+      "Existing config detected",
+    );
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 
   it("continues onboarding after a recovered promotion", async () => {
