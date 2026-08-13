@@ -17,7 +17,7 @@ const requestHeartbeatMock = vi.fn();
 const runCronIsolatedAgentTurnMock = vi.fn();
 const resolveMainSessionKeyMock = vi.fn(() => "main-session");
 const mainRosterConfig = (): OpenClawConfig => ({
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
 });
 const loadConfigMock = vi.fn(mainRosterConfig);
 const logHooksInfoMock = vi.fn();
@@ -108,6 +108,7 @@ function buildAgentPayload(name: string, agentId?: string) {
     message: "test message",
     name,
     agentId,
+    effectiveAgentId: agentId ?? "main",
     idempotencyKey: undefined,
     wakeMode: "now" as const,
     sessionKey: "session-1",
@@ -128,11 +129,11 @@ function dispatchAgentHook(payload: unknown): unknown {
   return resolveDispatchAgentHook()(payload);
 }
 
-function dispatchWakeHook(payload: unknown): unknown {
+function dispatchWakeHook(payload: unknown, agentId: string): unknown {
   if (!capturedDispatchWakeHook) {
     throw new Error("dispatchWakeHook missing");
   }
-  return capturedDispatchWakeHook(payload);
+  return capturedDispatchWakeHook(payload, agentId);
 }
 
 function resolveDispatchAgentHook(): (...args: unknown[]) => unknown {
@@ -202,12 +203,14 @@ describe("dispatchAgentHook trust handling", () => {
       session: { scope: "global" },
     });
 
-    dispatchWakeHook({
-      text: "Mapped wake",
-      mode: "now",
-      agentId: "hooks",
-      sessionKey: "hook:mapped",
-    });
+    dispatchWakeHook(
+      {
+        text: "Mapped wake",
+        mode: "now",
+        sessionKey: "hook:mapped",
+      },
+      "hooks",
+    );
 
     expectOwnedSystemEvent("Mapped wake", "hooks");
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -990,7 +993,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(failureWake.sessionKey).toBeUndefined();
   });
 
-  it("carries the explicit agent on the recovered global failure wake when the initial key is absent", async () => {
+  it("carries the config-resolved agent on a recovered global failure wake", async () => {
     // Early config resolution fails before the event key resolves, so
     // hookEventSessionKey is absent; recovery still yields the unscoped
     // "global" sentinel. The failure wake must reuse the recovered key and
@@ -1000,7 +1003,10 @@ describe("dispatchAgentHook trust handling", () => {
     });
     resolveMainSessionKeyMock.mockReturnValueOnce("global").mockReturnValueOnce("global");
 
-    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
+    const result = await dispatchAgentHook({
+      ...buildAgentPayload("Config"),
+      effectiveAgentId: "hooks",
+    });
 
     expect(result).toMatchObject({
       ok: false,

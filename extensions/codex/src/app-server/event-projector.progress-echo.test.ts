@@ -23,7 +23,7 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onToolResult,
     });
 
@@ -71,7 +71,7 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onToolResult,
     });
     const command = "pnpm test";

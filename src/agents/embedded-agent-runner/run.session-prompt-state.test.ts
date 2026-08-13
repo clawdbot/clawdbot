@@ -250,19 +250,19 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(false);
   });
 
-  it("preserves an unpersisted reasoning continuation across precheck compaction", async () => {
+  it("keeps an internal reasoning continuation hidden across precheck compaction", async () => {
     const reasoningContinuation =
       "The previous assistant turn recorded reasoning; continue to the visible answer.";
     const state = createState();
-    state.activateInternalPrompt(reasoningContinuation, false);
+    state.activateInternalPrompt(reasoningContinuation);
 
     await state.prepareCompactedTranscriptRetry();
 
     expect(state.activePrompt).toEqual({
       override: reasoningContinuation,
-      persisted: false,
+      persisted: true,
       internal: true,
     });
-    expect(state.suppressNextUserMessagePersistence).toBe(false);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 });

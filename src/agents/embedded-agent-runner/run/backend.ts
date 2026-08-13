@@ -25,6 +25,7 @@ export async function runEmbeddedAttemptWithBackend(
     // Settle before dispatch can replace the successful result with a late abort.
     settleRequesterAfterSessionSpawns({
       requesterSessionKey: params.sessionKey,
+      requesterAgentId: params.agentId,
       requesterTurnRunId: params.runId,
       requesterYielded: result.yieldDetected === true,
       acceptedSessionSpawns: result.acceptedSessionSpawns,

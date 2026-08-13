@@ -551,13 +551,13 @@ Query-string tokens are rejected.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a system event for the main session:
+    Enqueue a system event for the selected agent's main session:
 
     ```bash
     curl -X POST http://127.0.0.1:18789/hooks/wake \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"text":"New email received","mode":"now"}'
+      -d '{"text":"New email received","mode":"now","agentId":"main"}'
     ```
 
     <ParamField path="text" type="string" required>
@@ -565,6 +565,9 @@ Query-string tokens are rejected.
     </ParamField>
     <ParamField path="mode" type="string" default="now">
       `now` or `next-heartbeat`.
+    </ParamField>
+    <ParamField path="agentId" type="string">
+      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
 
   </Accordion>
@@ -629,15 +632,16 @@ Wire Gmail inbox triggers to OpenClaw via Google PubSub.
 
 ### Configure a restricted Gmail reader (recommended)
 
-Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing default agent; the `main` entry below only shows the required roster shape.
+Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing agent; the `main` entry below only shows the required roster shape.
+
+<Warning>Adding `mail_reader` creates an explicit fleet. Keep existing bindings and add one channel-wide binding per enabled channel that `main` still owns; there is no cross-channel wildcard.</Warning>
 
 ```json5
 {
   agents: {
+    ownership: "explicit",
     entries: {
-      main: {
-        default: true,
-      },
+      main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
         model: "openai/gpt-5.6-sol",
@@ -654,6 +658,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
       },
     },
   },
+  bindings: [{ agentId: "main", match: { channel: "<channel-id>", accountId: "*" } }],
   hooks: {
     defaultSessionKey: "hook:gmail:ingress",
     allowRequestSessionKey: true,
@@ -676,9 +681,12 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
 }
 ```
 
+Before restart, run `openclaw agents list --bindings`; replace every placeholder and verify each channel owner.
+
 Why this shape is safer:
 
-- `agentId: "mail_reader"` keeps Gmail off the default agent.
+- The explicit `main` binding preserves existing channel ownership instead of leaving non-Gmail traffic ownerless. Use a specific `accountId` instead of `"*"` when only one account belongs to `main`.
+- `agentId: "mail_reader"` keeps Gmail off the `main` agent.
 - `allowedAgentIds` prevents this hook endpoint from selecting another agent. If the Gateway serves other hook workflows, include only their intended agent ids too.
 - `scope: "session"` gives each Gmail message its own sandbox; `workspaceAccess: "none"` keeps the host agent workspace out of that sandbox.
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.

@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
@@ -25,7 +26,7 @@ const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
-const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const SCREEN_DANGEROUS_COMMANDS = ["screen.record", NODE_DESKTOP_STREAM_COMMAND];
 
 // Desktop computer use is advertised only while the node-local control is
 // enabled. Pairing approval of that advertised surface is the durable grant.
@@ -92,6 +93,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
+  NODE_DESKTOP_STREAM_COMMAND,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,

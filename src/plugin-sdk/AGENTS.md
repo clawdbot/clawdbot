@@ -14,7 +14,7 @@ can affect bundled plugins and third-party plugins.
 - Definition files:
   - `package.json`
   - `scripts/lib/plugin-sdk-entrypoints.json`
-  - `src/plugin-sdk/entrypoints.ts`
+  - `scripts/lib/plugin-sdk-entries.mts`
   - `src/plugin-sdk/api-baseline.ts`
   - `src/plugin-sdk/plugin-entry.ts`
   - `src/plugin-sdk/core.ts`
@@ -89,7 +89,7 @@ can affect bundled plugins and third-party plugins.
 - When adding or changing a public subpath, keep these aligned:
   - docs in `docs/plugins/*`
   - `scripts/lib/plugin-sdk-entrypoints.json`
-  - `src/plugin-sdk/entrypoints.ts`
+  - `scripts/lib/plugin-sdk-entries.mts`
   - `package.json` exports
   - API baseline and export checks
 - If a bundled channel/helper need crosses package boundaries, first ask

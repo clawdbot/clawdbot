@@ -143,6 +143,29 @@ suite.define(() => {
     });
   });
 
+  it("previews and removes a picked image without object URL support", async () => {
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
+      });
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      await page
+        .locator(".agent-chat__photo-input")
+        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
+
+      const attachment = page.locator(".chat-attachment-thumb");
+      const preview = attachment.locator('img[alt="Attachment preview"]');
+      await preview.waitFor({ state: "visible" });
+      await expect.poll(() => preview.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+      await captureUiProof(page, "new-session-picked-image-preview.png");
+      await page.getByRole("button", { name: "Remove attachment" }).click();
+      await expect.poll(() => attachment.count()).toBe(0);
+      await captureUiProof(page, "new-session-picked-image-removed.png");
+    });
+  });
+
   it("shows the initial prompt while the newly created session is still running", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:visible-initial-prompt";

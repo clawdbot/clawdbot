@@ -119,6 +119,7 @@ export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
+  agentId?: string;
   payload?: PluginJsonValue;
   client?: {
     connId?: string;

@@ -559,6 +559,7 @@ export async function runEmbeddedAttemptSettledPhase(
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
     settleRequesterAfterSessionSpawns({
       requesterSessionKey: attempt.sessionKey,
+      requesterAgentId: input.setup.sessionAgentId,
       requesterTurnRunId: attempt.runId,
       requesterYielded: result.yieldDetected === true,
       acceptedSessionSpawns: result.acceptedSessionSpawns,

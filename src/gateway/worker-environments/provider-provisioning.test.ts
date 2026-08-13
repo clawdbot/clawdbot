@@ -76,6 +76,36 @@ describe("worker environment service", () => {
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
   });
 
+  it("holds a node lease ready without entering SSH bootstrap", async () => {
+    support.testState.prepareInstallation = vi.fn(async () => {
+      throw new Error("node leases must not prepare an SSH installation");
+    });
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        provision: async () => ({
+          leaseId: "device-lease-1",
+          node: { deviceId: "device-1" },
+          sharedHost: true,
+        }),
+      }),
+    );
+
+    const result = await workerService.create("development", "request-device");
+
+    expect(result).toMatchObject({
+      state: "ready",
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      bootstrapReceipt: null,
+      sharedHost: true,
+      ownerEpoch: 1,
+    });
+    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(support.testState.store.getCredential(result.environmentId)).toBeUndefined();
+  });
+
   it("creates a nested environment from its parent's snapshot after config drift", async () => {
     const provisionedProfiles: WorkerProfile[] = [];
     let lease = 0;
@@ -699,6 +729,17 @@ describe("worker environment service", () => {
 
   it.each([
     ["missing result", null, "invalid provision result"],
+    ["missing transport", { leaseId: "lease-invalid" }, "invalid provision result"],
+    [
+      "ambiguous transport",
+      { leaseId: "lease-invalid", ssh: support.SSH_ENDPOINT, node: { deviceId: "device-1" } },
+      "invalid provision result",
+    ],
+    [
+      "blank node device id",
+      { leaseId: "lease-invalid", node: { deviceId: " " } },
+      "invalid node device id",
+    ],
     [
       "malformed SSH endpoint",
       { leaseId: "lease-invalid", ssh: { ...support.SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },

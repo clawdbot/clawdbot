@@ -2,7 +2,7 @@ import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import * as hostSource from "../gateway/desktop/host-source.js";
-import { noteHostDesktopHealth } from "./doctor-host-desktop.js";
+import { collectHostDesktopHealthFindings, noteHostDesktopHealth } from "./doctor-host-desktop.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
@@ -72,6 +72,49 @@ describe("host desktop doctor section", () => {
       `attached (127.0.0.1:${address.port}, security: VncAuth)`,
       "Host desktop",
     );
+  });
+
+  it("reports managed configured and failed states distinctly", async () => {
+    vi.spyOn(hostSource, "inspectHostDesktop")
+      .mockResolvedValueOnce({
+        status: {
+          enabled: true,
+          state: "managed",
+          managedState: "unknown",
+          port: 5900,
+        },
+        detail: "managed (configured; runtime state is available from the running Gateway status)",
+      })
+      .mockResolvedValueOnce({
+        status: {
+          enabled: true,
+          state: "managed",
+          managedState: "failed",
+          port: 46_001,
+          display: 99,
+          error: "startxfce4 not installed",
+        },
+        detail: "managed (failed: startxfce4 not installed)",
+      });
+
+    await noteHostDesktopHealth(
+      { desktop: { host: { enabled: true, managed: true } } },
+      { platform: "linux" },
+    );
+    expect(note).toHaveBeenCalledWith(
+      "managed (configured; runtime state is available from the running Gateway status)",
+      "Host desktop",
+    );
+    await expect(
+      collectHostDesktopHealthFindings({
+        desktop: { host: { enabled: true, managed: true } },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: "managed (failed: startxfce4 not installed)",
+      }),
+    ]);
   });
 
   it("runs the exact Screen Sharing launchctl repair only after interactive confirmation", async () => {

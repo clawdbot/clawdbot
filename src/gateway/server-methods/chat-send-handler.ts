@@ -24,14 +24,16 @@ import {
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export async function handleChatSend(
+async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+  options?: { trustedSystemInput?: boolean },
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
     onAdmissionOwned,
+    options,
   );
   if (!setup) {
     return;
@@ -281,4 +283,22 @@ export async function handleChatSend(
       terminalizeRestartSafeAdmission,
     });
   }
+}
+
+export async function handleChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+  externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** Dispatches Gateway-authored system input without widening the public chat-send contract. */
+export async function handleTrustedInternalChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    trustedSystemInput: true,
+  });
 }

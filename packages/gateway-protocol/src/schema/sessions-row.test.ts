@@ -17,6 +17,7 @@ describe("SessionRowSchema", () => {
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       visibility: "suggest",
       sharingRole: "owner",
+      restartRecoveryStatus: "tombstoned",
     };
     const roundTripped = structuredClone(row);
 
@@ -29,6 +30,7 @@ describe("SessionRowSchema", () => {
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       visibility: "suggest",
       sharingRole: "owner",
+      restartRecoveryStatus: "tombstoned",
     });
   });
 });

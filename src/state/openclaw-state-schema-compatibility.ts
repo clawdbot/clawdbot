@@ -82,16 +82,6 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
   allowCompatibleAdditiveColumns: true,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
-    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
-    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
-    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
-    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
-    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
-    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
-    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
-    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
-    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
     "claw_package_refs.package_integrity": [
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],

@@ -107,16 +107,37 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   } = context;
   const disabledBanner = props.disabledBanner
     ? html`
-        <div class="agent-chat__disabled-banner callout info callout--action" role="status">
-          <span class="callout__content">${props.disabledBanner.text}</span>
+        <div
+          class="agent-chat__disabled-banner callout ${props.disabledBanner.tone === "neutral"
+            ? "agent-chat__disabled-banner--neutral"
+            : "info"} callout--action"
+          role="status"
+        >
+          ${props.disabledBanner.icon === "warning"
+            ? html`<span class="agent-chat__disabled-banner-icon" aria-hidden="true"
+                >${icons.alertTriangle}</span
+              >`
+            : nothing}
+          <div class="callout__content">
+            ${props.disabledBanner.title
+              ? html`<div class="agent-chat__disabled-banner-title">
+                  ${props.disabledBanner.title}
+                </div>`
+              : nothing}
+            <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
+          </div>
           <button
             type="button"
-            class="btn btn--xs"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason)}
+            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
             title=${props.disabledBanner.disabledReason ?? nothing}
             @click=${props.disabledBanner.onAction}
           >
-            ${props.disabledBanner.actionLabel}
+            ${props.disabledBanner.busy
+              ? html`<span class="btn__spinner" aria-hidden="true"></span>${props.disabledBanner
+                    .busyLabel ?? props.disabledBanner.actionLabel}`
+              : props.disabledBanner.actionLabel}
           </button>
           ${props.disabledBanner.kind === "composer-replacement" && showAbortableUi
             ? renderChatPrimaryActions(runControlsProps)

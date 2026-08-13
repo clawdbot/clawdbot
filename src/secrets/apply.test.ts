@@ -683,6 +683,7 @@ describe("secrets apply", () => {
     const secondStorePath = resolveAuthProfileDatabasePath(secondAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
+        ownership: "explicit",
         entries: {
           first: { agentDir: firstAgentDir },
           second: { agentDir: secondAgentDir },
@@ -757,6 +758,7 @@ describe("secrets apply", () => {
       registerResolvedAgentDir({ agentId: "second", agentDir: secondAgentDir });
       await writeJsonFile(fixture.configPath, {
         agents: {
+          ownership: "explicit",
           entries: {
             first: { agentDir: firstAgentDir },
             second: { agentDir: secondAgentDir },

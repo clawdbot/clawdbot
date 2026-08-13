@@ -1050,6 +1050,7 @@ describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
+        ownership: "explicit",
         entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {

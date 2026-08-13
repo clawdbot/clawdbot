@@ -403,7 +403,7 @@ describe("buildInboundMediaNote", () => {
       ],
     });
 
-    expect(projection).toEqual({ media: [] });
+    expect(projection).toEqual({ media: [], mediaIndexes: [] });
   });
 
   it("keeps audio attachments when no transcription is available", () => {
@@ -472,6 +472,7 @@ describe("buildInboundMediaNote", () => {
           messageId: undefined,
         },
       ],
+      mediaIndexes: [0],
     });
 
     const multi = buildInboundMediaNoteProjection({

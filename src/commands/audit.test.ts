@@ -565,6 +565,50 @@ describe("audit run explanation", () => {
     });
   });
 
+  it("routes the shared explain cursor by selector and grammar", async () => {
+    callGateway.mockResolvedValue({
+      schemaVersion: 1,
+      run: { runId: "run-1", executionId: "execution-1", status: "known" },
+      identity: {
+        state: "unknown",
+        reasonCode: "execution_not_found",
+        missingEvidence: ["identity.context"],
+        remediation: [],
+      },
+      decisions: [],
+      coverage: { state: "unknown", missingEvidence: ["identity.context"] },
+    });
+
+    for (const [options, params] of [
+      [
+        { explain: true, runId: "run-1", cursor: "a:2000:42" },
+        { runId: "run-1", executionLimit: 50, decisionCursor: "a:2000:42", decisionLimit: 50 },
+      ],
+      [
+        { explain: true, executionId: "execution-1", cursor: "1" },
+        { executionId: "execution-1", decisionCursor: "1", decisionLimit: 50 },
+      ],
+      [
+        { explain: true, runId: "run-1", cursor: "001" },
+        {
+          runId: "run-1",
+          executionLimit: 50,
+          executionCursor: "001",
+          decisionCursor: "001",
+          decisionLimit: 50,
+        },
+      ],
+      [
+        { explain: true, executionId: "execution-1", cursor: "g:2000:42" },
+        { executionId: "execution-1", decisionCursor: "g:2000:42", decisionLimit: 50 },
+      ],
+    ] as const) {
+      callGateway.mockClear();
+      await auditListCommand(options, runtime);
+      expect(callGateway).toHaveBeenCalledWith({ method: "audit.run.inspect", params });
+    }
+  });
+
   it("renders expired identity as unsupported without context fields or decisions", async () => {
     callGateway.mockResolvedValue({
       schemaVersion: 1,

@@ -4,15 +4,15 @@
  * Records quota/manual/circuit suspensions for diagnostics and recovery flows.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  resolveExpiresAtMsFromDurationMs,
-  resolveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
 import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import type { FailoverReason } from "./failover/signal.js";

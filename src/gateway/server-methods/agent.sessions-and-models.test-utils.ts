@@ -2158,6 +2158,7 @@ describe("gateway agent handler", () => {
       meta: { durationMs: 100 },
     });
     const respond = vi.fn();
+    mocks.loadSessionEntry.mockClear();
 
     await invokeAgent(
       {
@@ -2180,10 +2181,13 @@ describe("gateway agent handler", () => {
     }>();
     expect(call.agentId).toBe("work");
     expect(call.sessionKey).toBe("global");
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
-      agentId: "work",
-      clone: false,
-    });
+    const globalLoadCalls = mocks.loadSessionEntry.mock.calls.filter(
+      ([sessionKey]) => sessionKey === "global",
+    );
+    expect(globalLoadCalls.length).toBeGreaterThan(0);
+    for (const [, options] of globalLoadCalls) {
+      expect(options).toEqual({ agentId: "work", clone: false });
+    }
   });
 
   it("routes bare global session keys to the configured default agent", async () => {
@@ -2211,6 +2215,7 @@ describe("gateway agent handler", () => {
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
+    mocks.loadSessionEntry.mockClear();
 
     await invokeAgent(
       {
@@ -2227,9 +2232,13 @@ describe("gateway agent handler", () => {
     }>();
     expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
-      clone: false,
-    });
+    const globalLoadCalls = mocks.loadSessionEntry.mock.calls.filter(
+      ([sessionKey]) => sessionKey === "global",
+    );
+    expect(globalLoadCalls.length).toBeGreaterThan(0);
+    for (const [, options] of globalLoadCalls) {
+      expect(options).toEqual({ agentId: "ops", clone: false });
+    }
   });
 
   it("infers selected-global agent id from agent-prefixed session aliases", async () => {
@@ -2417,6 +2426,11 @@ describe("gateway agent handler", () => {
 
   it("preserves selected-global agent id on cached accepted responses", async () => {
     const context = makeContext();
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
     mocks.agentCommand.mockClear();
     context.dedupe.set("agent:cached-global-work", {
       ts: Date.now(),

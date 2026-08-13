@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => ({
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn(),
+    updateGatewayConnection: vi.fn(),
     close: vi.fn(async () => {}),
   },
 }));
@@ -544,6 +545,8 @@ describe("runNodeHost", () => {
       await vi.waitFor(() => expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce());
 
       expect(clearIntervalSpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
+      expect(resolveCloseMcp).toBeTypeOf("function");
       resolveCloseMcp?.();
       await running;
 

@@ -43,6 +43,7 @@ import {
 export type CronContinuationClaim = {
   storePath: string;
   sessionKey: string;
+  sessionAgentId: string;
   lifecycleRevision: string;
   initialEntry: SessionEntry;
   mediaTaskIdsBefore: ReadonlySet<string>;
@@ -254,6 +255,7 @@ export async function persistAgentSessionPhase(params: {
               params.setCronContinuationClaim({
                 storePath: params.storePath,
                 sessionKey: params.canonicalSessionKey,
+                sessionAgentId: params.sessionAgentId,
                 lifecycleRevision: marker.lifecycleRevision,
                 initialEntry: structuredClone(entryForPatch!),
                 mediaTaskIdsBefore: getGeneratedMediaTaskIdsForSessionKey(
@@ -520,7 +522,7 @@ export async function persistAgentSessionPhase(params: {
     pendingChatRun: isMainSession
       ? {
           sessionKey: params.canonicalSessionKey,
-          ...(params.canonicalSessionKey === "global" ? { agentId: params.sessionAgentId } : {}),
+          agentId: params.sessionAgentId,
         }
       : undefined,
     bestEffortDeliver:

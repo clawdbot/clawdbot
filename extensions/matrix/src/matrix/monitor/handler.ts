@@ -611,6 +611,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       );
       await commitInboundEventIfClaimed();
     } catch (err) {
+      const draftController = draftControllerRef;
+      if (
+        draftController?.draftStream?.eventId() &&
+        draftController.draftDisposition() === "active"
+      ) {
+        // A Matrix-accepted preview is the only visible reply after an abort.
+        draftController.markDraftRetained();
+      }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
@@ -618,7 +626,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStream = draftControllerRef?.draftStream;
       if (draftStream) {
         const draftEventId = await draftStream.stop().catch(() => undefined);
-        if (draftEventId && draftControllerRef?.isDraftConsumed() !== true) {
+        if (draftEventId && draftControllerRef?.draftDisposition() === "active") {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }

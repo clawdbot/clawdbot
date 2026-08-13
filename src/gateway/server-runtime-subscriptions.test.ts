@@ -77,6 +77,11 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
   readMessageCount: vi.fn(),
 }));
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.value,
+}));
 
 vi.mock("../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => auditTestState.enabled,
@@ -172,6 +177,7 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageCount.mockReset();
+    runtimeConfigState.value = {};
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -268,6 +274,45 @@ describe("startGatewayEventSubscriptions", () => {
 
     await unsubs.agentUnsub();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("uses the persisted bare-key owner for ownerless active-run projections", async () => {
+    runtimeConfigState.value = {
+      session: { scope: "global", store: "/tmp/openclaw-owned-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    params.chatAbortControllers.set("run-ops", {
+      sessionKey: "global",
+      sessionId: "session-ops",
+    } as never);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({ runId: "load-handler", stream: "lifecycle", data: { phase: "error" } });
+    await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
+    const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as {
+      resolveSessionActiveRunState?: (session: {
+        requestedKey: string;
+        canonicalKey: string;
+        sessionId?: string;
+        agentId?: string;
+      }) => { active: boolean; runIds: string[] };
+    };
+
+    expect(
+      options.resolveSessionActiveRunState?.({
+        requestedKey: "global",
+        canonicalKey: "global",
+        sessionId: "session-ops",
+        agentId: "ops",
+      }),
+    ).toEqual({ active: true, runIds: ["run-ops"] });
   });
 
   it("logs transcript handler failures", async () => {

@@ -62,8 +62,15 @@ function isActiveRunProgressStale(params: {
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  /**
+   * When false, staleness is evaluated even with a zero queued backlog.
+   * Run-handle recovery keeps the gate so an unqueued active run is not
+   * disturbed; reply-only ownership has no backlog to protect and must
+   * still expire when proven stale (phantom active reply work).
+   */
+  requireQueueBacklog?: boolean;
 }): boolean {
-  if ((params.queueDepth ?? 0) <= 0) {
+  if ((params.queueDepth ?? 0) <= 0 && params.requireQueueBacklog !== false) {
     return false;
   }
   const activity = getDiagnosticSessionActivitySnapshot({
@@ -250,6 +257,18 @@ export async function recoverStuckDiagnosticSession(
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
+          // Reply-only ownership must expire when proven stale even with zero
+          // queued backlog; the queue gate exists to protect run handles that
+          // are actively draining queued turns, and there is no such backlog
+          // here to protect. Recognized maintenance phases are the exception:
+          // preflight compaction and memory flush are explicitly allowed to
+          // run longer than the stale threshold (they honor a configured
+          // compaction timeout), so they keep the queue-backlog guard and are
+          // never force-cleared early by this reclaim path.
+          requireQueueBacklog:
+            activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing"
+              ? undefined
+              : false,
         });
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {

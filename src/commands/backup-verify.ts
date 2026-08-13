@@ -13,15 +13,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
-// DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
-// Keep bounded headroom without disabling node-tar's decompression bomb guard.
-const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 type BackupManifestAsset = {
@@ -712,12 +709,9 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
-export async function backupVerifyCommand(
-  runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
-): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(opts.archive);
+/** Verify a backup archive and return its normalized, integrity-checked inventory. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(archive);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
@@ -778,6 +772,16 @@ export async function backupVerifyCommand(
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
   };
+
+  return result;
+}
+
+/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
+export async function backupVerifyCommand(
+  runtime: RuntimeEnv,
+  opts: BackupVerifyOptions,
+): Promise<BackupVerifyResult> {
+  const result = await verifyBackupArchive(opts.archive);
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);

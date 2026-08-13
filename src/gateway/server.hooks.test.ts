@@ -504,7 +504,7 @@ describe("gateway server hooks", () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
-      allowedAgentIds: ["hooks"],
+      allowedAgentIds: ["main", "hooks"],
       allowedSessionKeyPrefixes: ["hook:"],
       mappings: [
         {
@@ -1005,7 +1005,7 @@ describe("gateway server hooks", () => {
       expect(resNoAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBeUndefined();
+      expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
       expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
       drainSystemEvents(resolveMainKey());
@@ -1018,7 +1018,7 @@ describe("gateway server hooks", () => {
       expect(resBlankAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const blankAgentCall = cronRunCall();
-      expect(blankAgentCall?.job?.agentId).toBeUndefined();
+      expect(blankAgentCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
   });

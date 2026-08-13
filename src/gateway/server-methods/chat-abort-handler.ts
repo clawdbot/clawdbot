@@ -4,12 +4,16 @@ import {
   errorShape,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
+import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
@@ -17,7 +21,6 @@ import {
   canRequesterAbortPreRegisteredRun,
   readPreRegisteredAgentDedupePayloadForSession,
   resolveChatAbortRequester,
-  resolveStoredGlobalRunAgentId,
   writePreRegisteredAgentAbort,
   writePreRegisteredChatAbort,
 } from "./chat-abort-authorization.js";
@@ -63,18 +66,38 @@ export async function handleChatAbortRequestWithLifecycle(
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const abortCfg = context.getRuntimeConfig();
-  const defaultAgentId = resolveDefaultAgentId(abortCfg);
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
-  const abortSessionResolvesGlobal =
-    resolveSessionStoreKey({ cfg: abortCfg, sessionKey: rawSessionKey }) === "global";
-  const inferredGlobalAgentId =
-    !agentIdOverride && parsedAbortSessionKey && abortSessionResolvesGlobal
+  const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+    abortCfg,
+    rawSessionKey,
+  );
+  const inferredSessionAgentId =
+    !agentIdOverride && parsedAbortSessionKey
       ? normalizeAgentId(parsedAbortSessionKey.agentId)
       : undefined;
-  const abortAgentId =
-    agentIdOverride ??
-    inferredGlobalAgentId ??
-    (abortSessionResolvesGlobal ? defaultAgentId : undefined);
+  const bareSessionAgentResolution = !parsedAbortSessionKey
+    ? resolveRequestedSessionAgentId(abortCfg, rawSessionKey, agentIdOverride)
+    : undefined;
+  if (bareSessionAgentResolution && !bareSessionAgentResolution.ok) {
+    respond(false, undefined, bareSessionAgentResolution.error);
+    return;
+  }
+  const abortAgentId = parsedAbortSessionKey
+    ? (agentIdOverride ?? inferredSessionAgentId)
+    : bareSessionAgentResolution?.agentId;
+  if (!abortAgentId) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        rawSessionKey.trim().toLowerCase() === "global"
+          ? "agentId is required for global chat.abort when no compatibility owner exists"
+          : "agentId is required for unscoped chat.abort when no compatibility owner exists",
+      ),
+    );
+    return;
+  }
   if (
     agentIdOverride &&
     parsedAbortSessionKey &&
@@ -90,14 +113,19 @@ export async function handleChatAbortRequestWithLifecycle(
     );
     return;
   }
-  const canonicalAbortSessionKey =
-    abortAgentId && abortSessionResolvesGlobal ? "global" : rawSessionKey;
-
+  const canonicalAbortSessionKey = resolveSessionStoreKey({
+    cfg: abortCfg,
+    sessionKey: rawSessionKey,
+    storeAgentId: abortAgentId,
+  });
   const ops = createChatAbortOps(context);
   const requester = resolveChatAbortRequester(client);
 
-  const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
-  const { entry: abortSessionEntry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+  const sessionLoadOptions = { agentId: abortAgentId };
+  const { entry: abortSessionEntry } = loadSessionEntry(
+    canonicalAbortSessionKey,
+    sessionLoadOptions,
+  );
   const cancelWorkerRun = (sessionId = abortSessionEntry?.sessionId): string[] =>
     requester.isAdmin
       ? cancelWorkerInferenceForSession({ context, sessionId, ...(runId ? { runId } : {}) })
@@ -115,7 +143,7 @@ export async function handleChatAbortRequestWithLifecycle(
       sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
       agentId: abortAgentId,
       sessionId: abortSessionEntry?.sessionId,
-      defaultAgentId,
+      defaultAgentId: compatibilityDefaultAgentId,
       abortOrigin: "rpc",
       stopReason: "rpc",
       requester,
@@ -130,7 +158,7 @@ export async function handleChatAbortRequestWithLifecycle(
     respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
     return;
   }
-  const normalizedAgentIdOverride = abortAgentId?.toLowerCase();
+  const normalizedAgentIdOverride = normalizeAgentId(abortAgentId);
   const authorizeRunTarget = (target: ChatAbortTarget): boolean => {
     if (
       target.sessionKey !== rawSessionKey &&
@@ -145,9 +173,14 @@ export async function handleChatAbortRequestWithLifecycle(
       return false;
     }
     if (
-      normalizedAgentIdOverride &&
-      target.sessionKey === "global" &&
-      resolveStoredGlobalRunAgentId(target.agentId, defaultAgentId) !== normalizedAgentIdOverride
+      !chatRunBelongsToAgent(
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          defaultAgentId: compatibilityDefaultAgentId,
+        },
+        normalizedAgentIdOverride,
+      )
     ) {
       respond(
         false,
@@ -174,7 +207,7 @@ export async function handleChatAbortRequestWithLifecycle(
           runId,
           sessionKey,
           agentId: abortAgentId,
-          defaultAgentId,
+          defaultAgentId: compatibilityDefaultAgentId,
           includeHidden: true,
         });
         if (payload) {

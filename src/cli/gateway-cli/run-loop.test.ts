@@ -216,6 +216,7 @@ vi.mock("../../tasks/runtime-internal.js", () => ({
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));
 
 vi.mock("../../tasks/task-registry.maintenance.js", () => ({

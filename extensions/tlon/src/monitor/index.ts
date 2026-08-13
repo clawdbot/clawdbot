@@ -1,5 +1,8 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelInboundEnvelopeBuilder,
+  formatInboundMediaUnavailableText,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
   waitUntilAbort,
@@ -330,9 +333,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     // Download any images from the message content
     let attachments: Array<{ path: string; contentType: string }> = [];
+    let unavailableMediaCount = 0;
     if (messageContent) {
       try {
-        attachments = await downloadMessageImages(messageContent);
+        ({ attachments, unavailableCount: unavailableMediaCount } =
+          await downloadMessageImages(messageContent));
         if (attachments.length > 0) {
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
@@ -505,6 +510,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     });
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
+    const bodyForAgent =
+      unavailableMediaCount > 0
+        ? formatInboundMediaUnavailableText({
+            body: commandBody,
+            notice: `[tlon ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
+          })
+        : commandBody;
     const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
     const ctxPayload = core.channel.inbound.buildContext({
       channel: "tlon",
@@ -535,7 +547,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       },
       message: {
         body,
-        bodyForAgent: commandBody,
+        bodyForAgent,
         rawBody: messageText,
         commandBody,
       },

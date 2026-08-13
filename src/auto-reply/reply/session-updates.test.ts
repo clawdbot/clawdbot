@@ -75,7 +75,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: (id: string) => id,
+  normalizeAgentId: vi.fn((id: string) => id),
   normalizeMainKey: (key?: string) => key ?? "main",
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));

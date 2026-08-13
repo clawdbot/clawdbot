@@ -1,5 +1,5 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { WebSocket } from "ws";
+import type { ClientOptions, WebSocket } from "ws";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
@@ -7,6 +7,7 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
@@ -37,13 +38,13 @@ export type WorkerConnectionExit =
   | { kind: "stopped" };
 
 export type WorkerConnectionOptions = {
-  socketPath: string;
+  endpoint: WorkerConnectionEndpoint;
   connectParams: WorkerConnectParams;
   reconnectBackoff?: BackoffPolicy;
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string) => WebSocket;
+  createSocket?: (url: string, options: ClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
 };
 
