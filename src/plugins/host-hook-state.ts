@@ -277,6 +277,7 @@ export function getPluginSessionExtensionStateSync(params: {
 export async function patchPluginSessionExtension(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   pluginId: string;
   namespace: string;
   value?: PluginJsonValue;
@@ -318,7 +319,11 @@ export async function patchPluginSessionExtension(params: {
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
   const updated = await updateResolvedSessionEntry(
-    { cfg: params.cfg, sessionKey: params.sessionKey },
+    {
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
     (entry, context) => {
       params.assertCurrent?.();
       const entryRecord = entry as unknown as Record<string, unknown>;

@@ -6,7 +6,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -584,14 +584,10 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const selectedTarget = resolveDraftModelTarget(this.selected, undefined, this.catalog);
-    const draftRow: GatewaySessionRow = {
-      key: sessionKey,
-      kind: "direct",
-      updatedAt: null,
-      ...(selectedTarget
-        ? { model: selectedTarget.model, modelProvider: selectedTarget.provider ?? undefined }
-        : {}),
-      ...(this.thinkingLevel ? { thinkingLevel: this.thinkingLevel } : {}),
+    const thinkingTarget = {
+      model: selectedTarget?.model,
+      modelProvider: selectedTarget?.provider ?? undefined,
+      thinkingLevel: this.thinkingLevel || undefined,
     };
     const thinkingDefaults = {
       ...sourceResult?.defaults,
@@ -639,7 +635,7 @@ export class NewSessionModelControl {
       showFastMode: false,
       stream: null,
       thinkingDefaults,
-      thinkingSession: draftRow,
+      thinkingSession: thinkingTarget,
       onModelSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;

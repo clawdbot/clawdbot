@@ -345,6 +345,13 @@ export class CodexAppServerEventProjector {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
+  /** Projects a successful OpenClaw update_plan call through the native plan stream. */
+  recordDynamicPlanUpdate(params: unknown): void {
+    if (isJsonObject(params)) {
+      this.reasoningProjection.handleTurnPlanUpdated(params, "openclaw");
+    }
+  }
+
   recordDynamicToolResult(params: {
     callId: string;
     tool: string;

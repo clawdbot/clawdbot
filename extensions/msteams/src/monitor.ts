@@ -6,6 +6,7 @@ import {
   isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
+  resolveChannelMediaMaxBytes,
   summarizeMapping,
   type OpenClawConfig,
   type RuntimeEnv,
@@ -205,12 +206,11 @@ export async function monitorMSTeamsProvider(
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
-  const MB = 1024 * 1024;
-  const agentDefaults = cfg.agents?.defaults;
   const mediaMaxBytes =
-    typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
-      ? Math.floor(agentDefaults.mediaMaxMb * MB)
-      : 8 * MB;
+    resolveChannelMediaMaxBytes({
+      cfg,
+      resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
+    }) ?? 8 * 1024 * 1024;
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
 

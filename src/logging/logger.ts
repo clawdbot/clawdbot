@@ -1,6 +1,5 @@
 // Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -23,20 +22,14 @@ import {
   DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
-import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
 import { resolveDefaultRollingLogFile } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
-import {
-  drainFileLogQueueSync,
-  enqueueFileLog,
-  flushFileLogQueue,
-  resetFileLogTransportForTests,
-  setFileLogAppenderForTests,
-  setFileLogQueueMaxRecordsForTests,
-} from "./logger-file-transport.js";
+import { fileLogTransport } from "./logger-file-transport.js";
+import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
@@ -71,7 +64,6 @@ type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
-type HostnameResolver = () => string;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -95,9 +87,6 @@ const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
 const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
-const defaultHostnameResolver: HostnameResolver = () => os.hostname();
-let hostnameResolver: HostnameResolver = defaultHostnameResolver;
-let cachedHostname: string | null = null;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
@@ -298,14 +287,14 @@ function buildFileLogMessage(numericArgs: readonly unknown[]): string | undefine
 }
 
 function resolveLogHostname(): string {
-  if (cachedHostname) {
-    return cachedHostname;
+  if (loggerHostnameState.cached) {
+    return loggerHostnameState.cached;
   }
-  const hostname = hostnameResolver().trim();
+  const hostname = loggerHostnameState.resolver().trim();
   if (!hostname) {
     return "unknown";
   }
-  cachedHostname = hostname;
+  loggerHostnameState.cached = hostname;
   return hostname;
 }
 
@@ -636,7 +625,7 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
         ...traceFields,
       };
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
-      enqueueFileLog({
+      fileLogTransport.enqueue({
         file: activeFile,
         hostname: expectDefined(structuredFields.hostname, "structured log hostname"),
         maxFileBytes: settings.maxFileBytes,
@@ -746,7 +735,7 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
 
 /** Flushes queued file logs before a graceful owner exits the process. */
 export async function flushLogger(): Promise<void> {
-  await flushFileLogQueue();
+  await fileLogTransport.flush();
 }
 
 // Test helpers
@@ -763,27 +752,8 @@ export function resetLogger() {
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
   loadLoggerConfig = loadLoggerConfigDefault;
-  hostnameResolver = defaultHostnameResolver;
-  cachedHostname = null;
-}
-
-export const testApi = {
-  drainFileLogQueueSyncForTests: drainFileLogQueueSync,
-  flushFileLogQueueForTests: flushFileLogQueue,
-  resetFileLogTransportForTests,
-  resolveActiveLogFile,
-  setFileLogAppenderForTests,
-  setFileLogQueueMaxRecordsForTests,
-  setHostnameResolverForTests: (resolver?: HostnameResolver) => {
-    hostnameResolver = resolver ?? defaultHostnameResolver;
-    cachedHostname = null;
-  },
-  shouldSkipMutatingLoggingConfigRead,
-};
-export { testApi as __test__ };
-
-function resolveActiveLogFile(file: string): string {
-  return resolveActiveLogFileWithMode(file, isLegacyRollingLogFilePath(file));
+  loggerHostnameState.resolver = defaultLoggerHostnameResolver;
+  loggerHostnameState.cached = null;
 }
 
 function resolveActiveLogFileWithMode(file: string, rolling: boolean): string {

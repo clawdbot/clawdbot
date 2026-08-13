@@ -261,6 +261,29 @@ function runCiManifestFixture(options: {
                     : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
                 }]
               : null;
+          export const createChangedExtensionFallbackShards = (changedPaths) =>
+            changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))
+              ? changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
+                ? [{
+                    checkName: "changed-extension-fallback-plan",
+                    configs: ["test/vitest/vitest.extension-matrix.config.ts"],
+                    includePatterns: [
+                      "extensions/matrix/src/client.test.ts",
+                      "extensions/matrix/src/monitor.test.ts",
+                    ],
+                    requiresDist: false,
+                    runner: "ubuntu-24.04",
+                    shardName: "changed-extension-fallback-plan",
+                  }]
+                : [{
+                  checkName: "changed-extension-fallback-plan",
+                  configs: [],
+                  requiresDist: false,
+                  runner: "ubuntu-24.04",
+                  shardName: "changed-extension-fallback-plan",
+                  targets: ["extensions/codex/src/focused.test.ts"],
+                }]
+              : [];
           export const hasBuildArtifactAffectingChange = (changedPaths) =>
             !changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
           export const hasSqliteSessionLifecycleAffectingChange = (changedPaths) =>
@@ -2936,6 +2959,9 @@ NODE
     expect(maintainStep.run).toContain('store_dir="${PNPM_CONFIG_STORE_DIR:?}"');
     expect(maintainStep.run).toContain('PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune');
     expect(maintainStep.run).toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(maintainStep.run).toContain('if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]');
+    expect(maintainStep.run).toContain("ensure-change /var/tmp/openclaw-node-deps");
+    expect(maintainStep.run).toContain('"${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"');
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain("github.ref == 'refs/heads/main'");
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
       "github.repository == 'openclaw/openclaw'",
@@ -2974,6 +3000,9 @@ NODE
     );
     const mountStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
+    );
+    const baselineStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Record sticky disk allocation baseline",
     );
     const cleanupStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Register sticky bind cleanup",
@@ -3021,10 +3050,21 @@ NODE
     // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
     // runtime patches belong in the marker, not the backing-disk key.
     expect(mountStep.with.key).toBe(
-      "${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}",
+      "${{ github.repository }}-node-deps-bind-v7-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
-      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
+    );
+    expect(baselineStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true' && inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request'",
+    });
+    expect(baselineStep.run).toContain('df -B1 --output=used "$sticky_root"');
+    expect(baselineStep.run).toContain(
+      'echo "OPENCLAW_STICKY_INITIAL_USAGE_BYTES=$initial_usage_bytes"',
+    );
+    expect(baselineStep.run).toContain('echo "OPENCLAW_STICKY_REBUILD_SIGNAL=$rebuild_signal"');
+    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
+      action.runs.steps.indexOf(baselineStep),
     );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
@@ -3115,6 +3155,7 @@ NODE
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
+    expect(installStep.run).toContain('"${OPENCLAW_STICKY_REBUILD_SIGNAL:?}"');
     // The content-validated snapshot or successful install already owns
     // dependency validation. pnpm's redundant check sees intentionally pruned
     // plugin importers as stale, so it must not mutate during shard fanout.
@@ -3190,6 +3231,14 @@ NODE
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     });
+    expect(releaseChecks.jobs.validate_repo_e2e["timeout-minutes"]).toBe(90);
+    const repoE2eSteps = releaseChecks.jobs.validate_repo_e2e.steps as WorkflowStep[];
+    const sandboxSetupIndex = repoE2eSteps.findIndex(
+      (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
+    );
+    const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
+    expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );
@@ -3256,6 +3305,7 @@ NODE
       const rootOptionalDependency = path.join(rootModules, "optional-ipaddr");
       const importerDependency = path.join(importerModules, "ipaddr.js");
       const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      const rebuildSignal = path.join(root, "rebuilt");
       const lockfile = [
         "lockfileVersion: '9.0'",
         "importers:",
@@ -3324,7 +3374,15 @@ NODE
       );
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
 
-      execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
+      execFileSync("bash", [
+        helper,
+        "capture",
+        stickyRoot,
+        workspace,
+        "fingerprint-a",
+        rebuildSignal,
+      ]);
+      expect(existsSync(rebuildSignal)).toBe(true);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
@@ -3335,6 +3393,19 @@ NODE
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
       expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
         "fingerprint-a\n",
+      );
+      rmSync(rebuildSignal);
+      execFileSync("bash", [
+        helper,
+        "capture",
+        stickyRoot,
+        workspace,
+        "fingerprint-b",
+        rebuildSignal,
+      ]);
+      expect(existsSync(rebuildSignal)).toBe(true);
+      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
+        "fingerprint-b\n",
       );
 
       // Recreate the reported failure shape: a marker-matching archive can be
@@ -3360,15 +3431,70 @@ NODE
       );
       expect(existsSync(importerModules)).toBe(false);
 
+      rmSync(rebuildSignal);
       const failedCapture = spawnSync(
         "bash",
-        [helper, "capture", stickyRoot, workspace, "fingerprint-b"],
+        [helper, "capture", stickyRoot, workspace, "fingerprint-c", rebuildSignal],
         { encoding: "utf8" },
       );
       expect(failedCapture.status).toBe(1);
+      expect(existsSync(rebuildSignal)).toBe(false);
       expect(failedCapture.stderr).toContain(
         "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forces StickyDisk's allocation delta after a successful rebuild", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-allocation-"));
+    try {
+      const fakeBin = path.join(root, "bin");
+      const stickyRoot = path.join(root, "sticky");
+      const usageFile = path.join(root, "usage");
+      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(stickyRoot, { recursive: true });
+      // Start one allocation block below the action's baseline. A fixed append
+      // can be cancelled by this shrink; the helper must measure the net delta.
+      writeFileSync(usageFile, "995904\n", "utf8");
+      writeFileSync(
+        path.join(fakeBin, "df"),
+        '#!/usr/bin/env bash\necho Used\ncat "$OPENCLAW_TEST_USAGE_FILE"\n',
+        "utf8",
+      );
+      writeFileSync(
+        path.join(fakeBin, "dd"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+for arg in "$@"; do
+  case "$arg" in count=*) count="\${arg#count=}" ;; esac
+done
+usage="$(<"$OPENCLAW_TEST_USAGE_FILE")"
+printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
+`,
+        "utf8",
+      );
+      writeFileSync(path.join(fakeBin, "sync"), "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      for (const command of ["df", "dd", "sync"]) {
+        chmodSync(path.join(fakeBin, command), 0o755);
+      }
+
+      const result = spawnSync("bash", [helper, "ensure-change", stickyRoot, "1000000"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_USAGE_FILE: usageFile,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const finalUsage = Number(readFileSync(usageFile, "utf8").trim());
+      expect(Math.abs(finalUsage - 1_000_000)).toBeGreaterThan(65_536);
+      expect(result.stdout).toContain("Sticky dependency rebuild changed allocation");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -3391,6 +3517,7 @@ NODE
       execFileSync("git", ["init", "-q"], { cwd: root });
       writeManifest({
         name: "fixture",
+        openclaw: { schemaVersions: { agent: 17, state: 6 } },
         scripts: {
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
@@ -3412,6 +3539,17 @@ NODE
       rmSync(path.join(root, ".pnpmfile.cjs"));
       expect(fingerprint()).toBe(baseline);
 
+      writeFileSync(path.join(root, ".pnpmfile.mjs"), "export const hooks = {};\n");
+      const mjsHookFingerprint = fingerprint();
+      expect(mjsHookFingerprint).not.toBe(baseline);
+      writeFileSync(
+        path.join(root, ".pnpmfile.mjs"),
+        "export const hooks = { readPackage: (pkg) => pkg };\n",
+      );
+      expect(fingerprint()).not.toBe(mjsHookFingerprint);
+      rmSync(path.join(root, ".pnpmfile.mjs"));
+      expect(fingerprint()).toBe(baseline);
+
       mkdirSync(path.join(root, "scripts"), { recursive: true });
       writeFileSync(path.join(root, "scripts", "prepare-git-hooks.mjs"), "export {};\n");
       expect(fingerprint()).not.toBe(baseline);
@@ -3429,6 +3567,21 @@ NODE
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
         },
         name: "fixture",
+      });
+      expect(fingerprint()).toBe(baseline);
+
+      // Repository-owned package metadata does not affect pnpm's install tree
+      // or any audited install hook, so schema churn must stay warm.
+      writeManifest({
+        name: "fixture",
+        openclaw: { schemaVersions: { agent: 17, state: 7 } },
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+          test: "vitest run",
+        },
+        devDependencies: { vitest: "1.0.0" },
       });
       expect(fingerprint()).toBe(baseline);
 
@@ -3717,6 +3870,7 @@ NODE
           ...process.env,
           GITHUB_STEP_SUMMARY: summaryPath,
           OPENCLAW_PNPM_STORE_MAX_KIB: "-1",
+          OPENCLAW_STICKY_REBUILD_SIGNAL: path.join(maintenanceRoot, "not-rebuilt"),
           PNPM_CONFIG_STORE_DIR: storeDir,
         },
       });
@@ -5244,7 +5398,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,
-      changedPaths: ["src/focused.ts"],
+      changedPaths: ["src/focused.ts", "extensions/codex/src/focused.ts"],
       eventName: "pull_request",
     });
     expect(changedPullRequest.status, changedPullRequest.output).toBe(0);
@@ -5262,8 +5416,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         targets: ["src/focused.test.ts"],
       }),
     ]);
+    expect(
+      JSON.parse(
+        expectDefined(
+          changedPullRequest.outputs.checks_node_core_nondist_matrix,
+          "changed PR node matrix output",
+        ),
+      ).include,
+    ).not.toContainEqual(
+      expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
+    );
     expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
     expect(changedPullRequest.outputs.run_sqlite_session_lifecycle).toBe("false");
+
+    const mixedFallbackPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: [
+        "packages/gateway-protocol/src/frame-guards.ts",
+        "extensions/codex/src/focused.ts",
+      ],
+      eventName: "pull_request",
+    });
+    expect(mixedFallbackPullRequest.status, mixedFallbackPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          mixedFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
+          "mixed fallback PR node matrix output",
+        ),
+      ).include,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ check_name: "bundled-node-plan" }),
+        expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
+      ]),
+    );
+
+    const matrixFallbackPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: [
+        "packages/gateway-protocol/src/frame-guards.ts",
+        "extensions/matrix/src/channel.ts",
+      ],
+      eventName: "pull_request",
+    });
+    expect(matrixFallbackPullRequest.status, matrixFallbackPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          matrixFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
+          "Matrix fallback PR node matrix output",
+        ),
+      ).include,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          check_name: "changed-extension-fallback-plan",
+          configs: ["test/vitest/vitest.extension-matrix.config.ts"],
+          includePatterns: [
+            "extensions/matrix/src/client.test.ts",
+            "extensions/matrix/src/monitor.test.ts",
+          ],
+        }),
+      ]),
+    );
 
     const sqliteLifecyclePullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -5860,6 +6076,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Verify built Doctor plugin index persistence",
     );
 
+    expect(proofStep.env.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe("1");
     expect(proofStep.run).toContain(
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
     );
@@ -7190,6 +7407,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
     const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
+    const telegramProvenanceHelper = readFileSync("scripts/release-telegram-provenance.sh", "utf8");
     const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
@@ -7241,29 +7459,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     for (const provenanceStep of provenanceSteps) {
       expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
-      expect(provenanceStep.run).toContain("frozen-release-branch-head");
-      expect(provenanceStep.run).toContain(
-        'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]',
-      );
-      expect(provenanceStep.run).toContain(
-        'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
-      );
-      expect(provenanceStep.run).toContain('elif [[ -z "$frozen_release_branch_pattern" ]]; then');
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
-      );
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
-      );
-      expect(provenanceStep.run).toContain('context_release_branch="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain('context_release_tag="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain(
-        "Frozen release candidate ${candidate_sha} requires a valid maintainer signature.",
-      );
-      expect(provenanceStep.run).toContain(
-        'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+      expect(provenanceStep.run.trim()).toBe(
+        'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
       );
     }
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$candidate_version" == "$release_version" ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      '"$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha"',
+    );
+    expect(telegramProvenanceHelper).toContain('trusted_reason="frozen-release-branch-head"');
+    expect(telegramProvenanceHelper).toContain(
+      '"$signature_status" != "valid" || "$signer" == "web-flow"',
+    );
+    expect(telegramProvenanceHelper).toContain('context_release_branch="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain('context_release_tag="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(".mergeCommit.oid == $sha)]");
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$(jq \'length\' <<<"$matching_merge_prs")" != "1" ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then',
+    );
+    expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {

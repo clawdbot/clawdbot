@@ -158,7 +158,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -175,10 +174,8 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
-      resumed: { laneId: "main" },
       cleared: false,
     });
   });
@@ -196,7 +193,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "circuit_open",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,

@@ -9,7 +9,7 @@ doc-schema-version: 1
 
 Cloud workers let a session run its agent loop on a throwaway cloud machine while everything about the session stays where it always was: visible in the sidebar, streaming live, with the transcript owned by the Gateway. The Gateway leases a box, installs a pinned copy of OpenClaw on it, syncs the session's workspace over, and hands the turn loop to a restricted `openclaw worker` process. Model calls are proxied back through the Gateway, so provider credentials never leave your machine, and prompt caching keeps working because the provider sees one continuous stream.
 
-When the work is done (or the box dies), the machine is discarded. The durable state — transcript, workspace commits, placement records — lives with the Gateway.
+When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
 <Note>
 Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and the Gateway does not advertise `sessions.dispatch`. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
@@ -17,13 +17,13 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 
 ## What runs where
 
-| Concern                                                 | Location                                                                         |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box                                                                 |
-| Model inference and provider credentials                | Gateway (proxied by `{provider, model}` reference)                               |
-| Transcript (durable, session store)                     | Gateway                                                                          |
-| Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                      |
-| Workspace git history                                   | Authored on the box credential-free; the Gateway adopts commits and owns push/PR |
+| Concern                                                 | Location                                                                          |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box                                                                  |
+| Model inference and provider credentials                | Gateway (proxied by `{provider, model}` reference)                                |
+| Transcript (durable, session store)                     | Gateway                                                                           |
+| Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                       |
+| Workspace file state                                    | Changed on the box credential-free; the Gateway reconciles files and owns push/PR |
 
 The box needs no inbound ports except `sshd`: the Gateway connects out via pinned SSH, and a reverse tunnel carries the worker's WebSocket back. The bundled Crabbox provider forces the public SSH route and disables managed Tailscale enrollment. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
 
@@ -187,6 +187,14 @@ openclaw gateway call sessions.reclaim \
 ```
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
+
+## What survives a dead machine
+
+The Gateway commits each complete user, assistant, and tool-result message to the canonical session transcript before the worker's session write settles. Commits are ordered and idempotent against the exact transcript leaf. If the machine disappears mid-message, durable history ends at the last committed message. Partial text or tool progress already shown by the live stream may disappear; the failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
+
+Workspace state has a wider loss window. A completed turn reconciles worker files before releasing its claim, and **Stop cloud worker…** performs one final reconciliation before destroying the machine. Changes made between reconciliations exist only on the worker and can be lost. Session deletion does not synchronize a live worker: active placements must first be stopped or archived. Deletion then snapshots the already-reconciled managed worktree under `refs/openclaw/snapshots/` before removing it.
+
+After a failed placement, redispatch the session and retry the turn. A reclaimed placement redispatches automatically on the next turn. The new worker rebuilds its inference context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
 
 ## Desktop (interactive)
 

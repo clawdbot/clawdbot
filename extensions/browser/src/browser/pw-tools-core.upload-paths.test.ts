@@ -108,9 +108,10 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
     await Promise.resolve();
 
     await vi.waitFor(() => {
-      expect(fileChooser.setFiles).toHaveBeenCalledWith([
-        "/home/user/.openclaw/media/inbound/report.pdf",
-      ]);
+      expect(fileChooser.setFiles).toHaveBeenCalledWith(
+        ["/home/user/.openclaw/media/inbound/report.pdf"],
+        { timeout: expect.any(Number) },
+      );
     });
     expect(fileChooser.setFiles).toHaveBeenCalledTimes(1);
     expect(fileChooser.element).not.toHaveBeenCalled();

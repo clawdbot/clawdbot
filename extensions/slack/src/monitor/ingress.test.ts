@@ -4,19 +4,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
+import type { WebClientOptions } from "@slack/web-api";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
-import { createSlackSystemEventTestHarness } from "./events/system-event-test-harness.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
 
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
@@ -86,7 +89,11 @@ function createReceiverHarness() {
 function createReceiverEvent(
   eventId: string,
   ack = vi.fn(async () => {}),
-  options: { retryNum?: number; ts?: string; event?: Record<string, PluginJsonValue> } = {},
+  options: {
+    retryNum?: number;
+    ts?: string;
+    event?: Record<string, PluginJsonValue>;
+  } = {},
 ): ReceiverEvent {
   return {
     body: createSlackEnvelope(eventId, options.ts, options.event),
@@ -108,7 +115,8 @@ function createMemberEvent(type: "member_joined_channel" | "member_left_channel"
 function attachBoltMemberIngress(params: {
   queue: ChannelIngressQueue<SlackIngressPayload>;
   trackEvent: () => void;
-  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  usersInfo?: App["client"]["users"]["info"];
+  usersInfoFetch?: NonNullable<WebClientOptions["fetch"]>;
   pollIntervalMs?: number;
 }) {
   const ingress = createSlackDurableIngress({
@@ -126,15 +134,73 @@ function attachBoltMemberIngress(params: {
       botUserId: "U_BOT",
       teamId: "T_TEST",
     }),
+    ...(params.usersInfoFetch
+      ? {
+          clientOptions: {
+            fetch: params.usersInfoFetch,
+            retryConfig: { retries: 0 },
+            slackApiUrl: "https://slack.test/api/",
+          },
+        }
+      : {}),
     convoStore: false,
     ignoreSelf: false,
   });
-  const memberHarness = createSlackSystemEventTestHarness({ channelType: "channel" });
-  memberHarness.ctx.app = app;
-  if (params.resolveUserName) {
-    memberHarness.ctx.resolveUserName = params.resolveUserName;
+  vi.spyOn(app.client.conversations, "info").mockResolvedValue({
+    ok: true,
+    channel: { id: "C_TEST", name: "general", is_channel: true },
+  });
+  if (!params.usersInfoFetch) {
+    vi.spyOn(app.client.users, "info").mockImplementation(
+      params.usersInfo ??
+        (async () => ({
+          ok: true,
+          user: { id: "U_TEST", name: "alice" },
+        })),
+    );
   }
-  registerSlackMemberEvents({ ctx: memberHarness.ctx, trackEvent: params.trackEvent });
+  const ctx = createSlackMonitorContext({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    botToken: "xoxb-test",
+    app,
+    runtime: {} as RuntimeEnv,
+    botUserId: "U_BOT",
+    botId: "B_BOT",
+    identityHealth: { lifecycle: "ready", lastError: null },
+    teamId: "T_TEST",
+    apiAppId: "A_TEST",
+    installationIdentity: { kind: "workspace", teamId: "T_TEST" },
+    historyLimit: 0,
+    sessionScope: "per-sender",
+    mainKey: "main",
+    dmEnabled: true,
+    dmPolicy: "open",
+    allowFrom: [],
+    allowNameMatching: true,
+    groupDmEnabled: true,
+    groupDmChannels: [],
+    defaultRequireMention: true,
+    channelsConfig: { C_TEST: { users: ["alice"], enabled: true } },
+    groupPolicy: "open",
+    useAccessGroups: false,
+    reactionMode: "off",
+    reactionAllowlist: [],
+    replyToMode: "off",
+    slashCommand: {
+      enabled: false,
+      name: "openclaw",
+      sessionPrefix: "slack:slash",
+      ephemeral: true,
+    },
+    textLimit: 4000,
+    ackReactionScope: "group-mentions",
+    typingReaction: "",
+    mediaMaxBytes: 1,
+    threadHistoryScope: "thread",
+    threadInheritParent: false,
+  });
+  registerSlackMemberEvents({ ctx, trackEvent: params.trackEvent });
   return { ingress, receive: receiverHarness.receive };
 }
 
@@ -440,7 +506,11 @@ describe("Slack durable ingress", () => {
         await ingress.waitForIdle();
 
         expect(trackEvent).toHaveBeenCalledTimes(3);
-        expect(peekSystemEventEntries("agent:main:main").map((entry) => entry.contextKey)).toEqual([
+        expect(
+          peekSystemEventEntries("agent:main:slack:channel:c_test").map(
+            (entry) => entry.contextKey,
+          ),
+        ).toEqual([
           "slack:member:joined:c_test:u_test:ev-member-join-1",
           "slack:member:left:c_test:u_test:ev-member-left",
           "slack:member:joined:c_test:u_test:ev-member-join-2",
@@ -454,15 +524,34 @@ describe("Slack durable ingress", () => {
   it("retries transient member failures through Bolt after restart", async () => {
     await withQueue(async (queue) => {
       const trackEvent = vi.fn();
-      let userLookupCount = 0;
-      const resolveUserName = async () => {
-        userLookupCount += 1;
-        if (userLookupCount === 2) {
-          throw new Error("users.info temporarily unavailable");
+      let usersInfoRequests = 0;
+      const usersInfoFetch = vi.fn<NonNullable<WebClientOptions["fetch"]>>(async (input) => {
+        const pathname = new URL(String(input)).pathname;
+        if (pathname.endsWith("/conversations.info")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              channel: { id: "C_TEST", name: "general", is_channel: true },
+            }),
+            { headers: { "content-type": "application/json" }, status: 200 },
+          );
         }
-        return { name: "alice" };
-      };
-      const first = attachBoltMemberIngress({ queue, trackEvent, resolveUserName });
+        if (!pathname.endsWith("/users.info")) {
+          throw new Error(`unexpected Slack API request: ${pathname}`);
+        }
+        usersInfoRequests += 1;
+        if (usersInfoRequests === 1) {
+          return new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+            headers: { "content-type": "application/json", "retry-after": "0" },
+            status: 429,
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, user: { id: "U_TEST", name: "alice" } }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      });
+      const first = attachBoltMemberIngress({ queue, trackEvent, usersInfoFetch });
       first.ingress.start();
       let restarted: ReturnType<typeof attachBoltMemberIngress> | undefined;
       try {
@@ -475,13 +564,13 @@ describe("Slack durable ingress", () => {
         await first.ingress.stop();
 
         expect(trackEvent).toHaveBeenCalledTimes(1);
-        expect(peekSystemEventEntries("agent:main:main")).toHaveLength(0);
+        expect(peekSystemEventEntries("agent:main:slack:channel:c_test")).toHaveLength(0);
         expect((await queue.listPending()).map((entry) => entry.id)).toContain("Ev-member-retry");
 
         restarted = attachBoltMemberIngress({
           queue,
           trackEvent,
-          resolveUserName,
+          usersInfoFetch,
           pollIntervalMs: 25,
         });
         restarted.ingress.start();
@@ -493,7 +582,8 @@ describe("Slack durable ingress", () => {
           { timeout: 15_000, interval: 100 },
         );
 
-        expect(peekSystemEventEntries("agent:main:main")).toHaveLength(1);
+        expect(usersInfoRequests).toBe(2);
+        expect(peekSystemEventEntries("agent:main:slack:channel:c_test")).toHaveLength(1);
       } finally {
         await first.ingress.stop();
         await restarted?.ingress.stop();

@@ -778,4 +778,32 @@ describe("normalizeInitialApplicationLocation", () => {
       window.history.replaceState({}, "", previousUrl);
     }
   });
+
+  it("synchronizes every theme-color meta with the resolved theme background", () => {
+    const previousSettings = loadSettings();
+    const style = document.createElement("style");
+    style.textContent = ':root[data-theme="light"] { --bg: #123456; }';
+    const lightMeta = document.createElement("meta");
+    lightMeta.name = "theme-color";
+    lightMeta.media = "(prefers-color-scheme: light)";
+    const darkMeta = document.createElement("meta");
+    darkMeta.name = "theme-color";
+    darkMeta.media = "(prefers-color-scheme: dark)";
+    document.head.append(style, lightMeta, darkMeta);
+    saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+    try {
+      expect(lightMeta.content).toBe("#123456");
+      expect(darkMeta.content).toBe("#123456");
+      expect(lightMeta.hasAttribute("media")).toBe(false);
+      expect(darkMeta.hasAttribute("media")).toBe(false);
+    } finally {
+      runtime.stop();
+      style.remove();
+      lightMeta.remove();
+      darkMeta.remove();
+      saveSettings(previousSettings);
+    }
+  });
 });

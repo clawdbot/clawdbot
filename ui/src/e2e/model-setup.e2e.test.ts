@@ -182,6 +182,13 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const signInUrl = `https://example.com/device?${new URLSearchParams({
+          client_id: "device-code-client",
+          redirect_uri: "http://localhost:1455/auth/callback",
+          response_type: "code",
+          scope: "openid profile email offline_access",
+          state: "state-1".repeat(16),
+        })}`;
         const initialDetection = {
           candidates: [],
           manualProviders: [],
@@ -228,7 +235,8 @@ suite.define(() => {
                     id: "device-code",
                     type: "note",
                     title: "Authorize device",
-                    externalUrl: "https://example.com/device",
+                    message: `Open this URL in your local browser:\n\n${signInUrl}`,
+                    externalUrl: signInUrl,
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
@@ -274,7 +282,17 @@ suite.define(() => {
           });
         }
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
-        await expect.poll(() => signInLink.getAttribute("href")).toBe("https://example.com/device");
+        await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
+        const wizardBody = page.locator(".model-setup-wizard__body");
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.getByRole("button", { name: "Continue" }).waitFor();
+        await page.getByRole("button", { name: "Cancel" }).waitFor();
 
         await gateway.setMethodResponse("openclaw.setup.detect", {
           ...initialDetection,

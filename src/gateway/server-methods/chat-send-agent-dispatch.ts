@@ -5,7 +5,6 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
@@ -14,11 +13,16 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { resolveWebchatPromptCacheKey } from "./chat-send-background.js";
+import {
+  resolveWebchatPromptCacheKey,
+  scheduleChatDashboardSessionTitle,
+} from "./chat-send-background.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
@@ -319,23 +323,21 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     // Register for any other active runs *in the same session* so
                     // late-joining clients (e.g. page refresh mid-response) receive
                     // in-progress tool events without leaking cross-session data.
-                    const defaultAgentId = resolveDefaultAgentId(cfg);
-                    const selectedGlobalAgentId =
-                      sessionKey === "global"
-                        ? (selectedAgent.agentId ?? defaultAgentId)
-                        : undefined;
+                    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+                      cfg,
+                      sessionKey,
+                    );
+                    const selectedSessionAgentId = selectedAgent.agentId;
                     for (const [activeRunId, active] of context.chatAbortControllers) {
-                      const activeGlobalAgentId =
-                        active.sessionKey === "global"
-                          ? (active.agentId ?? defaultAgentId)
-                          : undefined;
-                      const sameSelectedGlobalAgent =
-                        sessionKey === "global" &&
-                        selectedGlobalAgentId !== undefined &&
-                        activeGlobalAgentId === selectedGlobalAgentId;
-                      const sameSession =
-                        active.sessionKey === sessionKey &&
-                        (sessionKey !== "global" || sameSelectedGlobalAgent);
+                      const sameSelectedAgent =
+                        selectedSessionAgentId !== undefined &&
+                        chatRunBelongsToSelectedAgent({
+                          agentId: active.agentId,
+                          sessionKey: active.sessionKey,
+                          defaultAgentId: compatibilityOwnerAgentId,
+                          selectedAgentId: selectedSessionAgentId,
+                        });
+                      const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
                       if (activeRunId !== runId && sameSession) {
                         context.registerToolEventRecipient(activeRunId, connId);
                       }
@@ -503,5 +505,20 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     })
     .catch(dispatchErrorLifecycle.handleError)
-    .finally(dispatchErrorLifecycle.finalize);
+    .finally(() => {
+      dispatchErrorLifecycle.finalize();
+      // Cosmetic title work starts only after the accepted turn finishes. Starting it
+      // before dispatch can make a cold utility runtime starve the user's real turn.
+      scheduleChatDashboardSessionTitle({
+        admittedSessionId,
+        agentId,
+        cfg,
+        context,
+        entry,
+        request,
+        sessionKey,
+        sessionLoadOptions: session.sessionLoadOptions,
+        storePath: session.storePath,
+      });
+    });
 }

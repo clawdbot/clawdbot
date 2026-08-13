@@ -1,4 +1,5 @@
 // Route-first argv parsers for commands that can skip full Commander startup.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
@@ -9,7 +10,6 @@ import {
 } from "../argv.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
-import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
   ok: boolean;
@@ -201,10 +201,7 @@ export function parseGatewayHealthRouteArgs(argv: string[]) {
   if (!url.ok || !token.ok || !password.ok || !timeout.ok || !port.ok) {
     return null;
   }
-  if (
-    timeout.value !== undefined &&
-    parseStrictPositiveIntOrUndefined(timeout.value) === undefined
-  ) {
+  if (timeout.value !== undefined && parseStrictPositiveInteger(timeout.value) === undefined) {
     return null;
   }
   let localPortOverride: number | undefined;
@@ -550,7 +547,7 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   if (rawLimit === null) {
     return null;
   }
-  const limit = rawLimit === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawLimit);
+  const limit = rawLimit === undefined ? undefined : parseStrictPositiveInteger(rawLimit);
   if (rawLimit !== undefined && limit === undefined) {
     return null;
   }

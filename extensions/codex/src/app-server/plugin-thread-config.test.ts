@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache, defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
-import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -179,6 +178,197 @@ describe("Codex plugin thread config", () => {
       destructiveApprovalMode: "deny",
     });
     expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("exposes an owner-installed repository plugin and its authorized GitHub app", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) =>
+        codexAppInventoryResponse(method, [appInfo("github-app", true)], params),
+    });
+    const methods: string[] = [];
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "security-review@company-tools": {
+              marketplaceName: "company-tools",
+              pluginName: "security-review",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/company",
+      nowMs: 1,
+      request: async (method, params) => {
+        methods.push(method);
+        if (method === "plugin/installed") {
+          expect(params).toEqual({ cwds: ["/repo/company"] });
+          return pluginInstalled(
+            [pluginSummary("security-review", { installed: true, enabled: true })],
+            {
+              name: "company-tools",
+              path: "/repo/company/.agents/plugins/marketplace.json",
+            },
+          );
+        }
+        if (method === "plugin/read") {
+          expect(params).toEqual({
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+            pluginName: "security-review",
+          });
+          return pluginDetail("security-review", [appSummary("github-app")], ["github"], {
+            marketplaceName: "company-tools",
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          });
+        }
+        if (method === "config/read") {
+          expect(params).toEqual({ includeLayers: true, cwd: "/repo/company" });
+          return { config: {}, layers: [] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(methods).toEqual(["plugin/installed", "plugin/read", "config/read"]);
+    expect(config.policyContext.apps["github-app"]).toMatchObject({
+      configKey: "security-review@company-tools",
+      marketplaceName: "company-tools",
+      pluginName: "security-review",
+      mcpServerNames: ["github"],
+    });
+    expect(config.diagnostics).toEqual([]);
+  });
+
+  it("does not silently install an uninstalled repository plugin during a model turn", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) => codexAppInventoryResponse(method, [], params),
+    });
+    const requests: string[] = [];
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "security-review@company-tools": {
+              marketplaceName: "company-tools",
+              pluginName: "security-review",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/company",
+      nowMs: 1,
+      request: async (method, params) => {
+        requests.push(method);
+        if (method === "plugin/installed") {
+          expect(params).toEqual({ cwds: ["/repo/company"] });
+          return {
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+          } satisfies v2.PluginInstalledResponse;
+        }
+        if (method === "plugin/list") {
+          expect(params).toEqual({ cwds: ["/repo/company"] });
+          return pluginList(
+            [pluginSummary("security-review", { installed: false, enabled: false })],
+            {
+              name: "company-tools",
+              path: "/repo/company/.agents/plugins/marketplace.json",
+            },
+          );
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("security-review", [], [], {
+            marketplaceName: "company-tools",
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          });
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(requests).not.toContain("plugin/install");
+    expect(config.configPatch?.apps).toEqual({
+      _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+    });
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "plugin_activation_failed",
+        message: expect.stringContaining("/codex plugins install security-review@company-tools"),
+      }),
+    );
+  });
+
+  it("does not silently reactivate an owner-installed but disabled repository plugin", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) => codexAppInventoryResponse(method, [], params),
+    });
+    const methods: string[] = [];
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "security-review@company-tools": {
+              marketplaceName: "company-tools",
+              pluginName: "security-review",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/company",
+      nowMs: 1,
+      request: async (method) => {
+        methods.push(method);
+        if (method === "plugin/installed") {
+          return pluginInstalled(
+            [pluginSummary("security-review", { installed: true, enabled: false })],
+            {
+              name: "company-tools",
+              path: "/repo/company/.agents/plugins/marketplace.json",
+            },
+          );
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("security-review", [], [], {
+            marketplaceName: "company-tools",
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          });
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(methods).toEqual(["plugin/installed", "plugin/read"]);
+    expect(methods).not.toContain("plugin/install");
+    expect(config.configPatch?.apps).toEqual({
+      _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+    });
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "plugin_activation_failed",
+        message: expect.stringContaining("/codex plugins install security-review@company-tools"),
+      }),
+    );
   });
 
   it("maps destructive app access from global and per-plugin policy", async () => {
@@ -1172,6 +1362,173 @@ describe("Codex plugin thread config", () => {
     expect(config.configPatch?.apps).not.toHaveProperty("plugin-owned-app");
     expect(config.configPatch?.apps).not.toHaveProperty("unrelated-slack-app");
     expect(config.provisionalAppIds).toBeUndefined();
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "account_app_ownership_unavailable" }),
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
+  });
+
+  it.each([
+    {
+      name: "preserves denied enterprise ownership",
+      detailUnavailable: false,
+      marketplaceName: "company-tools",
+    },
+    {
+      name: "fails closed for unavailable enterprise ownership",
+      detailUnavailable: true,
+      marketplaceName: "company-tools",
+    },
+    {
+      name: "preserves denied curated ownership",
+      detailUnavailable: false,
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    },
+    {
+      name: "fails closed for unavailable curated ownership",
+      detailUnavailable: true,
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    },
+  ])(
+    "$name for an administrator-disabled marketplace plugin",
+    async ({ detailUnavailable, marketplaceName }) => {
+      const marketplacePath = `/marketplaces/${marketplaceName}/marketplace.json`;
+      const request = vi.fn(async (method: string) => {
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(method, [
+            appInfo("admin-denied-app", true),
+            appInfo("unrelated-slack-app", true),
+          ]);
+        }
+        if (method === "plugin/installed" || method === "plugin/list") {
+          const summaries = [
+            pluginSummary("security-review", {
+              installed: true,
+              enabled: true,
+              availability: "DISABLED_BY_ADMIN",
+            }),
+          ];
+          const marketplace = { name: marketplaceName, path: marketplacePath };
+          return method === "plugin/installed"
+            ? pluginInstalled(summaries, marketplace)
+            : pluginList(summaries, marketplace);
+        }
+        if (method === "plugin/read") {
+          if (detailUnavailable) {
+            throw new Error("administrator denied plugin ownership details");
+          }
+          return pluginDetail("security-review", [appSummary("admin-denied-app")], [], {
+            marketplaceName,
+            marketplacePath,
+          });
+        }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            plugins: {
+              security: {
+                marketplaceName,
+                pluginName: "security-review",
+              },
+            },
+          },
+        },
+        appCacheKey: "runtime",
+        request,
+      });
+
+      expect(config.configPatch?.apps).not.toHaveProperty("admin-denied-app");
+      expect(config.policyContext.apps).not.toHaveProperty("admin-denied-app");
+      expect(config.diagnostics).toContainEqual(
+        expect.objectContaining({ code: "plugin_disabled" }),
+      );
+      if (detailUnavailable) {
+        expect(config.configPatch?.apps).not.toHaveProperty("unrelated-slack-app");
+        expect(config.diagnostics).toContainEqual(
+          expect.objectContaining({ code: "account_app_ownership_unavailable" }),
+        );
+      } else {
+        expect(config.configPatch?.apps).toHaveProperty("unrelated-slack-app");
+      }
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
+    },
+  );
+
+  it.each([
+    {
+      name: "an enterprise plugin omitted from every catalog",
+      marketplaceName: "company-tools",
+      listedPlugins: [],
+    },
+    {
+      name: "an enterprise plugin unavailable before installation",
+      marketplaceName: "company-tools",
+      listedPlugins: [
+        pluginSummary("security-review", {
+          installed: false,
+          enabled: false,
+          availability: "DISABLED_BY_ADMIN",
+        }),
+      ],
+    },
+    {
+      name: "a curated plugin unavailable before installation",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+      listedPlugins: [
+        pluginSummary("security-review", {
+          installed: false,
+          enabled: false,
+          availability: "DISABLED_BY_ADMIN",
+        }),
+      ],
+    },
+  ])("fails closed when $name", async ({ listedPlugins, marketplaceName }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed" || method === "app/read") {
+        return codexAppInventoryResponse(method, [
+          appInfo("admin-denied-app", true),
+          appInfo("unrelated-slack-app", true),
+        ]);
+      }
+      if (method === "plugin/installed") {
+        return pluginInstalled([], { name: marketplaceName, path: "/company/marketplace.json" });
+      }
+      if (method === "plugin/list") {
+        return pluginList(listedPlugins, {
+          name: marketplaceName,
+          path: "/company/marketplace.json",
+        });
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          plugins: {
+            security: {
+              marketplaceName,
+              pluginName: "security-review",
+            },
+          },
+        },
+      },
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect(config.configPatch?.apps).not.toHaveProperty("admin-denied-app");
+    expect(config.configPatch?.apps).not.toHaveProperty("unrelated-slack-app");
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({ code: "account_app_ownership_unavailable" }),
     );
@@ -2358,19 +2715,6 @@ describe("Codex plugin thread config", () => {
               marketplacePath: null,
             });
       }
-      if (method === "plugin/install") {
-        expect(params).toEqual({
-          remoteMarketplaceName: "openai-curated-remote",
-          pluginName: "plugins~Plugin_calendar",
-        });
-        throw new CodexAppServerRpcError(
-          {
-            code: -32600,
-            message: "remote plugin plugins~Plugin_calendar is disabled by admin",
-          },
-          "plugin/install",
-        );
-      }
       throw new Error(`unexpected request ${method}`);
     });
 
@@ -2418,11 +2762,11 @@ describe("Codex plugin thread config", () => {
     expect(config.policyContext.pluginAppIds).toEqual({ github: ["github-app"] });
     expect(config.policyContext.apps).not.toHaveProperty("calendar-app");
     expect(config.diagnostics).toContainEqual({
-      code: "plugin_activation_failed",
+      code: "plugin_disabled",
       plugin: expect.objectContaining({ configKey: "calendar", pluginName: "calendar" }),
-      message:
-        "Codex plugin install failed: remote plugin plugins~Plugin_calendar is disabled by admin",
+      message: "calendar is unavailable in openai-curated.",
     });
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
   });
 
   it("fails closed when the initial app inventory refresh fails", async () => {

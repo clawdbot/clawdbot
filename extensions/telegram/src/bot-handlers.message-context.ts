@@ -4,13 +4,13 @@ import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound"
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -25,13 +25,12 @@ import {
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
   resolveTelegramForumThreadId,
-  shouldUseTelegramDmThreadSession,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
-  resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import {
@@ -100,7 +99,7 @@ export type ResolvePromptContextAmbientWatermarkParams = {
 };
 
 export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+  asFiniteNumber(timestampMs);
 
 export function promptContextBoundaryOptions(
   timestampMs?: number,
@@ -212,24 +211,15 @@ export function createTelegramMessageSessionRuntime({
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
-    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+    const sessionKey = resolveTelegramTargetSession({
       cfg: params.runtimeCfg,
       route,
       chatId: params.chatId,
       isGroup: params.isGroup,
       senderId: params.senderId,
+      dmThreadId,
+      botHasTopicsEnabled: params.botHasTopicsEnabled,
     });
-    const threadKeys =
-      shouldUseTelegramDmThreadSession({
-        dmThreadId,
-        botHasTopicsEnabled: params.botHasTopicsEnabled,
-      }) && dmThreadId != null
-        ? resolveThreadSessionKeys({
-            baseSessionKey,
-            threadId: `${params.chatId}:${dmThreadId}`,
-          })
-        : null;
-    const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });

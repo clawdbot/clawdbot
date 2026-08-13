@@ -7,9 +7,10 @@ import {
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import {
+  answerConfirmDialog,
+  cancelOpenModalDialogs,
   installDialogPolyfill,
-  nextFrame,
-  waitForRenderedModalDialog,
+  waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./sidebar-update-card.ts";
@@ -20,15 +21,9 @@ const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 async function resolveUpdateConfirmation(
   label: "Cancel" | "Update and restart" | "Update Mac app and restart",
 ) {
-  const { modal } = await waitForRenderedModalDialog(document.body);
-  const button = [...modal.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${label} button in the update confirmation`);
-  }
-  button.click();
-  await nextFrame();
+  const actions = await waitForConfirmDialogActions();
+  expect(actions.textContent).toContain(label);
+  answerConfirmDialog(actions, label === "Cancel" ? "cancel" : "confirm");
 }
 
 type SidebarUpdateCardElement = HTMLElement & {
@@ -79,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  cancelOpenModalDialogs();
   document.body.replaceChildren();
   restoreDialogPolyfill();
   if (originalLocalStorage) {
@@ -91,6 +87,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "webkit");
   }
+  vi.resetModules();
 });
 
 describe("SidebarUpdateCard", () => {
@@ -163,7 +160,7 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__subtitle")).toBeNull();
     expect(element.querySelector(".sidebar-update-card__arrow")).toBeNull();
     action?.click();
-    await nextFrame();
+    await waitForConfirmDialogActions();
 
     expect(onUpdate).not.toHaveBeenCalled();
     await resolveUpdateConfirmation("Update and restart");
@@ -239,7 +236,7 @@ describe("SidebarUpdateCard", () => {
     expect(action?.textContent).toContain("Update Mac app + Gateway");
     expect(action?.textContent).toContain("v2.0.0");
     action?.click();
-    await nextFrame();
+    await waitForConfirmDialogActions();
 
     expect(postMessage).not.toHaveBeenCalled();
     await resolveUpdateConfirmation("Update Mac app and restart");

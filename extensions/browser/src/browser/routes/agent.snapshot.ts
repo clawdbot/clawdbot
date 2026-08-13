@@ -569,6 +569,7 @@ export function registerBrowserAgentSnapshotRoutes(
         } else {
           buffer = await captureScreenshot({
             wsUrl: tab.wsUrl ?? "",
+            ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
             fullPage,
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
@@ -807,6 +808,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             return await getMainFrameDocumentIdentityViaCdp({
               wsUrl: tab.wsUrl,
+              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
               timeoutMs: plan.timeoutMs,
             }).catch(() => undefined);
           };
@@ -851,6 +853,7 @@ export function registerBrowserAgentSnapshotRoutes(
               }
               return await snapshotRoleViaCdp({
                 wsUrl: tab.wsUrl,
+                ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 urls: plan.urls,
                 timeoutMs: plan.timeoutMs,
                 maxChars: plan.resolvedMaxChars,
@@ -979,6 +982,7 @@ export function registerBrowserAgentSnapshotRoutes(
               })()
             : snapshotAria({
                 wsUrl: tab.wsUrl ?? "",
+                ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 limit: plan.limit,
                 timeoutMs: plan.timeoutMs,
               });

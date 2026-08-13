@@ -100,10 +100,12 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
 
 // Applies quota-resume TTL maintenance to only the active attempt session.
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
   });
@@ -117,6 +119,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   }
   const updated = await updateSessionEntry(
     {
+      agentId: params.agentId,
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },

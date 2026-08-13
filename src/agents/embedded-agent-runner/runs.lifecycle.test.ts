@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Embedded run lifecycle tests cover drain/wait behavior, process-global
 // ownership, abandonment tracking, and snapshots.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -7,7 +8,6 @@ import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-reg
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,

@@ -17,6 +17,35 @@ import {
 } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+function makeSettledIdleWriteAttempt(options?: {
+  terminal?: EmbeddedRunAttemptResult["terminal"];
+  stalePriorTurn?: boolean;
+}) {
+  const toolUseAssistant = makeLastAssistant({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: {} }],
+  });
+  const abortedAssistant = makeLastAssistant({ stopReason: "aborted", content: [] });
+  return makeAttemptResult({
+    terminal: options?.terminal ?? { kind: "timeout", phase: "prompt", source: "idle" },
+    assistantTexts: [],
+    toolMetas: [{ toolName: "write", replaySafe: false }],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    messagesSnapshot: [
+      { role: "user", content: [{ type: "text", text: "old turn" }] },
+      toolUseAssistant,
+      { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+      ...(options?.stalePriorTurn
+        ? [{ role: "user", content: [{ type: "text", text: "current turn" }] }]
+        : []),
+      abortedAssistant,
+    ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+    lastAssistant: abortedAssistant,
+    currentAttemptAssistant: abortedAssistant,
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+  });
+}
+
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeEach(() => {
     resetRunIncompleteTurnOwnerMocks();
@@ -87,26 +116,81 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { label: "aborted", aborted: true, timedOut: false, promptError: null },
-    { label: "timed out", aborted: false, timedOut: true, promptError: null },
-    { label: "prompt error", aborted: false, timedOut: false, promptError: new Error("closed") },
-  ])("does not continue a $label tool-use terminal turn", ({ aborted, timedOut, promptError }) => {
-    const toolUseAssistant = makeLastAssistant({
-      stopReason: "toolUse",
-      content: [{ type: "tool_use", id: "tool_1", name: "bash", input: {} }],
-    });
+  it("continues an exactly settled current-turn tool batch after an idle prompt timeout", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(
-      makeSettledContinuationParams(
-        {
-          assistantTexts: [],
-          toolMetas: [{ toolName: "bash" }],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-          lastAssistant: toolUseAssistant,
-          currentAttemptAssistant: toolUseAssistant,
-        },
-        { aborted, timedOut, promptError },
-      ),
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
+        timedOut: true,
+        promptError: new Error("LLM idle timeout"),
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it.each([
+    {
+      label: "external abort",
+      terminal: { kind: "timeout", phase: "prompt", source: "external" } as const,
+      aborted: true,
+      timedOut: true,
+    },
+    {
+      label: "runtime timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "runtime" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "run budget timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "compaction timeout",
+      terminal: { kind: "timeout", phase: "compaction", source: "idle" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "tool execution timeout",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "idle" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "timeout observation",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "observation" } as const,
+      aborted: false,
+      timedOut: false,
+    },
+    {
+      label: "prompt error without idle timeout",
+      terminal: { kind: "ok" } as const,
+      aborted: false,
+      timedOut: false,
+      promptError: new Error("closed"),
+    },
+  ])(
+    "does not finalize settled tools after a $label",
+    ({ terminal, aborted, timedOut, promptError }) => {
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
+          aborted,
+          timedOut,
+          promptError,
+        }),
+      );
+
+      expect(instruction).toBeNull();
+    },
+  );
+
+  it("does not use a settled prior-turn batch to authorize idle-timeout finalization", () => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt({ stalePriorTurn: true }), {
+        timedOut: true,
+      }),
     );
 
     expect(instruction).toBeNull();

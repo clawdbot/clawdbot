@@ -7,6 +7,7 @@ import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -69,6 +70,7 @@ function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInsta
 export function createTestInstalledPluginIndex(params: {
   policyHash: string;
   installRecords: PluginInstallRecordMap;
+  plugins?: InstalledPluginIndex["plugins"];
 }): InstalledPluginIndex {
   return {
     version: 1,
@@ -79,7 +81,7 @@ export function createTestInstalledPluginIndex(params: {
     generatedAtMs: 0,
     refreshReason: "source-changed",
     installRecords: clonePluginInstallRecords(params.installRecords),
-    plugins: [],
+    plugins: params.plugins ?? [],
     diagnostics: [],
   };
 }
@@ -955,9 +957,30 @@ export function resetPluginsCliTestState() {
       return true;
     },
   );
-  loadPluginManifestRegistryMock.mockReturnValue({
-    plugins: [],
-    diagnostics: [],
+  loadPluginManifestRegistryMock.mockImplementation((input: unknown) => {
+    const installRecords =
+      (input as { installRecords?: PluginInstallRecordMap } | undefined)?.installRecords ?? {};
+    return {
+      plugins: Object.entries(installRecords).map(([pluginId, record]) => {
+        const rootDir = record.installPath ?? record.sourcePath ?? `/tmp/${pluginId}`;
+        return recordPluginManifestInstallOwner(
+          {
+            id: pluginId,
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: `${rootDir}/index.js`,
+            manifestPath: `${rootDir}/openclaw.plugin.json`,
+          },
+          pluginId,
+        );
+      }),
+      diagnostics: [],
+    };
   });
   const defaultPluginReport = {
     plugins: [],

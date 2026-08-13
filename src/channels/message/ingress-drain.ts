@@ -523,7 +523,7 @@ export function createChannelIngressDrain<
         if (state.guillotined || state.superseded) {
           return;
         }
-        clearStallTimer(state);
+        // Keep recovery armed until disposition commits; removeActive clears it after success.
         await state.settleOnce(async () => {
           await applyFailureDisposition(state.claim, error);
         });

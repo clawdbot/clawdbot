@@ -1,9 +1,7 @@
 // Isolated agent delivery test helpers build delivery targets and mocks.
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob } from "./isolated-agent.test-harness.js";
 
 /** Creates mocked CLI delivery deps for isolated-agent delivery tests. */
 export function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
@@ -31,45 +29,5 @@ export function mockAgentPayloads(
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
     ...extra,
-  });
-}
-
-export function expectDirectTelegramDelivery(
-  deps: CliDeps,
-  params: { chatId: string; text: string; messageThreadId?: number },
-) {
-  expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-  expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-    params.chatId,
-    params.text,
-    expect.objectContaining(
-      params.messageThreadId === undefined ? {} : { messageThreadId: params.messageThreadId },
-    ),
-  );
-}
-
-export async function runTelegramAnnounceTurn(params: {
-  home: string;
-  storePath: string;
-  deps: CliDeps;
-  delivery: {
-    mode: "announce";
-    channel: string;
-    to?: string;
-    bestEffort?: boolean;
-  };
-}): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
-  return runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home, params.storePath, {
-      channels: { telegram: { botToken: "t-1" } },
-    }),
-    deps: params.deps,
-    job: {
-      ...makeJob({ kind: "agentTurn", message: "do it" }),
-      delivery: params.delivery,
-    },
-    message: "do it",
-    sessionKey: "cron:job-1",
-    lane: "cron",
   });
 }

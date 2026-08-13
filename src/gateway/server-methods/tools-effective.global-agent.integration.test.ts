@@ -183,7 +183,7 @@ describe("tools.effective global agent integration", () => {
       | [boolean, unknown?, { code: number; message: string }?]
       | undefined;
     expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe('agent id "work" does not match session agent "main"');
+    expect(call?.[2]?.message).toBe('agent "work" does not match session key agent "main"');
     expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 

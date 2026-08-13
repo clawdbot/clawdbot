@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
@@ -29,6 +30,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -268,7 +270,7 @@ export async function cleanupClawAgentFilesystem(params: {
         }
         deleteWorkspaceState(statePlan);
       } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
+        errors.push(coerceErrorMessage(error));
       }
     } else {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
@@ -347,7 +349,7 @@ async function inspectDigestOwnedWorkspaceFile(
     }
     return {
       state: "unsafe",
-      message: error instanceof Error ? error.message : String(error),
+      message: coerceErrorMessage(error),
     };
   }
 }
@@ -481,4 +483,7 @@ export function releaseClawRemoveRows(
         .run(agentId);
     }
   }, options);
+  if (complete) {
+    deleteCachedClawInstallSchemaVersion(agentId, options);
+  }
 }

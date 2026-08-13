@@ -63,7 +63,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     claimControlUiDeviceAuthMigration,
     releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
+    nodeDesktopService,
     workerEnvironmentService,
+    hostDesktopService,
     workerEnvironmentStartup,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -94,6 +96,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
+    gatewayTls,
     lifecycle,
     startupState,
     clearFallbackGatewayContextForServer,
@@ -111,6 +114,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
@@ -160,7 +164,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
+      ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
+      ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),

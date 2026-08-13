@@ -1,8 +1,4 @@
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -557,13 +553,7 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat startup projection is unavailable for agent "${sessionAgentId}"`,
         );
       }
-      const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(generation.facts.config));
-      const defaultAgent = generation.agentsById.get(defaultAgentId);
-      if (!defaultAgent) {
-        throw new ChatMetadataSnapshotUnavailableError(
-          `prepared chat startup projection is unavailable for default agent "${defaultAgentId}"`,
-        );
-      }
+      const defaultAgentId = sessionAgentId;
       const profileNeutralProjections = await Promise.all(
         [...generation.agentsById.values()].map(
           async (agent) => [agent.agentId, await projectAgent(generation, agent)] as const,

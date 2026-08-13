@@ -70,7 +70,6 @@ export async function closeMemorySearchManager(params: {
   }
   const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
   await closeMemoryIndexManagersForAgent({
-    cfg: params.cfg,
     agentId: normalizeAgentId(params.agentId),
   });
 }

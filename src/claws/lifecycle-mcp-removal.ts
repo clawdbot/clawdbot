@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -75,7 +76,7 @@ export async function removeClawMcpServers(params: {
       deleteClawMcpServerRef(params.agentId, server.name, params.options);
       mcpServers.push({ name: server.name, action: result.removed ? "removed" : "missing" });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       mcpServers.push({ name: server.name, action: "error", message });
       return { mcpServers, error: message };
     }

@@ -1,4 +1,5 @@
 // Shared doctor state helpers for previewing or applying config mutations.
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 export type DoctorConfigMutationState = {
@@ -29,10 +30,11 @@ export function applyDoctorConfigMutation(params: {
   if (params.mutation.changes.length === 0) {
     return params.state;
   }
+  const config = inheritLegacyDefaultAgentId(params.state.candidate, params.mutation.config);
 
   return {
-    cfg: params.shouldRepair ? params.mutation.config : params.state.cfg,
-    candidate: params.mutation.config,
+    cfg: params.shouldRepair ? config : params.state.cfg,
+    candidate: config,
     pendingChanges: true,
     fixHints:
       !params.shouldRepair && params.fixHint

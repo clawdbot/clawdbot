@@ -281,6 +281,42 @@ describe("force-clear terminal state persistence", () => {
     expect(entry?.runtimeMs).toBe(12_345);
   });
 
+  it("persists a force-cleared bare row under its fixed-store owner", async () => {
+    storePath = testState?.statePath("shared-store.sqlite") ?? storePath;
+    const sessionKey = "global";
+    const sessionId = "session-fixed-owner";
+    const startedAt = Date.now() - 60_000;
+    setRuntimeConfigSnapshot({
+      session: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    });
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey, storePath },
+      { sessionId, updatedAt: startedAt, startedAt, status: "running" },
+    );
+    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
+
+    await expect(
+      abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        forceClear: true,
+        reason: "stuck_recovery",
+        settleMs: 0,
+      }),
+    ).resolves.toMatchObject({ forceCleared: true });
+
+    expect(loadSessionEntry({ agentId: "ops", sessionKey, storePath })).toMatchObject({
+      sessionId,
+      status: "killed",
+      abortedLastRun: true,
+    });
+  });
+
   it("keeps the persisted killed state when the force-cleared owner finishes late", async () => {
     const sessionKey = "agent:main:force-clear-late-completion";
     const sessionId = "session-force-clear-late-completion";

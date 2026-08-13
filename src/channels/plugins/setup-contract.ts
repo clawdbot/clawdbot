@@ -1,7 +1,7 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import type { ChannelSetupInput } from "./setup-input.js";
@@ -22,6 +22,8 @@ type ChannelSetupStringField = {
 type ChannelSetupBooleanField = {
   kind: "boolean";
   cli: ChannelSetupCliOption;
+  envVars?: readonly string[];
+  envVarMode?: "all" | "any";
 };
 
 type ChannelSetupIntegerField = {
@@ -48,9 +50,11 @@ type ChannelSetupField =
   | ChannelSetupStringListField
   | ChannelSetupChoiceField;
 
-export type ChannelSetupFieldMetadata = ChannelSetupField & {
-  key: string;
-};
+type ChannelSetupFieldMetadataFor<Field extends ChannelSetupField> = Field extends ChannelSetupField
+  ? Field & { key: string }
+  : never;
+
+export type ChannelSetupFieldMetadata = ChannelSetupFieldMetadataFor<ChannelSetupField>;
 
 export type ChannelSetupMetadata = {
   fields: readonly ChannelSetupFieldMetadata[];

@@ -5,6 +5,7 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
   parseExecutionIdentityAdmissionEnvelope,
+  parseExecutionIdentityAdmissionWork,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionWork,
@@ -12,6 +13,22 @@ import {
 
 const ADMISSION_MAX_BYTES = 16 * 1024;
 const ADMISSION_MAX_ITEMS = 16;
+
+function defineObjectPrototypeProperty(key: string, descriptor: PropertyDescriptor): void {
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution at the admission boundary.
+  Object.defineProperty(Object.prototype, key, descriptor);
+}
+
+function restoreObjectPrototypeProperty(
+  key: string,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    defineObjectPrototypeProperty(key, descriptor);
+  } else {
+    delete (Object.prototype as Record<string, unknown>)[key];
+  }
+}
 
 function facts(overrides: Partial<ExecutionIdentityAdmissionFacts> = {}) {
   return {
@@ -150,6 +167,379 @@ describe("execution identity admission envelope", () => {
     }
   });
 
+  it("omits inherited outer evidence instead of projecting it", () => {
+    const inheritedRefs = {
+      invoker: { state: "unknown" },
+      applicableGrants: [{ rawGrantRef: "inherited-grant", state: "present" }],
+      assurance: [
+        {
+          kind: "other",
+          rawEvidenceRef: "inherited-assurance",
+          strength: "self-asserted",
+        },
+      ],
+    } as const;
+    const prior = new Map(
+      Object.keys(inheritedRefs).map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(Object.prototype, key),
+      ]),
+    );
+    let envelope: ExecutionIdentityAdmissionEnvelope;
+    try {
+      for (const [key, value] of Object.entries(inheritedRefs)) {
+        defineObjectPrototypeProperty(key, {
+          configurable: true,
+          enumerable: false,
+          value,
+          writable: true,
+        });
+      }
+      envelope = captureEnvelope(facts(), {
+        contextId: "context-inherited",
+        executionId: "execution-inherited",
+        now: 1,
+        runtimeInstanceId: "runtime-owned",
+      });
+    } finally {
+      for (const [key, descriptor] of prior) {
+        restoreObjectPrototypeProperty(key, descriptor);
+      }
+    }
+
+    expect(Object.hasOwn(envelope!, "invoker")).toBe(false);
+    expect(envelope!.applicableGrants).toEqual([]);
+    expect(envelope!.assurance).toEqual([
+      {
+        kind: "runtime-binding",
+        rawEvidenceRef: "runtime-owned",
+        strength: "boundary-verified",
+      },
+    ]);
+  });
+
+  it("never reads inherited accessors while treating optional evidence as omitted", () => {
+    const keys = ["invoker", "applicableGrants", "assurance"] as const;
+    const prior = new Map(
+      keys.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)]),
+    );
+    const getterReads = new Map(keys.map((key) => [key, 0]));
+    let envelope: ExecutionIdentityAdmissionEnvelope;
+    try {
+      for (const key of keys) {
+        defineObjectPrototypeProperty(key, {
+          configurable: true,
+          enumerable: false,
+          get: () => {
+            getterReads.set(key, getterReads.get(key)! + 1);
+            return key === "invoker"
+              ? { state: "unknown" }
+              : key === "applicableGrants"
+                ? [{ rawGrantRef: "inherited-grant", state: "present" }]
+                : [
+                    {
+                      kind: "other",
+                      rawEvidenceRef: "inherited-assurance",
+                      strength: "self-asserted",
+                    },
+                  ];
+          },
+        });
+      }
+      envelope = captureEnvelope(facts(), {
+        contextId: "context-inherited-getter",
+        executionId: "execution-inherited-getter",
+        now: 1,
+        runtimeInstanceId: "runtime-owned",
+      });
+    } finally {
+      for (const [key, descriptor] of prior) {
+        restoreObjectPrototypeProperty(key, descriptor);
+      }
+    }
+
+    expect(Object.fromEntries(getterReads)).toEqual({
+      invoker: 0,
+      applicableGrants: 0,
+      assurance: 0,
+    });
+    expect(Object.hasOwn(envelope!, "invoker")).toBe(false);
+    expect(envelope!.applicableGrants).toEqual([]);
+    expect(envelope!.assurance).toEqual([
+      {
+        kind: "runtime-binding",
+        rawEvidenceRef: "runtime-owned",
+        strength: "boundary-verified",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "ingress state",
+      key: "state",
+      value: "unknown",
+      admissionFacts: () => facts(),
+      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
+        expect(envelope.ingress.state).toBe("present");
+      },
+    },
+    {
+      name: "ingress source",
+      key: "rawSourceRef",
+      value: "inherited-source",
+      admissionFacts: () => facts(),
+      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
+        expect(Object.hasOwn(envelope.ingress, "rawSourceRef")).toBe(false);
+      },
+    },
+    {
+      name: "invoker label",
+      key: "displayLabel",
+      value: "inherited-label",
+      admissionFacts: () =>
+        facts({
+          invoker: {
+            state: "present",
+            kind: "local-account",
+            rawPrincipalRef: "owned-principal",
+          },
+        }),
+      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
+        expect(envelope.invoker?.state).toBe("present");
+        expect(Object.hasOwn(envelope.invoker!, "displayLabel")).toBe(false);
+      },
+    },
+  ])("omits inherited optional $name data", ({ key, value, admissionFacts, assertOmitted }) => {
+    const prior = Object.getOwnPropertyDescriptor(Object.prototype, key);
+    let dataEnvelope: ExecutionIdentityAdmissionEnvelope;
+    let getterEnvelope: ExecutionIdentityAdmissionEnvelope;
+    let getterReads = 0;
+    try {
+      defineObjectPrototypeProperty(key, {
+        configurable: true,
+        enumerable: false,
+        value,
+        writable: true,
+      });
+      dataEnvelope = captureEnvelope(admissionFacts(), {
+        contextId: `context-${key}`,
+        executionId: `execution-${key}`,
+        now: 1,
+        runtimeInstanceId: "runtime-owned",
+      });
+      defineObjectPrototypeProperty(key, {
+        configurable: true,
+        enumerable: false,
+        get: () => {
+          getterReads += 1;
+          return value;
+        },
+      });
+      getterEnvelope = captureEnvelope(admissionFacts(), {
+        contextId: `context-${key}-getter`,
+        executionId: `execution-${key}-getter`,
+        now: 2,
+        runtimeInstanceId: "runtime-owned",
+      });
+    } finally {
+      restoreObjectPrototypeProperty(key, prior);
+    }
+    expect(getterReads).toBe(0);
+    assertOmitted(dataEnvelope!);
+    assertOmitted(getterEnvelope!);
+  });
+
+  it.each([
+    ["outer run id", "runId", "inherited-run", () => omitOwn(facts(), "runId")],
+    ["outer agent id", "agentId", "inherited-agent", () => omitOwn(facts(), "agentId")],
+    ["outer ingress", "ingress", facts().ingress, () => omitOwn(facts(), "ingress")],
+    ["outer runtime", "runtime", facts().runtime, () => omitOwn(facts(), "runtime")],
+    [
+      "ingress kind",
+      "kind",
+      "local-cli",
+      () => facts({ ingress: { boundary: "agent-command.local" } as never }),
+    ],
+    [
+      "ingress boundary",
+      "boundary",
+      "agent-command.local",
+      () => facts({ ingress: { kind: "local-cli" } as never }),
+    ],
+    ["invoker state", "state", "unknown", () => facts({ invoker: {} as never })],
+    [
+      "invoker kind",
+      "kind",
+      "local-account",
+      () => facts({ invoker: { state: "present", rawPrincipalRef: "owned" } as never }),
+    ],
+    [
+      "invoker principal",
+      "rawPrincipalRef",
+      "inherited-principal",
+      () => facts({ invoker: { state: "present", kind: "local-account" } as never }),
+    ],
+    [
+      "grant reference",
+      "rawGrantRef",
+      "inherited-grant",
+      () => facts({ applicableGrants: [{ state: "present" } as never] }),
+    ],
+    [
+      "grant state",
+      "state",
+      "present",
+      () => facts({ applicableGrants: [{ rawGrantRef: "owned-grant" } as never] }),
+    ],
+    [
+      "assurance kind",
+      "kind",
+      "other",
+      () =>
+        facts({
+          assurance: [{ rawEvidenceRef: "owned-evidence", strength: "self-asserted" } as never],
+        }),
+    ],
+    [
+      "assurance reference",
+      "rawEvidenceRef",
+      "inherited-evidence",
+      () => facts({ assurance: [{ kind: "other", strength: "self-asserted" } as never] }),
+    ],
+    [
+      "assurance strength",
+      "strength",
+      "self-asserted",
+      () => facts({ assurance: [{ kind: "other", rawEvidenceRef: "owned-evidence" } as never] }),
+    ],
+  ] as const)(
+    "rejects inherited required $0 before allocation and enqueue",
+    (_name, key, inheritedValue, admissionFacts) => {
+      const prior = Object.getOwnPropertyDescriptor(Object.prototype, key);
+      let inheritedReads = 0;
+      let allocationReads = 0;
+      const sink = vi.fn(() => true);
+      const clear = configureExecutionIdentityAdmissionSink(sink);
+      try {
+        defineObjectPrototypeProperty(key, {
+          configurable: true,
+          enumerable: false,
+          get: () => {
+            inheritedReads += 1;
+            return inheritedValue;
+          },
+        });
+        const options = { enabled: true, runtimeInstanceId: "runtime-owned" };
+        Object.defineProperty(options, "contextId", {
+          enumerable: true,
+          get: () => {
+            allocationReads += 1;
+            return "must-not-allocate";
+          },
+        });
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(admissionFacts() as never, options),
+        ).toBeUndefined();
+      } finally {
+        clear();
+        restoreObjectPrototypeProperty(key, prior);
+      }
+      expect(inheritedReads).toBe(0);
+      expect(allocationReads).toBe(0);
+      expect(sink).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "outer ingress",
+      prepare: () => {
+        const admissionFacts = facts();
+        return { admissionFacts, target: admissionFacts, key: "ingress" };
+      },
+    },
+    ...["invoker", "applicableGrants", "assurance"].map((key) => ({
+      name: `outer ${key}`,
+      prepare: () => {
+        const admissionFacts = facts();
+        return { admissionFacts, target: admissionFacts, key };
+      },
+    })),
+    ...["kind", "boundary", "state", "rawSourceRef"].map((key) => ({
+      name: `ingress ${key}`,
+      prepare: () => {
+        const admissionFacts = facts();
+        return { admissionFacts, target: admissionFacts.ingress, key };
+      },
+    })),
+    ...["state", "kind", "rawPrincipalRef", "displayLabel"].map((key) => ({
+      name: `invoker ${key}`,
+      prepare: () => {
+        const invoker = {
+          state: "present" as const,
+          kind: "local-account" as const,
+          rawPrincipalRef: "owned-principal",
+          displayLabel: "owned-label",
+        };
+        const admissionFacts = facts({ invoker });
+        return { admissionFacts, target: invoker, key };
+      },
+    })),
+    ...["rawGrantRef", "state"].map((key) => ({
+      name: `grant ${key}`,
+      prepare: () => {
+        const grant = { rawGrantRef: "owned-grant", state: "present" as const };
+        const admissionFacts = facts({ applicableGrants: [grant] });
+        return { admissionFacts, target: grant, key };
+      },
+    })),
+    ...["kind", "rawEvidenceRef", "strength"].map((key) => ({
+      name: `assurance ${key}`,
+      prepare: () => {
+        const assurance = {
+          kind: "other" as const,
+          rawEvidenceRef: "owned-evidence",
+          strength: "self-asserted" as const,
+        };
+        const admissionFacts = facts({ assurance: [assurance] });
+        return { admissionFacts, target: assurance, key };
+      },
+    })),
+  ])("rejects an own accessor at $name without reading it or allocating", ({ prepare }) => {
+    const { admissionFacts, target, key } = prepare();
+    let accessorReads = 0;
+    let allocationReads = 0;
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return "must-not-read";
+      },
+    });
+    const options = { enabled: true, runtimeInstanceId: "runtime-owned" };
+    Object.defineProperty(options, "contextId", {
+      enumerable: true,
+      get: () => {
+        allocationReads += 1;
+        return "must-not-allocate";
+      },
+    });
+    const sink = vi.fn(() => true);
+    const clear = configureExecutionIdentityAdmissionSink(sink);
+    try {
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(admissionFacts as never, options),
+      ).toBeUndefined();
+    } finally {
+      clear();
+    }
+    expect(accessorReads).toBe(0);
+    expect(allocationReads).toBe(0);
+    expect(sink).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed, ambiguous, oversized, and noncanonical invoker variants", () => {
     const present = captureEnvelope(
       facts({
@@ -269,6 +659,65 @@ describe("execution identity admission envelope", () => {
     expect(() => captureEnvelope(customPrototypeFacts)).toThrow("expected admission envelope");
     expect(() => captureEnvelope(accessorFacts)).toThrow("expected admission envelope");
     expect(accessorReads).toBe(0);
+  });
+
+  it("revalidates envelopes and worker messages from owned data only", () => {
+    const envelope = captureEnvelope(facts(), {
+      contextId: "context-revalidation",
+      executionId: "execution-revalidation",
+      now: 1,
+      runtimeInstanceId: "runtime-owned",
+    });
+    const priorInvoker = Object.getOwnPropertyDescriptor(Object.prototype, "invoker");
+    const priorIngress = Object.getOwnPropertyDescriptor(Object.prototype, "ingress");
+    const priorKind = Object.getOwnPropertyDescriptor(Object.prototype, "kind");
+    let inheritedReads = 0;
+    let parsed: ExecutionIdentityAdmissionEnvelope;
+    try {
+      defineObjectPrototypeProperty("invoker", {
+        configurable: true,
+        enumerable: false,
+        get: () => {
+          inheritedReads += 1;
+          return { state: "unknown" };
+        },
+      });
+      parsed = parseExecutionIdentityAdmissionEnvelope(envelope);
+
+      defineObjectPrototypeProperty("ingress", {
+        configurable: true,
+        enumerable: false,
+        get: () => {
+          inheritedReads += 1;
+          return envelope.ingress;
+        },
+      });
+      expect(() => parseExecutionIdentityAdmissionEnvelope(omitOwn(envelope, "ingress"))).toThrow(
+        "execution identity admission envelope violates its bounded contract",
+      );
+
+      defineObjectPrototypeProperty("kind", {
+        configurable: true,
+        enumerable: false,
+        get: () => {
+          inheritedReads += 1;
+          return "capture";
+        },
+      });
+      expect(() => parseExecutionIdentityAdmissionWork({ envelope } as never)).toThrow(
+        "execution identity admission work violates its bounded contract",
+      );
+    } finally {
+      for (const [key, descriptor] of [
+        ["invoker", priorInvoker],
+        ["ingress", priorIngress],
+        ["kind", priorKind],
+      ] as const) {
+        restoreObjectPrototypeProperty(key, descriptor);
+      }
+    }
+    expect(inheritedReads).toBe(0);
+    expect(Object.hasOwn(parsed!, "invoker")).toBe(false);
   });
 
   it("rejects invalid owned facts, excess items, and oversized encoded envelopes", () => {
@@ -394,3 +843,9 @@ describe("execution identity admission envelope", () => {
     expect(JSON.stringify(work.mock.calls)).not.toContain("raw-private-reference");
   });
 });
+
+function omitOwn<T extends object, K extends keyof T>(value: T, key: K): Omit<T, K> {
+  const copy = { ...value };
+  delete copy[key];
+  return copy;
+}

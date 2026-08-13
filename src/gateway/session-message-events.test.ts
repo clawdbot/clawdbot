@@ -1753,6 +1753,8 @@ describe("session.message websocket events", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
           modelProvider: "openai",
           model: "gpt-5.4",
           contextTokens: 123_456,
@@ -1910,7 +1912,11 @@ describe("session.message websocket events", () => {
 
   test("routes selected-agent global transcript updates to matching message subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = {
+      ownership: "explicit",
+      list: [{ id: "main" }, { id: "work" }],
+    };
+    testState.agentConfig = { sessionStore: { agentId: "work" } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
     await writeSessionStore({
       entries: {
@@ -1955,27 +1961,30 @@ describe("session.message websocket events", () => {
       await connectOk(workWs, { scopes: ["operator.read"] });
       await connectOk(mainWs, { scopes: ["operator.read"] });
       await connectOk(bareWs, { scopes: ["operator.read"] });
-      await rpcReq(workWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "work",
-      });
-      await rpcReq(mainWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "main",
-      });
-      await rpcReq(bareWs, "sessions.messages.subscribe", {
-        key: "global",
-      });
+      expect(
+        await rpcReq(workWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "work",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+      expect(
+        await rpcReq(mainWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "main",
+        }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await rpcReq(bareWs, "sessions.messages.subscribe", {
+          key: "global",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
 
       const workMessagePromise = waitForSessionMessageEvent(workWs, "global");
       const mainMessagePromise = expectNoMessageWithin({
         watch: (timeoutMs) => waitForSessionMessageEvent(mainWs, "global", timeoutMs),
         timeoutMs: 250,
       });
-      const bareMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(bareWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
+      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
       emitSessionTranscriptUpdate({
         sessionFile: transcriptPath,
         sessionKey: "global",
@@ -1986,7 +1995,7 @@ describe("session.message websocket events", () => {
 
       const workMessage = await workMessagePromise;
       await mainMessagePromise;
-      await bareMessagePromise;
+      const bareMessage = await bareMessagePromise;
       expectRecordFields(workMessage.payload, {
         sessionKey: "global",
         agentId: "work",
@@ -2004,18 +2013,28 @@ describe("session.message websocket events", () => {
           continuationTurns: 0,
         },
       });
+      expectRecordFields(bareMessage.payload, {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-work-global",
+      });
     } finally {
       workWs.close();
       mainWs.close();
       bareWs.close();
       testState.agentsConfig = undefined;
+      testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
     }
   });
 
   test("routes a subscribed global observer event through the real gateway socket once", async () => {
     const storePath = await createSessionStoreFile();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = {
+      ownership: "explicit",
+      list: [{ id: "main" }, { id: "work" }],
+    };
+    testState.agentConfig = { sessionStore: { agentId: "work" } };
     await writeSessionStore({
       entries: { global: { sessionId: "sess-work-observer", updatedAt: Date.now() } },
       storePath,
@@ -2046,7 +2065,9 @@ describe("session.message websocket events", () => {
           agentId: " WORK ",
         }),
       ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
-      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "global", agentId: "main" });
+      expect(
+        await rpcReq(mainWs, "sessions.messages.subscribe", { key: "global", agentId: "main" }),
+      ).toMatchObject({ ok: false });
       await rpcReq(workWs, "sessions.observer.visibility", { visible: true });
       await rpcReq(mainWs, "sessions.observer.visibility", { visible: true });
 
@@ -2080,6 +2101,7 @@ describe("session.message websocket events", () => {
       workWs.close();
       mainWs.close();
       testState.agentsConfig = undefined;
+      testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
     }
   });

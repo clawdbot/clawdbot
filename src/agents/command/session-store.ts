@@ -66,8 +66,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
-   * them with the model used by this run. Used for heartbeat turns so the
-   * heartbeat model does not "bleed" into the main session's perceived state.
+   * them with the model used by this run. Used for turn-local fallback and
+   * heartbeat runs so their model does not bleed into the session selection.
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
@@ -146,9 +146,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
   }
   if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a background
-    // heartbeat turn using a different model does not bleed into the main
-    // session's perceived state.
+    // Keep the pre-existing runtime model and context window so a turn-local
+    // model does not bleed into the session's perceived selection.
     if (entry.model) {
       // Prior runtime model exists: preserve its contextTokens. When missing,
       // leave contextTokens unset rather than falling back to the heartbeat

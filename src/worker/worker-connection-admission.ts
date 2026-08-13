@@ -19,6 +19,10 @@ import {
   toWorkerConnectionError,
   type WorkerConnectionOptions,
 } from "./worker-connection-contract.js";
+import {
+  resolveWorkerConnectionTarget,
+  WorkerConnectionEndpointError,
+} from "./worker-connection-endpoint.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
 
 const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
@@ -68,25 +72,18 @@ export function isRetryableWorkerCloseReason(reason: WorkerProtocolCloseReason):
   return RETRYABLE_CLOSE_REASONS.has(reason);
 }
 
-function workerSocketUrl(socketPath: string): string {
-  if (!socketPath.startsWith("/")) {
-    throw new Error("worker gateway socket path must be absolute");
-  }
-  if (socketPath.includes(":")) {
-    throw new Error("worker gateway socket path must not contain a colon");
-  }
-  return `ws+unix://${socketPath}:/`;
-}
-
 export function connectWorkerConnectionAttempt(
   options: WorkerConnectionAttemptOptions,
 ): Promise<WorkerHelloOk> {
   const connectionOptions = options.connectionOptions;
+  const target = resolveWorkerConnectionTarget(connectionOptions.endpoint);
+  const socketOptions = {
+    ...target.options,
+    maxPayload: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+  };
   const socket = connectionOptions.createSocket
-    ? connectionOptions.createSocket(workerSocketUrl(connectionOptions.socketPath))
-    : new WebSocket(workerSocketUrl(connectionOptions.socketPath), {
-        maxPayload: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
-      });
+    ? connectionOptions.createSocket(target.url, socketOptions)
+    : new WebSocket(target.url, socketOptions);
   options.onSocket(socket);
   const admissionId = randomUUID();
   let admitted = false;
@@ -119,6 +116,12 @@ export function connectWorkerConnectionAttempt(
     socket.on("open", () => {
       if (!options.isCurrentGeneration() || options.isTerminal()) {
         socket.close();
+        return;
+      }
+      const tlsError = target.validateSocket(socket);
+      if (tlsError) {
+        rejectAttempt(new WorkerConnectionEndpointError(tlsError.message));
+        socket.close(1008, tlsError.message);
         return;
       }
       options.onAdmitting();

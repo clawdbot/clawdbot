@@ -2,8 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -15,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import type {
   SessionListRowContext,
   SessionListRowContextProvider,
@@ -101,13 +100,16 @@ export function resolveSessionListRowContext(params: {
 }
 
 export function resolveSessionListSearchModelFields(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
   rowContext?: SessionListRowContext;
 }): Array<string | undefined> {
   const parsedAgent = parseAgentSessionKey(params.key);
-  const agentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(params.cfg));
+  const agentId = normalizeAgentId(
+    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key),
+  );
   const subagentRun = params.rowContext
     ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
     : getSessionDisplaySubagentRunByChildSessionKey(params.key);
@@ -125,17 +127,11 @@ export function resolveSessionListSearchModelFields(params: {
     subagentRun?.model,
     { allowPluginNormalization: false },
   );
-  const modelIdentity = {
-    provider: resolvedModel.provider,
-    model: resolvedModel.model ?? DEFAULT_MODEL,
-  };
-  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelIdentity.provider;
-  const selectedOrRuntimeModel = selectedModel?.model ?? modelIdentity.model;
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
     agentId,
-    provider: selectedOrRuntimeModelProvider,
-    model: selectedOrRuntimeModel,
+    provider: selectedModel.provider,
+    model: selectedModel.model,
     rowContext: params.rowContext,
   });
   const fields: Array<string | undefined> = [];
@@ -144,9 +140,7 @@ export function resolveSessionListSearchModelFields(params: {
     model: params.entry?.model,
   });
   addSessionListSearchModelFields(fields, resolvedModel);
-  if (selectedModel) {
-    addSessionListSearchModelFields(fields, selectedModel);
-  }
+  addSessionListSearchModelFields(fields, selectedModel);
   addSessionListSearchModelFields(fields, displayModelIdentity);
   return fields;
 }

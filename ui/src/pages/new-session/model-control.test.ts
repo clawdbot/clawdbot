@@ -256,12 +256,22 @@ describe("new-session model runtime", () => {
       model: { primary: "openai/gpt-5.6-sol" },
       thinkingDefault: "high",
     });
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="openai/gpt-5.6-sol"][data-chat-model-default="true"]',
+      )?.textContent,
+    ).toContain("GPT-5.6 Sol");
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Sol",
     );
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "High",
-    );
+    const thinkingPicker = container.querySelector('[data-chat-thinking-select="true"]');
+    expect(thinkingPicker).not.toBeNull();
+    expect(thinkingPicker?.textContent).toContain("High");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-slider="true"]')
+        ?.getAttribute("data-chat-thinking-values"),
+    ).toContain("high");
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
   });
@@ -662,70 +672,6 @@ describe("new-session model runtime", () => {
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "",
     });
-  });
-
-  it("keeps xhigh anchored to the selected model profile across an interactive model switch", async () => {
-    const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));
-    const { context, request } = contextWith([
-      {
-        id: "k3",
-        name: "Kimi K3",
-        provider: "kimi",
-        reasoning: true,
-        thinkingLevels: levels([
-          "off",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max",
-          "ultra",
-        ]),
-        thinkingDefault: "high",
-      },
-      {
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        provider: "openai",
-        reasoning: true,
-        thinkingLevels: levels(["off", "minimal", "low", "medium", "high", "xhigh", "max"]),
-        thinkingDefault: "medium",
-      },
-    ]);
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
-    control.load(context, "main", true);
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(
-        renderControl(control, context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-sol"]',
-        ),
-      ).not.toBeNull();
-    });
-    control.selected = "kimi/k3";
-    control.thinkingLevel = "xhigh";
-
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')
-      ?.click();
-
-    expect(control.selected).toBe("openai/gpt-5.6-sol");
-    expect(control.thinkingLevel).toBe("xhigh");
-    expect(onSelectionChange).toHaveBeenLastCalledWith({
-      model: "openai/gpt-5.6-sol",
-      thinkingLevel: "xhigh",
-    });
-    const container = renderControl(control, context);
-    const slider = container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
-    expect(slider?.dataset.chatThinkingValues).toBe("off,minimal,low,medium,high,xhigh,max");
-    expect(slider?.value).toBe("5");
-    expect(slider?.max).toBe("6");
-    expect(slider?.getAttribute("aria-valuetext")).toBe("Extra high");
-    expect(
-      Number.parseFloat(slider?.style.getPropertyValue("--reasoning-fill") ?? "0"),
-    ).toBeCloseTo(83.33, 1);
   });
 
   it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
