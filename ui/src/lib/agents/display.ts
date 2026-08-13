@@ -340,12 +340,14 @@ export function normalizeAgentTargetLabel(
   agent: AgentRosterEntry,
   hydratedIdentity?: Pick<AgentIdentityResult, "name" | "nameSource"> | null,
 ) {
+  const resolvedName =
+    hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
+      ? normalizeOptionalString(hydratedIdentity.name)
+      : undefined;
   return (
+    resolvedName ??
     normalizeOptionalString(agent.name) ??
     normalizeOptionalString(agent.identity?.name) ??
-    (hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
-      ? normalizeOptionalString(hydratedIdentity.name)
-      : undefined) ??
     agent.id
   );
 }

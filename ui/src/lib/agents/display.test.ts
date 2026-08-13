@@ -31,6 +31,24 @@ describe("normalizeAgentTargetLabel", () => {
     ).toBe("research");
   });
 
+  it("prefers the authoritative resolved name over unresolved roster fields", () => {
+    expect(
+      normalizeAgentTargetLabel(
+        { id: "main", name: "Roster name", identity: { name: "Roster identity" } },
+        { name: "Configured assistant", nameSource: "config" },
+      ),
+    ).toBe("Configured assistant");
+  });
+
+  it("uses roster names when hydration only produced the synthesized default", () => {
+    expect(
+      normalizeAgentTargetLabel(
+        { id: "research", name: "Research roster" },
+        { name: "Assistant", nameSource: "default" },
+      ),
+    ).toBe("Research roster");
+  });
+
   it("preserves the id when an older Gateway omits name provenance", () => {
     expect(normalizeAgentTargetLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
   });
