@@ -165,26 +165,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       slackStreaming.mode === "progress" &&
       progress.streamMode === "status_final"
     ) {
-      const hadProgressDraft = progress.progressDraft.hasStarted;
-      progress.progressDraft.markFinalReplyStarted();
       if (progress.useNativeProgressStreaming) {
-        await progress.waitForNativeProgressStreamStart();
-        const finalThreadTs =
-          delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;
-        await delivery.deliverNormally({
-          payload,
-          kind: info.kind,
-          forcedThreadTs: finalThreadTs,
-        });
-        // Complete the cards only after the fresh final landed; a failed send
-        // leaves completion to the outer cleanup, which can mark error state.
-        await progress.appendNativeProgressCompletion(payload.isError === true);
-        progress.progressDraft.markFinalReplyDelivered();
-        if (!payload.isError && hadProgressDraft && delivery.streamSession) {
-          progress.pendingNativeProgressReceipt = progress.progressReceipt.buildSummaryLine();
-        }
+        await progress.deliverNativeFinal(payload, info.kind);
         return;
       }
+      progress.progressDraft.markFinalReplyStarted();
       if (progress.useDraftProgressCard) {
         await delivery.deliverNormally({
           payload,
@@ -205,6 +190,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
     }
     if (progress.useNativeProgressStreaming) {
+      if (info.kind !== "final" && payload.isError !== true) {
+        if (!delivery.isStreamingEligible(payload)) {
+          await delivery.deliverNormally({
+            payload,
+            kind: info.kind,
+            forcedThreadTs:
+              delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs,
+          });
+          return;
+        }
+        return (await progress.appendNativeNarration(payload, info.kind))
+          ? undefined
+          : { visibleReplySent: false };
+      }
       await delivery.deliverNormally({
         payload,
         kind: info.kind,
@@ -643,18 +642,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // emits for the non-streaming/fallback paths). emitSlackMessageSentHooks
       // self-gates on registered listeners, so this is a no-op when unused.
       delivery.acknowledgeStoppedStreamedDeliveries(finalStream, stopResult?.messageId);
-      if (
-        progress.pendingNativeProgressReceipt &&
-        stopResult?.messageId &&
-        !progress.progressReceiptCollapsed
-      ) {
-        await progress.collapseProgressReceipt({
-          channelId: finalStream.channel,
-          messageId: stopResult.messageId,
-          text: progress.pendingNativeProgressReceipt,
-          threadTs: finalStream.threadTs,
-        });
-      }
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await delivery.deliverPendingStreamFallback(finalStream, err);

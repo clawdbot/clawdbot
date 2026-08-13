@@ -44,7 +44,9 @@ export function resolveNativeProgressPlan(
 export function resolveNativeProgressLines(
   snapshot: ChannelProgressDraftCompositorSnapshot,
 ): ChannelProgressDraftLine[] {
-  const lines = resolveStructuredProgressLines(snapshot.lines);
+  const lines = resolveStructuredProgressLines(snapshot.lines).filter(
+    (line) => line.id !== "reasoning" && line.id?.startsWith("commentary:") !== true,
+  );
   if (snapshot.plan?.length || !snapshot.planExplanation) {
     return lines;
   }
@@ -54,6 +56,20 @@ export function resolveNativeProgressLines(
     explanation: snapshot.planExplanation,
   });
   return explanationLine ? [...lines, explanationLine] : lines;
+}
+
+export function resolveNativeProgressNarration(
+  snapshot: ChannelProgressDraftCompositorSnapshot,
+): string | undefined {
+  const authoredLines = resolveStructuredProgressLines(snapshot.lines)
+    .filter((line) => line.id === "reasoning" || line.id?.startsWith("commentary:") === true)
+    .map((line) => line.text.trim())
+    .filter(Boolean);
+  const paragraphs = [snapshot.statusHeadline, snapshot.planExplanation, ...authoredLines].filter(
+    (text, index, values): text is string =>
+      Boolean(text?.trim()) && values.indexOf(text) === index,
+  );
+  return paragraphs.length > 0 ? paragraphs.join("\n\n") : undefined;
 }
 
 export function combineProgressHeadlineAndExplanation(

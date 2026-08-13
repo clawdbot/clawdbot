@@ -41,20 +41,25 @@ function taskUpdate(
   id: unknown,
   title: string,
   status: "pending" | "in_progress" | "complete" | "error",
+  extra?: Record<string, unknown>,
 ) {
-  return { type: "task_update", id, title, status };
+  return { type: "task_update", id, title, status, ...extra };
 }
 
 function contentTaskId(prefix: string) {
   return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
-function expectTaskUpdate(task: unknown, fields: { id: unknown; title: string; status: string }) {
+function expectTaskUpdate(
+  task: unknown,
+  fields: { id: unknown; title: string; status: string; details?: string },
+) {
   expect(task).toEqual({
     type: "task_update",
     id: fields.id,
     title: fields.title,
     status: fields.status,
+    ...(fields.details ? { details: fields.details } : {}),
   });
 }
 
@@ -357,11 +362,23 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate(
-        contentTaskId("tool"),
-        "Exec — run tests in /Users/example/P…aw/packages/very/deep/path/example",
-        "in_progress",
-      ),
+      taskUpdate(contentTaskId("tool"), "Exec", "in_progress", {
+        details: "run tests in /Users/example/P…aw/packages/very/deep/path/example",
+      }),
+    ]);
+  });
+
+  it("separates inline file deltas from native task details", () => {
+    expect(
+      buildSlackProgressStreamStartChunks({
+        lines: [toolLine("src/native-card.ts +4 -2", "Write")],
+      }),
+    ).toEqual([
+      planUpdate("Write — src/native-card.ts"),
+      taskUpdate(contentTaskId("write"), "Write", "in_progress", {
+        details: "src/native-card.ts",
+        output: "+4 −2",
+      }),
     ]);
   });
 
@@ -390,8 +407,12 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate(contentTaskId("exec"), "Exec — command finished", "complete"),
-      taskUpdate(contentTaskId("exec"), "Exec — command failed · exit 1", "error"),
+      taskUpdate(contentTaskId("exec"), "exec", "complete", {
+        details: "command finished",
+      }),
+      taskUpdate(contentTaskId("exec"), "exec", "error", {
+        details: "command failed · exit 1",
+      }),
     ]);
   });
 
@@ -404,13 +425,15 @@ describe("native Slack progress stream chunks", () => {
     expect(chunksWithTitle?.[0]).toEqual(planUpdate("Shelling..."));
     expectTaskUpdate(chunksWithTitle?.[1], {
       id: contentTaskId("tool"),
-      title: "Exec 10 — run 10",
+      title: "Exec 10",
       status: "in_progress",
+      details: "run 10",
     });
     expectTaskUpdate(chunksWithTitle?.at(-1), {
       id: contentTaskId("tool"),
-      title: "Exec 59 — run 59",
+      title: "Exec 59",
       status: "in_progress",
+      details: "run 59",
     });
 
     const chunksWithoutTitle = buildSlackProgressStreamStartChunks({
@@ -420,13 +443,15 @@ describe("native Slack progress stream chunks", () => {
     expect(chunksWithoutTitle?.[0]).toEqual(planUpdate("Exec 59 — run 59"));
     expectTaskUpdate(chunksWithoutTitle?.[1], {
       id: contentTaskId("tool"),
-      title: "Exec 10 — run 10",
+      title: "Exec 10",
       status: "in_progress",
+      details: "run 10",
     });
     expectTaskUpdate(chunksWithoutTitle?.at(-1), {
       id: contentTaskId("tool"),
-      title: "Exec 59 — run 59",
+      title: "Exec 59",
       status: "in_progress",
+      details: "run 59",
     });
   });
 
@@ -437,7 +462,7 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Exec — run tests"),
-      taskUpdate(contentTaskId("exec"), "Exec — run tests", "in_progress"),
+      taskUpdate(contentTaskId("exec"), "Exec", "in_progress", { details: "run tests" }),
     ]);
   });
 
@@ -472,7 +497,7 @@ describe("native Slack progress stream chunks", () => {
     ).toEqual([
       planUpdate("Exec — run tests"),
       taskUpdate(contentTaskId("item"), "prepare the workspace", "in_progress"),
-      taskUpdate(contentTaskId("exec"), "Exec — run tests", "in_progress"),
+      taskUpdate(contentTaskId("exec"), "Exec", "in_progress", { details: "run tests" }),
     ]);
   });
 
@@ -543,7 +568,8 @@ describe("native Slack progress stream chunks", () => {
     expect(completed?.[1]).toMatchObject({
       id: runningTaskId,
       status: "complete",
-      title: "Bash — completed",
+      title: "bash",
+      details: "completed",
     });
   });
 
@@ -585,7 +611,32 @@ describe("native Slack progress stream chunks", () => {
     ).toEqual([
       planUpdate("Exec — command failed · exit 1"),
       taskUpdate(contentTaskId("item"), "tool one", "complete"),
-      taskUpdate(contentTaskId("command_output"), "Exec — command failed · exit 1", "error"),
+      taskUpdate(contentTaskId("command_output"), "Exec", "error", {
+        details: "command failed · exit 1",
+      }),
+    ]);
+  });
+
+  it("puts task detail, diff output, and the session source on the terminal row", () => {
+    expect(
+      buildSlackProgressStreamCompletionChunks({
+        lines: [toolLine("src/native-card.ts", "Write")],
+        diffStat: { files: 1, added: 3, removed: 1 },
+        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
+      }),
+    ).toEqual([
+      planUpdate("Write — src/native-card.ts"),
+      taskUpdate(contentTaskId("write"), "Write", "complete", {
+        details: "src/native-card.ts",
+        output: "+3 −1",
+        sources: [
+          {
+            type: "url_source",
+            url: "https://team.openclaw.ai/openclaw/chat/main",
+            text: "Open in OpenClaw",
+          },
+        ],
+      }),
     ]);
   });
 });

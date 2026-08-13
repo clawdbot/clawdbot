@@ -138,6 +138,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   };
 
   return {
+    resolveSessionUrl,
     resolveText,
     resolvePresentation,
     finalize,
