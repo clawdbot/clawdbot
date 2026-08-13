@@ -567,7 +567,7 @@ export function assertCronRunReceiptCurrent(params: {
   if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
-      `cron run owner ${params.handle.agentId} is no longer configured`,
+      `cron job agent is unavailable: ${params.handle.agentId}`,
     );
   }
   withReceiptWrite(

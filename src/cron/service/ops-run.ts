@@ -33,7 +33,7 @@ import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   recordCronOutcomeForJob,
@@ -152,7 +152,11 @@ async function finishPreparedManualRun(
         runReceipt: prepared.runReceipt,
       });
     } catch (err) {
-      coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
+      coreResult = {
+        status: "error",
+        error:
+          err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
+      };
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
@@ -317,6 +321,7 @@ async function finishPreparedManualRun(
           state,
           committed.removed ? [] : [committed.job],
           committed.removed ? [jobId] : [],
+          { publish: false },
         );
         if (!triggerSkipped) {
           emitCronRunFinished(
@@ -354,6 +359,7 @@ async function finishPreparedManualRun(
             },
           );
         }
+        publishCronRuntimeRows(state);
         const maintenance = recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: jobId } : {}),

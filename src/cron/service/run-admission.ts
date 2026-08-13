@@ -635,7 +635,10 @@ export async function executeQueuedCronRun(params: {
       });
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {
-      const errorText = normalizeCronRunErrorText(error);
+      const errorText =
+        error instanceof CronRunReceiptRevisionError
+          ? error.message
+          : normalizeCronRunErrorText(error);
       params.onSetupError?.(executionJob, errorText);
       outcome = {
         ...base,

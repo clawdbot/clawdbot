@@ -25,6 +25,7 @@ export function applyCronRuntimeRowsToState(
   state: CronServiceState,
   jobs: Iterable<CronJob>,
   deletedJobIds: Iterable<string> = [],
+  opts?: { publish?: boolean },
 ): void {
   if (!state.store) {
     return;
@@ -39,7 +40,9 @@ export function applyCronRuntimeRowsToState(
     (job) => !residentJobIds.has(job.id) && !deleted.has(job.id),
   );
   state.store.jobs = [...residentJobs, ...importedJobs];
-  publishCronRuntimeRows(state);
+  if (opts?.publish !== false) {
+    publishCronRuntimeRows(state);
+  }
 }
 
 /** Commits runtime-owned job rows from authoritative values read under SQLite's write lock. */

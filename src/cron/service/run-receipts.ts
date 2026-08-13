@@ -177,11 +177,14 @@ export function cronRunReceiptPersistHooks(params: {
   const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
   return {
     beforeWrite: (database) => {
-      if (params.state.deps.isAgentAvailable?.(params.handle.agentId) === false) {
-        throw new CronRunReceiptRevisionError(
-          params.handle.receiptId,
-          `cron run owner ${params.handle.agentId} is no longer configured`,
-        );
+      const unavailableError = `cron job agent is unavailable: ${params.handle.agentId}`;
+      const recordsUnavailableGuard =
+        terminal?.status === "error" && terminal.error === unavailableError;
+      if (
+        params.state.deps.isAgentAvailable?.(params.handle.agentId) === false &&
+        !recordsUnavailableGuard
+      ) {
+        throw new CronRunReceiptRevisionError(params.handle.receiptId, unavailableError);
       }
       if (params.allowMissingJob) {
         assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });

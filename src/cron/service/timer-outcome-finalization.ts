@@ -13,7 +13,7 @@ import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./ru
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
@@ -233,6 +233,7 @@ export async function finalizeCompletedCronRunOutcomes(
         state,
         committed.upsertedJobs,
         committed.removedJobs.map((job) => job.id),
+        { publish: false },
       );
       for (const plan of committed.eventPlans) {
         if (plan.job) {
@@ -248,6 +249,7 @@ export async function finalizeCompletedCronRunOutcomes(
       for (const removedJob of committed.removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }
+      publishCronRuntimeRows(state);
       try {
         const maintenance = recomputeUnownedCronSchedules(
           state,
