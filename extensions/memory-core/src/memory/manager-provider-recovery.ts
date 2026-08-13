@@ -36,7 +36,7 @@ type PrimaryProviderRecoveryProbe = {
 // While the recovery shadow build runs, the manager's write state points at
 // the build's temp database. A search admitted during that window reads the
 // still-live fallback-owned index through this snapshot instead.
-export type PrimaryRecoverySearchSnapshot = {
+type PrimaryRecoverySearchSnapshot = {
   db: DatabaseSync;
   ftsAvailable: boolean;
   vectorReady: Promise<boolean> | null;
