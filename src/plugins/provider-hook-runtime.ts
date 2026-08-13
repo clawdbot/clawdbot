@@ -22,7 +22,10 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  getPluginRuntimeGenerationRegistry,
+} from "./runtime/gateway-request-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -152,6 +155,14 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return findProviderRuntimePluginInRegistry({
+      registry: generationRegistry,
+      provider: params.lookup.provider,
+      ownerRefs: params.ownerRefs,
+    });
+  }
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scopedPlugin = scopedRegistry
     ? findProviderRuntimePluginInRegistry({
@@ -185,17 +196,23 @@ function findProviderRuntimePluginInRegistry(params: {
   provider: string;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
-  return params.registry.providers
-    .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }))
-    .find((plugin) => {
-      if (params.ownerRefs.length > 0) {
-        return (
-          matchesProviderLiteralId(plugin, params.provider) ||
-          params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-        );
-      }
-      return matchesProviderPluginRef(plugin, params.provider);
-    });
+  return listProviderRuntimePluginsInRegistry(params.registry).find((plugin) => {
+    if (params.ownerRefs.length > 0) {
+      return (
+        matchesProviderLiteralId(plugin, params.provider) ||
+        params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
+      );
+    }
+    return matchesProviderPluginRef(plugin, params.provider);
+  });
+}
+
+function listProviderRuntimePluginsInRegistry(
+  registry: PluginRegistry,
+): Array<ProviderPlugin & { pluginId: string }> {
+  return registry.providers.map((entry) =>
+    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+  );
 }
 
 function hasConfiguredModelProvider(params: {
@@ -217,6 +234,17 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    const plugins = listProviderRuntimePluginsInRegistry(generationRegistry);
+    const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
+    return plugins.filter(
+      (plugin) =>
+        (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
+    );
+  }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   return resolvePluginProvidersCore({
@@ -247,6 +275,9 @@ export function resolveProviderRuntimePlugin(
   });
   if (loadedPlugin) {
     return loadedPlugin;
+  }
+  if (getPluginRuntimeGenerationRegistry()) {
+    return undefined;
   }
   if (
     isPluginProvidersLoadInFlight({

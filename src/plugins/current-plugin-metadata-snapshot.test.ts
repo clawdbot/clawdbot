@@ -11,12 +11,15 @@ import {
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGenerationScope,
@@ -183,6 +186,89 @@ describe("current plugin metadata snapshot", () => {
 
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+  });
+
+  it("isolates a registry-less nested generation and restores the outer generation on rejection", async () => {
+    const outerConfig = { plugins: { allow: ["outer"] } };
+    const innerConfig = { plugins: { allow: ["inner"] } };
+    const outerSnapshot = createSnapshot({ config: outerConfig, workspaceDir: "/workspace/outer" });
+    const innerSnapshot = createSnapshot({ config: innerConfig, workspaceDir: "/workspace/inner" });
+    const outerRegistry = createEmptyPluginRegistry();
+    outerRegistry.providers.push({
+      pluginId: "outer",
+      source: "test",
+      provider: { id: "outer", label: "Outer", auth: [] },
+    });
+    outerRegistry.trustedToolPolicies = [
+      {
+        pluginId: "outer",
+        pluginName: "Outer",
+        source: "test",
+        policy: {
+          id: "outer-policy",
+          description: "outer",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(outerRegistry, "outer-generation", "default", "/workspace/outer");
+
+    try {
+      await withPluginRuntimeGenerationScope(
+        {
+          config: outerConfig,
+          metadataSnapshot: outerSnapshot,
+          pluginRegistry: outerRegistry,
+          workspaceDir: "/workspace/outer",
+        },
+        async () => {
+          await expect(
+            withPluginRuntimeGenerationScope(
+              {
+                config: innerConfig,
+                metadataSnapshot: innerSnapshot,
+                workspaceDir: "/workspace/inner",
+              },
+              async () => {
+                await Promise.resolve();
+                expect(
+                  getCurrentPluginMetadataSnapshot({
+                    config: innerConfig,
+                    workspaceDir: "/workspace/inner",
+                  }),
+                ).toBe(innerSnapshot);
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).not.toBe(
+                  outerRegistry,
+                );
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.providers).toEqual(
+                  [],
+                );
+                expect(resolveProviderRuntimePlugin({ provider: "outer" })).toBeUndefined();
+                expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
+                throw new Error("inner generation failed");
+              },
+            ),
+          ).rejects.toThrow("inner generation failed");
+
+          expect(
+            getCurrentPluginMetadataSnapshot({
+              config: outerConfig,
+              workspaceDir: "/workspace/outer",
+            }),
+          ).toBe(outerSnapshot);
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(outerRegistry);
+          expect(resolveProviderRuntimePlugin({ provider: "outer" })?.id).toBe("outer");
+          expect(
+            getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
+          ).toEqual(["outer-policy"]);
+        },
+      );
+
+      expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("lets configless nested readers inherit explicit owner discovery context", () => {

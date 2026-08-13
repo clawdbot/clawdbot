@@ -9,6 +9,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
 
 type PluginRuntimeGatewayRequestScope = {
@@ -40,6 +41,14 @@ const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY,
   () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
 );
+
+const PLUGIN_RUNTIME_GENERATION_REGISTRY_SCOPE_KEY: unique symbol = Symbol.for(
+  "openclaw.pluginRuntimeGenerationRegistryScope",
+);
+
+const pluginRuntimeGenerationRegistryScope = resolveGlobalSingleton<
+  AsyncLocalStorage<PluginRegistry>
+>(PLUGIN_RUNTIME_GENERATION_REGISTRY_SCOPE_KEY, () => new AsyncLocalStorage<PluginRegistry>());
 
 /**
  * Runs plugin gateway handlers with request-scoped context that runtime helpers can read.
@@ -76,9 +85,13 @@ export function withPluginRuntimeGenerationScope<T>(
   },
   run: () => T,
 ): T {
+  const pluginRegistry = generation.pluginRegistry ?? createEmptyPluginRegistry();
   return withPluginMetadataSnapshotScope(
     generation.metadataSnapshot,
-    () => withPluginRuntimeRegistryScope(generation.pluginRegistry, run),
+    () =>
+      pluginRuntimeGenerationRegistryScope.run(pluginRegistry, () =>
+        withPluginRuntimeRegistryScope(pluginRegistry, run),
+      ),
     {
       config: generation.config,
       ...(generation.workspaceDir ? { workspaceDir: generation.workspaceDir } : {}),
@@ -129,4 +142,9 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
+}
+
+/** Exact registry owned by the prepared generation, when one is active. */
+export function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {
+  return pluginRuntimeGenerationRegistryScope.getStore();
 }

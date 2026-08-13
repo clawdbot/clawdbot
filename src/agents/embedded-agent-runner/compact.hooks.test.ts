@@ -12,6 +12,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
+  getCurrentPluginMetadataSnapshotMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedExtensionFactoriesMock,
@@ -1169,6 +1170,56 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             runtime: "codex",
           }),
         ]),
+      }),
+    );
+  });
+
+  it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
+    const baseMetadataSnapshot = getCurrentPluginMetadataSnapshotMock();
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params?: { workspaceDir?: string }) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR
+        ? {
+            ...baseMetadataSnapshot,
+            configFingerprint: "workspace-compaction-normalization",
+            plugins: [
+              {
+                modelIdNormalization: {
+                  providers: {
+                    anthropic: {
+                      aliases: { legacy: "claude-modern" },
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : undefined,
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+      agentHarnessId: "codex",
+      modelFallbacksOverride: ["anthropic/legacy"],
+      config: {} as never,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "anthropic",
+            modelId: "claude-modern",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+    );
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: TEST_WORKSPACE_DIR,
+        allowWorkspaceScopedSnapshot: true,
       }),
     );
   });
