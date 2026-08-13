@@ -110,9 +110,7 @@ export async function admitChatSend(params: {
       status: "accepted" as const,
       sessionKey,
       ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
-      ...(sessionKey === "global" && selectedAgent.agentId
-        ? { agentId: selectedAgent.agentId }
-        : {}),
+      ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
       ownerConnId: normalizeOptionalChatText(client?.connId),
       ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
       expiresAtMs: pendingExpiresAtMs,

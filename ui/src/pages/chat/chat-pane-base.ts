@@ -42,6 +42,7 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
+  type ChatPaneConnectionScope,
   type ChatPageContext,
   type PaneSessionChangeOptions,
 } from "./chat-pane-shared.ts";
@@ -160,6 +161,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  protected continueInTerminalDialog: {
+    qualifiedSessionKey: string;
+    selectedGatewayUrl: string;
+    clientGatewayUrl: string;
+    scope: ChatPaneConnectionScope;
+  } | null = null;
+  @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -247,12 +255,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const sessionKey = state.sessionKey;
     this.requestSessionRail("open");
     if (!state.connected || !state.client) {
-      this.sessionCompanionThreads.setDraft(sessionKey, question);
+      this.sessionCompanionThreads.setDraft(sessionKey, question, state.assistantAgentId);
       return;
     }
     const client = state.client;
-    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
-      requestSessionCompanionAnswer(client, key, value),
+    await this.sessionCompanionThreads.submit(
+      sessionKey,
+      question,
+      (key, value) => requestSessionCompanionAnswer(client, key, value, state.assistantAgentId),
+      state.assistantAgentId,
     );
   };
 
@@ -261,7 +272,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!sessionKey) {
       return;
     }
-    this.sessionCompanionThreads.setDraft(sessionKey, question);
+    this.sessionCompanionThreads.setDraft(sessionKey, question, this.state?.assistantAgentId);
     this.requestSessionRail("open");
   };
 
@@ -270,14 +281,16 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
       return;
     }
-    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
+    const hydrationKey = `${this.connectionGeneration}\0${state.assistantAgentId ?? ""}\0${sessionKey}`;
     if (this.sessionCompanionHydrationKey === hydrationKey) {
       return;
     }
     this.sessionCompanionHydrationKey = hydrationKey;
     this.ensureSessionRail();
-    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
-      requestSessionCompanionState(state.client!, key),
+    void this.sessionCompanionThreads.hydrate(
+      sessionKey,
+      (key) => requestSessionCompanionState(state.client!, key, state.assistantAgentId),
+      state.assistantAgentId,
     );
   }
 
@@ -287,7 +300,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     await this.sessionCompanionThreads
-      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
+      .reset(
+        state.sessionKey,
+        (key) => resetSessionCompanion(state.client!, key, state.assistantAgentId),
+        state.assistantAgentId,
+      )
       .catch(() => undefined);
   };
   protected resetConfirmation:

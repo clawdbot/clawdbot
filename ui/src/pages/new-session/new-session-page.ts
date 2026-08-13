@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
+import type { PresenceEntry } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
@@ -8,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
@@ -20,6 +22,7 @@ import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
 import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -28,6 +31,24 @@ import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import { renderAgentSelect } from "./target-controls.ts";
+
+function readPresence(value: unknown): PresenceEntry[] | null {
+  const presence =
+    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
+  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
+}
+
+function presenceConnectivitySignature(entries: PresenceEntry[]): string {
+  const states = new Map<string, "connected" | "offline">();
+  for (const entry of entries) {
+    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
+    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+      continue;
+    }
+    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+  }
+  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
+}
 
 function controllerHost(element: OpenClawLightDomElement): ReactiveControllerHost {
   return {
@@ -49,6 +70,12 @@ class NewSessionPage extends OpenClawLightDomElement {
   private openedFor: string | null = null;
   private openedAgentId = "";
   private messageOwnerKey = "";
+  private presenceSignature = "";
+  private connectMachineOpen = false;
+  private connectMachineLoading = false;
+  private connectMachineError: string | null = null;
+  private connectMachineSetup: DevicePairSetup | null = null;
+  private connectMachineRequestId = 0;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
@@ -147,6 +174,38 @@ class NewSessionPage extends OpenClawLightDomElement {
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.gateway.synchronize(gateway),
       )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => {
+          this.presenceSignature = presenceConnectivitySignature(
+            readPresence(gateway.snapshot.hello?.snapshot) ?? [],
+          );
+          return gateway.subscribeEvents((event) => {
+            if (this.context?.gateway !== gateway) {
+              return;
+            }
+            if (
+              event.event === "config.changed" ||
+              event.event === "node.pair.requested" ||
+              event.event === "node.pair.resolved" ||
+              event.event === "device.pair.requested" ||
+              event.event === "device.pair.resolved"
+            ) {
+              this.refreshPlaceTopology();
+              return;
+            }
+            const presence = event.event === "presence" ? readPresence(event.payload) : null;
+            if (!presence) {
+              return;
+            }
+            const signature = presenceConnectivitySignature(presence);
+            if (signature !== this.presenceSignature) {
+              this.presenceSignature = signature;
+              this.refreshPlaceTopology();
+            }
+          });
+        },
+      )
       .watch(
         () => this.context?.agents,
         (agents, notify) => agents.subscribe(notify),
@@ -159,6 +218,12 @@ class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );
+  }
+
+  // Device visibility intersects both catalogs, so topology changes must refresh them together.
+  private refreshPlaceTopology() {
+    void this.place.refreshNodes();
+    void this.gateway.refreshCloudProfiles();
   }
 
   handleEvent(event: Event) {
@@ -211,10 +276,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.gateway.disconnect();
     this.browser.disconnect();
     this.submission.disconnect();
+    this.closeConnectMachine();
     super.disconnectedCallback();
   }
 
   override updated() {
+    if (this.connectMachineOpen && !this.place.isAdmin()) {
+      this.closeConnectMachine();
+    }
     this.gateway.retryPendingCatalogTarget();
     this.place.modelControl.loadCatalogTargets(
       this.context,
@@ -270,6 +339,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (resetHostSelection) {
       this.submission.clearError();
     }
+    this.closeConnectMachine();
   }
 
   private resetDraft() {
@@ -279,6 +349,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browser.clearPopoverHiding();
     this.closeAgentDropdown();
     this.browser.close();
+    this.closeConnectMachine();
     this.place.adoptAgentDefaults();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
@@ -370,6 +441,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       projectCloneError: this.browser.projectCloneError,
       projectId: this.place.projectId,
       execNodes: this.place.isAdmin() ? execNodes : [],
+      environments: this.place.isAdmin() ? this.gateway.environments : [],
       gatewayName: this.gateway.gatewayName,
       cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,
@@ -428,11 +500,79 @@ class NewSessionPage extends OpenClawLightDomElement {
       onBrowserNavigate: (path) => this.browser.loadBrowser(path),
       onBrowserBack: () => this.browser.showRoot(),
       onRegisterProject: (path) => void this.browser.registerBrowserProject(path),
+      onConnectMachine: () => this.openConnectMachine(),
       onClose: () => this.browser.close(),
       onToggleWorktree: () => this.place.toggleWorktree(),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
     });
+  }
+
+  private openConnectMachine() {
+    if (!this.place.isAdmin()) {
+      return;
+    }
+    this.browser.close();
+    this.connectMachineOpen = true;
+    this.connectMachineError = null;
+    this.connectMachineSetup = null;
+    this.requestUpdate();
+    void this.refreshConnectMachine();
+  }
+
+  private async refreshConnectMachine() {
+    if (!this.connectMachineOpen || this.connectMachineLoading) {
+      return;
+    }
+    const client = this.gateway.connected ? this.gateway.client : null;
+    if (!client) {
+      this.connectMachineError = t("newSession.connectMachineUnavailable");
+      this.requestUpdate();
+      return;
+    }
+    const requestId = ++this.connectMachineRequestId;
+    this.connectMachineLoading = true;
+    this.connectMachineError = null;
+    this.requestUpdate();
+    try {
+      const setup = await requestDevicePairJoinSetup(client);
+      if (
+        requestId !== this.connectMachineRequestId ||
+        client !== this.gateway.client ||
+        !this.gateway.connected ||
+        !this.connectMachineOpen
+      ) {
+        return;
+      }
+      if (!setup.joinUrl?.trim()) {
+        this.connectMachineSetup = null;
+        this.connectMachineError = t("newSession.connectMachineMissingUrl");
+        return;
+      }
+      this.connectMachineSetup = setup;
+    } catch (error) {
+      if (
+        requestId === this.connectMachineRequestId &&
+        client === this.gateway.client &&
+        this.gateway.connected &&
+        this.connectMachineOpen
+      ) {
+        this.connectMachineError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (requestId === this.connectMachineRequestId) {
+        this.connectMachineLoading = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private closeConnectMachine() {
+    this.connectMachineRequestId += 1;
+    this.connectMachineOpen = false;
+    this.connectMachineLoading = false;
+    this.connectMachineError = null;
+    this.connectMachineSetup = null;
   }
 
   private renderDraftBlock() {
@@ -553,6 +693,21 @@ class NewSessionPage extends OpenClawLightDomElement {
         >
           ${this.renderWelcome()}
         </div>
+        ${renderConnectMachineDialog({
+          open: this.connectMachineOpen && this.place.isAdmin(),
+          loading: this.connectMachineLoading,
+          error: this.connectMachineError,
+          setup: this.connectMachineSetup,
+          onRefresh: () => void this.refreshConnectMachine(),
+          onClose: () => {
+            this.closeConnectMachine();
+            this.requestUpdate();
+          },
+          onManageDevices: () => {
+            this.closeConnectMachine();
+            this.context?.navigate("devices");
+          },
+        })}
       </div>
     `;
   }

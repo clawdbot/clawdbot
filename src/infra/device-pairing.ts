@@ -59,6 +59,7 @@ type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "request
 type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
+  expiresAtMs: number;
   created: boolean;
   superseded?: DevicePairingSupersededRequest[];
 };
@@ -151,7 +152,7 @@ type DevicePairingStateFile = {
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-const PENDING_TTL_MS = 5 * 60 * 1000;
+const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
@@ -211,11 +212,11 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   const state: DevicePairingStateFile = loadDevicePairingStoreState(baseDir);
   const now = Date.now();
-  pruneExpiredPending(state.pendingById, now, PENDING_TTL_MS);
+  pruneExpiredPending(state.pendingById, now, PAIRING_PENDING_TTL_MS);
   // Pending node-surface requests share the pairing TTL; requests refresh
   // their ts on reconnect so an actively retrying node keeps one alive.
   for (const device of Object.values(state.pairedByDeviceId)) {
-    if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PENDING_TTL_MS) {
+    if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PAIRING_PENDING_TTL_MS) {
       delete device.pendingNodeSurface;
     }
   }
@@ -810,7 +811,10 @@ export async function getPairedDevice(
   baseDir?: string,
 ): Promise<PairedDevice | null> {
   const device = loadPairedDevicePairingStoreRecord(normalizeDeviceId(deviceId), baseDir);
-  if (device?.pendingNodeSurface && Date.now() - device.pendingNodeSurface.ts > PENDING_TTL_MS) {
+  if (
+    device?.pendingNodeSurface &&
+    Date.now() - device.pendingNodeSurface.ts > PAIRING_PENDING_TTL_MS
+  ) {
     delete device.pendingNodeSurface;
   }
   return device;
@@ -939,6 +943,7 @@ export async function requestDevicePairing(
     const publicResult = {
       ...result,
       request: toPublicPendingDevicePairingRequest(result.request),
+      expiresAtMs: (result.request.refreshedAtMs ?? result.request.ts) + PAIRING_PENDING_TTL_MS,
     };
     return superseded.length > 0 ? { ...publicResult, superseded } : publicResult;
   });

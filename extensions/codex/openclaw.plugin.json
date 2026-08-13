@@ -21,6 +21,7 @@
     "migrationProviders": ["codex"],
     "tools": [
       "codex_threads",
+      "codex_plugins",
       "codex_endpoint_probe",
       "codex_sessions_list",
       "codex_session_read",
@@ -182,7 +183,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated", "workspace-directory"]
+                  "pattern": "^[A-Za-z0-9_-]+$"
                 },
                 "pluginName": {
                   "type": "string"

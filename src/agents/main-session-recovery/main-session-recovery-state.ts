@@ -151,6 +151,35 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
+type MainRestartRecoveryRolloverEligibility =
+  | { eligible: true }
+  | {
+      eligible: false;
+      reason: "already_recovered";
+      recoveredSessionId?: string;
+      recoveredSessionKey?: string;
+    }
+  | { eligible: false; reason: "not_tombstoned" };
+
+export function inspectMainRestartRecoveryRolloverEligibility(
+  entry: SessionEntry,
+): MainRestartRecoveryRolloverEligibility {
+  if (!entry.mainRestartRecovery?.tombstone) {
+    return { eligible: false, reason: "not_tombstoned" };
+  }
+  const recoveredSessionId = entry.mainRestartRecovery.tombstone.recoveredSessionId;
+  const recoveredSessionKey = entry.mainRestartRecovery.tombstone.recoveredSessionKey;
+  if (recoveredSessionId || recoveredSessionKey) {
+    return {
+      eligible: false,
+      reason: "already_recovered",
+      ...(recoveredSessionId ? { recoveredSessionId } : {}),
+      ...(recoveredSessionKey ? { recoveredSessionKey } : {}),
+    };
+  }
+  return { eligible: true };
+}
+
 // A healthy session can retain lifecycle fences after its final recovery owner
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {

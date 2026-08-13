@@ -1,11 +1,12 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { promisify } from "node:util";
+import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -14,14 +15,15 @@ const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
 const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const execFileAsync = promisify(execFile);
 
 function runIsolatedModuleScript(
   env: NodeJS.ProcessEnv,
   script: string,
   options: { runtimeRoot?: string; timeoutMs?: number } = {},
 ) {
-  return spawnSync(
+  return execFileAsync(
     process.execPath,
     [
       ...(options.runtimeRoot ? ["--preserve-symlinks"] : []),
@@ -116,7 +118,7 @@ function seedPluginStateConflict(stateDir: string): void {
   }
 }
 
-describe("gateway startup-migration refusal", () => {
+describe.concurrent("gateway startup-migration refusal", () => {
   it("exits cleanly after reporting the refusal once and releasing its lease", async () => {
     const temporaryRoot = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-startup-migration-exit-"),
@@ -225,10 +227,7 @@ describe("gateway startup-migration refusal", () => {
         runtimeRoot,
         timeoutMs: 60_000,
       });
-    const readResult = (result: ReturnType<typeof runIsolatedModuleScript>) => {
-      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-      expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
+    const readResult = (result: Awaited<ReturnType<typeof runIsolatedModuleScript>>) => {
       const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
       expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
       return JSON.parse(resultLine!.slice("__RESULT__".length)) as {
@@ -237,8 +236,8 @@ describe("gateway startup-migration refusal", () => {
       };
     };
 
-    const first = readResult(run());
-    const second = readResult(run());
+    const first = readResult(await run());
+    const second = readResult(await run());
 
     expect(first).toEqual({ activeLease: false, stateMigrationsImported: true });
     expect(second).toEqual({ activeLease: false, stateMigrationsImported: false });
@@ -306,7 +305,7 @@ describe("gateway startup-migration refusal", () => {
       import.meta.url,
     ).href;
     const prompterUrl = new URL("./doctor-prompter.ts", import.meta.url).href;
-    const result = runIsolatedModuleScript(
+    const result = await runIsolatedModuleScript(
       env,
       `
         const fs = await import("node:fs");
@@ -356,9 +355,6 @@ describe("gateway startup-migration refusal", () => {
       `,
       { timeoutMs: 60_000 },
     );
-    expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
     const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
     expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
     expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({

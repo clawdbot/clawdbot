@@ -3,17 +3,13 @@ import { describe, expect, it } from "vitest";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 
 function buildCronConfig(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
-  const defaults = buildCronAgentDefaultsConfig({
-    defaults: cfg.agents?.defaults,
+  return resolveCronAgentConfig({
+    config: cfg,
     agentConfigOverride: resolveAgentConfig(cfg, agentId),
-  });
-  return {
-    ...cfg,
-    agents: { ...cfg.agents, defaults },
-  };
+  }).cfgWithAgentDefaults;
 }
 
 function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
@@ -30,7 +26,7 @@ function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
   });
 }
 
-describe("buildCronAgentDefaultsConfig model policy preservation", () => {
+describe("resolveCronAgentConfig model policy preservation", () => {
   it("keeps the inherited default restriction when the per-agent policy is empty", () => {
     const cfg: OpenClawConfig = {
       agents: {

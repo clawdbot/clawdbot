@@ -94,9 +94,16 @@ export const AgentSummarySchema = closedObject({
 /** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = closedObject({});
 
-/** Agent list result including the default agent and session scoping mode. */
+export const AgentOwnershipSchema = Type.Union([
+  Type.Literal("sole"),
+  Type.Literal("legacy"),
+  Type.Literal("explicit"),
+]);
+
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
@@ -221,7 +228,7 @@ export const AgentsFilesSetResultSchema = closedObject({
 
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = closedObject({
-  agentId: Type.Optional(Type.String()),
+  agentId: Type.Optional(NonEmptyString),
   includeProviderCapabilities: Type.Optional(Type.Boolean()),
   view: Type.Optional(
     Type.Union([

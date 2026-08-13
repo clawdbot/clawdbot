@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   FsListDirResult,
   WorktreesBranchesResult,
@@ -7,7 +8,6 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftNode, DraftRepositoryState } from "./discovery.ts";
 import { readDraftNodes } from "./discovery.ts";
@@ -149,6 +149,10 @@ export class DraftPlaceState {
       !this.execNodeValue ||
       (this.nodesHydrated && this.execNodes().some((node) => node.nodeId === this.execNodeValue))
     );
+  }
+
+  refreshNodes() {
+    return this.loadNodes({ quiet: true });
   }
 
   isAdmin(): boolean {
@@ -592,9 +596,11 @@ export class DraftPlaceState {
       });
   }
 
-  private async loadNodes() {
+  private async loadNodes(options: { quiet?: boolean } = {}) {
     const requestId = ++this.nodesRequestToken;
-    this.nodesHydrated = false;
+    if (!options.quiet) {
+      this.nodesHydrated = false;
+    }
     const snapshot = this.read().context?.gateway.snapshot;
     const client = snapshot?.client;
     if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
@@ -626,7 +632,7 @@ export class DraftPlaceState {
       }
       this.callbacks.requestUpdate();
     } catch {
-      if (requestId === this.nodesRequestToken) {
+      if (requestId === this.nodesRequestToken && !options.quiet) {
         this.nodesValue = [];
         this.nodesHydrated = true;
         this.callbacks.requestUpdate();

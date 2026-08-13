@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
-  assembleAttemptContextEngine,
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
 } from "./attempt-context-engine-helpers.js";
@@ -232,7 +232,7 @@ describe("embedded attempt context injection", () => {
       HEARTBEAT_PROMPT,
     );
     const limited = limitHistoryTurns(heartbeatFiltered, 1);
-    await assembleAttemptContextEngine({
+    await assembleHarnessContextEngine({
       contextEngine: {
         info: { id: "test", name: "Test", version: "0.0.1" },
         ingest: async () => ({ ingested: true }),

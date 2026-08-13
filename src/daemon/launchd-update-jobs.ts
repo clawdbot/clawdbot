@@ -1,6 +1,9 @@
 /** Discovery and shutdown of stale OpenClaw launchd updater jobs. */
 import path from "node:path";
-import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import {
+  parseStrictInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,

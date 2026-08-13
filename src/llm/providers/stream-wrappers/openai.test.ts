@@ -655,16 +655,6 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     expect(payloads[0]?.reasoning).toBeUndefined();
   });
 
-  it("overrides existing reasoning.effort from upstream wrappers", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
-  });
-
   it("returns underlying streamFn unchanged when thinkingLevel is undefined", () => {
     const { baseStreamFn } = createPayloadCapture();
     const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, undefined);

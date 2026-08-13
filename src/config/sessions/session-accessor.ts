@@ -168,6 +168,10 @@ export {
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
 export {
+  recoverSessionEntryFromRestartTombstone,
+  type RestartTombstoneRecoveryResult,
+} from "./session-accessor.sqlite-recovery.js";
+export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,

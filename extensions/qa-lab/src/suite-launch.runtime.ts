@@ -28,6 +28,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
+import { publishQaSuiteArtifactFiles } from "./suite-artifacts.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -705,7 +706,6 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   scenarios: readonly QaSuiteScenarioResult[];
   startedAt: Date;
 }) {
-  await fs.mkdir(params.outputDir, { recursive: true });
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
@@ -729,9 +729,14 @@ async function writeUnifiedQaSuiteArtifacts(params: {
     scenarios: [...params.scenarios],
     startedAt: params.startedAt,
   }) satisfies QaSuiteSummaryJson;
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  await publishQaSuiteArtifactFiles({
+    outputDir: params.outputDir,
+    files: [
+      { filePath: evidencePath, content: `${JSON.stringify(params.evidence, null, 2)}\n` },
+      { filePath: reportPath, content: report },
+      { filePath: summaryPath, content: `${JSON.stringify(summary, null, 2)}\n` },
+    ],
+  });
   return {
     evidencePath,
     outputDir: params.outputDir,

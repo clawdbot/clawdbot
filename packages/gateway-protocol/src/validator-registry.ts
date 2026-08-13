@@ -92,6 +92,7 @@ export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
@@ -158,6 +159,9 @@ export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserve
 export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
 export const validateWorkerDesktopLaunchResult = compile(S.WorkerDesktopLaunchResultSchema);
+export const validateDesktopObserveParams = compile(S.DesktopObserveParamsSchema);
+export const validateDesktopObserveResult = compile(S.DesktopObserveResultSchema);
+export const validateDesktopLaunchParams = compile(S.DesktopLaunchParamsSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -222,6 +226,7 @@ export const validateSessionSuggestionsResolveParams = compile(
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
+export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);
 export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
@@ -387,6 +392,8 @@ export const validateDevicePairSetupCodeParams = compile(S.DevicePairSetupCodePa
 export const validateDevicePairRenameParams = compile(S.DevicePairRenameParamsSchema);
 export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParamsSchema);
 export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);
+export const validateScopeUpgradeRequest = compile(S.ScopeUpgradeRequestSchema);
+export const validateScopeUpgradeWait = compile(S.ScopeUpgradeWaitSchema);
 export const validateApprovalPresentation = compile(S.ApprovalPresentationSchema);
 export const validateApprovalGetParams = compile(S.ApprovalGetParamsSchema);
 export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSchema);

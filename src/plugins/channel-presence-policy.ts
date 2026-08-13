@@ -1,7 +1,6 @@
 // Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
@@ -10,6 +9,7 @@ import {
   type AmbientEnvTriggerPolicy,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -342,6 +342,12 @@ function loadInstalledChannelManifestRecords(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
+  if (!params.workspaceDir) {
+    return resolveConfigWidePluginManifestRegistry({
+      config: params.config,
+      env: params.env,
+    }).plugins;
+  }
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -361,9 +367,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   manifestRecords?: readonly PluginManifestRecord[];
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
+  const workspaceDir = params.workspaceDir;
   const records =
     params.manifestRecords ??
     loadInstalledChannelManifestRecords({
@@ -447,6 +451,78 @@ export function resolveConfiguredChannelPresencePolicy(params: {
     });
   }
   return entries;
+}
+
+function listChannelIdsForGatewayPolicy(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+  includePersistedAuthState: boolean,
+): string[] {
+  return resolveConfiguredChannelPresencePolicy({
+    ...params,
+    includePersistedAuthState,
+  })
+    .filter(
+      (entry) =>
+        entry.effective ||
+        // A bundled disabled-by-default owner remains eligible even when an
+        // untrusted sibling manifest for the same channel is also blocked.
+        entry.blockedReasons.includes("bundled-disabled-by-default"),
+    )
+    .map((entry) => entry.channelId);
+}
+
+export function listGatewayActivatedChannelIds(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  // Persisted credentials are migration evidence, not activation consent.
+  return listChannelIdsForGatewayPolicy(params, false);
+}
+
+export function listChannelIdsForOwnershipMigration(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir;
+  const records =
+    params.manifestRecords ??
+    loadInstalledChannelManifestRecords({ config: params.config, workspaceDir, env });
+  const trustConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
+  const persistedTrustedChannelIds = listPotentialConfiguredChannelPresenceSignals(
+    params.config,
+    env,
+    {
+      includePersistedAuthState: true,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+    },
+  )
+    .filter((signal) => signal.source === "persisted-auth")
+    .map((signal) => signal.channelId)
+    .filter((channelId) =>
+      records.some(
+        (plugin) =>
+          recordDeclaresChannel(plugin, channelId) &&
+          isChannelPluginEligibleForScopedOwnership({
+            plugin,
+            normalizedConfig,
+            rootConfig: trustConfig,
+          }),
+      ),
+    );
+  // Migration preserves trusted persisted state even when activation is disabled.
+  return normalizeChannelIds([
+    ...listChannelIdsForGatewayPolicy(params, true),
+    ...persistedTrustedChannelIds,
+  ]);
 }
 
 /** Lists channels that suppression removes because their only presence is ambient env. */

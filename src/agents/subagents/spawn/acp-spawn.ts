@@ -33,7 +33,6 @@ import {
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
-import { resolveDefaultAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -449,7 +448,7 @@ export async function spawnAcpDirect(
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
-    ? resolveAgentIdFromSessionKey(parentSessionKey, resolveDefaultAgentId(cfg))
+    ? resolveAgentIdFromSessionKey(parentSessionKey, requesterAgentId)
     : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.

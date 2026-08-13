@@ -26,7 +26,7 @@ import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
-import type { SessionDiffLoader } from "./session-diff-panel.ts";
+import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -81,6 +81,9 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
+  loadFileText?: SessionDiffFileTextLoader;
+  openFile?: (path: string) => void;
+  revealFile?: (path: string) => void;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -590,7 +593,12 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
             ? content.kind === "file"
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
-                ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
+                ? html`<openclaw-session-diff
+                    .loader=${content.load}
+                    .loadFileText=${content.loadFileText ?? null}
+                    .openFile=${content.openFile ?? null}
+                    .revealFile=${content.revealFile ?? null}
+                  ></openclaw-session-diff>`
                 : content.kind === "canvas"
                   ? html`
                       <div class="chat-tool-card__preview" data-kind="canvas">
@@ -1335,7 +1343,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     // Markdown previews and file editors need a bounded host wrapper so their
     // inner content can shrink and scroll. Content-sized kinds keep auto height.
     const fillHost =
-      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
+      this.visibleContent?.kind === "file" ||
+      this.visibleContent?.kind === "markdown" ||
+      this.visibleContent?.kind === "session-diff";
     return html`
       <div
         class=${fillHost ? "sidebar-panel-host--fill" : ""}

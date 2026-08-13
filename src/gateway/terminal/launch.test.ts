@@ -83,13 +83,14 @@ describe("createTerminalLaunchPolicy", () => {
 
   it("keeps restart and commit restrictions isolated across agents", () => {
     const baseConfig: OpenClawConfig = {
-      agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
     policy.prepareConfig(
       {
         agents: {
+          ownership: "explicit",
           list: [{ id: "alpha", sandbox: { mode: "all" } }, { id: "beta" }],
         },
       },
@@ -98,6 +99,7 @@ describe("createTerminalLaunchPolicy", () => {
     policy.prepareConfig(
       {
         agents: {
+          ownership: "explicit",
           list: [{ id: "alpha" }, { id: "beta", sandbox: { mode: "all" } }],
         },
       },

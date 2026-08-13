@@ -1,7 +1,7 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
 // cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,

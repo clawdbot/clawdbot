@@ -25,6 +25,8 @@ export type SqliteSchemaCompatibility = {
    * canonical shape.
    */
   allowedMissingTables?: readonly string[];
+  /** Same-version non-unique indexes that a writable cold open lazily repairs. */
+  allowedMissingIndexes?: readonly string[];
   /** Additive columns that may be absent until their owning feature lazily ensures them. */
   allowedMissingColumns?: readonly string[];
   /**

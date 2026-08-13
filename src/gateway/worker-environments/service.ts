@@ -49,6 +49,7 @@ type WorkerEnvironmentServiceErrorCode =
   | "invalid_profile"
   | "invalid_state"
   | "desktop_app_not_found"
+  | "device-runner-transport-unimplemented"
   | "unsupported_platform"
   | "launcher_failure"
   | "provider_failure"

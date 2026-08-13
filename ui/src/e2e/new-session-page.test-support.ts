@@ -64,6 +64,12 @@ export const projectProofArtifactDir = path.join(
   "control-ui-e2e",
   "project-registry",
 );
+const environmentMetadataProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "environment-metadata",
+);
 
 export async function prepareProjectUiProof() {
   if (captureUiProofEnabled) {
@@ -155,6 +161,19 @@ export async function captureProjectUiProof(page: Page, fileName: string) {
     animations: "disabled",
     fullPage: true,
     path: path.join(projectProofArtifactDir, fileName),
+  });
+}
+
+export async function captureEnvironmentMetadataUiProof(page: Page) {
+  const proofName = process.env.OPENCLAW_ENVIRONMENT_METADATA_PROOF;
+  if (proofName !== "before" && proofName !== "after") {
+    return;
+  }
+  await mkdir(environmentMetadataProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(environmentMetadataProofArtifactDir, `${proofName}.png`),
   });
 }
 

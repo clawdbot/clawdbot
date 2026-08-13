@@ -325,7 +325,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools,
       modelId: "gpt-4o",
@@ -359,7 +359,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -389,7 +389,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -412,7 +412,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools,
       modelId: "gpt-4o",
@@ -457,7 +457,7 @@ describe("createCopilotToolBridge", () => {
         config: { tools: { codeMode: true } },
         hostCapabilities: { ...testHostCapabilities, bindToolSurface },
         runId: "run-code-mode-bound",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       },
       createOpenClawCodingTools: async () => [makeTool({ execute: hiddenExecute, name: "read" })],
       modelId: "gpt-test",
@@ -503,7 +503,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: false } },
         runId: "run-no-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
       modelId: "gpt-4o",
@@ -525,7 +525,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -550,7 +550,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -923,8 +923,8 @@ describe("createCopilotToolBridge", () => {
         // sandbox key and the real run key is exposed as runSessionKey
         // so `session_status: "current"` resolves to the live session.
         attemptParams: {
-          sandboxSessionKey: "sandbox:agent:main",
-          sessionKey: "agent:main:main",
+          sandboxSessionKey: "sandbox:agent:agent-1",
+          sessionKey: "agent:agent-1:main",
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -933,8 +933,8 @@ describe("createCopilotToolBridge", () => {
       });
 
       const opts = getOpts();
-      expect(opts.sessionKey).toBe("sandbox:agent:main");
-      expect(opts.runSessionKey).toBe("agent:main:main");
+      expect(opts.sessionKey).toBe("sandbox:agent:agent-1");
+      expect(opts.runSessionKey).toBe("agent:agent-1:main");
     });
 
     it("derives runSessionKey as undefined when sandboxSessionKey equals sessionKey", async () => {
@@ -942,7 +942,7 @@ describe("createCopilotToolBridge", () => {
 
       await createCopilotToolBridge({
         agentId: "agent-1",
-        attemptParams: { sessionKey: "agent:main:main" } as never,
+        attemptParams: { sessionKey: "agent:agent-1:main" } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
@@ -950,7 +950,7 @@ describe("createCopilotToolBridge", () => {
       });
 
       const opts = getOpts();
-      expect(opts.sessionKey).toBe("agent:main:main");
+      expect(opts.sessionKey).toBe("agent:agent-1:main");
       expect(opts.runSessionKey).toBeUndefined();
     });
 
@@ -1278,14 +1278,14 @@ describe("createCopilotToolBridge", () => {
               deny: ["exec", "process", "write", "edit", "ask_user"],
             },
             runId: "policy-run",
-            sessionKey: "agent:main:policy-session",
+            sessionKey: "agent:agent-1:policy-session",
             workspaceDir,
           } as never,
           createOpenClawCodingTools: createRealOpenClawCodingTools,
           modelId: "gpt-4o",
           modelProvider: "github-copilot",
           sessionId: "policy-session",
-          sessionKey: "agent:main:policy-session",
+          sessionKey: "agent:agent-1:policy-session",
           workspaceDir,
         });
         const names = result.sdkTools.map((tool) => tool.name);
@@ -2043,7 +2043,7 @@ describe("createCopilotToolBridge tool conversion", () => {
         config: { tools: { toolSearch: true } },
         observeToolTerminal,
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools: async (options: unknown) => {
         catalogExecutor = (options as { toolSearchCatalogExecutor?: CatalogExecutor })

@@ -638,11 +638,25 @@ body {
      that `hidden` would let strand the shell off-screen. */
   overflow: clip;
   overscroll-behavior: none;
+  /* The app supplies its own pressed and selected states; WebKit's tap flash
+     reads as foreign chrome on top of them. */
+  -webkit-tap-highlight-color: transparent;
   /* iOS WKWebView font boosting inflates rendered text without re-running
      layout, so labels spill out of fixed-size chrome (welcome chips, badges).
      Locking text-size-adjust keeps rendered metrics equal to layout metrics. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+}
+
+a,
+button,
+label,
+summary,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
 }
 
 body {
@@ -657,6 +671,18 @@ body {
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* iOS Safari zooms the viewport when a focused text control is under 16px;
+   important keeps feature-local typography from silently dropping this floor.
+   Controls that manage their own touch size declare it via
+   --control-ui-touch-input-size; the floor never caps above 16px. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em)) !important;
+  }
 }
 
 @media (min-width: 1600px) {

@@ -15,6 +15,7 @@ import {
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
+import { toStringifiedError } from "../error-format.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -559,8 +560,7 @@ export async function startStaticFileServer(params: {
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-              (logError: unknown): Error =>
-                logError instanceof Error ? logError : new Error(String(logError)),
+              (logError: unknown): Error => toStringifiedError(logError),
             );
             if (error) {
               rejectPromise(error);

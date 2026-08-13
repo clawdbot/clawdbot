@@ -53,7 +53,7 @@ export async function handleEmbeddedPromptFailure(input: {
   suspensionSessionId: string;
   runtimeAuthRetry: boolean;
   maybeRefreshRuntimeAuthForAuthError: (errorText: string, retry: boolean) => Promise<boolean>;
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   resolveReplayInvalid: () => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
   buildErrorAgentMeta: () => EmbeddedAgentMeta;

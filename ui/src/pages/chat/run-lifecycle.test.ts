@@ -19,6 +19,7 @@ type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0]
 type TestRow = {
   key: string;
   hasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
   activeRunIds?: string[];
   status?: string;
   startedAt?: number;
@@ -64,6 +65,29 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
 }
 
 describe("handleAbortChat", () => {
+  it("dispatches sessions.abort when only descendant work remains", async () => {
+    const request = vi.fn(async () => ({ status: "aborted" }));
+    const host = makeAbortHost({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionsResult: makeSessionsResult([
+        {
+          key: "agent:main",
+          hasActiveRun: false,
+          hasActiveSubagentRun: true,
+          status: "done",
+        },
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      clearQueued: true,
+    });
+  });
+
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;

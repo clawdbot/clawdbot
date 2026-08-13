@@ -19,6 +19,8 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
+import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
@@ -41,9 +43,8 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -102,6 +103,7 @@ export async function createGatewayHttpTransport(params: {
   getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  joinRateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
@@ -114,10 +116,12 @@ export async function createGatewayHttpTransport(params: {
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
+  getStartup?: StartupChecker;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
-  workerDesktopTunnels?: WorkerDesktopTunnels;
+  desktopSessionRegistry?: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   clients: Set<GatewayWsClient>;
 }): Promise<{
   httpServer: HttpServer;
@@ -281,7 +285,9 @@ export async function createGatewayHttpTransport(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      joinRateLimiter: params.joinRateLimiter,
       getReadiness: params.getReadiness,
+      getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -299,8 +305,12 @@ export async function createGatewayHttpTransport(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      publicRateLimiter: params.joinRateLimiter,
+      workerIngressEnabled: params.workerIngressEnabled,
       log: params.log,
-      workerDesktopTunnels: params.workerDesktopTunnels,
+      desktopSessionRegistry: params.desktopSessionRegistry,
+      nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
+      getGatewayRequestContext: params.getGatewayRequestContext,
     });
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);

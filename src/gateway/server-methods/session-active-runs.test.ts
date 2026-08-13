@@ -17,7 +17,6 @@ import {
   collectTrackedActiveSessionRuns,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
-  hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 
@@ -35,6 +34,7 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   });
   registerAgentRunContext("projected-id", {
     projectSessionActive: true,
+    agentId: "main",
     sessionId: "session-projected",
   });
   try {
@@ -87,12 +87,13 @@ it("matches session-id-only gateway runs during archive admission", () => {
   } as never;
 
   expect(
-    hasVisibleActiveSessionRun({
+    resolveVisibleActiveSessionRunState({
       context,
       requestedKey: "agent:main:child",
       canonicalKey: "agent:main:child",
       sessionId: "session-1",
-    }),
+      defaultAgentId: "main",
+    }).active,
   ).toBe(true);
 });
 
@@ -143,6 +144,8 @@ it("returns deterministic visible run ids for the selected session", () => {
       context,
       requestedKey: "main",
       canonicalKey: "main",
+      agentId: "main",
+      defaultAgentId: "main",
     }),
   ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
 });
@@ -332,7 +335,7 @@ it("counts settled but still registered chat runs for a session key", () => {
   ).toBe(false);
   expect(
     hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: undefined }),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     hasRegisteredChatRunForSessionKey({
       context: {},
@@ -340,4 +343,101 @@ it("counts settled but still registered chat runs for a session key", () => {
       agentId: undefined,
     }),
   ).toBe(false);
+});
+
+it("matches colliding bare active runs by stable owner", () => {
+  const context = {
+    chatAbortControllers: new Map([
+      ["run-ownerless", { sessionKey: "incident-42" }],
+      ["run-research", { sessionKey: "incident-42", agentId: "research" }],
+    ]),
+  } as never;
+
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context,
+      requestedKey: "incident-42",
+      canonicalKey: "incident-42",
+      agentId: "ops",
+      defaultAgentId: "ops",
+    }),
+  ).toEqual({ active: true, runIds: ["run-ownerless"] });
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context,
+      requestedKey: "incident-42",
+      canonicalKey: "incident-42",
+      agentId: "research",
+      defaultAgentId: "ops",
+    }),
+  ).toEqual({ active: true, runIds: ["run-research"] });
+});
+
+it("keeps projected bare runs agent-scoped", () => {
+  registerAgentRunContext("projected-ops", {
+    projectSessionActive: true,
+    sessionKey: "incident-42",
+    sessionId: "shared-id",
+    agentId: "ops",
+  });
+  try {
+    const index = buildProjectedAgentRunIndex();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "shared-id",
+        agentId: "research",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(false);
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "shared-id",
+        agentId: "ops",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(true);
+  } finally {
+    clearAgentRunContext("projected-ops");
+  }
+});
+
+it("resolves projected ownerless bare runs through the stable default owner", () => {
+  registerAgentRunContext("projected-ownerless", {
+    projectSessionActive: true,
+    sessionKey: "incident-42",
+    sessionId: "ownerless-id",
+  });
+  try {
+    const index = buildProjectedAgentRunIndex();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "ownerless-id",
+        agentId: "ops",
+        defaultAgentId: "ops",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(true);
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "ownerless-id",
+        agentId: "research",
+        defaultAgentId: "ops",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(false);
+  } finally {
+    clearAgentRunContext("projected-ownerless");
+  }
 });

@@ -90,6 +90,51 @@ describe("resolveGatewayScopedTools", () => {
     expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
   });
 
+  it("applies a borrowed runtime policy without reassigning session tools", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: { tools: { deny: ["sessions_list"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runtimePolicySessionKey: "agent:worker:discord:default:direct:peer-42",
+      runtimePolicyAgentId: "worker",
+      surface: "loopback",
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.tools.some((tool) => tool.name === "sessions_list")).toBe(false);
+    expect(result.tools.some((tool) => tool.name === "sessions_history")).toBe(true);
+  });
+
+  it("rejects a runtime policy agent that conflicts with its session key", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveGatewayScopedTools({
+        cfg,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runtimePolicySessionKey: "agent:worker:main",
+        runtimePolicyAgentId: "main",
+        surface: "loopback",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
     try {

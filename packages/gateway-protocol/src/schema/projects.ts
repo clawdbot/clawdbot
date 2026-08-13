@@ -7,6 +7,10 @@ const StoredProjectIdSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
 });
 
+export const PROJECTS_LIST_DEFAULT_LIMIT = 50;
+export const PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT = 50;
+export const PROJECTS_LIST_MAX_IDENTITY_PROBES = 32;
+
 export const ProjectRecordSchema = closedObject({
   id: NonEmptyString,
   displayName: NonEmptyString,
@@ -44,10 +48,50 @@ export const ProjectRecentSchema = Type.Union([
   ProjectRecentFolderSchema,
 ]);
 
-export const ProjectsListParamsSchema = closedObject({});
+/** One gateway-visible checkout for an observed repository project. */
+export const ProjectCheckoutSchema = closedObject({
+  runnerId: Type.String({
+    minLength: 1,
+    description: "Runner hosting this operator.write-scoped checkout.",
+  }),
+  path: Type.String({
+    minLength: 1,
+    description: "Physical checkout path returned only to operator.write-capable callers.",
+  }),
+});
+
+/** Repository identity derived from visible checkout and session state. */
+export const ProjectSummarySchema = closedObject({
+  name: NonEmptyString,
+  originUrl: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Sanitized repository origin returned to operator.write-capable callers.",
+    }),
+  ),
+  checkouts: Type.Array(ProjectCheckoutSchema, {
+    minItems: 1,
+    maxItems: PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
+  }),
+  lastUsedAt: Type.Number({ minimum: 0 }),
+});
+
+export const ProjectsListParamsSchema = closedObject({
+  includeObserved: Type.Optional(
+    Type.Boolean({
+      description: "Compute write-scoped observed checkout groups in addition to projects.",
+    }),
+  ),
+});
 export const ProjectsListResultSchema = closedObject({
   projects: Type.Array(ProjectRecordSchema),
   recents: Type.Optional(Type.Array(ProjectRecentSchema, { maxItems: 8 })),
+  observedProjects: Type.Optional(
+    Type.Array(ProjectSummarySchema, {
+      maxItems: PROJECTS_LIST_DEFAULT_LIMIT,
+      description: "Observed checkout details returned only to operator.write-capable callers.",
+    }),
+  ),
 });
 
 export const ProjectsRegisterParamsSchema = closedObject({
@@ -86,6 +130,8 @@ export const ProjectsRemoveResultSchema = closedObject({ removed: Type.Boolean()
 
 export type ProjectRecord = Static<typeof ProjectRecordSchema>;
 export type ProjectRecent = Static<typeof ProjectRecentSchema>;
+export type ProjectCheckout = Static<typeof ProjectCheckoutSchema>;
+export type ProjectSummary = Static<typeof ProjectSummarySchema>;
 export type ProjectsListParams = Static<typeof ProjectsListParamsSchema>;
 export type ProjectsListResult = Static<typeof ProjectsListResultSchema>;
 export type ProjectsRegisterParams = Static<typeof ProjectsRegisterParamsSchema>;

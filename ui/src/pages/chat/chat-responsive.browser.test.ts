@@ -194,7 +194,7 @@ function activityAlignmentHtml() {
           <div class="chat-avatar tool">A</div>
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
-              <button class="chat-activity-group__summary chat-activity-group__summary--error" type="button">
+              <button class="chat-activity-group__summary" type="button">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
                 <span class="chat-activity-group__label">Activity: 2 tools</span>
               </button>
@@ -212,10 +212,11 @@ function activityAlignmentHtml() {
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
-                    <button class="chat-tool-msg-summary chat-tool-msg-summary--error" type="button">
+                    <button class="chat-tool-msg-summary" data-failed-call-row type="button">
                       <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                      <span class="chat-tool-msg-summary__label">Tool error</span>
+                      <span class="chat-tool-msg-summary__label">Bash</span>
                       <span class="chat-tool-msg-summary__names">Bash</span>
+                      <span class="chat-tool-row__badge">failed</span>
                     </button>
                   </div>
                 </div>
@@ -1232,9 +1233,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       await expectNoHorizontalOverflow(page);
       const callRow = await getRect(page, "[data-activity-call-row]");
-      const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
-      expect(Math.abs(callRow.right - errorSummary.right)).toBeLessThanOrEqual(1);
-      expect(Math.abs(callRow.height - errorSummary.height)).toBeLessThanOrEqual(1);
+      const failedSummary = await getRect(page, "[data-failed-call-row]");
+      expect(Math.abs(callRow.right - failedSummary.right)).toBeLessThanOrEqual(1);
+      expect(Math.abs(callRow.height - failedSummary.height)).toBeLessThanOrEqual(1);
       const styles = await page.evaluate(() => {
         const call = document.querySelector<HTMLElement>("[data-activity-call-row]")!;
         return {
@@ -2114,19 +2115,28 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             const punctuationRect = range.getBoundingClientRect();
             range.detach();
             const chipRect = (node as HTMLElement).getBoundingClientRect();
+            const paragraph = (node as HTMLElement).parentElement;
+            if (!paragraph) {
+              throw new Error("Expected inline code inside a paragraph");
+            }
             return {
               horizontalGap: punctuationRect.left - textRect.right,
-              heightDelta: chipRect.height - punctuationRect.height,
+              chipHeight: chipRect.height,
+              lineHeight: Number.parseFloat(getComputedStyle(paragraph).lineHeight),
             };
           }),
         );
 
         expect(spacing).toHaveLength(2);
-        for (const { horizontalGap, heightDelta } of spacing) {
-          // Include the chip border/inset, but keep both measurements within a
-          // quarter of the 14px prose size across browser font metrics.
+        for (const { horizontalGap, chipHeight, lineHeight } of spacing) {
+          // The gap is the chip's em-derived inset plus its border, so a quarter of
+          // the 14px prose size holds on every platform.
           expect(horizontalGap).toBeLessThanOrEqual(3.75);
-          expect(heightDelta).toBeLessThanOrEqual(3.75);
+          // Measure the chip against the paragraph's CSS line box rather than a text
+          // rect: the chip's content height follows the monospace font's default line
+          // spacing, which differs by several px between macOS and Linux.
+          expect(lineHeight).toBeGreaterThan(0);
+          expect(chipHeight).toBeLessThanOrEqual(lineHeight + 1);
         }
       } finally {
         await closeBrowserPage(page);

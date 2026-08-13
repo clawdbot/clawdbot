@@ -114,6 +114,18 @@ test("sessions.resolve can probe a missing selector without returning an RPC err
   expect(resolved.payload).toEqual({ ok: false });
 });
 
+test("sessions.resolve rejects a missing key by default", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+
+  const resolved = await rpcReq(ws, "sessions.resolve", {
+    key: "agent:main:missing",
+  });
+
+  expect(resolved.ok).toBe(false);
+  expect(resolved.error?.message).toBe("No session found: agent:main:missing");
+});
+
 test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -141,10 +153,12 @@ test("sessions.resolve returns short-id ambiguity as a protocol-success result",
     ok: false,
     candidates: [
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
         displayName: "Newer",
       },
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
         displayName: "Older",
       },

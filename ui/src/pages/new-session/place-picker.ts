@@ -7,10 +7,22 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
-import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
+import {
+  renderCloudProfileMenuItems,
+  renderConnectMachineMenuItem,
+  renderSessionMenuItem,
+} from "./cloud-target.ts";
+import type {
+  BrowserTarget,
+  DraftBranches,
+  DraftCloudProfile,
+  DraftEnvironment,
+  DraftNode,
+} from "./discovery.ts";
 import { folderDisplayName } from "./path.ts";
+import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
+import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
 function parentFolderDisplayName(path: string): string | undefined {
   const trimmed = path.replace(/[\\/]+$/u, "");
@@ -29,133 +41,6 @@ export function projectCloneInput(value: string): string | null {
     return null;
   }
   return /^(?:https:\/\/|ssh:\/\/git@|git@[^:]+:)/iu.test(trimmed) ? trimmed : null;
-}
-
-function renderBrowseView(params: {
-  listing: FsListDirResult | null;
-  target: BrowserTarget;
-  loading: boolean;
-  error: string | null;
-  pathDraft: string;
-  usablePath: string | null;
-  registerProjectPath: string | null;
-  registeringProject: boolean;
-  onPathDraftChange: (value: string) => void;
-  onNavigate: (path: string | undefined) => void;
-  onBack: () => void;
-  onRegisterProject: (path: string) => void;
-  onClose: () => void;
-  onApplyFolder: (path: string, nodeId: string) => void;
-}) {
-  const entries = params.listing?.entries ?? [];
-  const registerProjectPath = params.registerProjectPath;
-  return html`
-    <div
-      class="new-session-page__browser"
-      @keydown=${(event: KeyboardEvent) => {
-        if (event.key !== "Escape") {
-          return;
-        }
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        params.onBack();
-      }}
-    >
-      <div class="new-session-page__browser-head">
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("newSession.browserUp")}
-          aria-label=${t("newSession.browserUp")}
-          @click=${() => {
-            if (params.listing?.parent) {
-              params.onNavigate(params.listing.parent);
-            } else {
-              params.onBack();
-            }
-          }}
-        >
-          ${icons.arrowLeft}
-        </button>
-        <input
-          class="new-session-page__browser-path"
-          type="text"
-          aria-label=${t("newSession.folder")}
-          placeholder=${params.target.label}
-          .value=${params.pathDraft}
-          @input=${(event: Event) => {
-            params.onPathDraftChange((event.target as HTMLInputElement).value);
-          }}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              params.onNavigate(params.pathDraft.trim() || undefined);
-            }
-          }}
-        />
-        ${params.loading
-          ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("common.close")}
-          aria-label=${t("common.close")}
-          @click=${params.onClose}
-        >
-          ${icons.x}
-        </button>
-      </div>
-      ${params.error ? html`<div class="new-session-page__error">${params.error}</div>` : nothing}
-      <div class="new-session-page__browser-list" role="group" aria-label=${t("newSession.folder")}>
-        ${params.listing && entries.length === 0 && !params.loading
-          ? html`<div class="new-session-page__browser-empty">${t("newSession.browserEmpty")}</div>`
-          : nothing}
-        ${entries.map(
-          (entry) => html`
-            <button
-              type="button"
-              class="new-session-page__browser-entry ${entry.hidden
-                ? "new-session-page__browser-entry--hidden"
-                : ""}"
-              title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-              @click=${() => params.onNavigate(entry.path)}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-              <span>${entry.name}</span>
-            </button>
-          `,
-        )}
-      </div>
-      <div class="new-session-page__browser-actions">
-        ${registerProjectPath
-          ? html`
-              <button
-                type="button"
-                class="new-session-page__browser-register"
-                ?disabled=${params.registeringProject}
-                @click=${() => params.onRegisterProject(registerProjectPath)}
-              >
-                ${t("newSession.registerProject")}
-              </button>
-            `
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-use"
-          ?disabled=${params.usablePath === null || params.registeringProject}
-          @click=${() => {
-            if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath, params.target.nodeId);
-              params.onClose();
-            }
-          }}
-        >
-          ${t("newSession.browserUse")}
-        </button>
-      </div>
-    </div>
-  `;
 }
 
 export function renderPlaceSelect(params: {
@@ -177,6 +62,7 @@ export function renderPlaceSelect(params: {
   projectCloneError: string | null;
   projectId: string;
   execNodes: DraftNode[];
+  environments: readonly DraftEnvironment[] | null;
   gatewayName: string;
   cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
@@ -219,6 +105,7 @@ export function renderPlaceSelect(params: {
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
+  onConnectMachine: () => void;
   onClose: () => void;
   onToggleWorktree: () => void;
   onBaseRefInput: (baseRef: string) => void;
@@ -248,6 +135,7 @@ export function renderPlaceSelect(params: {
   const activeProfile = params.cloudProfiles.find(
     (profile) => profile.id === params.cloudProfileId,
   );
+  const { deviceNodes, deviceFacts, cloudProfiles } = resolvePlacePickerSections(params);
   const gatewayLabel = params.gatewayName
     ? t("newSession.gatewayNamed", { name: params.gatewayName })
     : t("newSession.gateway");
@@ -258,10 +146,16 @@ export function renderPlaceSelect(params: {
       : gatewayLabel;
   const label = params.showDestinations ? `${folderLabel} · ${destinationLabel}` : folderLabel;
   const effectiveFolder = folder || params.workspace;
-  const recentItems = params.recents.map((recent) => {
+  const recents = params.recents.filter(
+    (recent) =>
+      recent.kind !== "folder" ||
+      !recent.execNode ||
+      deviceNodes.some((node) => node.nodeId === recent.execNode),
+  );
+  const recentItems = recents.map((recent) => {
     const node =
       recent.kind === "folder" && recent.execNode
-        ? params.execNodes.find((candidate) => candidate.nodeId === recent.execNode)
+        ? deviceNodes.find((candidate) => candidate.nodeId === recent.execNode)
         : undefined;
     const recentLabel =
       params.showDestinations && node
@@ -279,7 +173,7 @@ export function renderPlaceSelect(params: {
         ? `${recent.folder}${recent.execNode ? ` · ${recent.execNode.slice(0, 8)}` : ""}`
         : recent.projectId,
   ]);
-  const nodeSuffixes = disambiguate(params.execNodes, (node) => node.displayName, [
+  const nodeSuffixes = disambiguate(deviceNodes, (node) => node.displayName, [
     (node) => node.modelIdentifier,
     (node) => node.remoteIp,
     (node) => node.nodeId.slice(0, 8),
@@ -290,6 +184,28 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
+        params.onBrowse(browseTarget);
+      }
+    }}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -339,7 +255,7 @@ export function renderPlaceSelect(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       ${params.browserTarget
-        ? renderBrowseView({
+        ? renderPlaceBrowser({
             listing: params.browserListing,
             target: params.browserTarget,
             loading: params.browserLoading,
@@ -469,7 +385,7 @@ export function renderPlaceSelect(params: {
                     ${t("newSession.projectsAdminHint")}
                   </div>`
                 : nothing}
-              ${params.recents.length > 0
+              ${recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>
                     ${recentItems.map((recent, index) => {
@@ -499,26 +415,14 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.places")}</div>
+                    <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
                     ${renderSessionMenuItem(
                       {
                         value: "gateway",
@@ -529,53 +433,67 @@ export function renderPlaceSelect(params: {
                       },
                       params.submitting,
                     )}
-                    ${params.execNodes.map((node, index) =>
-                      renderSessionMenuItem(
-                        {
-                          value: `node:${node.nodeId}`,
-                          label: node.displayName,
-                          icon: isPhoneFamily(node.deviceFamily)
-                            ? icons.monitorSmartphone
-                            : icons.monitor,
-                          sub: nodeSuffixes[index],
-                          checked: params.execNode === node.nodeId,
-                          title: nodeTooltip(node),
-                          onSelect: () => params.onSelectExecNode(node.nodeId),
-                        },
-                        params.submitting,
-                      ),
-                    )}
-                    ${renderCloudProfileMenuItems({
-                      profiles: params.cloudProfiles,
-                      selectedId: params.cloudProfileId,
-                      submitting: params.submitting,
-                      icon: icons.server,
-                      disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
-                      disabledReason: params.cloudDisabledReason,
-                      onSelect: params.onSelectCloudProfile,
-                    })}
-                    ${params.cloudProfileId && !activeProfile
-                      ? renderSessionMenuItem(
-                          {
-                            value: `cloud:${params.cloudProfileId}`,
-                            label: t("newSession.cloudWorker", {
-                              profile: params.cloudProfileId,
-                            }),
-                            icon: icons.server,
-                            checked: true,
-                            disabled: true,
-                            title: t("newSession.catalogUnavailable"),
-                            onSelect: () => undefined,
-                          },
-                          params.submitting,
-                        )
+                    ${deviceNodes.length > 0
+                      ? html`
+                          <div class="new-session-page__menu-title">
+                            ${t("newSession.yourDevices")}
+                          </div>
+                          ${deviceNodes.map((node, index) =>
+                            renderSessionMenuItem(
+                              {
+                                value: `node:${node.nodeId}`,
+                                label: node.displayName,
+                                icon: isPhoneFamily(node.deviceFamily)
+                                  ? icons.monitorSmartphone
+                                  : icons.monitor,
+                                sub: nodeSuffixes[index],
+                                facts: deviceFacts.get(node.nodeId),
+                                checked: params.execNode === node.nodeId,
+                                title: nodeTooltip(node),
+                                onSelect: () => params.onSelectExecNode(node.nodeId),
+                              },
+                              params.submitting,
+                            ),
+                          )}
+                        `
                       : nothing}
-                    ${params.cloudProfileId && params.syncFolder
-                      ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.cloudSyncsFolder", {
-                            folder: folderDisplayName(params.syncFolder),
+                    ${cloudProfiles.length > 0 || (params.cloudProfileId && !activeProfile)
+                      ? html`
+                          <div class="new-session-page__menu-title">${t("newSession.cloud")}</div>
+                          ${renderCloudProfileMenuItems({
+                            profiles: cloudProfiles,
+                            selectedId: params.cloudProfileId,
+                            submitting: params.submitting,
+                            icon: icons.server,
+                            disabled:
+                              !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
+                            disabledReason: params.cloudDisabledReason,
+                            onSelect: params.onSelectCloudProfile,
                           })}
-                        </div>`
+                          ${params.cloudProfileId && !activeProfile
+                            ? renderSessionMenuItem(
+                                {
+                                  value: `cloud:${params.cloudProfileId}`,
+                                  label: t("newSession.cloudWorker", {
+                                    profile: params.cloudProfileId,
+                                  }),
+                                  icon: icons.server,
+                                  checked: true,
+                                  disabled: true,
+                                  title: t("newSession.catalogUnavailable"),
+                                  onSelect: () => undefined,
+                                },
+                                params.submitting,
+                              )
+                            : nothing}
+                          ${params.cloudProfileId && params.syncFolder
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.cloudSyncsFolder", {
+                                  folder: folderDisplayName(params.syncFolder),
+                                })}
+                              </div>`
+                            : nothing}
+                        `
                       : nothing}
                   `
                 : nothing}
@@ -648,6 +566,12 @@ export function renderPlaceSelect(params: {
                 : html`<div class="new-session-page__menu-note">
                     ${t("newSession.runsOn", { place: gatewayLabel })}
                   </div>`}
+              ${params.isAdmin
+                ? renderConnectMachineMenuItem({
+                    disabled: params.submitting || params.pendingCloud,
+                    onSelect: params.onConnectMachine,
+                  })
+                : nothing}
             </div>
           `}
     </wa-popover>

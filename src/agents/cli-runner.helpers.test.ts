@@ -144,6 +144,36 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     }
   });
 
+  it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-mixed-media-"),
+    );
+    const imagePath = path.join(workspaceDir, "present.png");
+    const image = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachments",
+        workspaceDir,
+        images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          { path: imagePath, contentType: "image/png" },
+          {
+            path: path.join(workspaceDir, "missing.png"),
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
     await expect(
       prepareCliPromptImagePayload({

@@ -10,6 +10,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -98,7 +99,7 @@ export type ResolvePromptContextAmbientWatermarkParams = {
 };
 
 export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+  asFiniteNumber(timestampMs);
 
 export function promptContextBoundaryOptions(
   timestampMs?: number,

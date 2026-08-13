@@ -101,14 +101,17 @@ function makeContext(overrides: Partial<GatewayRequestContext> = {}): GatewayReq
   } as unknown as GatewayRequestContext;
 }
 
-async function invoke(context: GatewayRequestContext) {
+async function invoke(
+  context: GatewayRequestContext,
+  target: { profileId: string } | { deviceId: string } = { profileId: "test" },
+) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
     sessionDispatchHandlers["sessions.dispatch"],
     'sessionDispatchHandlers["sessions.dispatch"] test invariant',
   )({
     req: { id: "dispatch-request" } as never,
-    params: { key: sessionKey, profileId: "test" },
+    params: { key: sessionKey, ...target },
     respond,
     context,
     client: null,
@@ -146,6 +149,81 @@ describe("sessions.dispatch", () => {
       false,
       undefined,
       expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
+    );
+  });
+
+  it("synthesizes the core device-provider target for a connected session-capable node", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(
+      Object.assign(new Error("device-runner-transport-unimplemented: launch is pending"), {
+        code: "device-runner-transport-unimplemented",
+      }),
+    );
+    const respond = await invoke(
+      makeContext({
+        nodeRegistry: {
+          listCurrentConnected: vi.fn(async () => [
+            { nodeId: "device-1", commands: ["system.run"] },
+          ]),
+        } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { deviceId: "device-1" },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "device:device-1",
+        deviceId: "device-1",
+        inheritedProfile: {
+          providerId: "device",
+          profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+        },
+      }),
+      expect.any(Function),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("device-runner-transport-unimplemented"),
+      }),
+    );
+  });
+
+  it("rejects a device target without a connected session-capable pairing", async () => {
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        nodeRegistry: {
+          listCurrentConnected: vi.fn(async () => [{ nodeId: "device-1", commands: ["camera"] }]),
+        } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { deviceId: "device-1" },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("connected session-capable paired node"),
+      }),
     );
   });
 
