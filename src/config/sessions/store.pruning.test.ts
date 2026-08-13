@@ -400,6 +400,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         key,
         { sessionId, updatedAt: now - preserved.length - 1 + index },
       ]),
+      ["removable-older", { sessionId: "removable-older-session", updatedAt: now - 100 }],
       ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
     ]);
     const admission = await beginSessionWorkAdmission({
@@ -416,7 +417,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
+          // Leave the cap satisfiable so this stays a test about preservation.
+          // Once protected entries alone reach maxEntries the cap is
+          // unsatisfiable, and the removable budget falls back to its floor
+          // instead of evicting every removable entry — covered separately below.
+          maxEntries: preserved.length + 1,
           modelRunPruneAfterMs: DAY_MS,
           resetArchiveRetentionMs: null,
           maxDiskBytes: null,
@@ -428,7 +433,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       for (const [key] of preserved) {
         expect(store).toHaveProperty(key);
       }
-      expect(store.removable).toBeUndefined();
+      expect(store["removable-older"]).toBeUndefined();
+      expect(store).toHaveProperty("removable");
     } finally {
       admission.release();
     }
@@ -708,6 +714,89 @@ describe("capEntryCount", () => {
     expect(store).toHaveProperty("archived");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
+  });
+
+  it("keeps removable entries when protected entries alone already fill the cap", () => {
+    const now = Date.now();
+    const threadKeys = [
+      "agent:main:slack:thread:t-a",
+      "agent:main:slack:thread:t-b",
+      "agent:main:slack:thread:t-c",
+    ];
+    const cronKey = "agent:main:cron:job-1";
+    const store = makeStore([
+      ...threadKeys.map((key, index): [string, SessionEntry] => [
+        key,
+        makeEntry(now - 10 * DAY_MS - index),
+      ]),
+      [cronKey, makeEntry(now)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    // Removing the cron entry cannot bring four entries under a cap of two, so
+    // the pass would destroy a live session and still leave the store over cap.
+    expect(evicted).toBe(0);
+    expect(store).toHaveProperty(cronKey);
+    expect(Object.keys(store)).toHaveLength(4);
+  });
+
+  it("does not re-delete a session written once and left alone across passes", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:slack:thread:t-a", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:thread:t-b", makeEntry(now - 9 * DAY_MS)],
+    ]);
+    const cronKey = "agent:main:cron:job-2";
+    // Written once, exactly as an isolated cron run writes its row before it
+    // claims a work admission. Rewriting it between passes would test a fresh
+    // row every time and never the survival of the one that was created.
+    store[cronKey] = makeEntry(now);
+
+    for (let pass = 0; pass < 5; pass += 1) {
+      expect(capEntryCount(store, 1)).toBe(0);
+      expect(store).toHaveProperty(cronKey);
+    }
+
+    expect(store[cronKey]?.updatedAt).toBe(now);
+  });
+
+  it("still caps normally while the protected population leaves budget", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:slack:thread:t-a", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:cron:newest", makeEntry(now)],
+      ["agent:main:cron:older", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(1);
+    expect(store).toHaveProperty("agent:main:cron:newest");
+    expect(store["agent:main:cron:older"]).toBeUndefined();
+  });
+
+  it("still trims older removable entries under an unsatisfiable cap", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:slack:thread:t-a", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:thread:t-b", makeEntry(now - 9 * DAY_MS)],
+      ...Array.from({ length: 6 }, (_, index): [string, SessionEntry] => [
+        `agent:main:cron:job-${index}`,
+        makeEntry(now - index),
+      ]),
+    ]);
+
+    // Two protected entries against a cap of two leaves no arithmetic budget, so
+    // the over-cap floor applies: the newest removable entries survive and the
+    // rest are still evicted. Count-based retention stays active rather than
+    // becoming all-or-nothing.
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(4);
+    expect(store).toHaveProperty("agent:main:cron:job-0");
+    expect(store).toHaveProperty("agent:main:cron:job-1");
+    expect(store["agent:main:cron:job-2"]).toBeUndefined();
   });
 
   it("preserves runtime-provided pending subagent sessions when capping", () => {

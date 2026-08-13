@@ -30,6 +30,19 @@ const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
+/**
+ * Smallest removable budget the count cap will use once protected entries alone
+ * fill `maxEntries`. In that state the cap is unsatisfiable, and the two obvious
+ * responses are both wrong: trimming to a budget of zero deletes every removable
+ * entry — including a session written moments earlier that has not yet claimed
+ * its work admission — and still leaves the store over the cap, while skipping
+ * the pass entirely leaves removable entries with no count-based bound at all.
+ * The floor keeps the most recently updated removable entries and still trims
+ * everything older, so retention stays active and bounded. It is additionally
+ * clamped to `maxEntries`, so the surviving removable population is never
+ * allowed to exceed the operator's configured cap.
+ */
+const MIN_OVER_CAP_REMOVABLE_ENTRIES = 25;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -497,6 +510,27 @@ export function getActiveSessionMaintenanceWarning(params: {
   };
 }
 
+/**
+ * How many unprotected entries the count cap may keep.
+ *
+ * Normally this is whatever the cap leaves after protected entries are counted.
+ * When protected entries alone reach `maxEntries` that arithmetic yields zero,
+ * which would make the cap mean "no unprotected entry may exist" — deleting
+ * every removable entry on every write while still leaving the store over the
+ * cap. `MIN_OVER_CAP_REMOVABLE_ENTRIES` is substituted in that state so the
+ * newest removable entries survive and older ones are still trimmed.
+ *
+ * Shared by the deletion path and the warning that predicts it, so the two
+ * cannot disagree about which entries a pass would remove.
+ */
+function resolveRemovableEntryBudget(maxEntries: number, protectedCount: number): number {
+  const budget = Math.max(0, maxEntries - protectedCount);
+  if (budget > 0 || maxEntries <= 0) {
+    return budget;
+  }
+  return Math.min(maxEntries, MIN_OVER_CAP_REMOVABLE_ENTRIES);
+}
+
 function wouldCapActiveSession(params: {
   store: Record<string, SessionEntry>;
   keys: string[];
@@ -516,8 +550,9 @@ function wouldCapActiveSession(params: {
       key !== params.activeSessionKey &&
       shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
   ).length;
-  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
-  // If protected entries fill the cap, the active unprotected session would be the one removed.
+  const maxRemovableEntries = resolveRemovableEntryBudget(params.maxEntries, protectedCount);
+  // The budget only stays non-positive when the cap itself is, which means no
+  // unprotected entry may survive at all.
   if (maxRemovableEntries <= 0) {
     return true;
   }
@@ -562,7 +597,7 @@ export function capEntryCount(
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
-  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  const maxRemovableEntries = resolveRemovableEntryBudget(maxEntries, preservedCount);
   // Protected entries reduce the removable budget instead of being counted as deletion targets.
   const keys = Object.keys(store).filter(
     (key) =>
