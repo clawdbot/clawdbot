@@ -488,31 +488,31 @@ function mergeManifestChannelSetupContractMetadata(
   if (manifestFieldsByKey.size === 0) {
     return plugin;
   }
+  const fields: (typeof setupContract.metadata.fields)[number][] = [];
+  for (const field of setupContract.metadata.fields) {
+    const manifestField = manifestFieldsByKey.get(field.key);
+    if (!manifestField || field.kind !== "boolean") {
+      fields.push(field);
+      continue;
+    }
+    const mergedField: typeof field = {
+      kind: field.kind,
+      cli: field.cli,
+      key: field.key,
+      envVars: Array.from(manifestField.envVars ?? []),
+    };
+    if (manifestField.envVarMode) {
+      mergedField.envVarMode = manifestField.envVarMode;
+    }
+    fields.push(mergedField);
+  }
   return {
     ...plugin,
     setupContract: {
       ...setupContract,
       metadata: {
         ...setupContract.metadata,
-        fields: setupContract.metadata.fields.map((field) => {
-          const manifestField = manifestFieldsByKey.get(field.key);
-          if (!manifestField) {
-            return field;
-          }
-          if (field.kind !== "boolean") {
-            return field;
-          }
-          const mergedField: typeof field = {
-            kind: field.kind,
-            cli: field.cli,
-            key: field.key,
-            envVars: [...(manifestField.envVars ?? [])],
-          };
-          if (manifestField.envVarMode) {
-            mergedField.envVarMode = manifestField.envVarMode;
-          }
-          return mergedField;
-        }),
+        fields,
       },
     },
   };
