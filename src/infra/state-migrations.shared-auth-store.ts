@@ -19,6 +19,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists as sqliteTableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -28,7 +29,10 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+
+export type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 
 const MIGRATION_KIND = "shared-auth-store-state-db";
 const AUTH_JSON_MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
@@ -52,11 +56,6 @@ type StoreRow = { store_json: string; updated_at: number };
 type StateRow = { state_json: string; updated_at: number };
 type AuthRows = { store: StoreRow | null; state: StateRow | null };
 type MigrationStage = "copied" | "ownership-flipped" | "completed";
-
-export type SharedAuthStoreMigrationDetection = {
-  sourcePath: string;
-  hasLegacy: boolean;
-};
 
 class SharedAuthStoreSourceInspectionError extends Error {
   readonly code = "SHARED_AUTH_STORE_SOURCE_UNREADABLE" as const;
@@ -107,14 +106,6 @@ function inspectSourceFile(
     );
   }
   return { status: "present", size: target.size };
-}
-
-function sqliteTableExists(database: DatabaseSync, tableName: string): boolean {
-  return Boolean(
-    database
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
-      .get(tableName),
-  );
 }
 
 function readSourceRowsFromDatabase(database: DatabaseSync): AuthRows {
