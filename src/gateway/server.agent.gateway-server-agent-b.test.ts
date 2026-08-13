@@ -375,6 +375,38 @@ describe("gateway server agent", () => {
     expect(loadStored()?.mainRestartRecovery).toBeUndefined();
   });
 
+  test("agent validates malformed recovery ownership before admin authorization", async () => {
+    const writerWs = await connectWebchatClient({ port, scopes: ["operator.write"] });
+    try {
+      const malformed = await rpcReq(writerWs, "agent", {
+        message: "reject malformed recovery ownership",
+        sessionKey: "main",
+        restartRecoveryOwner: "scheduler",
+        idempotencyKey: "idem-agent-recovery-owner-malformed",
+      });
+      expect(malformed.ok).toBe(false);
+      expect(malformed.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid agent params"),
+      });
+
+      const valid = await rpcReq(writerWs, "agent", {
+        message: "require admin for valid recovery ownership",
+        sessionKey: "main",
+        restartRecoveryOwner: "external",
+        idempotencyKey: "idem-agent-recovery-owner-admin",
+      });
+      expect(valid.ok).toBe(false);
+      expect(valid.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("operator.admin"),
+      });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    } finally {
+      writerWs.close();
+    }
+  });
+
   test("agent clears restart recovery ownership when rotating the session generation", async () => {
     await useTempSessionStorePath();
     const sessionStorePath = testState.sessionStorePath;

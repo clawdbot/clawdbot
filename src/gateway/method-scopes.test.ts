@@ -174,6 +174,18 @@ describe("method scope resolution", () => {
         restartRecoveryOwner: "external",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("agent", {
+        message: "reject malformed ownership",
+        restartRecoveryOwner: "scheduler",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      authorizeOperatorScopesForMethod("agent", ["operator.write"], {
+        message: "reject malformed ownership",
+        restartRecoveryOwner: "scheduler",
+      }),
+    ).toEqual({ allowed: true });
   });
 
   it("raises host-sensitive node commands from write to admin scope", () => {

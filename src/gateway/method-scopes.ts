@@ -141,7 +141,7 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
       params && typeof params === "object" && !Array.isArray(params)
         ? (params as { restartRecoveryOwner?: unknown }).restartRecoveryOwner
         : undefined;
-    if (restartRecoveryOwner !== undefined) {
+    if (restartRecoveryOwner === "openclaw" || restartRecoveryOwner === "external") {
       return [ADMIN_SCOPE];
     }
     const message =
