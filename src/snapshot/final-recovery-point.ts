@@ -24,13 +24,23 @@ import {
 } from "./recovery-journal.js";
 import {
   createRecoveryPointManifest,
-  recoveryPointOwnerInventorySchema,
   verifyRecoveryPoint,
   verifyRecoveryPointOwnerInventory,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
+
+const recoveryPointOwnerInventoryInputSchema = z.custom<
+  ReturnType<typeof verifyRecoveryPointOwnerInventory>
+>((value) => {
+  try {
+    verifyRecoveryPointOwnerInventory(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "inventory is invalid");
 
 export const FINAL_RECOVERY_POINT_REQUEST_VERSION = "openclaw-final-recovery-point-request/v1";
 const FINAL_RECOVERY_POINT_RESULT_VERSION = "openclaw-final-recovery-point-result/v1";
@@ -48,7 +58,7 @@ const finalRecoveryPointRequestSchema = z
     sourceGeneration: z.string().regex(SAFE_ID_PATTERN),
     capturedAt: z.string(),
     repositoryPath: z.string().min(1),
-    ownerInventory: recoveryPointOwnerInventorySchema,
+    ownerInventory: recoveryPointOwnerInventoryInputSchema,
     closure: z
       .object({
         gateway: z.literal("cleanly-stopped"),
