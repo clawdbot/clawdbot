@@ -16,7 +16,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
-import { clearChatModelSearchOnEscape } from "../chat/components/chat-model-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
@@ -211,8 +210,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     if (event.type === "keydown") {
       const keyEvent = event as KeyboardEvent;
-      clearChatModelSearchOnEscape(keyEvent);
-      if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
+      if (keyEvent.key !== "Escape") {
         return;
       }
       const picker =

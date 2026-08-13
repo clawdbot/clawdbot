@@ -291,22 +291,11 @@ function composerControlsHtml(crowded = false) {
       }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
-          <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+          <div class="chat-controls__model-control">
+          <div class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
-          </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
-            <div class="chat-controls__model-options">
-              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
-            </div>
           </div>
-          </details>
+          </div>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
@@ -2428,10 +2417,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const composer = await getBoundingBox(page, ".agent-chat__input");
         for (const picker of [
           {
-            menu: ".chat-controls__model-menu",
-            trigger: '[data-chat-composer-model="true"]',
-          },
-          {
             menu: ".chat-controls__effort-menu",
             trigger: '[data-chat-composer-effort="true"]',
           },
@@ -2484,14 +2469,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
       });
       await syncFixtureComposerPopoverAnchor(page);
-      await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+      await page.locator('[data-chat-composer-effort="true"]').evaluate((node) => {
         node.parentElement?.setAttribute("open", "");
       });
       await waitForLayoutSettled(page);
       await syncFixtureComposerPopoverAnchor(page);
       await waitForLayoutSettled(page);
       const composer = await getBoundingBox(page, ".agent-chat__input");
-      const menu = await getBoundingBox(page, ".chat-controls__model-menu");
+      const menu = await getBoundingBox(page, ".chat-controls__effort-menu");
       const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({
         anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
         layoutHeight: document.documentElement.clientHeight,

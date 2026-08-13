@@ -135,7 +135,7 @@ suite.define(() => {
       const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
       const triggersBox = await page.locator(".new-session-page__triggers").boundingBox();
       const composerBox = await page.locator(".new-session-page__composer").boundingBox();
-      const modelBox = await page.locator('[data-chat-model-select="true"]').boundingBox();
+      const modelBox = await page.locator("wa-select.chat-controls__model-picker").boundingBox();
       const modelWrapperBox = await page
         .locator(".new-session-page__composer .chat-composer-model-control")
         .boundingBox();
@@ -159,7 +159,7 @@ suite.define(() => {
       ).toBe(1);
       expect(
         await page
-          .locator('[data-chat-model-select="true"]')
+          .locator("wa-select.chat-controls__model-picker")
           .evaluate((element) => element.closest(".agent-chat__composer-footer") != null),
       ).toBe(true);
       expect(modelWrapperBox?.x ?? 0).toBeGreaterThan(

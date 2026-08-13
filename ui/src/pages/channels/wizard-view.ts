@@ -1,13 +1,12 @@
 // Channel setup wizard modal: renders gateway wizard steps (note/select/text/
 // confirm/multiselect) plus the WhatsApp QR linking phase after config write.
-import "@awesome.me/webawesome/dist/components/radio/radio.js";
-import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
+import { channelDocsUrl, channelHubMeta } from "./hub-meta.ts";
 import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
@@ -99,6 +98,7 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
     presentation: "channels",
+    channelSelect: props.wizard.phase === "step" && props.wizard.channel === null,
     answerLabel: t("channels.setup.continue"),
     sensitiveRevealed: props.secretVisible,
     onValueChange:
@@ -260,7 +260,7 @@ export function renderChannelWizard(
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          ${channel ? renderChannelArt(channel, label, "tile") : nothing}
+          ${channel ? renderChannelIcon(channel, label, "tile") : nothing}
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted">${t("channels.setup.subtitle")}</div>
