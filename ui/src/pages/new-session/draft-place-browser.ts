@@ -16,10 +16,11 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import type { BrowserTarget, DraftNode } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
-import { projectCloneInput } from "./place-picker.ts";
+import { projectCloneInput } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 const PROJECT_SEARCH_DEBOUNCE_MS = 300;
+type DraftPickerKind = "where" | "project" | "detail";
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -54,8 +55,8 @@ export class DraftPlaceBrowser {
   private browserTargetValue: BrowserTarget | null = null;
   private browserProjectPathValue: string | null = null;
   private browserRegisteringValue = false;
-  private placePopoverOpenValue = false;
-  private placePopoverHidingValue = false;
+  private openPopoverValue: DraftPickerKind | null = null;
+  private hidingPopoverValue: DraftPickerKind | null = null;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   private browserPathDraftValue = "";
   private browserRequestToken = 0;
@@ -139,6 +140,13 @@ export class DraftPlaceBrowser {
     return this.projectsValue;
   }
 
+  get projectsReady(): boolean {
+    return (
+      this.projectsTask.status === TaskStatus.COMPLETE ||
+      this.projectsTask.status === TaskStatus.ERROR
+    );
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectRecentsValue;
   }
@@ -205,12 +213,12 @@ export class DraftPlaceBrowser {
     return this.browserRegisteringValue;
   }
 
-  get placePopoverOpen(): boolean {
-    return this.placePopoverOpenValue;
+  popoverOpen(kind: DraftPickerKind): boolean {
+    return this.openPopoverValue === kind;
   }
 
-  get placePopoverHiding(): boolean {
-    return this.placePopoverHidingValue;
+  popoverHiding(kind: DraftPickerKind): boolean {
+    return this.hidingPopoverValue === kind;
   }
 
   get browserPathDraft(): string {
@@ -376,13 +384,13 @@ export class DraftPlaceBrowser {
 
   close() {
     this.resetBrowser(true);
-    const popover = this.callbacks.querySelector(".new-session-page__place-popover") as
-      | (HTMLElement & {
-          open: boolean;
-        })
-      | null;
-    if (popover) {
-      popover.open = false;
+    for (const kind of ["where", "project", "detail"] as const) {
+      const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`) as
+        | (HTMLElement & { open: boolean })
+        | null;
+      if (popover) {
+        popover.open = false;
+      }
     }
   }
 
@@ -528,25 +536,37 @@ export class DraftPlaceBrowser {
     }
   }
 
-  onPopoverShow() {
-    this.placePopoverOpenValue = true;
-    this.showRoot();
+  onPopoverShow(kind: DraftPickerKind) {
+    this.openPopoverValue = kind;
+    if (kind === "project") {
+      this.showRoot();
+    } else {
+      this.callbacks.requestUpdate();
+    }
   }
 
-  onPopoverHide() {
-    this.placePopoverOpenValue = false;
-    this.placePopoverHidingValue = true;
-    this.showRoot();
+  onPopoverHide(kind: DraftPickerKind) {
+    if (this.openPopoverValue === kind) {
+      this.openPopoverValue = null;
+    }
+    this.hidingPopoverValue = kind;
+    if (kind === "project") {
+      this.showRoot();
+    } else {
+      this.callbacks.requestUpdate();
+    }
   }
 
-  onPopoverAfterHide() {
-    this.placePopoverHidingValue = false;
-    this.restorePopoverTrigger("new-session-place-trigger", ".new-session-page__place-popover");
+  onPopoverAfterHide(kind: DraftPickerKind) {
+    if (this.hidingPopoverValue === kind) {
+      this.hidingPopoverValue = null;
+    }
+    this.restorePopoverTrigger(`new-session-${kind}-trigger`, `.new-session-page__${kind}-popover`);
     this.callbacks.requestUpdate();
   }
 
-  guardPopoverTransition(event: Event) {
-    if (!this.placePopoverHidingValue) {
+  guardPopoverTransition(event: Event, kind: DraftPickerKind) {
+    if (this.hidingPopoverValue !== kind) {
       return;
     }
     event.preventDefault();
@@ -554,7 +574,7 @@ export class DraftPlaceBrowser {
   }
 
   clearPopoverHiding() {
-    this.placePopoverHidingValue = false;
+    this.hidingPopoverValue = null;
     this.callbacks.requestUpdate();
   }
 
@@ -574,7 +594,7 @@ export class DraftPlaceBrowser {
     this.browserRegisteringValue = false;
     this.browserPathDraftValue = "";
     if (closePopover) {
-      this.placePopoverOpenValue = false;
+      this.openPopoverValue = null;
     }
     this.callbacks.requestUpdate();
   }

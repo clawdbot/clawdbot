@@ -784,6 +784,13 @@ export const en: TranslationMap = {
     cloudSetupInterrupted:
       "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
+    what: "What",
+    detail: "Detail",
+    local: "Local",
+    nodePath: "Node path",
+    nodeCwd: "Working directory",
+    runsDirectly: "Runs directly",
+    runsDirectlyNote: "Runs directly in the selected folder.",
   },
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
