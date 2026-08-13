@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStoredConversationId } from "./conversation-store-helpers.js";
 import {
   MSTEAMS_CONVERSATIONS_LEGACY_FILENAME,
   normalizeMSTeamsLegacyConversationStore,
@@ -81,6 +82,16 @@ async function readArchivedConversationStores(
     .toSorted((a, b) => (a.generation < b.generation ? 1 : a.generation > b.generation ? -1 : 0));
 }
 
+export function resolveLegacyConversationId(
+  rawConversationId: string,
+  reference: StoredConversationReference,
+): string {
+  const storedConversationId = reference.conversation?.id
+    ? normalizeStoredConversationId(reference.conversation.id)
+    : "";
+  return storedConversationId || normalizeStoredConversationId(rawConversationId);
+}
+
 export async function resolveLegacyConversationMigrationSource(
   stateDir: string,
 ): Promise<LegacyConversationMigrationSource | null> {
@@ -101,7 +112,12 @@ export async function resolveLegacyConversationMigrationSource(
     for (const [rawConversationId, reference] of Object.entries(
       archivedStore.state.conversations,
     )) {
-      conversations[rawConversationId] ??= reference;
+      const conversationId = resolveLegacyConversationId(rawConversationId, reference);
+      if (conversationId) {
+        // Archives are newest-first. Collapse aliases at the canonical key before
+        // retention so an older reference cannot win later via raw-key ordering.
+        conversations[conversationId] ??= reference;
+      }
     }
   }
   return {

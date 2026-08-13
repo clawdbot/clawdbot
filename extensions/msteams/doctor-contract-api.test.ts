@@ -325,6 +325,80 @@ describe("msteams doctor state migration", () => {
     ).resolves.toBeNull();
   });
 
+  it("deduplicates archive aliases by canonical conversation id before retention", async () => {
+    const filePath = path.join(stateDir, "msteams-conversations.json");
+    const archivedPath = `${filePath}.migrated`;
+    const rotatedArchivedPath = `${filePath}.migrated.2`;
+    const conversationId = "19:canonical-collision@thread.tacv2";
+    const baseRef: StoredConversationReference = {
+      conversation: { id: conversationId, conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://newest-service.example.com",
+      user: { id: "newest-user" },
+    };
+    const fillerConversations = Object.fromEntries(
+      Array.from({ length: 999 }, (_, index) => {
+        const id = `m-filler-${String(index).padStart(4, "0")}`;
+        return [
+          id,
+          {
+            ...baseRef,
+            conversation: { ...baseRef.conversation, id },
+            serviceUrl: `https://filler-${index}.example.com`,
+          },
+        ];
+      }),
+    ) satisfies Record<string, StoredConversationReference>;
+
+    await fs.writeFile(
+      archivedPath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          ...fillerConversations,
+          "y-older-alias": {
+            ...baseRef,
+            serviceUrl: "https://older-service.example.com",
+            user: { id: "older-user" },
+          },
+        },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+    await fs.writeFile(
+      rotatedArchivedPath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: { "z-newer-alias": baseRef },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+
+    const migration = migrationById("msteams-conversations-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Recovered 1000 Microsoft Teams conversation entries"),
+      expect.stringContaining("Preserved 2 Microsoft Teams conversation recovery archives"),
+    ]);
+    const store = context.openPluginStateKeyedStore<StoredConversationReference>({
+      namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
+      maxEntries: 2000,
+    });
+    await expect(store.lookup(buildMSTeamsConversationStateKey(conversationId))).resolves.toEqual(
+      expect.objectContaining({
+        serviceUrl: "https://newest-service.example.com",
+        user: expect.objectContaining({ id: "newest-user" }),
+      }),
+    );
+  });
+
   it("archives legacy conversations when zero imports are already present in plugin state", async () => {
     const filePath = path.join(stateDir, "msteams-conversations.json");
     const ref: StoredConversationReference = {

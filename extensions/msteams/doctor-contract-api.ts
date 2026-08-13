@@ -14,7 +14,6 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
   buildMSTeamsConversationStateKey,
   MSTEAMS_CONVERSATIONS_NAMESPACE,
@@ -30,7 +29,10 @@ import {
   MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
   normalizeMSTeamsDelegatedTokens,
 } from "./src/delegated-state.js";
-import { resolveLegacyConversationMigrationSource } from "./src/doctor-conversation-migration.js";
+import {
+  resolveLegacyConversationId,
+  resolveLegacyConversationMigrationSource,
+} from "./src/doctor-conversation-migration.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
@@ -192,16 +194,6 @@ async function readLegacyJsonFile<T>(
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
-function resolveLegacyConversationId(
-  rawConversationId: string,
-  reference: StoredConversationReference,
-): string {
-  const storedConversationId = reference.conversation?.id
-    ? normalizeStoredConversationId(reference.conversation.id)
-    : "";
-  return storedConversationId || normalizeStoredConversationId(rawConversationId);
 }
 
 function parseLegacyPoll(value: unknown): MSTeamsPoll | null {
