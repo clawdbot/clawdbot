@@ -132,8 +132,19 @@ describe("method scope resolution", () => {
     ["conversations.send", ["operator.admin"]],
     ["conversations.turn", ["operator.admin"]],
     ["conversations.turn.cancel", ["operator.admin"]],
+    ["openclaw.setup.verify", ["operator.write"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
+  });
+
+  it("allows existing Mac device grants to verify configured inference", () => {
+    expect(
+      authorizeOperatorScopesForMethod("openclaw.setup.verify", [
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+      ]),
+    ).toEqual({ allowed: true });
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {

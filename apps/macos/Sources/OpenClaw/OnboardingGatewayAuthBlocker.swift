@@ -1,7 +1,21 @@
 extension OnboardingAISetupModel {
+    struct ConfiguredGatewayVerificationFailure: Equatable {
+        let modelRef: String
+        let status: String?
+        let error: String?
+
+        var presentation: Failure {
+            OnboardingAISetupModel.failure(
+                label: "Configured AI",
+                status: self.status,
+                error: self.error)
+        }
+    }
+
     enum ConfiguredGatewayBlocker: Equatable {
         case unavailable
         case authentication(RemoteGatewayAuthIssue)
+        case verificationFailed(ConfiguredGatewayVerificationFailure)
     }
 
     var configuredGatewayProbeUnavailable: Bool {
@@ -11,6 +25,11 @@ extension OnboardingAISetupModel {
     var configuredGatewayAuthIssue: RemoteGatewayAuthIssue? {
         guard case let .authentication(issue) = self.configuredGatewayBlocker else { return nil }
         return issue
+    }
+
+    var configuredGatewayVerificationFailure: ConfiguredGatewayVerificationFailure? {
+        guard case let .verificationFailed(failure) = self.configuredGatewayBlocker else { return nil }
+        return failure
     }
 
     func showConfiguredGatewayProbeUnavailable() {

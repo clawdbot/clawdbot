@@ -219,11 +219,44 @@ extension OnboardingView {
                 OnboardingController.markComplete()
                 OnboardingController.shared.close()
                 AppNavigationActions.openDashboard()
-            case .verificationFailed:
+            case let .verificationFailed(modelRef, status, error, _):
                 // A configured model is not usable when its live turn fails.
-                // Keep onboarding open and expose the existing provider sign-in
-                // and credential recovery choices.
-                self.resumePendingInferenceSetup()
+                // An ambiguous activation receipt retains mutation ownership;
+                // otherwise recovery may list choices but never auto-activate one.
+                guard !self.aiSetup.ownsInferenceTransition ||
+                    self.aiSetup.configuredGatewayVerificationFailure != nil
+                else { return }
+                switch pendingState {
+                case .activating, .completed:
+                    self.resumePendingSystemAgent(modelRef: modelRef)
+                case .verified:
+                    self.waitForPendingInferenceSetup()
+                case .activationExpired:
+                    guard expectedPendingState != .none,
+                          let expectedRouteIdentity,
+                          OnboardingSystemAgentResumeStore.clear(
+                              ifOwnedBy: expectedRouteIdentity,
+                              activationOwner: expectedActivationOwner,
+                              defaults: self.systemAgentDefaults)
+                    else { return }
+                    self.resumeConfiguredGatewayVerificationRecovery(
+                        modelRef: modelRef,
+                        status: status,
+                        error: error)
+                case .none:
+                    if self.aiSetup.pendingActivationVerification {
+                        self.resumePendingSystemAgent(modelRef: modelRef)
+                        return
+                    }
+                    // A receipt visible before this request was cleared by a
+                    // concurrent owner. Its completion path, not this stale
+                    // failure, decides when replacement setup is safe.
+                    guard expectedPendingState == .none else { return }
+                    self.resumeConfiguredGatewayVerificationRecovery(
+                        modelRef: modelRef,
+                        status: status,
+                        error: error)
+                }
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -253,7 +286,11 @@ extension OnboardingView {
                 if startAISetupWhenMissing,
                    knownAISetupPage || self.activePageIndex == self.aiPageIndex
                 {
-                    self.aiSetup.startIfNeeded()
+                    if self.aiSetup.configuredGatewayVerificationFailure != nil {
+                        self.resumePendingInferenceSetup()
+                    } else {
+                        self.aiSetup.startIfNeeded()
+                    }
                 }
             case .unavailable, .authIssue:
                 self.showConfiguredGatewayProbeBlocker(outcome)

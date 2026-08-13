@@ -367,10 +367,11 @@ struct OnboardingConfiguredGatewayProbeTests {
 
         let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
 
-        guard case let .verificationFailed(status, error, _) = outcome else {
+        guard case let .verificationFailed(modelRef, status, error, _) = outcome else {
             Issue.record("expected configured inference verification failure")
             return
         }
+        #expect(modelRef == "openai/gpt-5.5")
         #expect(status == "auth")
         #expect(error == "expired login")
     }
@@ -403,6 +404,42 @@ struct OnboardingConfiguredGatewayProbeTests {
             }
             return false
         }())
+    }
+
+    @Test func `configured probe does not splice a reconnecting socket`() async throws {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let fixture = onboardingProbeFixture(
+            url: url,
+            taskFactory: {
+                return GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0,
+                              let request = onboardingProbeRequest(from: message),
+                              request.method == "agents.list"
+                        else { return }
+                        task.emitReceiveSuccessOnce(.data(onboardingAgentsResponse(id: request.id)))
+                        while !task.hasPendingReceiveHandler() {
+                            await Task.yield()
+                        }
+                        task.emitReceiveFailure()
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: task.snapshotConnectRequestID() ?? "connect",
+                            methods: ["openclaw.setup.verify"]))
+                    })
+            })
+
+        let outcome = await runOnboardingProbe(fixture.probe, connectionMode: .remote)
+
+        #expect({
+            if case .unavailable = outcome { return true }
+            return false
+        }())
+        #expect(fixture.session.snapshotMakeCount() >= 1)
     }
 
     @Test func `route replacement supersedes live verification`() async throws {

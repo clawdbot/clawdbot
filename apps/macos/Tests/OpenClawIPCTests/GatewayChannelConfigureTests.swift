@@ -108,15 +108,13 @@ struct GatewayConnectionTests {
         await conn.shutdown()
     }
 
-    @Test func `server lease does not retarget an existing route after credential replacement`() async throws {
+    @Test func `server lease does not retarget after credential replacement`() async throws {
         let session = self.makeSession()
         let (conn, cfg) = try makeConnection(session: session, token: "a")
-        let route = try #require(await conn.captureRequiredRoute())
+        let lease = try await conn.captureRequiredServerLease()
 
-        let lease = try #require(await conn.captureServerLease(ifCurrentRoute: route))
         cfg.setToken("b")
 
-        #expect(await conn.captureServerLease(ifCurrentRoute: route) == nil)
         #expect(await conn.isCurrentServerLease(lease) == false)
         #expect(session.snapshotMakeCount() == 1)
         await conn.shutdown()

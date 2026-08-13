@@ -46,10 +46,13 @@ has no macOS app asset, use the newest one that does, or build from source with
    macOS permissions any time from **Settings → Permissions**.
 
 If the app reaches an existing Gateway whose default agent has a configured
-model, it treats that Gateway as already set up, skips provider onboarding and
-OpenClaw, and opens the dashboard. If the Gateway cannot connect or its
-default agent has no model, inference onboarding remains available for
-recovery.
+model, it asks that model for a live reply before opening the dashboard. A
+failed check keeps onboarding open with retry, provider sign-in, model choice,
+and API-key recovery options; OpenClaw does not replace the configured model
+until you choose one of those options. Gateways from before the live-check
+method was introduced retain the config-only handoff until they are upgraded.
+If the Gateway cannot connect or its default agent has no model, inference
+onboarding remains available for recovery.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).

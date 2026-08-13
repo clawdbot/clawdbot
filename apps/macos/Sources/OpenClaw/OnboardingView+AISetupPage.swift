@@ -169,4 +169,19 @@ extension OnboardingView {
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
         aiSetup.startIfNeeded()
     }
+
+    func resumeConfiguredGatewayVerificationRecovery(
+        modelRef: String,
+        status: String?,
+        error: String?)
+    {
+        self.prepareSystemAgentHandoff()
+        if let page = pageOrder.firstIndex(of: aiPageIndex) {
+            currentPage = page
+        }
+        aiSetup.recoverConfiguredGatewayVerification(
+            modelRef: modelRef,
+            status: status,
+            error: error)
+    }
 }

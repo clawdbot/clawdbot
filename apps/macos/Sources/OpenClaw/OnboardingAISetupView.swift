@@ -182,6 +182,14 @@ struct OnboardingAISetupView: View {
                 secondaryTitle: card.secondaryTitle,
                 secondary: self.retryConfiguredGatewayProbe,
                 retry: self.returnToGatewayAuthentication)
+        } else if let verificationFailure = model.configuredGatewayVerificationFailure {
+            OnboardingErrorCard(
+                title: "Configured AI needs attention",
+                message: verificationFailure.presentation.summary,
+                details: verificationFailure.presentation.detail,
+                docsSlug: "start/onboarding",
+                retryTitle: "Try again",
+                retry: self.retryConfiguredGatewayProbe)
         } else if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable

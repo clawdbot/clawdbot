@@ -653,17 +653,18 @@ extension GatewayConnection {
     /// Captures the currently connected physical socket without probing or
     /// reconnecting. Queued mutations use this so waiting cannot retarget them.
     func captureServerLease() async -> ServerLease? {
-        guard let route = await self.captureRoute() else { return nil }
-        return await self.captureServerLease(ifCurrentRoute: route)
+        try? await self.captureRequiredServerLease()
     }
 
-    /// Freeze the physical socket that already owns a route-bound read.
-    func captureServerLease(ifCurrentRoute route: Route) async -> ServerLease? {
+    func captureRequiredServerLease() async throws -> ServerLease {
+        let route = try await self.captureRequiredRoute()
         guard let client = self.configuredConnection?.client,
               let socketGeneration = self.activeSocketGeneration
-        else { return nil }
+        else { throw OpenClawChatTransportSendError.notDispatched }
         let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
-        guard await self.isCurrentServerLease(lease) else { return nil }
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         return lease
     }
 

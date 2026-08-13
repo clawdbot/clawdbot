@@ -15,7 +15,7 @@ final class OnboardingConfiguredGatewayProbe {
 
     enum Outcome: Equatable {
         case configured(modelRef: String, route: BoundRoute)
-        case verificationFailed(status: String?, error: String?, route: BoundRoute)
+        case verificationFailed(modelRef: String, status: String?, error: String?, route: BoundRoute)
         case missing(route: BoundRoute)
         case authIssue(RemoteGatewayAuthIssue)
         case unavailable
@@ -23,7 +23,7 @@ final class OnboardingConfiguredGatewayProbe {
 
         var boundRoute: BoundRoute? {
             switch self {
-            case let .configured(_, route), let .verificationFailed(_, _, route), let .missing(route):
+            case let .configured(_, route), let .verificationFailed(_, _, _, route), let .missing(route):
                 route
             case .authIssue, .unavailable, .superseded:
                 nil
@@ -116,9 +116,9 @@ final class OnboardingConfiguredGatewayProbe {
         self.activeProbeCount += 1
         defer { self.finishProbe() }
         guard connectionMode != .unconfigured else { return .unavailable }
-        let route: GatewayConnection.Route
+        let lease: GatewayConnection.ServerLease
         do {
-            route = try await self.gateway.captureRequiredRoute()
+            lease = try await self.gateway.captureRequiredServerLease()
         } catch {
             guard self.isCurrent(attempt) else { return .superseded }
             if connectionMode == .remote,
@@ -129,23 +129,20 @@ final class OnboardingConfiguredGatewayProbe {
             return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
+        let route = lease.route
         do {
-            let model = try await gateway.configuredInferenceModel(
-                ifCurrentRoute: route,
-                timeoutMs: self.timeoutMs)
-            guard await self.gateway.isCurrentRoute(route),
+            let agentsData = try await gateway.request(
+                method: GatewayConnection.Method.agentsList.rawValue,
+                params: [:],
+                timeoutMs: self.timeoutMs,
+                ifCurrentServerLease: lease)
+            let model = try GatewayConnection.decodeConfiguredInferenceModel(agentsData)
+            guard await self.gateway.isCurrentServerLease(lease),
                   self.isCurrent(attempt)
             else { return .superseded }
             let boundRoute = BoundRoute(route: route, identity: routeIdentity)
             guard let model else { return .missing(route: boundRoute) }
 
-            // Bind method negotiation and inference to the socket that owned
-            // agents.list. A reconnect or credential replacement supersedes it.
-            guard let lease = await self.gateway.captureServerLease(ifCurrentRoute: route) else {
-                guard self.isCurrent(attempt) else { return .superseded }
-                return .unavailable
-            }
-            guard self.isCurrent(attempt) else { return .superseded }
             guard let supportsVerification = await self.gateway.supportsServerMethod(
                 "openclaw.setup.verify",
                 ifCurrentServerLease: lease),
@@ -169,17 +166,18 @@ final class OnboardingConfiguredGatewayProbe {
                 from: verificationData)
             guard verification.ok else {
                 return .verificationFailed(
+                    modelRef: model,
                     status: verification.status,
                     error: verification.error,
                     route: boundRoute)
             }
             return .configured(modelRef: model, route: boundRoute)
         } catch is CancellationError {
-            return .superseded
+            guard self.isCurrent(attempt) else { return .superseded }
+            return await self.gateway.isCurrentServerLease(lease) ? .superseded : .unavailable
         } catch {
-            guard await self.gateway.isCurrentRoute(route),
-                  self.isCurrent(attempt)
-            else { return .superseded }
+            guard self.isCurrent(attempt) else { return .superseded }
+            guard await self.gateway.isCurrentServerLease(lease) else { return .unavailable }
             if connectionMode == .remote,
                let authIssue = RemoteGatewayAuthIssue(error: error)
             {

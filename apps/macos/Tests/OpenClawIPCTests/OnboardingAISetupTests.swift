@@ -272,7 +272,9 @@ private func reauthenticationDetectedSetupResponse(id: String) -> Data {
     Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
-          "candidates":[],"manualProviders":[],
+          "candidates":[{"kind":"claude-cli","label":"Claude Code","detail":"signed in",
+            "modelRef":"anthropic/claude-opus-4-8","credentials":true}],
+          "manualProviders":[],
           "authOptions":[{"id":"openai:oauth","brandId":"openai","label":"OpenAI",
             "hint":"Sign in with OpenAI","kind":"oauth","featured":true}],
           "prepareOptions":[],"workspace":"/tmp/openclaw-workspace",
@@ -803,8 +805,119 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
         ])
         #expect(view.aiSetup.phase == .ready)
+        #expect(view.aiSetup.candidates.map(\.kind) == ["claude-cli"])
         #expect(view.aiSetup.authOptions.map(\.id) == ["openai:oauth"])
         #expect(!view.aiSetup.connected)
+        #expect(!requests.methods.contains("openclaw.setup.activate"))
+        #expect(view.aiSetup.configuredGatewayVerificationFailure?.modelRef == "openai/gpt-5.5")
+        #expect(view.aiSetup.configuredGatewayVerificationFailure?.status == "auth")
+        #expect(view.aiSetup.configuredGatewayVerificationFailure?.error == "expired login")
+    }
+
+    @Test(arguments: [false, true])
+    func `failed configured verification preserves activation receipt`(
+        completed: Bool) async throws
+    {
+        let defaults = try #require(isolatedAISetupDefaults(
+            prefix: "OnboardingConfiguredVerifyReceipt-\(completed)"))
+        markPending(defaults, for: "local", timeoutMs: 30000)
+        if completed {
+            #expect(markCompleted(defaults, for: "local"))
+        }
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list": configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+
+        #expect(requests.methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.verify",
+        ])
+        #expect(!requests.methods.contains("openclaw.setup.detect"))
+        #expect(!requests.methods.contains("openclaw.setup.activate"))
+        #expect(view.aiSetup.pendingActivationVerification)
+        if completed {
+            #expect(pendingState(defaults) == .completed)
+        } else {
+            #expect(isPending(defaults))
+        }
+    }
+
+    @Test func `failed configured verification retry may enter ordinary missing setup`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyMissingRetry"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, recorder in
+                switch request.method {
+                case "agents.list":
+                    let count = await recorder.snapshot().methods.filter { $0 == "agents.list" }.count
+                    return count == 1
+                        ? configuredModelResponse(id: request.id)
+                        : missingConfiguredModelResponse(id: request.id)
+                case "openclaw.setup.verify": rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect": reauthenticationDetectedSetupResponse(id: request.id)
+                default: nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(
+            state: state,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        let failedProbe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await failedProbe.value
+        _ = await waitForAISetupRequests(harness.recorder, count: 3)
+        let retry = try #require(view.retryConfiguredGatewayProbe())
+        await retry.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 5)
+        await settleQueuedAISetupTasks()
+
+        #expect(requests.methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
+            "agents.list",
+            "openclaw.setup.detect",
+        ])
+        #expect(view.aiSetup.configuredGatewayVerificationFailure == nil)
+        #expect(view.aiSetup.phase == .ready)
     }
 
     @Test func `candidate failure keeps friendly summary and exact detail`() {

@@ -169,6 +169,23 @@ final class OnboardingAISetupModel {
         self.detectError = detectError
     }
 
+    func recoverConfiguredGatewayVerification(
+        modelRef: String,
+        status: String?,
+        error: String?)
+    {
+        self.resetForGatewayChange(clearPendingHandoff: false)
+        self.updateConfiguredGatewayBlockerState(
+            .verificationFailed(ConfiguredGatewayVerificationFailure(
+                modelRef: modelRef,
+                status: status,
+                error: error)),
+            phase: .detecting,
+            detectError: nil)
+        self.started = true
+        self.scheduleDetection()
+    }
+
     /// Restore only the pending handoff state. A configured model label is not
     /// proof that the ambiguous activation completed or that inference works.
     func resumeConfiguredInference(modelRef: String) {
@@ -694,7 +711,9 @@ extension OnboardingAISetupModel {
                 }
                 return
             }
-            if let first = autoCandidateAfter(kind: nil) {
+            if self.configuredGatewayVerificationFailure != nil {
+                self.showManualEntry = self.candidates.isEmpty && !self.manualProviders.isEmpty
+            } else if let first = autoCandidateAfter(kind: nil) {
                 await self.activate(kind: first.kind, context: context)
             } else {
                 self.showManualEntry = !self.manualProviders.isEmpty
@@ -819,7 +838,7 @@ extension OnboardingAISetupModel {
             kind: kind,
             modelRef: candidate.modelRef,
             label: candidate.label,
-            tryNextCandidateOnFailure: true,
+            tryNextCandidateOnFailure: self.configuredGatewayVerificationFailure == nil,
             context: context)
     }
 
