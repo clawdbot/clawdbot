@@ -23,8 +23,12 @@ import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
  */
 export function chunkTelephonyReply(text: string, limit: number): string[] {
   const clean = (text ?? "").trim();
-  if (!clean) return [];
-  if (clean.length <= limit) return [clean];
+  if (!clean) {
+    return [];
+  }
+  if (clean.length <= limit) {
+    return [clean];
+  }
 
   // Each match is one sentence including its terminal punctuation and trailing
   // whitespace; the final alternative captures a trailing run with no terminator.
@@ -33,7 +37,9 @@ export function chunkTelephonyReply(text: string, limit: number): string[] {
   let buf = "";
   const flush = () => {
     const trimmed = buf.trim();
-    if (trimmed) chunks.push(trimmed);
+    if (trimmed) {
+      chunks.push(trimmed);
+    }
     buf = "";
   };
 

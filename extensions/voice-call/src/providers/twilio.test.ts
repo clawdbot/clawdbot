@@ -850,7 +850,10 @@ describe("TwilioProvider", () => {
       });
 
       // A reply well over the 320-char synthesis budget, several sentences long.
-      const longText = `${Array.from({ length: 12 }, (_, i) => `This is sentence number ${i} with some filler words.`).join(" ")}`;
+      const longText = Array.from(
+        { length: 12 },
+        (_, i) => `This is sentence number ${i} with some filler words.`,
+      ).join(" ");
       const expectedChunks = chunkTelephonyReply(longText, 320);
       expect(expectedChunks.length).toBeGreaterThan(1);
 
@@ -902,7 +905,9 @@ describe("TwilioProvider", () => {
         synthesizeForTelephony: async (text: string) => {
           synthCalls.push(text);
           // Simulate a caller barge-in the moment the first piece synthesizes.
-          if (synthCalls.length === 1) controller.abort();
+          if (synthCalls.length === 1) {
+            controller.abort();
+          }
           return Buffer.alloc(160);
         },
       });
