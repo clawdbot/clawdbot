@@ -31,28 +31,28 @@ const portal: PortalSummary = {
 function recorder() {
   const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
-  const reply = <T>(method: string): T => {
+  const reply = (method: string) => {
     if (method === "portal.list") {
-      return { portals: [portal] } as PortalListResult as T;
+      return { portals: [portal] } as PortalListResult;
     }
     if (method === "portal.close") {
-      return { closed: true } as PortalCloseResult as T;
+      return { closed: true } as PortalCloseResult;
     }
-    return portal as T;
+    return portal;
   };
   const callGateway: InProcessGatewayCaller = async <T>(
     method: string,
     params: Record<string, unknown>,
   ): Promise<T> => {
     calls.push([method, params]);
-    return reply<T>(method);
+    return reply(method) as T;
   };
   const callGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
     request: AgentToolGatewayRequest,
   ): Promise<T> => {
     calls.push([request.method, request.params ?? {}]);
     requestScopes.push([request.method, request.scopes]);
-    return reply<T>(request.method);
+    return reply(request.method) as T;
   };
   return { calls, requestScopes, callGateway, callGatewayRequest };
 }
