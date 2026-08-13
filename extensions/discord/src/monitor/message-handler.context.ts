@@ -59,6 +59,10 @@ function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
+function formatDiscordAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
+
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
   text: string;
@@ -405,11 +409,18 @@ export async function buildDiscordMessageProcessContext(params: {
     message: {
       inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
-      rawBody: preflightAudioTranscript ?? baseText,
+      // RawBody/CommandBody keep only the typed text so machine-generated
+      // transcripts never enter command classification (telegram/whatsapp parity).
+      rawBody: baseText,
       // BodyForAgent wins over Body for the model's text, so the notice has to
-      // ride the agent-facing source too — keeping transcript precedence.
-      bodyForAgent: appendMediaUnavailableNotice(preflightAudioTranscript ?? baseText ?? text),
-      commandBody: preflightAudioTranscript ?? baseText,
+      // ride the agent-facing source too. Transcripts are framed as untrusted
+      // machine input, keeping precedence over typed text like before.
+      bodyForAgent: appendMediaUnavailableNotice(
+        preflightAudioTranscript !== undefined
+          ? formatDiscordAudioTranscriptForAgent(preflightAudioTranscript)
+          : (baseText ?? text),
+      ),
+      commandBody: baseText,
       inboundHistory,
     },
     sessionTranscript: {
@@ -431,7 +442,7 @@ export async function buildDiscordMessageProcessContext(params: {
       kind: "text-slash" as const,
       source: "text" as const,
       authorized: commandAuthorized,
-      body: preflightAudioTranscript ?? baseText,
+      body: baseText,
     },
     media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,

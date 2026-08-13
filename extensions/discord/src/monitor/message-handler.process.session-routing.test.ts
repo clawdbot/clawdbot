@@ -25,7 +25,7 @@ import {
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing", () => {
-  it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
+  it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
     const ctx = await createBaseContext({
       message: {
         id: "m-audio-preflight",
@@ -55,8 +55,9 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      BodyForAgent: "hello from discord voice",
-      CommandBody: "hello from discord voice",
+      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "hello from discord voice"',
+      RawBody: "",
+      CommandBody: "",
       Transcript: "hello from discord voice",
       media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
     });
