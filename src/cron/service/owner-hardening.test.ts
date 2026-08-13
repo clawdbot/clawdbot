@@ -267,7 +267,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("releases manual run ownership when receipt finalization throws", async () => {
+  it("retries transient receipt finalization before releasing ownership", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -297,6 +297,12 @@ describe("cron durable run ownership", () => {
     );
     try {
       await expect(cron.run(job.id, "force")).rejects.toThrow("receipt finalization unavailable");
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "running" });
+      database.exec("DROP TRIGGER reject_cron_run_receipt_finish");
+      await vi.waitFor(
+        () => expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "superseded" }),
+        { timeout: 3_000, interval: 50 },
+      );
     } finally {
       cron.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt_finish");

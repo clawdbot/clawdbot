@@ -76,6 +76,7 @@ const CRON_RUN_RECEIPT_SCHEMA_END =
   "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);";
 const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
+const CRON_RUN_RECEIPT_FINISH_RETRY_MS = 1_000;
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const locallyOwnedReceipts = new Set<string>();
 type CronRunReceiptFinish = {
@@ -91,6 +92,8 @@ type CronRunReceiptSettlement = {
   onFinishError: (error: unknown) => void;
 };
 const pendingReceiptSettlements = new Map<string, CronRunReceiptSettlement>();
+type CronRunReceiptFinishRetry = { finish: CronRunReceiptFinish; timer: NodeJS.Timeout | null };
+const pendingReceiptFinishRetries = new Map<string, CronRunReceiptFinishRetry>();
 
 export class CronRunReceiptConflictError extends Error {
   constructor(readonly receipt: CronRunReceipt) {
@@ -298,6 +301,10 @@ export function prepareCronRunReceiptClaim(params: {
   requestRunId?: string;
   env?: NodeJS.ProcessEnv;
 }): PreparedCronRunReceiptClaim {
+  const ownerStartTime = getFileLockProcessStartTime(process.pid);
+  if (ownerStartTime === null) {
+    throw new Error("cron run cannot acquire a durable fence without process start identity");
+  }
   const storeKey = cronStoreKey(params.storePath);
   const options = params.env ? { env: params.env } : {};
   const observed = withReceiptWrite("cron.run-receipt.inspect", options, (database) =>
@@ -310,7 +317,7 @@ export function prepareCronRunReceiptClaim(params: {
     configRevision: resolveCronJobConfigRevision(params.job),
     agentId: params.agentId,
     ownerPid: process.pid,
-    ownerStartTime: getFileLockProcessStartTime(process.pid),
+    ownerStartTime,
     startedAtMs: params.startedAtMs,
   };
   return {
@@ -331,6 +338,9 @@ export function claimCronRunReceiptInDatabase(params: {
     ensureCronRunReceiptSchema(params.database);
   }
   const { handle, observed, observedStale } = params.prepared;
+  if (handle.ownerStartTime === null) {
+    throw new Error("cron run cannot acquire a durable fence without process start identity");
+  }
   const current = activeRow(params.database, handle.storeKey, handle.jobId);
   if (current) {
     if (observed && observedStale && sameOwner(current, observed)) {
@@ -480,6 +490,37 @@ export function isCronRunReceiptSettlementPending(handle: CronRunReceiptHandle):
   return pendingReceiptSettlements.has(handle.receiptId);
 }
 
+function clearCronRunReceiptFinishRetry(receiptId: string): void {
+  const pending = pendingReceiptFinishRetries.get(receiptId);
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+  pendingReceiptFinishRetries.delete(receiptId);
+}
+
+function queueCronRunReceiptFinishRetry(finish: CronRunReceiptFinish): void {
+  const receiptId = finish.handle.receiptId;
+  let pending = pendingReceiptFinishRetries.get(receiptId);
+  if (!pending) {
+    pending = { finish, timer: null };
+    pendingReceiptFinishRetries.set(receiptId, pending);
+  }
+  if (pending.timer) {
+    return;
+  }
+  // Keep local ownership until a retry commits; process exit remains the only
+  // implicit release if SQLite never recovers.
+  pending.timer = setTimeout(() => {
+    pending!.timer = null;
+    try {
+      finishCronRunReceipt(pending!.finish);
+    } catch {
+      // finishCronRunReceipt retained the handle and scheduled the next retry.
+    }
+  }, CRON_RUN_RECEIPT_FINISH_RETRY_MS);
+  pending.timer.unref?.();
+}
+
 export function finishCronRunReceipt(params: CronRunReceiptFinish): CronRunReceipt | undefined {
   const pending = pendingReceiptSettlements.get(params.handle.receiptId);
   if (pending) {
@@ -487,13 +528,17 @@ export function finishCronRunReceipt(params: CronRunReceiptFinish): CronRunRecei
     return undefined;
   }
   try {
-    return withReceiptWrite(
+    const result = withReceiptWrite(
       "cron.run-receipt.finish",
       params.env ? { env: params.env } : {},
       (database) => finishCronRunReceiptInDatabase({ database, ...params }),
     );
-  } finally {
+    clearCronRunReceiptFinishRetry(params.handle.receiptId);
     locallyOwnedReceipts.delete(params.handle.receiptId);
+    return result;
+  } catch (error) {
+    queueCronRunReceiptFinishRetry(params);
+    throw error;
   }
 }
 
@@ -502,6 +547,9 @@ export function releaseLocalCronRunReceiptOwnership(handle: CronRunReceiptHandle
   const pending = pendingReceiptSettlements.get(handle.receiptId);
   if (pending) {
     pending.releaseRequested = true;
+    return;
+  }
+  if (pendingReceiptFinishRetries.has(handle.receiptId)) {
     return;
   }
   locallyOwnedReceipts.delete(handle.receiptId);
@@ -545,6 +593,11 @@ export function reconcileCronRunReceiptForStartup(params: {
   jobId: string;
   startedAtMs: number;
   nowMs: number;
+  staleOwnerTerminal?: {
+    status: Exclude<CronRunReceiptStatus, "running">;
+    finishedAtMs: number;
+    error?: string;
+  };
   env?: NodeJS.ProcessEnv;
 }): CronRunReceipt | undefined {
   const storeKey = cronStoreKey(params.storePath);
@@ -573,9 +626,11 @@ export function reconcileCronRunReceiptForStartup(params: {
       query(database)
         .updateTable("cron_run_receipts")
         .set({
-          status: "interrupted",
-          finished_at_ms: params.nowMs,
-          error_text: "cron: job interrupted by owner process exit",
+          status: params.staleOwnerTerminal?.status ?? "interrupted",
+          finished_at_ms: params.staleOwnerTerminal?.finishedAtMs ?? params.nowMs,
+          error_text:
+            params.staleOwnerTerminal?.error ??
+            (params.staleOwnerTerminal ? null : "cron: job interrupted by owner process exit"),
         })
         .where("receipt_id", "=", current.receipt_id)
         .where("status", "=", "running"),

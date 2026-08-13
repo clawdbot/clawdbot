@@ -1,6 +1,6 @@
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronRunStatus } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
@@ -31,6 +31,7 @@ type ForeignReceiptMonitor = {
   timer: NodeJS.Timeout | null;
 };
 const foreignReceiptMonitors = new WeakMap<CronServiceState, ForeignReceiptMonitor>();
+type FinalizedCronTaskRun = ReturnType<typeof tryFindFinalizedCronTaskRun>;
 
 function foreignReceiptMonitor(state: CronServiceState): ForeignReceiptMonitor {
   let monitor = foreignReceiptMonitors.get(state);
@@ -45,6 +46,7 @@ function repairStoppedCronRun(params: {
   state: CronServiceState;
   job: CronJob;
   runningAtMs: number;
+  finalized: FinalizedCronTaskRun;
   deferredNotifications: DeferredCronNotifications;
 }): {
   interrupted?: InterruptedStartupRun;
@@ -53,7 +55,7 @@ function repairStoppedCronRun(params: {
 } {
   const { state, job, runningAtMs, deferredNotifications } = params;
   const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
-  const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
+  const { finalized } = params;
   if (finalized) {
     const repaired = restoreFinalizedStartupRun({
       state,
@@ -84,6 +86,29 @@ function repairStoppedCronRun(params: {
     interrupted,
     replacementAtMs: interrupted.replacementAtMs,
     shouldDelete: false,
+  };
+}
+
+function receiptTerminalFromFinalized(finalized: FinalizedCronTaskRun):
+  | {
+      status: "ok" | "error" | "skipped";
+      finishedAtMs: number;
+      error?: string;
+    }
+  | undefined {
+  if (!finalized) {
+    return undefined;
+  }
+  const receiptStatus = (runStatus: CronRunStatus) => {
+    if (runStatus === "ok" || runStatus === "skipped") {
+      return runStatus;
+    }
+    return "error";
+  };
+  return {
+    status: receiptStatus(finalized.entry.status),
+    finishedAtMs: finalized.entry.ts,
+    error: finalized.entry.error,
   };
 }
 
@@ -153,7 +178,11 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       return;
     }
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    const candidates: Array<{ jobId: string; runningAtMs: number }> = [];
+    const candidates: Array<{
+      jobId: string;
+      runningAtMs: number;
+      finalized: FinalizedCronTaskRun;
+    }> = [];
     for (const [jobId, runningAtMs] of [...monitor.startedAtByJobId.entries()].toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
@@ -164,15 +193,17 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       }
       // The store helper observes process liveness before entering SQLite, then
       // retires only that exact receipt owner inside its write transaction.
+      const finalized = tryFindFinalizedCronTaskRun(state, jobId, runningAtMs);
       if (
         !reconcileCronRunReceiptForStartup({
           storePath: state.deps.storePath,
           jobId,
           startedAtMs: runningAtMs,
           nowMs: state.deps.nowMs(),
+          staleOwnerTerminal: receiptTerminalFromFinalized(finalized),
         })
       ) {
-        candidates.push({ jobId, runningAtMs });
+        candidates.push({ jobId, runningAtMs, finalized });
       }
     }
     if (candidates.length === 0) {
@@ -187,7 +218,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     const interruptedRuns: InterruptedStartupRun[] = [];
     const recoveredJobIds: string[] = [];
     const postPersistNotifications: DeferredCronNotifications = [];
-    for (const { jobId, runningAtMs } of candidates) {
+    for (const { jobId, runningAtMs, finalized } of candidates) {
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (job?.state.runningAtMs !== runningAtMs) {
         monitor.startedAtByJobId.delete(jobId);
@@ -197,6 +228,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
         state,
         job,
         runningAtMs,
+        finalized,
         deferredNotifications: postPersistNotifications,
       });
       if (recovery.shouldDelete) {
@@ -284,11 +316,13 @@ export async function start(state: CronServiceState) {
         // Older releases used runningAtMs for both queued and active work. Those
         // rows are intentionally recovered conservatively to avoid replaying side effects.
         const runningAtMs = job.state.runningAtMs;
+        const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
         const liveReceipt = reconcileCronRunReceiptForStartup({
           storePath: state.deps.storePath,
           jobId: job.id,
           startedAtMs: runningAtMs,
           nowMs: state.deps.nowMs(),
+          staleOwnerTerminal: receiptTerminalFromFinalized(finalized),
         });
         if (liveReceipt) {
           // An overlapping replacement gateway must not retire work whose
@@ -301,6 +335,7 @@ export async function start(state: CronServiceState) {
           state,
           job,
           runningAtMs,
+          finalized,
           deferredNotifications: postPersistNotifications,
         });
         // Skip only the old invocation; a distinct overdue replacement must

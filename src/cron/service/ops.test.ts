@@ -16,6 +16,11 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import {
+  claimCronRunReceiptInDatabase,
+  prepareCronRunReceiptClaim,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -960,6 +965,20 @@ describe("cron service ops seam coverage", () => {
         job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
         job.state.triggerState = { cursor: "old" };
         await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const preparedReceipt = prepareCronRunReceiptClaim({
+          storePath,
+          job,
+          agentId: "main",
+          startedAtMs: startedAt,
+        });
+        const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+          claimCronRunReceiptInDatabase({
+            database: db,
+            prepared: preparedReceipt,
+            resolveAgentId: (current) => current.agentId ?? "main",
+          }),
+        );
+        releaseLocalCronRunReceiptOwnership(receipt);
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
@@ -1045,6 +1064,14 @@ describe("cron service ops seam coverage", () => {
         expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
         expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
         expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+        const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+          db
+            .prepare(
+              "SELECT status, finished_at_ms AS finishedAtMs, error_text AS error FROM cron_run_receipts WHERE receipt_id = ?",
+            )
+            .get(receipt.receiptId),
+        ) as { status: string; finishedAtMs: number; error: string | null };
+        expect(receiptRow).toEqual({ status: "ok", finishedAtMs: endedAt, error: null });
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
         stop(state);
       });
