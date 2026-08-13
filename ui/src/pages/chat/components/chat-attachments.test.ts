@@ -79,7 +79,9 @@ describe("chat attachment read failures", () => {
     });
     expect(vi.mocked(showToast)).toHaveBeenCalledTimes(1);
     const message = vi.mocked(showToast).mock.calls[0]?.[0]?.message;
-    expect(String(message)).toContain("bad.png");
+    // The read-failure toast is a plain t() string, not a template.
+    expect(typeof message).toBe("string");
+    expect(message).toContain("bad.png");
     // The successful sibling still attaches.
     const attached = onAttachmentsChange.mock.calls[0]?.[0] as Array<{ fileName?: string }>;
     expect(attached).toHaveLength(1);
