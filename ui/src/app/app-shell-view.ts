@@ -142,8 +142,8 @@ type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtim
 type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
 
 // Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
-// fetched the first time an operator opens Pair mobile device. Rendering
-// nothing for that one frame is safe because the overlay owns its own state.
+// fetched the first time an operator opens Pair mobile device. The eager shell
+// stays visible during that import so the action never appears to do nothing.
 function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupProps) {
   if (!props.open) {
     return nothing;
@@ -156,7 +156,31 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
     return renderDevicePairSetupLoadFailure(host, props);
   }
   host.loadDevicePairSetupRenderer();
-  return nothing;
+  return renderDevicePairSetupLoading(props);
+}
+
+function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("common.loading");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup" aria-busy="true">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p role="status">${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
 }
 
 // The pairing chunk failed to load while its overlay is open. Reuse the eager

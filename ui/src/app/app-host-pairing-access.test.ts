@@ -12,6 +12,7 @@ type PairingShell = HTMLElement & {
   render: () => TemplateResult;
   devicePairSetupRenderer: unknown;
   devicePairSetupLoadFailed: boolean;
+  loadDevicePairSetupRenderer: () => void;
 };
 
 type PairingSidebar = HTMLElement & {
@@ -103,13 +104,15 @@ function createPairingShell(params: {
     return sidebar;
   };
 
-  // The pairing modal is a lazy chunk, so the first shell render emits nothing
-  // for it; re-render until the loaded renderer produces the dialog.
+  // The pairing modal is a lazy chunk; re-render until the loaded renderer
+  // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
     return await vi.waitFor(() => {
       render(shell.render(), container);
-      const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
+      const dialog = container.querySelector<HTMLElement>(
+        '.device-pair-setup:not([aria-busy="true"])',
+      );
       if (!dialog) {
         throw new Error("Expected the application shell to render its mobile pairing dialog");
       }
@@ -208,6 +211,24 @@ describe("application shell pairing access", () => {
     actions[0]?.click();
 
     expect(shell.devicePairSetupLoadFailed).toBe(false);
+  });
+
+  it("keeps the pairing dialog visible while its lazy renderer is loading", () => {
+    const { shell, renderSidebar, container } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-mobile-secret",
+    });
+    const loadRenderer = vi.fn();
+    shell.devicePairSetupRenderer = null;
+    shell.devicePairSetupLoadFailed = false;
+    shell.loadDevicePairSetupRenderer = loadRenderer;
+
+    renderSidebar();
+
+    const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
+    expect(dialog?.getAttribute("aria-busy")).toBe("true");
+    expect(dialog?.textContent).toContain("Loading…");
+    expect(loadRenderer).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
