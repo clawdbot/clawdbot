@@ -1873,7 +1873,7 @@ public struct ProjectCloneErrorDetails: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case code
         case cause
-   }
+    }
 }
 
 public struct GatewayRestoreStatusParams: Codable, Sendable {

@@ -628,7 +628,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   // Additive restored-admission status appends so older advertised method indices stay stable.
-  ["gateway.restore.status", "restore", "operator.read", "2026.7"],
+  ["gateway.restore.status", "restore", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
