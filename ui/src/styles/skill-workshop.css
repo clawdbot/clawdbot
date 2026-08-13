@@ -1496,7 +1496,7 @@
   left: 0;
   right: 0;
   height: 3px;
-  background: linear-gradient(90deg, var(--accent), #ff8a5c, #14b8a6);
+  background: linear-gradient(90deg, var(--accent), #3ec9a0, #14b8a6);
   opacity: 0.7;
 }
 

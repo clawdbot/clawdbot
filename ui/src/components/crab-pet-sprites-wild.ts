@@ -114,7 +114,7 @@ export function ACTUAL_CRAB(openEyeStyle: string, closedEyeStyle: string): Templ
         <path d="M74 29 Q86 16 98 13" stroke-width="1.3" />
       </g>
 
-      <g fill="none" stroke="#7f3022" stroke-width="2.2" stroke-linecap="round">
+      <g fill="none" stroke="#2e5a3a" stroke-width="2.2" stroke-linecap="round">
         <path d="M39 48 Q22 52 10 65" />
         <path d="M38 56 Q20 62 8 77" />
         <path d="M40 65 Q24 72 15 88" />
@@ -156,12 +156,12 @@ export function ACTUAL_CRAB(openEyeStyle: string, closedEyeStyle: string): Templ
         stroke-width="1.8"
       />
       <g class="crab-actual__abdomen" stroke="#6f281d" stroke-width="1.4">
-        <path d="M39 54 Q60 62 81 54 L79 65 Q60 72 41 65 Z" fill="#b34b35" />
+        <path d="M39 54 Q60 62 81 54 L79 65 Q60 72 41 65 Z" fill="#2e7d46" />
         <path d="M41 65 Q60 72 79 65 L76 76 Q60 82 44 76 Z" fill="#2e7d46" />
-        <path d="M44 76 Q60 82 76 76 L72 87 Q60 92 48 87 Z" fill="#b34b35" />
+        <path d="M44 76 Q60 82 76 76 L72 87 Q60 92 48 87 Z" fill="#2e7d46" />
         <path d="M48 87 Q60 92 72 87 L67 96 Q60 99 53 96 Z" fill="#2e7d46" />
       </g>
-      <path d="M48 42 Q60 48 72 42 Q69 56 60 58 Q51 56 48 42 Z" fill="#bd6044" opacity="0.72" />
+      <path d="M48 42 Q60 48 72 42 Q69 56 60 58 Q51 56 48 42 Z" fill="#2e7d46" opacity="0.72" />
 
       <g fill="none" stroke="#6f281d" stroke-width="2.2" stroke-linecap="round">
         <path d="M47 28 L45 23" />
@@ -199,9 +199,9 @@ export function BALLOON_CRAB(openEyeStyle: string, closedEyeStyle: string): Temp
       </g>
 
       <ellipse cx="60" cy="29" rx="24" ry="19" fill="var(--crab-shell)" />
-      <circle cx="60" cy="48" r="4" fill="#d94b72" />
+      <circle cx="60" cy="48" r="4" fill="#3ec9a0" />
       <ellipse cx="60" cy="61" rx="18" ry="14" fill="var(--crab-shell)" />
-      <circle cx="60" cy="75" r="3.5" fill="#d94b72" />
+      <circle cx="60" cy="75" r="3.5" fill="#3ec9a0" />
       <ellipse cx="60" cy="86" rx="13" ry="10" fill="var(--crab-shell)" />
 
       <g fill="#ffffff" opacity="0.55">
@@ -228,7 +228,7 @@ export function BALLOON_CRAB(openEyeStyle: string, closedEyeStyle: string): Temp
         <path d="M65 31 Q70 27 75 31" />
       </g>
 
-      <path d="M55 96 L60 91 L65 96 L60 101 Z" fill="#d94b72" />
+      <path d="M55 96 L60 91 L65 96 L60 101 Z" fill="#3ec9a0" />
       <path
         d="M60 100 Q67 102 62 105 Q57 108 65 111"
         fill="none"
@@ -284,14 +284,14 @@ export function PORTAL_CRAB(openEyeStyle: string, closedEyeStyle: string): Templ
       />
 
       <!-- Fixed crab red preserves the split-body gag while shell/claw vars carry portal identity. -->
-      <path d="M31 30 Q45 20 56 30 Q62 39 60 53 Q58 64 47 70 L31 67 Z" fill="#b0432f" />
+      <path d="M31 30 Q45 20 56 30 Q62 39 60 53 Q58 64 47 70 L31 67 Z" fill="#1F9D57" />
       <g class="crab-claw crab-claw--l">
         <path
           d="M52 54 Q58 48 63 51 Q67 56 63 62 Q58 67 52 63 Z"
-          fill="#b0432f"
+          fill="#1F9D57"
         />
       </g>
-      <g fill="none" stroke="#b0432f" stroke-width="2" stroke-linecap="round">
+      <g fill="none" stroke="#1F9D57" stroke-width="2" stroke-linecap="round">
         <path d="M42 31 Q43 16 50 7" />
         <path d="M52 28 Q58 14 66 9" />
       </g>
@@ -313,10 +313,10 @@ export function PORTAL_CRAB(openEyeStyle: string, closedEyeStyle: string): Templ
         <path d="M53 38 Q57 35 61 38" />
       </g>
 
-      <g class="crab-portal-rear" fill="#b0432f">
+      <g class="crab-portal-rear" fill="#1F9D57">
         <path d="M91 44 Q82 40 75 44 L82 51 L74 56 L82 61 L75 68 Q83 70 92 64 Z" />
-        <path d="M88 52 Q82 49 78 45" fill="none" stroke="#7f3022" stroke-width="2" />
-        <path d="M88 61 Q82 64 78 69" fill="none" stroke="#7f3022" stroke-width="2" />
+        <path d="M88 52 Q82 49 78 45" fill="none" stroke="#2e5a3a" stroke-width="2" />
+        <path d="M88 61 Q82 64 78 69" fill="none" stroke="#2e5a3a" stroke-width="2" />
       </g>
       <ellipse
         class="crab-portal-ring crab-portal-ring--orange"
@@ -342,7 +342,7 @@ export const WATERMELON_RIND = svg`
       <path d="M66 22 Q72 10 80 15" />
       <path d="M82 28 Q89 20 94 30" />
     </g>
-    <ellipse cx="60" cy="69" rx="35" ry="23" fill="#e5484d" />
+    <ellipse cx="60" cy="69" rx="35" ry="23" fill="#4ade80" />
     <g fill="#28211c">
       <ellipse cx="42" cy="62" rx="2" ry="3.4" transform="rotate(-20 42 62)" />
       <ellipse cx="58" cy="58" rx="2" ry="3.4" transform="rotate(8 58 58)" />
@@ -412,7 +412,7 @@ export const NOTEXTURE_CHECKER = svg`
           y=${row.y}
           width="8"
           height="8"
-          fill=${(rowIndex + column) % 2 === 0 ? "#ff00dc" : "#111111"}
+          fill=${(rowIndex + column) % 2 === 0 ? "#00e5cc" : "#111111"}
         />`,
       ),
     )}

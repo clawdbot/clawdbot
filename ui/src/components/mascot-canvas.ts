@@ -6,10 +6,10 @@ const ART_SIZE = 120;
 const TAU = Math.PI * 2;
 const EYE = "#050810";
 const EYE_GLOW = "#00e5cc";
-const BLUSH = "#ff9eae";
-const HAT_AMBER = "#f2a833";
-const HAT_LIGHT = "#ffd659";
-const HAT_OUTLINE = "rgba(184, 115, 31, 0.7)";
+const BLUSH = "#3ec9a0";
+const HAT_AMBER = "#2FBF71";
+const HAT_LIGHT = "#7ef5dd";
+const HAT_OUTLINE = "rgba(47, 191, 113, 0.7)";
 
 type Point = { x: number; y: number };
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };

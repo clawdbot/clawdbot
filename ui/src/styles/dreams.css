@@ -42,7 +42,7 @@
 
 .dreams__crab {
   animation: dreams-breathe 4s ease-in-out infinite;
-  filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
+  filter: drop-shadow(0 0 40px rgba(74, 222, 128, 0.25));
   transition: filter 0.6s ease;
 }
 
@@ -191,7 +191,7 @@
   left: calc(50% - 200px);
   padding: 16px 20px;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.12);
   border-radius: 20px;
   display: flex;
   flex-direction: column;
@@ -235,7 +235,7 @@
   position: absolute;
   border-radius: 50%;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.1);
   animation: dreams-bubble-float 6s ease-in-out infinite;
 }
 
@@ -281,7 +281,7 @@
   width: 240px;
   height: 100px;
   border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.08) 0%, transparent 70%);
+  background: radial-gradient(ellipse, rgba(74, 222, 128, 0.08) 0%, transparent 70%);
   pointer-events: none;
   animation: dreams-glow-pulse 4s ease-in-out infinite;
 }
@@ -453,7 +453,7 @@
 /* ---- Idle / inactive state ---- */
 
 .dreams--idle .dreams__crab {
-  filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
+  filter: drop-shadow(0 0 20px rgba(74, 222, 128, 0.1));
 }
 
 .dreams--idle .dreams__status-dot {

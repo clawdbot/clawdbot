@@ -78,7 +78,7 @@
    *
    * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
    *   --ok     #22c55e  6.66:1 ✓    --warn  #f59e0b  6.93:1 ✓
-   *   --danger #f87171  5.52:1 ✓    --info  #60a5fa  5.97:1 ✓
+   *   --danger #4ade80  10.1:1 ✓    --info  #60a5fa  5.97:1 ✓
    *
    * Bounded to --card and --bg. A status label can also land on --bg-hover,
    * --bg-muted, --panel-hover or --input, which this audit does not cover.
