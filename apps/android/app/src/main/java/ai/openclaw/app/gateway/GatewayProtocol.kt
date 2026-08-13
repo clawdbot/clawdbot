@@ -578,6 +578,9 @@ enum class GatewayMethod(
   DesktopLaunch("desktop.launch"),
   DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
   DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
+  PortalList("portal.list"),
+  PortalOpen("portal.open"),
+  PortalClose("portal.close"),
 }
 
 enum class GatewayEvent(
@@ -628,5 +631,6 @@ enum class GatewayEvent(
   OpenclawApprovalResolved("openclaw.approval.resolved"),
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
+  PortalChanged("portal.changed"),
   UpdateAvailable("update.available"),
 }
