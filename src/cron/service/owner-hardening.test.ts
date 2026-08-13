@@ -10,7 +10,8 @@ import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-sta
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { listCronRunReceipts } from "../store/run-receipt-store.js";
+import { cronStoreKey } from "../store/key.js";
+import { reconcileCronRunReceiptForStartup } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
@@ -155,6 +156,21 @@ function makeParentService(storePath: string, runCommandJob = vi.fn()) {
   });
 }
 
+function receipts(storePath: string, jobId: string) {
+  return openOpenClawStateDatabase()
+    .db.prepare(
+      `SELECT receipt_id AS receiptId, status, agent_id AS agentId
+         FROM cron_run_receipts
+        WHERE store_key = ? AND job_id = ?
+        ORDER BY started_at_ms DESC, receipt_id DESC`,
+    )
+    .all(cronStoreKey(storePath), jobId) as Array<{
+    receiptId: string;
+    status: string;
+    agentId: string;
+  }>;
+}
+
 describe("cron durable run ownership", () => {
   it("does not execute when the durable receipt cannot be recorded", async () => {
     vi.useRealTimers();
@@ -162,7 +178,12 @@ describe("cron durable run ownership", () => {
     const now = Date.now();
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    listCronRunReceipts(storePath, job.id);
+    reconcileCronRunReceiptForStartup({
+      storePath,
+      jobId: job.id,
+      startedAtMs: 0,
+      nowMs: now,
+    });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
       CREATE TRIGGER reject_cron_run_receipt
@@ -202,7 +223,7 @@ describe("cron durable run ownership", () => {
       reason: "already-running",
     });
     expect(replacementRunner).not.toHaveBeenCalled();
-    expect(listCronRunReceipts(storePath, job.id)).toMatchObject([{ status: "running" }]);
+    expect(receipts(storePath, job.id)).toMatchObject([{ status: "running" }]);
     replacement.stop();
 
     owner.kill("SIGKILL");
@@ -211,7 +232,7 @@ describe("cron durable run ownership", () => {
     await recovered.start();
     recovered.stop();
 
-    expect(listCronRunReceipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+    expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
     expect((await loadCronStore(storePath)).jobs[0]?.state.lastError).toContain(
       "interrupted by gateway restart",
     );
@@ -233,7 +254,7 @@ describe("cron durable run ownership", () => {
       ? fs.readFileSync(outputPath, "utf8").trim().split("\n").filter(Boolean)
       : [];
     expect(invocations).toHaveLength(1);
-    expect(listCronRunReceipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+    expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
   });
 
   it("supersedes a live run before payload effects after its owner changes", async () => {
@@ -260,7 +281,7 @@ describe("cron durable run ownership", () => {
     await waitForExit(owner);
 
     expect(fs.existsSync(outputPath)).toBe(false);
-    expect(listCronRunReceipts(storePath, job.id)[0]).toMatchObject({
+    expect(receipts(storePath, job.id)[0]).toMatchObject({
       agentId: "alpha",
       status: "superseded",
     });

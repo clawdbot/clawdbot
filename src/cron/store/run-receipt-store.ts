@@ -29,7 +29,7 @@ export type CronRunReceiptStatus =
   | "interrupted"
   | "superseded";
 
-export type CronRunReceipt = {
+type CronRunReceipt = {
   receiptId: string;
   storeKey: string;
   jobId: string;
@@ -438,26 +438,5 @@ export function reconcileCronRunReceiptForStartup(params: {
         .where("status", "=", "running"),
     );
     return undefined;
-  });
-}
-
-/** Stable history order for operator and recovery reads. */
-export function listCronRunReceipts(
-  storePath: string,
-  jobId?: string,
-  env?: NodeJS.ProcessEnv,
-): CronRunReceipt[] {
-  return withReceiptWrite("cron.run-receipt.list", env ? { env } : {}, (database) => {
-    let builder = query(database)
-      .selectFrom("cron_run_receipts")
-      .selectAll()
-      .where("store_key", "=", cronStoreKey(storePath));
-    if (jobId) {
-      builder = builder.where("job_id", "=", jobId);
-    }
-    return executeSqliteQuerySync(
-      database,
-      builder.orderBy("started_at_ms", "desc").orderBy("receipt_id", "desc"),
-    ).rows.map(receiptFromRow);
   });
 }

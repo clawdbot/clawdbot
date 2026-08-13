@@ -3,13 +3,13 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
+import { cronStoreKey } from "./key.js";
 import {
   assertCronRunReceiptCurrent,
   claimCronRunReceipt,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
-  listCronRunReceipts,
 } from "./run-receipt-store.js";
 
 const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
@@ -40,6 +40,24 @@ function claim(storePath: string, job: CronJob, startedAtMs: number) {
   });
 }
 
+function receipts(storePath: string, jobId: string) {
+  return openOpenClawStateDatabase()
+    .db.prepare(
+      `SELECT receipt_id AS receiptId, status, agent_id AS agentId,
+              started_at_ms AS startedAtMs, error_text AS error
+         FROM cron_run_receipts
+        WHERE store_key = ? AND job_id = ?
+        ORDER BY started_at_ms DESC, receipt_id DESC`,
+    )
+    .all(cronStoreKey(storePath), jobId) as Array<{
+    receiptId: string;
+    status: string;
+    agentId: string;
+    startedAtMs: number;
+    error: string | null;
+  }>;
+}
+
 describe("cron run receipt store", () => {
   it("records one durable active run and rejects an overlapping claimant", async () => {
     const { storePath } = await makeStorePath();
@@ -49,7 +67,7 @@ describe("cron run receipt store", () => {
     const first = claim(storePath, job, 100);
 
     expect(() => claim(storePath, job, 101)).toThrow(CronRunReceiptConflictError);
-    expect(listCronRunReceipts(storePath, job.id)).toMatchObject([
+    expect(receipts(storePath, job.id)).toMatchObject([
       { receiptId: first.receiptId, status: "running", startedAtMs: 100 },
     ]);
 
@@ -57,10 +75,7 @@ describe("cron run receipt store", () => {
     const second = claim(storePath, job, 120);
     finishCronRunReceipt({ handle: second, status: "skipped", finishedAtMs: 121 });
 
-    expect(listCronRunReceipts(storePath, job.id).map((receipt) => receipt.status)).toEqual([
-      "skipped",
-      "ok",
-    ]);
+    expect(receipts(storePath, job.id).map((receipt) => receipt.status)).toEqual(["skipped", "ok"]);
   });
 
   it("retires a provably dead process claim before admitting its successor", async () => {
@@ -75,7 +90,7 @@ describe("cron run receipt store", () => {
     const replacement = claim(storePath, job, 220);
 
     expect(replacement.receiptId).not.toBe(abandoned.receiptId);
-    expect(listCronRunReceipts(storePath, job.id)).toMatchObject([
+    expect(receipts(storePath, job.id)).toMatchObject([
       { receiptId: replacement.receiptId, status: "running" },
       { receiptId: abandoned.receiptId, status: "interrupted" },
     ]);
@@ -102,7 +117,7 @@ describe("cron run receipt store", () => {
       finishedAtMs: 310,
       error: "owner changed",
     });
-    expect(listCronRunReceipts(storePath, admitted.id)[0]).toMatchObject({
+    expect(receipts(storePath, admitted.id)[0]).toMatchObject({
       status: "superseded",
       agentId: "alpha",
       error: "owner changed",

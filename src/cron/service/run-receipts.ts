@@ -17,7 +17,7 @@ function currentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
-export function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
+function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
   return resolveEffectiveJobAgentId(job, currentDefaultAgentId(state));
 }
 
