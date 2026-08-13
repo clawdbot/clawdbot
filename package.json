@@ -58,6 +58,7 @@
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
+    "!dist/plugin-sdk/channel-config-ui-hints.d.ts",
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
