@@ -36,7 +36,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -1497,10 +1497,13 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(inboundLabel, {
-    sessionKey,
-    contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
-  });
+  enqueueRoutedSystemEvent(
+    inboundLabel,
+    { ...route, sessionKey },
+    {
+      contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
+    },
+  );
 
   const envelopeFrom =
     resolveConversationLabel({
