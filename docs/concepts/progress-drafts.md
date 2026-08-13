@@ -362,30 +362,6 @@ Tune the per-line budget:
 }
 ```
 
-### Rich rendering (Slack)
-
-Slack can render progress lines as structured Block Kit fields instead of
-plain text:
-
-```json5
-{
-  channels: {
-    slack: {
-      streaming: {
-        mode: "progress",
-        progress: {
-          render: "rich",
-        },
-      },
-    },
-  },
-}
-```
-
-Rich rendering always sends the same plain-text body alongside the Block Kit
-fields, so clients that cannot render the richer shape still show the compact
-progress text.
-
 ### Hide tool/task lines
 
 Keep the single progress draft but hide tool and task lines:
