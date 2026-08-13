@@ -348,6 +348,8 @@ async function expectSharedRailActions(actions: Locator[]): Promise<void> {
       return {
         background: style.backgroundColor,
         color: style.color,
+        outlineColor: style.outlineColor,
+        outlineStyle: style.outlineStyle,
         outlineWidth: style.outlineWidth,
       };
     });
@@ -376,12 +378,15 @@ async function expectSharedRailActions(actions: Locator[]): Promise<void> {
     expect(metric.hover.background).toBe("rgba(0, 0, 0, 0)");
     expect(metric.focus).toMatchObject({
       background: "rgba(0, 0, 0, 0)",
-      outlineWidth: "2px",
+      outlineStyle: "solid",
     });
   }
   expect(new Set(metrics.map(({ rest }) => rest.color)).size).toBe(1);
   expect(new Set(metrics.map(({ hover }) => hover.color)).size).toBe(1);
   expect(new Set(metrics.map(({ focus }) => focus.color)).size).toBe(1);
+  expect(new Set(metrics.map(({ focus }) => focus.outlineColor)).size).toBe(1);
+  expect(new Set(metrics.map(({ focus }) => focus.outlineWidth)).size).toBe(1);
+  expect(Number.parseFloat(metrics[0]?.focus.outlineWidth ?? "0")).toBeGreaterThanOrEqual(2);
 }
 
 async function expectSharedActiveRailActions(
