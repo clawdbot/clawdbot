@@ -795,18 +795,24 @@ export function deferGatewayRestartUntilIdle(opts: {
       return;
     }
     const current = readPendingCount();
-    if (current !== undefined && current <= 0) {
+    const elapsedMs = Date.now() - startedAt;
+    // Checked before the idle branch below: a probe that keeps reporting idle while
+    // emission keeps failing (emitRestart throwing) hits that branch's early return on
+    // every tick. Gating it on the budget means repeated idle-emission failures still
+    // reach the escalation below instead of looping the idle retry forever.
+    const timedOut = maxWaitMs !== undefined && elapsedMs >= maxWaitMs;
+    if (!timedOut && current !== undefined && current <= 0) {
       attemptEmission({ notifyReady: true });
       return;
     }
-    const elapsedMs = Date.now() - startedAt;
-    // Skipped while the count is unknown: onCheckError already reported that inspection,
-    // and there is no observed count to put in the still-pending warning.
-    if (current !== undefined && Date.now() >= nextStillPendingAt) {
+    // Skipped while the count is unknown, or once idle+timed-out has already reached the
+    // escalation below: onCheckError already reported an unknown-count read, and an idle
+    // count is not a "still pending" observation.
+    if (current !== undefined && current > 0 && Date.now() >= nextStillPendingAt) {
       opts.hooks?.onStillPending?.(current, elapsedMs);
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
-    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
+    if (timedOut) {
       stopPoll();
       opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
       attemptEmission({

@@ -377,4 +377,35 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       reason: "gateway.restart.deferral-timeout",
     });
   });
+
+  // The idle branch (current <= 0) used to return before the maxWaitMs check below it.
+  // A probe that keeps reporting idle while emission keeps failing hit that early return
+  // on every single tick, so the bounded budget below it was never reached and the
+  // deferral polled "idle" forever instead of escalating.
+  it("still escalates through maxWaitMs when idle emission keeps failing", async () => {
+    const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onTimeout: vi.fn() };
+    let emitAttempts = 0;
+
+    deferGatewayRestartUntilIdle({
+      // Idle from the start so every poll takes the idle branch, never the unknown-count one.
+      getPendingCount: () => 0,
+      pollMs: 10,
+      maxWaitMs: 100,
+      hooks,
+      timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
+      emitHooks: {
+        emitRestart: () => {
+          emitAttempts += 1;
+          throw new Error("independent-root admission rejected");
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    // Repeated idle retries happened (the single-failed-probe-is-idle policy still holds)...
+    expect(emitAttempts).toBeGreaterThan(1);
+    // ...but the bounded budget still fired instead of looping the idle retry forever.
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+  });
 });
