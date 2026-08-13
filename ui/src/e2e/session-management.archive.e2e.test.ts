@@ -614,6 +614,7 @@ suite.define(() => {
 
       await rowFor(target.key).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
       let listRequestCount = (await gateway.getRequests("sessions.list")).length;
@@ -626,7 +627,6 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listRequestCount);
-      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse(
         "sessions.list",
