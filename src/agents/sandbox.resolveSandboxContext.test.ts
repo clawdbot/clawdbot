@@ -305,11 +305,7 @@ describe("resolveSandboxContext", () => {
       expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({ skillsSnapshot }),
       );
-      expect(readPublishedSandboxSkills(result)?.skillsSnapshot).toEqual({
-        prompt: "",
-        skills: [],
-        resolvedSkills: [],
-      });
+      expect(readPublishedSandboxSkills(result)).toBeUndefined();
       expect(result).not.toHaveProperty("skillsSnapshot");
 
       const workspace = await ensureSandboxWorkspaceForSession({

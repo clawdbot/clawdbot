@@ -225,6 +225,7 @@ type ResolveSandboxContextParams = {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
+  retainPublishedSkills?: boolean;
 };
 
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
@@ -243,6 +244,21 @@ function assertSandboxSessionSecretOwnerAvailable(
     scope: resolved.cfg.scope,
     agentId: resolved.runtime.agentId,
   });
+}
+
+function bindOrReleasePublishedSandboxSkills(
+  owner: object,
+  publishedSkills: PublishedSandboxSkillsHandoff | undefined,
+  retain: boolean | undefined,
+): void {
+  // Prompt readers opt in and release from their own cleanup. Non-prompt
+  // consumers (plugin readiness, cron cache, /btw, plugin-harness dispatch)
+  // must not keep a generation lease: WeakMap GC does not run the releaser.
+  if (retain && publishedSkills) {
+    attachPublishedSandboxSkills(owner, publishedSkills);
+    return;
+  }
+  publishedSkills?.releaseGeneration();
 }
 
 async function resolveProvisionedSandboxContext(
@@ -374,9 +390,11 @@ async function resolveProvisionedSandboxContext(
       backend.createFsBridge?.({ sandbox: sandboxContext }) ??
       createSandboxFsBridge({ sandbox: sandboxContext });
 
-    if (publishedSkills) {
-      attachPublishedSandboxSkills(sandboxContext, publishedSkills);
-    }
+    bindOrReleasePublishedSandboxSkills(
+      sandboxContext,
+      publishedSkills,
+      params.retainPublishedSkills,
+    );
     return sandboxContext;
   } catch (error) {
     publishedSkills?.releaseGeneration();
@@ -392,6 +410,7 @@ export async function resolveSandboxContext(params: {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
+  retainPublishedSkills?: boolean;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -454,14 +473,11 @@ export async function ensureSandboxWorkspaceForSession(params: {
       ...(skillUsagePaths ? { skillUsagePaths } : {}),
       workspaceAccess: cfg.workspaceAccess,
     };
-    // Media staging reuses this helper for workspace paths only. Keep the
-    // generation lease off that path; prompt readers opt in and release from
-    // their own cleanup so prune cannot leak leases across attachment copies.
-    if (params.retainPublishedSkills && publishedSkills) {
-      attachPublishedSandboxSkills(sandboxWorkspace, publishedSkills);
-    } else {
-      publishedSkills?.releaseGeneration();
-    }
+    bindOrReleasePublishedSandboxSkills(
+      sandboxWorkspace,
+      publishedSkills,
+      params.retainPublishedSkills,
+    );
     return sandboxWorkspace;
   } catch (error) {
     publishedSkills?.releaseGeneration();

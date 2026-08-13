@@ -715,6 +715,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         config: {},
         sessionKey: "agent:main:telegram:default:direct:12345",
         workspaceDir: "/tmp/workspace",
+        retainPublishedSkills: true,
       }),
     );
   });

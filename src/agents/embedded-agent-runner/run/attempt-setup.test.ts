@@ -64,7 +64,9 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-sandbox-skills"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(resolveSandboxContext).toHaveBeenCalledWith(expect.objectContaining({ skillsSnapshot }));
+    expect(resolveSandboxContext).toHaveBeenCalledWith(
+      expect.objectContaining({ skillsSnapshot, retainPublishedSkills: true }),
+    );
   });
 
   it.each(["ro", "rw"] as const)(

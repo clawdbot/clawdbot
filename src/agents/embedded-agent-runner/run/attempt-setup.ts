@@ -120,6 +120,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
         sessionKey: sandboxSessionKey,
         skillsSnapshot: params.skillsSnapshot,
         workspaceDir: resolvedWorkspace,
+        retainPublishedSkills: true,
       });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;

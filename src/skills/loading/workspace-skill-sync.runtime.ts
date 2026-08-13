@@ -526,7 +526,13 @@ export async function syncWorkspaceSkills(params: {
           generation: cachedUsage.generation ?? 0,
         };
       }
-      return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot, generation: 0 };
+      // First publish has no committed generation. Returning nextSkillsSnapshot
+      // after deleting generationDir would advertise unreadable <location> paths.
+      return {
+        skillUsagePaths: [],
+        skillsSnapshot: createEmptySyncedSkillsSnapshot(skillsVersion),
+        generation: 0,
+      };
     }
     const nextManifest: SyncedSkillsManifest = {
       entryKeys: plans.map((plan) => plan.identity).toSorted(),

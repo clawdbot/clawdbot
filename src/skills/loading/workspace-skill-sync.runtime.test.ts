@@ -506,6 +506,41 @@ describe("syncWorkspaceSkills", () => {
     expect(await pathExists(firstFilePath ?? "")).toBe(true);
   });
 
+  it("returns no snapshot paths when the first generation copy fails", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
+    const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const copy = vi
+      .spyOn(nodeFs.promises, "cp")
+      .mockRejectedValueOnce(new Error("injected copy failure"));
+    const synced = await syncWorkspaceSkills({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    });
+    copy.mockRestore();
+
+    expect(synced.generation).toBe(0);
+    expect(synced.skillUsagePaths).toEqual([]);
+    expect(synced.skillsSnapshot.skills).toEqual([]);
+    expect(synced.skillsSnapshot.resolvedSkills ?? []).toEqual([]);
+    expect(synced.skillsSnapshot.prompt).toBe("");
+    expect(peekPublishedSyncedSkillsSnapshot(targetWorkspace)).toBeUndefined();
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", ".openclaw-generations", "1")),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves the target skills directory while refreshing children",
     async () => {

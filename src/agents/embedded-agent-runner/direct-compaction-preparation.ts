@@ -327,6 +327,7 @@ export async function prepareDirectCompactionAttempt(
     execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
+    retainPublishedSkills: true,
   });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
