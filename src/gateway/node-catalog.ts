@@ -263,7 +263,6 @@ function buildEffectiveKnownNode(entry: {
       devicePairing?.clientMode,
       pendingNodePairing?.clientMode,
     ),
-    ...(sessionHost ? { sessionHost: true } : {}),
     deviceFamily: firstNormalizedString(
       live?.deviceFamily,
       nodePairing?.deviceFamily,
@@ -284,7 +283,7 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
-    sessionHost: live?.workerRuns !== undefined,
+    sessionHost,
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,

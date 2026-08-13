@@ -211,6 +211,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
   it("projects live node session-host capability without a worker service", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -406,6 +407,7 @@ describe("environment gateway methods", () => {
   });
 
   it("returns status for one node environment", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });
