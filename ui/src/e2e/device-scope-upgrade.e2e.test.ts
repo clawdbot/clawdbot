@@ -121,7 +121,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await navigation;
     await page.getByRole("button", { name: "Request admin" }).waitFor();
 
-    await page.locator("#new-session-place-trigger").click();
+    await page.locator("#new-session-project-trigger").click();
     const browse = page.getByRole("button", { name: "Browse folders" });
     await expect.poll(() => browse.isDisabled()).toBe(true);
     await browse.focus();

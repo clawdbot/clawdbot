@@ -76,8 +76,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
