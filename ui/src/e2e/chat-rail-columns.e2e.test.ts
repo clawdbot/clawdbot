@@ -355,8 +355,11 @@ async function expectSharedRailActions(page: Page, actions: Locator[]): Promise<
     await page.keyboard.press("Tab");
     const focus = await action.evaluate((element) => {
       const style = getComputedStyle(element);
+      const root = element.getRootNode();
+      const activeElement =
+        root instanceof ShadowRoot ? root.activeElement : document.activeElement;
       return {
-        active: document.activeElement === element,
+        active: activeElement === element,
         background: style.backgroundColor,
         color: style.color,
         focusVisible: element.matches(":focus-visible"),
