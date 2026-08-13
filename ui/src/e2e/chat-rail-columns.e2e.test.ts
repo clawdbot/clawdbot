@@ -315,9 +315,9 @@ async function expectSingleRailSeparator(page: Page, selector: string): Promise<
   }
 }
 
-async function expectSharedRailActions(actions: Locator[]): Promise<void> {
+async function expectSharedRailActions(page: Page, actions: Locator[]): Promise<void> {
   const metrics = [];
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     await action.waitFor();
     const rest = await action.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -342,17 +342,30 @@ async function expectSharedRailActions(actions: Locator[]): Promise<void> {
       const style = getComputedStyle(element);
       return { background: style.backgroundColor, color: style.color };
     });
-    await action.focus();
+    const sentinelId = `rail-focus-sentinel-${index}`;
+    await action.evaluate((element, id) => {
+      const sentinel = document.createElement("button");
+      sentinel.id = id;
+      sentinel.type = "button";
+      sentinel.style.cssText =
+        "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none";
+      element.before(sentinel);
+      sentinel.focus();
+    }, sentinelId);
+    await page.keyboard.press("Tab");
     const focus = await action.evaluate((element) => {
       const style = getComputedStyle(element);
       return {
+        active: document.activeElement === element,
         background: style.backgroundColor,
         color: style.color,
+        focusVisible: element.matches(":focus-visible"),
         outlineColor: style.outlineColor,
         outlineStyle: style.outlineStyle,
         outlineWidth: style.outlineWidth,
       };
     });
+    await page.locator(`#${sentinelId}`).evaluate((element) => element.remove());
     await action.evaluate((element) => (element as HTMLElement).blur());
     metrics.push({ focus, hover, rest });
   }
@@ -377,7 +390,9 @@ async function expectSharedRailActions(actions: Locator[]): Promise<void> {
     });
     expect(metric.hover.background).toBe("rgba(0, 0, 0, 0)");
     expect(metric.focus).toMatchObject({
+      active: true,
       background: "rgba(0, 0, 0, 0)",
+      focusVisible: true,
       outlineStyle: "solid",
     });
   }
@@ -497,7 +512,7 @@ suite.define(() => {
                 .evaluate((element) => getComputedStyle(element).borderLeftWidth),
             )
             .toBe("1px");
-          await expectSharedRailActions([
+          await expectSharedRailActions(page, [
             workspace.getByRole("button", { name: "Collapse session workspace" }),
             tasks.getByRole("button", { name: "Collapse background tasks" }),
             companion.getByRole("button", { name: "Close session companion" }),
@@ -589,7 +604,7 @@ suite.define(() => {
           ]);
           await expectSingleRailSeparator(page, '.sidebar-column__divider[role="separator"]');
           await expectSingleRailSeparator(page, "openclaw-browser-panel .bp-resizer--right");
-          await expectSharedRailActions([
+          await expectSharedRailActions(page, [
             changes.locator(".sidebar-column__actions button").last(),
             companion.getByRole("button", { name: "Close session companion" }),
             browser.getByRole("button", { name: "Close browser panel" }),
@@ -617,7 +632,9 @@ suite.define(() => {
         await terminal.locator(".tp").waitFor();
         if (proofPhase === "after") {
           await expectSharedRailHeaders(page, [terminal.locator(".tp-header")]);
-          await expectSharedRailActions([terminal.getByRole("button", { name: "Hide terminal" })]);
+          await expectSharedRailActions(page, [
+            terminal.getByRole("button", { name: "Hide terminal" }),
+          ]);
           await expectSharedActiveRailActions(
             [terminal.getByRole("button", { name: "Dock to bottom" })],
             [terminal.getByRole("button", { name: "Dock to right" })],
@@ -645,7 +662,7 @@ suite.define(() => {
             desktop.locator(".bp-header"),
           ]);
           await expectSingleRailSeparator(page, "openclaw-desktop-panel .bp-resizer--right");
-          await expectSharedRailActions([
+          await expectSharedRailActions(page, [
             changes.locator(".sidebar-column__actions button").last(),
             companion.getByRole("button", { name: "Close session companion" }),
             desktop.getByRole("button", { name: "Hide desktop panel" }),
@@ -694,7 +711,7 @@ suite.define(() => {
             custodian.locator(".cp-header"),
           ]);
           await expectSingleRailSeparator(page, "openclaw-custodian-panel .cp-resizer--right");
-          await expectSharedRailActions([
+          await expectSharedRailActions(page, [
             changes.locator(".sidebar-column__actions button").last(),
             companion.getByRole("button", { name: "Close session companion" }),
             custodian.getByRole("button", { name: "Close Ask OpenClaw" }),
