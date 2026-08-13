@@ -338,7 +338,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
