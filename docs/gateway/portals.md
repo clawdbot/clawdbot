@@ -16,7 +16,7 @@ Ask the agent to open a portal:
 - "Show me in a portal."
 - "Start the app in a portal."
 
-The agent opens a portal for the application's port, then starts the development server with a background `exec` call. OpenClaw passes the selected port as `PORT` and the portal's public base URL as `PUBLIC_URL`.
+The agent opens a portal for the application's port, then starts the development server with a background `exec` call. Opening a portal only creates the proxy listener; it does not inject environment variables into your server. The agent sets `PORT` (the port it opened) and `PUBLIC_URL` (the portal's public base URL) in that `exec` command's own environment, so the app binds the expected port and generates correct absolute URLs.
 
 ## Declare development servers
 
