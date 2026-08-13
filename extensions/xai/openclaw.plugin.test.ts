@@ -39,7 +39,6 @@ describe("xAI plugin manifest", () => {
     expect(manifest.modelIdNormalization?.providers?.xai?.aliases).toMatchObject({
       "grok-4.3-latest": "grok-4.3",
       "grok-4.5-latest": "grok-4.5",
-      "grok-4.6-latest": "grok-4.6",
     });
     expect(manifest.modelIdNormalization?.providers?.xai?.aliases).not.toHaveProperty(
       "grok-latest",

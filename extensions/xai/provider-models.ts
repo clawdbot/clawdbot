@@ -9,7 +9,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
-import { normalizeXaiModelId, XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
+import { normalizeXaiModelId, resolveXaiOAuthAutoModelId } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 const XAI_MODERN_MODEL_PREFIXES = [
@@ -55,13 +55,7 @@ export function resolveXaiForwardCompatModel(params: {
 }
 
 export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const canonicalModelId =
-    typeof model.params?.canonicalModelId === "string"
-      ? model.params.canonicalModelId.trim()
-      : undefined;
-  const resolved =
-    model.id === XAI_OAUTH_AUTO_MODEL_ID && canonicalModelId
-      ? { ...model, id: canonicalModelId }
-      : model;
+  const resolvedModelId = resolveXaiOAuthAutoModelId(model.id, model.params);
+  const resolved = resolvedModelId === model.id ? model : { ...model, id: resolvedModelId };
   return applyXaiRuntimeModelCompat(resolved);
 }

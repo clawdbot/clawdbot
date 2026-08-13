@@ -8,7 +8,7 @@ import {
   isXaiFrontierModelId,
   isXaiGrok46ModelId,
   normalizeXaiModelId,
-  XAI_OAUTH_AUTO_MODEL_ID,
+  resolveXaiOAuthAutoModelId,
 } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
 
@@ -16,14 +16,8 @@ export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile {
   // OAuth catalog rows keep the "auto" alias id and carry the provider-selected
-  // target in params.canonicalModelId. Judge the concrete target, or the auto
-  // route collapses to an off-only thinking picker.
-  const canonicalModelId =
-    typeof ctx.params?.canonicalModelId === "string" ? ctx.params.canonicalModelId : "";
-  const rawModelId =
-    ctx.modelId.trim().toLowerCase() === XAI_OAUTH_AUTO_MODEL_ID && canonicalModelId
-      ? canonicalModelId
-      : ctx.modelId;
+  // target in params.canonicalModelId. Judge that concrete target here too.
+  const rawModelId = resolveXaiOAuthAutoModelId(ctx.modelId, ctx.params);
   const modelId = normalizeXaiModelId(rawModelId.trim().toLowerCase());
   const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning;
   if (!isXaiProviderId(ctx.provider) || !reasoning) {

@@ -18,7 +18,6 @@
         "aliases": {
           "grok-4.3-latest": "grok-4.3",
           "grok-4.5-latest": "grok-4.5",
-          "grok-4.6-latest": "grok-4.6",
           "grok-build-latest": "grok-4.5"
         }
       }

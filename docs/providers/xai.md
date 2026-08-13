@@ -115,7 +115,7 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 | Family         | Model ids                                                    |
 | -------------- | ------------------------------------------------------------ |
-| Grok 4.6       | `grok-4.6` (alias: `grok-4.6-latest`)                        |
+| Grok 4.6       | `grok-4.6`                                                   |
 | Grok 4.5       | `grok-4.5` (aliases: `grok-4.5-latest`, `grok-build-latest`) |
 | Grok Build 0.1 | `grok-build-0.1`                                             |
 | Grok 4.3       | `grok-4.3` (aliases: `grok-4.3-latest`, `grok-latest`)       |
@@ -124,8 +124,8 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 <Tip>
 Use `xai/auto` to follow xAI's authenticated OAuth default, or select a concrete
 id such as `xai/grok-4.6` to remain pinned. API-key setup keeps Grok 4.3 as the
-regional-safe default; Grok 4.6, Grok 4.5, `grok-build-0.1`, and both dated Grok 4.20 variants
-remain selectable.
+regional-safe default; Grok 4.6, Grok 4.5, `grok-build-0.1`, and both dated
+Grok 4.20 variants remain selectable.
 </Tip>
 
 Catalog context and token-cost metadata follows xAI's live
@@ -133,9 +133,10 @@ Catalog context and token-cost metadata follows xAI's live
 [pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
 when a request crosses its documented 200k-token long-context threshold:
 for Grok 4.5 and Grok 4.6, input, cached-input, and output rates double.
-OpenClaw's flat catalog cost fields record the short-context rates. Grok Build,
-xAI's separate coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli)
-and currently uses Grok 4.5.
+OpenClaw's flat catalog cost fields record the short-context rates. The current
+[Grok Build](https://docs.x.ai/build/overview) coding agent uses Grok 4.6. The
+historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
+Grok 4.5.
 
 ## Feature coverage
 

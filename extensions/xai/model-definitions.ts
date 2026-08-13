@@ -268,10 +268,6 @@ function toModelDefinition(entry: XaiCatalogEntry): ModelDefinitionConfig {
   };
 }
 
-function resolveXaiFrontierCost(modelId: string): XaiCost {
-  return isXaiGrok46ModelId(modelId) ? XAI_GROK_46_COST : XAI_GROK_45_COST;
-}
-
 export function buildXaiModelDefinition(): ModelDefinitionConfig {
   return toModelDefinition(
     XAI_MODEL_CATALOG.find((entry) => entry.id === XAI_DEFAULT_MODEL_ID) ?? {
@@ -353,7 +349,9 @@ export function resolveXaiCatalogEntry(modelId: string) {
             ? 30_000
             : XAI_DEFAULT_MAX_TOKENS,
       cost: isXaiFrontierModelId(lower)
-        ? resolveXaiFrontierCost(lower)
+        ? isXaiGrok46ModelId(lower)
+          ? XAI_GROK_46_COST
+          : XAI_GROK_45_COST
         : lower.startsWith("grok-4.3")
           ? XAI_GROK_43_COST
           : lower.startsWith("grok-4.20")
