@@ -318,11 +318,10 @@ function shouldCopySyncedSkillSourceEntry(src: string): boolean {
 async function lstatOrUndefined(target: string): Promise<fs.Stats | undefined> {
   try {
     return await fsp.lstat(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+  } catch {
+    // Any stat failure means "not usable here". Rethrowing would let one bad
+    // child abort the whole sandbox skill sync and leave the run with no skills.
+    return undefined;
   }
 }
 
@@ -335,42 +334,45 @@ function resolveSyncedSkillEntryKind(
   return entry.isDirectory() ? "directory" : "file";
 }
 
-async function reconcileSyncedSkillChild(source: string, destination: string): Promise<void> {
+async function reconcileSyncedSkillChild(params: {
+  source: string;
+  destination: string;
+  /** Type conflicts block the copy; dropped entries may only go after it succeeds. */
+  mode: "type-conflicts" | "dropped-entries";
+}): Promise<void> {
   let children: fs.Dirent[];
   try {
-    children = await fsp.readdir(destination, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
+    children = await fsp.readdir(params.destination, { withFileTypes: true });
+  } catch {
+    return;
   }
   for (const child of children) {
-    const sourceChild = path.join(source, child.name);
-    const destinationChild = path.join(destination, child.name);
+    const sourceChild = path.join(params.source, child.name);
+    const destinationChild = path.join(params.destination, child.name);
     const sourceStats = shouldCopySyncedSkillSourceEntry(sourceChild)
       ? await lstatOrUndefined(sourceChild)
       : undefined;
-    if (
-      sourceStats &&
-      resolveSyncedSkillEntryKind(sourceStats) === resolveSyncedSkillEntryKind(child)
-    ) {
-      if (child.isDirectory()) {
-        await reconcileSyncedSkillChild(sourceChild, destinationChild);
+    if (!sourceStats) {
+      if (params.mode === "dropped-entries") {
+        await fsp.rm(destinationChild, { recursive: true, force: true });
       }
       continue;
     }
-    await fsp.rm(destinationChild, { recursive: true, force: true });
+    if (resolveSyncedSkillEntryKind(sourceStats) !== resolveSyncedSkillEntryKind(child)) {
+      await fsp.rm(destinationChild, { recursive: true, force: true });
+      continue;
+    }
+    if (child.isDirectory()) {
+      await reconcileSyncedSkillChild({
+        source: sourceChild,
+        destination: destinationChild,
+        mode: params.mode,
+      });
+    }
   }
 }
 
-async function syncSyncedSkillChild(source: string, destination: string): Promise<void> {
-  // Reconcile before copying. `fs.cp` only unlinks on its regular-file branch, so
-  // a source that became a directory or a symlink (skills ship AGENTS.md with a
-  // sibling CLAUDE.md symlink) throws EEXIST/EISDIR and strands the child
-  // half-updated on every later sync. Removing only entries that are about to be
-  // rewritten, or that the source dropped, keeps the copy self-healing.
-  await reconcileSyncedSkillChild(source, destination);
+async function overlaySyncedSkillChild(source: string, destination: string): Promise<void> {
   // Overlay onto the live child instead of replacing it: a concurrent run already
   // advertised these <location> paths, and wiping the child first would leave it
   // reading a half-built directory for the whole copy.
@@ -381,18 +383,55 @@ async function syncSyncedSkillChild(source: string, destination: string): Promis
   });
 }
 
-function resolveSyncedSkillChildDirNames(
+// `fs.cp` only unlinks on its regular-file branch. Verified on Node 24: a source
+// entry that became a directory raises ERR_FS_CP_DIR_TO_NON_DIR, one that became a
+// symlink raises EEXIST, and a destination directory facing a file or symlink
+// raises ERR_FS_CP_NON_DIR_TO_DIR. Only those are worth reconciling and retrying;
+// retrying anything else would mask the real failure.
+const SYNCED_SKILL_TYPE_CONFLICT_CODES = new Set([
+  "EEXIST",
+  "ERR_FS_CP_DIR_TO_NON_DIR",
+  "ERR_FS_CP_NON_DIR_TO_DIR",
+]);
+
+async function syncSyncedSkillChild(source: string, destination: string): Promise<void> {
+  try {
+    await overlaySyncedSkillChild(source, destination);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!code || !SYNCED_SKILL_TYPE_CONFLICT_CODES.has(code)) {
+      throw error;
+    }
+    // Skills ship AGENTS.md with a sibling CLAUDE.md symlink, so this shape is
+    // shipped. Clear just the conflicting entries and retry once.
+    await reconcileSyncedSkillChild({ source, destination, mode: "type-conflicts" });
+    await overlaySyncedSkillChild(source, destination);
+  }
+  // Only now: deleting what the source dropped before a copy has succeeded would
+  // let a vanished source empty an already-published child.
+  await reconcileSyncedSkillChild({ source, destination, mode: "dropped-entries" });
+}
+
+/** Child directory each previously published skill occupied, keyed by directory name. */
+function resolvePublishedSyncedSkillDirNames(
   targetSkillsDir: string,
   skillUsagePaths: readonly SkillUsagePath[],
-): string[] {
-  return skillUsagePaths.flatMap((usage) => {
+): Map<string, string> {
+  const dirNames = new Map<string, string>();
+  for (const usage of skillUsagePaths) {
     const relative = path.relative(targetSkillsDir, usage.readPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      return [];
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+      continue;
+    }
+    if (path.isAbsolute(relative)) {
+      continue;
     }
     const [child] = relative.split(path.sep);
-    return child ? [child] : [];
-  });
+    if (child) {
+      dirNames.set(child, usage.skillName);
+    }
+  }
+  return dirNames;
 }
 
 async function pruneRemovedSyncedSkillChildren(params: {
@@ -583,7 +622,19 @@ export async function syncWorkspaceSkills(params: {
       [...baseNameCounts].flatMap(([baseName, count]) => (count > 1 ? [baseName] : [])),
     );
 
-    const usedDirNames = new Set<string>();
+    const publishedDirNames = resolvePublishedSyncedSkillDirNames(
+      targetSkillsDir,
+      manifest?.skillUsagePaths ?? [],
+    );
+    const candidateSkillNames = new Set(candidates.map((candidate) => candidate.entry.skill.name));
+    // Reserve directories the previous catalog gave to skills this run dropped.
+    // Those files survive one refresh for in-flight readers, so handing the name
+    // to a different skill would serve foreign content at an advertised location.
+    const usedDirNames = new Set(
+      [...publishedDirNames].flatMap(([dirName, skillName]) =>
+        candidateSkillNames.has(skillName) ? [] : [dirName],
+      ),
+    );
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const candidate of candidates) {
       const { baseName, entry, identity } = candidate;
@@ -680,13 +731,11 @@ export async function syncWorkspaceSkills(params: {
     try {
       await pruneRemovedSyncedSkillChildren({
         targetSkillsDir,
-        // Keep the previous catalog's children for one refresh. A run that built
-        // its prompt from that catalog is still reading those <location> paths,
-        // and the bound is one generation, not unbounded retention.
-        retainDirNames: new Set([
-          ...usedDirNames,
-          ...resolveSyncedSkillChildDirNames(targetSkillsDir, manifest?.skillUsagePaths ?? []),
-        ]),
+        // Keep the previous catalog's children for one further catalog change: a
+        // run that built its prompt from that catalog is still reading those
+        // <location> paths. Retention spans one published generation, not one
+        // wall-clock interval, so an unchanged catalog keeps them until it moves.
+        retainDirNames: new Set([...usedDirNames, ...publishedDirNames.keys()]),
       });
     } catch (error) {
       // The manifest is already committed. Prune is cleanup; failing it must not

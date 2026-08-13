@@ -349,7 +349,7 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     );
   });
 
-  it("gives basename-colliding skills stable directories across catalog changes", async () => {
+  it("never repurposes a departed skill's directory for a basename-colliding sibling", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
@@ -394,7 +394,6 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     expect(alphaPath).toBeTruthy();
     expect(betaPath).toBeTruthy();
     expect(alphaPath).not.toBe(betaPath);
-    expect(await fs.readFile(alphaPath ?? "", "utf8")).toContain("name: alpha");
 
     // Eligibility narrows to beta only. Alpha's location must never start
     // serving beta: a missing or stale file is a failure the model can report,
@@ -402,10 +401,63 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
     const betaOnly = await publish(["beta"]);
     expect(await fs.readFile(alphaPath ?? "", "utf8")).toContain("name: alpha");
-    const betaOnlyPath = betaOnly.skillsSnapshot.resolvedSkills?.find(
+    expect(
+      await fs.readFile(
+        betaOnly.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "beta")?.filePath ??
+          "",
+        "utf8",
+      ),
+    ).toContain("name: beta");
+  });
+
+  it("never lets a newly eligible skill claim a departed sibling's directory", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha", "tools"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "beta", "tools"),
+      name: "beta",
+      description: "Beta skill",
+    });
+    const publish = async (skillFilter: string[]) => {
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillFilter,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillFilter,
+        skillsSnapshot,
+      });
+    };
+
+    // Beta alone takes the plain basename. Alpha then becomes eligible while beta
+    // does not: alpha must not inherit the location beta's run advertised.
+    const betaOnly = await publish(["beta"]);
+    const betaPath = betaOnly.skillsSnapshot.resolvedSkills?.find(
       (skill) => skill.name === "beta",
     )?.filePath;
-    expect(await fs.readFile(betaOnlyPath ?? "", "utf8")).toContain("name: beta");
+    expect(betaPath).toBeTruthy();
+
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const alphaOnly = await publish(["alpha"]);
+    const alphaPath = alphaOnly.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "alpha",
+    )?.filePath;
+    expect(alphaPath).not.toBe(betaPath);
+    expect(await fs.readFile(betaPath ?? "", "utf8")).toContain("name: beta");
+    expect(await fs.readFile(alphaPath ?? "", "utf8")).toContain("name: alpha");
   });
 
   it("keeps node-hosted skills in the published sandbox catalog", async () => {
@@ -568,6 +620,71 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       expect(await pathExists(path.join(targetWorkspace, "skills", "demo", "SKILL.md"))).toBe(true);
     } finally {
       resetRemoteNodeSkillsForTests();
+    }
+  });
+
+  it("keeps a published child when its source disappears mid-refresh", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    for (const name of ["aaa", "bbb"]) {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
+      });
+    }
+    const publish = async () => {
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    await publish();
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "aaa"),
+      name: "aaa",
+      description: "aaa skill updated",
+    });
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+
+    // A skill install, plugin regeneration, or git operation can remove a source
+    // tree after discovery and before its copy. That must not empty the child a
+    // concurrent run already advertises.
+    const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+    let removedSource = false;
+    const cpSpy = vi
+      .spyOn(nodeFs.promises, "cp")
+      .mockImplementation(async (source, destination, opts) => {
+        const result = await originalCp(source, destination, opts);
+        if (!removedSource) {
+          removedSource = true;
+          await fs.rm(path.join(sourceWorkspace, "skills", "bbb"), {
+            recursive: true,
+            force: true,
+          });
+        }
+        return result;
+      });
+    try {
+      const second = await publish();
+      expect(sortedSkillNames(second.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
+        "aaa",
+        "bbb",
+      ]);
+      expect(await pathExists(path.join(targetWorkspace, "skills", "bbb", "SKILL.md"))).toBe(true);
+    } finally {
+      cpSpy.mockRestore();
     }
   });
 

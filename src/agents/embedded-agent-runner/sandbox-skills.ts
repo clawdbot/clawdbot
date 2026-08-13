@@ -131,21 +131,11 @@ function replaceSerializedSkillLocation(params: {
 }): string {
   // The catalog renderer serializes arbitrary description and location-note
   // prose next to <location>. Substitute only that element so a skill that
-  // documents its host path keeps the rest of the prompt byte-for-byte.
-  const pathPairs: Array<[string, string]> = [[params.hostPath, params.mappedPath]];
-  const hostPosix = params.hostPath.replaceAll("\\", "/");
-  if (hostPosix !== params.hostPath) {
-    pathPairs.push([hostPosix, params.mappedPath.replaceAll("\\", "/")]);
-  }
-  let prompt = params.prompt;
-  for (const [fromPath, toPath] of pathPairs) {
-    const from = `<location>${escapeSkillXml(fromPath)}</location>`;
-    const to = `<location>${escapeSkillXml(toPath)}</location>`;
-    if (from !== to) {
-      prompt = prompt.replaceAll(from, to);
-    }
-  }
-  return prompt;
+  // documents its host path keeps the rest of the prompt byte-for-byte. The
+  // caller passes the path exactly as the renderer serialized it.
+  const from = `<location>${escapeSkillXml(params.hostPath)}</location>`;
+  const to = `<location>${escapeSkillXml(params.mappedPath)}</location>`;
+  return from === to ? params.prompt : params.prompt.replaceAll(from, to);
 }
 
 export function mapSandboxSkillUsagePaths(params: {
