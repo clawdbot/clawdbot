@@ -6,15 +6,16 @@ metadata: { "openclaw": { "emoji": "🪝" } }
 
 # TaskFlow
 
-Use TaskFlow when a job needs to outlive one prompt or one detached run, but you still want one owner session, one return context, and one place to inspect or resume the work.
+Use TaskFlow when plugin or tool code owns multi-step background orchestration that must persist step state, waits, revision-checked transitions, and child-task links across runs.
+
+Do not use a managed TaskFlow merely because a single detached ACP/subagent job must outlive the current prompt or run. Start that work through the normal Core task entry point; Core creates the mirrored flow automatically. Agent instructions should not create, advance, resume, or recover a second managed flow for the same job.
 
 ## When to use it
 
-- Multi-step background work with one owner
-- Work that waits on detached ACP or subagent tasks
-- Jobs that may need to emit one clear update back to the owner
-- Jobs that need small persisted state between steps
-- Plugin or tool work that must survive restarts and revision conflicts cleanly
+- Plugin or controller code orchestrating multiple child tasks
+- Persisted `currentStep`, `stateJson`, or `waitJson` across orchestration steps
+- Explicit waiting/resume transitions
+- Revision-safe lifecycle control across restarts
 
 ## What TaskFlow owns
 
