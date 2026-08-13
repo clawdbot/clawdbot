@@ -10,11 +10,34 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
-import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { consumeChannelRunAdmission, prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
 describe("channel run admission", () => {
+  it("projects a hardened channel handoff as boundary-verified assurance", () => {
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const evidence = createChannelParticipantAdmissionEvidence({
+        channelId: "test",
+        participantId: "person-1",
+      });
+
+      expect(consumeChannelRunAdmission(evidence).facts).toMatchObject({
+        invoker: { state: "present", kind: "person" },
+        assurance: [
+          {
+            kind: "channel-admission",
+            rawEvidenceRef: "channel-admission",
+            strength: "boundary-verified",
+          },
+        ],
+      });
+    } finally {
+      clearCollection();
+    }
+  });
+
   it("consumes once across fallback admission and closes the exact prepared owner", async () => {
     const identityWork: unknown[] = [];
     const decisions: unknown[] = [];

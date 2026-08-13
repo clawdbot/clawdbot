@@ -9,8 +9,8 @@ export function applyRouteDmScope<T extends AssembledChannelTurn["ctxPayload"]>(
     return context;
   }
   const scoped = { ...context, DmScope: dmScope } as T;
-  // Finalized contexts carry identity evidence out-of-band; keep it attached
-  // when routing replaces the object to add the authoritative DM scope.
+  // The route rewrite changes admission scope. Preserve the private carrier
+  // operation so the replacement records unknown instead of reusing authority.
   copyChannelParticipantAdmissionEvidence(context, scoped);
   return scoped;
 }

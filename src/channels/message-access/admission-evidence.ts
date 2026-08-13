@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- Record/epoch, one-shot scope, and carrier state share one private owner. */
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { ResolvedChannelMessageIngress } from "./runtime-types.js";
@@ -43,6 +44,22 @@ type ChannelIngressResolutionBinding = Readonly<{
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
+  owner?: ChannelAdmissionEvidenceOwner;
+  ownerEpoch?: object;
+  scope?: ChannelIngressResolutionScope;
+  publicScopeKey?: string;
+  handoff: { consumed: boolean };
+}>;
+
+type ChannelAdmissionEvidenceOwner = Readonly<{
+  channelId: string;
+  record: object;
+  epoch: object;
+  isLive: () => boolean;
+}>;
+
+type PreparedChannelAdmissionEvidence = Readonly<{
+  kind: "prepared-channel-admission-evidence";
 }>;
 
 const CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS = 16;
@@ -53,11 +70,25 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   generation: 0,
   payloadByEvidence: new WeakMap<object, ChannelAdmissionEvidencePayload>(),
   resolutionByIngress: new WeakMap<object, ChannelIngressResolutionBinding>(),
-  evidenceByIngress: new WeakMap<object, ChannelAdmissionEvidence>(),
+  ownerByChannelId: new Map<string, ChannelAdmissionEvidenceOwner>(),
+  evidenceByPreparation: new WeakMap<object, ChannelAdmissionEvidence | undefined>(),
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
+  scopeByContext: new WeakMap<object, string>(),
   consumedEvidence: new WeakSet<object>(),
   decisionSink: undefined as ((receipt: DecisionReceiptV1) => boolean) | undefined,
 }));
+
+/** Register one exact native channel record as the current in-process producer. */
+export function registerChannelAdmissionEvidenceOwner(
+  owner: ChannelAdmissionEvidenceOwner,
+): () => void {
+  state.ownerByChannelId.set(owner.channelId, owner);
+  return () => {
+    if (state.ownerByChannelId.get(owner.channelId) === owner) {
+      state.ownerByChannelId.delete(owner.channelId);
+    }
+  };
+}
 
 export function configureChannelAdmissionEvidenceCollection(enabled: boolean): () => void {
   const generation = ++state.generation;
@@ -105,10 +136,9 @@ function scopedParticipantRef(params: {
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
 }): string | undefined {
-  const channelId = params.channelId.trim();
-  const accountId = params.accountId?.trim() || "default";
-  const rawPrincipalRef =
-    params.rawPrincipalRef == null ? "" : String(params.rawPrincipalRef).trim();
+  const channelId = params.channelId;
+  const accountId = params.accountId || "default";
+  const rawPrincipalRef = params.rawPrincipalRef == null ? "" : String(params.rawPrincipalRef);
   if (!channelId || !rawPrincipalRef) {
     return undefined;
   }
@@ -131,6 +161,122 @@ function participantContribution(params: {
   );
 }
 
+type ChannelIngressResolutionScope = {
+  conversation: {
+    kind: "direct" | "group" | "channel";
+    id: string;
+    parentId?: string;
+    threadId?: string;
+  };
+};
+
+const MAX_CHANNEL_ADMISSION_SCOPE_BYTES = 32_768;
+const MAX_CHANNEL_ADMISSION_SCOPE_NODES = 256;
+const INVALID_SCOPE_VALUE = Symbol("invalid-channel-admission-scope-value");
+
+function snapshotOwnedData(
+  value: unknown,
+  budget = { nodes: 0 },
+  depth = 0,
+): unknown | typeof INVALID_SCOPE_VALUE {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_CHANNEL_ADMISSION_SCOPE_NODES || depth > 6) {
+    return INVALID_SCOPE_VALUE;
+  }
+  if (
+    value === undefined ||
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : INVALID_SCOPE_VALUE;
+  }
+  if (typeof value !== "object") {
+    return INVALID_SCOPE_VALUE;
+  }
+  let descriptors: ReturnType<typeof Object.getOwnPropertyDescriptors>;
+  let symbols: symbol[];
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+    symbols = Object.getOwnPropertySymbols(value);
+  } catch {
+    return INVALID_SCOPE_VALUE;
+  }
+  if (symbols.some((key) => Object.getOwnPropertyDescriptor(value, key)?.enumerable)) {
+    return INVALID_SCOPE_VALUE;
+  }
+  const keys = Object.keys(descriptors)
+    .filter((key) => descriptors[key]?.enumerable)
+    .toSorted();
+  const entries: unknown[] = [];
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor)) {
+      return INVALID_SCOPE_VALUE;
+    }
+    const captured = snapshotOwnedData(descriptor.value, budget, depth + 1);
+    if (captured === INVALID_SCOPE_VALUE) {
+      return INVALID_SCOPE_VALUE;
+    }
+    entries.push([key, captured]);
+  }
+  return Array.isArray(value) ? ["array", entries] : ["record", entries];
+}
+
+function stableOwnedScopeKey(value: unknown): string | undefined {
+  const snapshot = snapshotOwnedData(value);
+  if (snapshot === INVALID_SCOPE_VALUE) {
+    return undefined;
+  }
+  try {
+    const key = JSON.stringify(snapshot);
+    return key.length <= MAX_CHANNEL_ADMISSION_SCOPE_BYTES ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function publicResultScopeKey(result: ResolvedChannelMessageIngress): string | undefined {
+  const stateValue = ownDataValue(result, "state");
+  if (!stateValue || typeof stateValue !== "object") {
+    return undefined;
+  }
+  const routeFacts = ownDataValue(stateValue, "routeFacts");
+  if (!Array.isArray(routeFacts)) {
+    return undefined;
+  }
+  const routeCount = ownDataValue(routeFacts, "length");
+  if (typeof routeCount !== "number" || routeCount > MAX_CHANNEL_ADMISSION_SCOPE_NODES) {
+    return undefined;
+  }
+  const routes: unknown[] = [];
+  for (let index = 0; index < routeCount; index += 1) {
+    const descriptor = safeOwnPropertyDescriptor(routeFacts, String(index));
+    const route = descriptor && "value" in descriptor ? descriptor.value : undefined;
+    if (!route || typeof route !== "object") {
+      return undefined;
+    }
+    routes.push({
+      id: ownDataValue(route, "id"),
+      kind: ownDataValue(route, "kind"),
+      gate: ownDataValue(route, "gate"),
+      effect: ownDataValue(route, "effect"),
+      precedence: ownDataValue(route, "precedence"),
+      senderPolicy: ownDataValue(route, "senderPolicy"),
+    });
+  }
+  return stableOwnedScopeKey({
+    accountId: ownDataValue(stateValue, "accountId"),
+    channelId: ownDataValue(stateValue, "channelId"),
+    conversationKind: ownDataValue(stateValue, "conversationKind"),
+    event: ownDataValue(stateValue, "event"),
+    routeFacts: routes,
+  });
+}
+
 /** Brand an exact resolver object with its non-authoritative input binding. */
 export function recordChannelIngressResolution(params: {
   result: ResolvedChannelMessageIngress;
@@ -138,7 +284,10 @@ export function recordChannelIngressResolution(params: {
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
+  scope: ChannelIngressResolutionScope;
 }): ResolvedChannelMessageIngress {
+  const owner = state.ownerByChannelId.get(params.channelId);
+  const activeOwner = owner?.isLive() === true ? owner : undefined;
   state.resolutionByIngress.set(
     params.result,
     Object.freeze({
@@ -146,131 +295,298 @@ export function recordChannelIngressResolution(params: {
       accountId: params.accountId,
       rawPrincipalRef: params.rawPrincipalRef,
       participantOutcomeAffecting: params.participantOutcomeAffecting,
+      owner: activeOwner,
+      ownerEpoch: activeOwner?.epoch,
+      scope: Object.freeze(params.scope),
+      publicScopeKey: publicResultScopeKey(params.result),
+      handoff: { consumed: false },
     }),
   );
   return params.result;
 }
 
-/** Bind host-admitted resolver results without exposing participant values on public SDK paths. */
-function bindChannelIngressAdmissionEvidence(params: {
-  result: ResolvedChannelMessageIngress;
-  channelId: string;
-  accountId?: string;
-  rawPrincipalRef: string | number | null | undefined;
-}): void {
-  if (!state.collectionEnabled || params.result.ingress.admission !== "dispatch") {
-    return;
+function ownDataValue(value: object, key: PropertyKey): unknown | typeof INVALID_SCOPE_VALUE {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return INVALID_SCOPE_VALUE;
   }
-  const resolution = state.resolutionByIngress.get(params.result);
-  if (!resolution || scopedParticipantRef(resolution) !== scopedParticipantRef(params)) {
-    return;
+  if (!descriptor) {
+    return undefined;
   }
-  const contribution = participantContribution(resolution);
-  const evidence = mintChannelAdmissionEvidence({
-    kind: "leaf",
-    contribution: Object.freeze({
-      ...contribution,
-      decision: Object.freeze({
-        participantAware: contribution.participant.state === "present",
-        outcomeAffecting: resolution.participantOutcomeAffecting,
-      }),
-    }),
-  });
-  if (evidence) {
-    state.evidenceByIngress.set(params.result, evidence);
+  return "value" in descriptor ? descriptor.value : INVALID_SCOPE_VALUE;
+}
+
+function safeOwnPropertyDescriptor(
+  value: object,
+  key: PropertyKey,
+): PropertyDescriptor | undefined {
+  try {
+    return Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return undefined;
   }
 }
 
-/** Bind ingress results only at the host-owned bundled channel context boundary. */
-export function bindHostChannelContextAdmissionEvidence(params: {
-  context: object;
-  channelId: string;
-  accountId?: string;
-  ingress?:
-    | ResolvedChannelMessageIngress
-    | readonly ResolvedChannelMessageIngress[]
-    | "unsupported";
-  rawPrincipalRef: string | number | null | undefined;
-}): void {
-  if (params.ingress !== undefined && params.ingress !== "unsupported") {
-    const ingressResults = Array.isArray(params.ingress) ? params.ingress : [params.ingress];
-    for (const result of ingressResults) {
-      bindChannelIngressAdmissionEvidence({
-        result,
-        channelId: params.channelId,
-        accountId: params.accountId,
-        rawPrincipalRef: params.rawPrincipalRef,
-      });
-    }
+function normalizeScopeId(value: unknown): string | undefined | typeof INVALID_SCOPE_VALUE {
+  if (value === undefined || value === null) {
+    return undefined;
   }
-  bindChannelContextAdmissionEvidence(params);
+  return typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : INVALID_SCOPE_VALUE;
 }
 
-function evidenceMatchesContextParticipant(params: {
-  evidence: ChannelAdmissionEvidence;
+function contextHandoffMatches(params: {
+  binding: ChannelIngressResolutionBinding;
   channelId: string;
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
+  contextParams: object;
 }): boolean {
-  const expected = scopedParticipantRef(params);
-  const payload = state.payloadByEvidence.get(params.evidence);
+  const conversation = ownDataValue(params.contextParams, "conversation");
+  const route = ownDataValue(params.contextParams, "route");
+  const reply = ownDataValue(params.contextParams, "reply");
+  if (
+    !conversation ||
+    typeof conversation !== "object" ||
+    !route ||
+    typeof route !== "object" ||
+    !reply ||
+    typeof reply !== "object"
+  ) {
+    return false;
+  }
+  const expected = params.binding.scope?.conversation;
+  if (!expected) {
+    return false;
+  }
+  const routeAccountId = ownDataValue(route, "accountId");
+  const effectiveAccountId =
+    routeAccountId === undefined ? params.accountId : normalizeScopeId(routeAccountId);
+  const conversationKind = ownDataValue(conversation, "kind");
+  const conversationId = normalizeScopeId(ownDataValue(conversation, "id"));
+  const conversationParentId = normalizeScopeId(ownDataValue(conversation, "parentId"));
+  const conversationThreadId = normalizeScopeId(ownDataValue(conversation, "threadId"));
+  const replyThreadId = normalizeScopeId(ownDataValue(reply, "messageThreadId"));
+  const replyParentId = normalizeScopeId(ownDataValue(reply, "threadParentId"));
+  const nativeConversationId = normalizeScopeId(ownDataValue(conversation, "nativeChannelId"));
+  const nativeReplyId = normalizeScopeId(ownDataValue(reply, "nativeChannelId"));
+  const values = [
+    effectiveAccountId,
+    conversationId,
+    conversationParentId,
+    conversationThreadId,
+    replyThreadId,
+    replyParentId,
+    nativeConversationId,
+    nativeReplyId,
+  ];
+  if (values.includes(INVALID_SCOPE_VALUE)) {
+    return false;
+  }
+  const nativeId = nativeReplyId ?? nativeConversationId;
+  if (
+    typeof nativeId === "string" &&
+    ![expected.id, expected.parentId, expected.threadId].includes(nativeId)
+  ) {
+    return false;
+  }
+  if (
+    (replyThreadId !== undefined &&
+      conversationThreadId !== undefined &&
+      replyThreadId !== conversationThreadId) ||
+    (replyParentId !== undefined &&
+      conversationParentId !== undefined &&
+      replyParentId !== conversationParentId) ||
+    (nativeReplyId !== undefined &&
+      nativeConversationId !== undefined &&
+      nativeReplyId !== nativeConversationId)
+  ) {
+    return false;
+  }
   return (
-    payload?.kind === "leaf" &&
-    payload.contribution.participant.state === "present" &&
-    payload.contribution.participant.rawPrincipalRef === expected
+    scopedParticipantRef(params.binding) ===
+      scopedParticipantRef({
+        channelId: params.channelId,
+        accountId: effectiveAccountId as string | undefined,
+        rawPrincipalRef: params.rawPrincipalRef,
+      }) &&
+    conversationKind === expected.kind &&
+    conversationId === expected.id &&
+    (replyParentId ?? conversationParentId) === expected.parentId &&
+    (replyThreadId ?? conversationThreadId) === expected.threadId
   );
 }
 
-/** Attach private evidence to the finalized context returned by the existing SDK builder. */
-function bindChannelContextAdmissionEvidence(params: {
-  context: object;
+function unknownChannelAdmissionEvidence(): ChannelAdmissionEvidence | undefined {
+  return mintChannelAdmissionEvidence({
+    kind: "leaf",
+    contribution: Object.freeze({ participant: { state: "unknown" as const } }),
+  });
+}
+
+/** Consume and validate the exact resolver-to-context handoff before context construction. */
+export function prepareHostChannelContextAdmissionEvidence(params: {
+  owner?: ChannelAdmissionEvidenceOwner;
   channelId: string;
   accountId?: string;
   ingress?:
     | ResolvedChannelMessageIngress
     | readonly ResolvedChannelMessageIngress[]
     | "unsupported";
-  /** Core-only carrier used by queue/ACP lifecycle owners. */
-  evidence?: ChannelAdmissionEvidence;
   rawPrincipalRef: string | number | null | undefined;
-}): void {
-  if (!state.collectionEnabled) {
-    return;
+  contextParams: object;
+}): PreparedChannelAdmissionEvidence {
+  const preparation = Object.freeze({ kind: "prepared-channel-admission-evidence" as const });
+  if (params.ingress === "unsupported") {
+    state.evidenceByPreparation.set(
+      preparation,
+      mintChannelAdmissionEvidence({
+        kind: "leaf",
+        contribution: Object.freeze({ participant: { state: "unsupported" as const } }),
+      }),
+    );
+    return preparation;
   }
-  const ingressResults =
-    params.ingress == null || params.ingress === "unsupported"
+  const results =
+    params.ingress === undefined
       ? []
       : Array.isArray(params.ingress)
         ? params.ingress
         : [params.ingress as ResolvedChannelMessageIngress];
-  const ingressEvidenceSources = ingressResults.map((result) =>
-    state.evidenceByIngress.get(result),
+  const seen = new Set<object>();
+  const validBindings: ChannelIngressResolutionBinding[] = [];
+  let valid = results.length > 0 && results.length <= CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS;
+  for (const result of results) {
+    const binding = state.resolutionByIngress.get(result);
+    const firstUse = binding !== undefined && !binding.handoff.consumed && !seen.has(result);
+    if (binding && !binding.handoff.consumed) {
+      // Consume before validation and before the ordinary context builder runs.
+      binding.handoff.consumed = true;
+    }
+    seen.add(result);
+    const ownerMatches =
+      params.owner !== undefined &&
+      binding?.owner === params.owner &&
+      binding.ownerEpoch === params.owner.epoch &&
+      state.ownerByChannelId.get(params.channelId) === params.owner &&
+      params.owner.isLive();
+    const resultIngress = ownDataValue(result, "ingress");
+    const resultMatches =
+      binding?.publicScopeKey !== undefined &&
+      publicResultScopeKey(result) === binding.publicScopeKey &&
+      resultIngress !== null &&
+      typeof resultIngress === "object" &&
+      ownDataValue(resultIngress, "admission") === "dispatch";
+    const contextMatches = binding !== undefined && contextHandoffMatches({ ...params, binding });
+    if (!firstUse || !ownerMatches || !resultMatches || !contextMatches || !binding) {
+      valid = false;
+    } else {
+      validBindings.push(binding);
+    }
+  }
+  const sources = valid
+    ? validBindings.map((binding) => {
+        const contribution = participantContribution(binding);
+        return mintChannelAdmissionEvidence({
+          kind: "leaf",
+          contribution: Object.freeze({
+            ...contribution,
+            decision: Object.freeze({
+              participantAware: contribution.participant.state === "present",
+              outcomeAffecting: binding.participantOutcomeAffecting,
+            }),
+          }),
+        });
+      })
+    : [];
+  state.evidenceByPreparation.set(
+    preparation,
+    valid ? combineChannelAdmissionEvidence(sources) : unknownChannelAdmissionEvidence(),
   );
-  const ingressEvidence = combineChannelAdmissionEvidence(ingressEvidenceSources);
+  return preparation;
+}
+
+const FINALIZED_CONTEXT_SCOPE_FIELDS = [
+  "OriginatingChannel",
+  "AccountId",
+  "SenderId",
+  "ChatType",
+  "ChatId",
+  "SessionKey",
+  "AgentId",
+  "DmScope",
+  "ParentSessionKey",
+  "ModelParentSessionKey",
+  "MessageSid",
+  "MessageSidFull",
+  "ReplyToId",
+  "ReplyToIdFull",
+  "To",
+  "From",
+  "OriginatingTo",
+  "MessageThreadId",
+  "NativeChannelId",
+  "ThreadParentId",
+  "InboundEventKind",
+  "Provider",
+  "Surface",
+  "NativeDirectUserId",
+] as const;
+
+function finalizedContextScopeKey(context: object): string | undefined {
+  const entries: unknown[] = [];
+  for (const key of FINALIZED_CONTEXT_SCOPE_FIELDS) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(context, key);
+    } catch {
+      return undefined;
+    }
+    if (!descriptor) {
+      entries.push([key, "absent"]);
+      continue;
+    }
+    if (!("value" in descriptor)) {
+      return undefined;
+    }
+    const value = descriptor.value;
+    if (
+      value !== undefined &&
+      value !== null &&
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      return undefined;
+    }
+    entries.push([key, "present", value]);
+  }
+  return stableOwnedScopeKey(entries);
+}
+
+/** Attach one prepared private carrier to the exact finalized context scope. */
+export function bindHostChannelContextAdmissionEvidence(params: {
+  context: object;
+  preparation: PreparedChannelAdmissionEvidence;
+}): void {
+  const preparedEvidence = state.evidenceByPreparation.get(params.preparation);
+  state.evidenceByPreparation.delete(params.preparation);
+  if (!state.collectionEnabled) {
+    return;
+  }
+  const scopeKey = finalizedContextScopeKey(params.context);
   const evidence =
-    params.evidence && evidenceMatchesContextParticipant({ ...params, evidence: params.evidence })
-      ? params.evidence
-      : params.ingress === "unsupported"
-        ? mintChannelAdmissionEvidence({
-            kind: "leaf",
-            contribution: Object.freeze({ participant: { state: "unsupported" as const } }),
-          })
-        : ingressEvidence &&
-            ingressResults.length > 0 &&
-            ingressResults.every((result) => result.ingress.admission === "dispatch") &&
-            ingressEvidenceSources.every(
-              (candidate) =>
-                candidate !== undefined &&
-                evidenceMatchesContextParticipant({ ...params, evidence: candidate }),
-            ) &&
-            compareChannelAdmissionParticipants([ingressEvidence]) === "same"
-          ? ingressEvidence
-          : mintChannelAdmissionEvidence({
-              kind: "leaf",
-              contribution: Object.freeze({ participant: { state: "unknown" as const } }),
-            });
+    preparedEvidence && scopeKey !== undefined
+      ? preparedEvidence
+      : unknownChannelAdmissionEvidence();
   if (evidence) {
     state.evidenceByContext.set(params.context, evidence);
+    if (scopeKey !== undefined) {
+      state.scopeByContext.set(params.context, scopeKey);
+    }
   }
 }
 
@@ -280,35 +596,25 @@ export function readChannelContextAdmissionEvidence(
   return state.evidenceByContext.get(context);
 }
 
-function contextIdentityMatches(source: object, target: object): boolean {
-  return ["OriginatingChannel", "AccountId", "SenderId"].every((key) => {
-    const sourceDescriptor = Object.getOwnPropertyDescriptor(source, key);
-    const targetDescriptor = Object.getOwnPropertyDescriptor(target, key);
-    if (!sourceDescriptor || !targetDescriptor) {
-      return sourceDescriptor === targetDescriptor;
-    }
-    return (
-      "value" in sourceDescriptor &&
-      "value" in targetDescriptor &&
-      Object.is(sourceDescriptor.value, targetDescriptor.value)
-    );
-  });
-}
-
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
   if (!evidence) {
     return;
   }
-  const safeEvidence = contextIdentityMatches(source, target)
-    ? evidence
-    : mintChannelAdmissionEvidence({
-        kind: "leaf",
-        contribution: Object.freeze({ participant: { state: "unknown" as const } }),
-      });
+  const sourceScope = state.scopeByContext.get(source);
+  const targetScope = finalizedContextScopeKey(target);
+  const safeEvidence =
+    sourceScope !== undefined &&
+    targetScope === sourceScope &&
+    activePayload(evidence, Date.now()) !== undefined
+      ? evidence
+      : unknownChannelAdmissionEvidence();
   if (safeEvidence) {
     state.evidenceByContext.set(target, safeEvidence);
+    if (targetScope !== undefined) {
+      state.scopeByContext.set(target, targetScope);
+    }
   }
 }
 

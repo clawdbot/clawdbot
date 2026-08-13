@@ -29,6 +29,8 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
               {
                 kind: "channel-admission" as const,
                 rawEvidenceRef: admission.assuranceRef,
+                // Core verified the registered record/epoch/scope handoff; the
+                // native plugin remains the remote participant-fact producer.
                 strength: "boundary-verified" as const,
               },
             ],

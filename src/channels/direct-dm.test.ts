@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
-import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
+import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import { resolveStableChannelMessageIngress } from "./message-access/runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./inbound-event/context.js", () => ({
-  buildHostChannelInboundEventContext: vi.fn(() => ({ Body: "envelope:hello" })),
+  buildChannelInboundEventContext: vi.fn(() => ({ Body: "envelope:hello" })),
 }));
 
 vi.mock("./inbound-event/envelope.js", () => ({
@@ -68,7 +68,7 @@ describe("dispatchInboundDirectDm", () => {
         replyOptions: { onModelSelected: mocks.onModelSelected },
       }),
     );
-    expect(vi.mocked(buildHostChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
       channelIngress,
     );
   });
@@ -106,7 +106,7 @@ describe("dispatchInboundDirectDm", () => {
         replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
       }),
     );
-    expect(vi.mocked(buildHostChannelInboundEventContext).mock.calls[1]?.[0].channelIngress).toBe(
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[1]?.[0].channelIngress).toBe(
       "unsupported",
     );
   });
@@ -130,7 +130,7 @@ describe("dispatchInboundDirectDm", () => {
     });
 
     expect(
-      vi.mocked(buildHostChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress,
+      vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress,
     ).toBeUndefined();
   });
 
@@ -154,8 +154,8 @@ describe("dispatchInboundDirectDm", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(
-      vi.mocked(buildHostChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress,
-    ).toBe("unsupported");
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
+      "unsupported",
+    );
   });
 });

@@ -1,16 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildHostChannelInboundEventContext } from "../inbound-event/context.js";
+import {
+  buildChannelInboundEventContext,
+  buildHostChannelInboundEventContext,
+} from "../inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import {
   combineChannelAdmissionEvidence,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
+  registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
 import { resolveStableChannelMessageIngress } from "./runtime.js";
 
 async function buildAdmittedContext(participantId: string, allowFrom = [participantId]) {
+  const record = {};
+  const epoch = {};
+  const owner = { channelId: "test", record, epoch, isLive: () => true };
+  const dispose = registerChannelAdmissionEvidenceOwner(owner);
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
     accountId: "acct:primary",
@@ -20,18 +29,26 @@ async function buildAdmittedContext(participantId: string, allowFrom = [particip
     groupPolicy: "allowlist",
     allowFrom,
   });
-  return buildHostChannelInboundEventContext({
-    channel: "test",
-    accountId: "acct:primary",
-    messageId: "msg-1",
-    from: "test:route:dm-1",
-    sender: { id: participantId },
-    conversation: { kind: "direct", id: "dm-1" },
-    route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
-    reply: { to: "test:route:dm-1" },
-    message: { rawBody: "hello" },
-    channelIngress,
-  });
+  try {
+    const buildContext = createHostChannelInboundEventContextBuilder(
+      buildChannelInboundEventContext,
+      owner,
+    );
+    return buildContext({
+      channel: "test",
+      accountId: "acct:primary",
+      messageId: "msg-1",
+      from: "test:route:dm-1",
+      sender: { id: participantId },
+      conversation: { kind: "direct", id: "dm-1" },
+      route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
+      reply: { to: "test:route:dm-1" },
+      message: { rawBody: "hello" },
+      channelIngress,
+    });
+  } finally {
+    dispose();
+  }
 }
 
 function inspectChannelContext(context: object) {
@@ -112,6 +129,46 @@ describe("channel admission evidence", () => {
       expect(inspectChannelContext(target)).toMatchObject({
         ingressState: "present",
         invoker: { state: "present", kind: "person" },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it.each([
+    ["route", { SessionKey: "agent:other:test:dm:dm-1" }],
+    ["thread", { MessageThreadId: "thread-2" }],
+    ["native channel", { NativeChannelId: "native-2" }],
+    ["message", { MessageSid: "msg-2", MessageSidFull: "msg-2" }],
+  ])("degrades a carrier copied across changed %s scope", async (_name, patch) => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const source = await buildAdmittedContext("person-a");
+      const target = { ...source, ...patch };
+
+      copyChannelParticipantAdmissionEvidence(source, target);
+
+      expect(inspectChannelContext(target)).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("cannot revive a carrier through a same-scope copy after run admission", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const source = await buildAdmittedContext("person-a");
+      expect(inspectChannelContext(source)).toMatchObject({ ingressState: "present" });
+      const target = { ...source };
+
+      copyChannelParticipantAdmissionEvidence(source, target);
+
+      expect(inspectChannelContext(target)).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
       });
     } finally {
       cleanup();
@@ -238,6 +295,43 @@ describe("channel admission evidence", () => {
         consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(mismatched)),
       ).toMatchObject({ ingressState: "unknown", decisionCoverage: "unknown" });
     } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps ordinary public and ownerless host builders non-authoritative", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    const owner = { channelId: "public-test", record: {}, epoch: {}, isLive: () => true };
+    const dispose = registerChannelAdmissionEvidenceOwner(owner);
+    try {
+      const ingress = await resolveStableChannelMessageIngress({
+        channelId: "public-test",
+        accountId: "default",
+        subject: { stableId: "person-1" },
+        conversation: { kind: "direct", id: "dm-1" },
+        dmPolicy: "open",
+      });
+      const params = {
+        channel: "public-test",
+        accountId: "default",
+        from: "public-test:dm-1",
+        sender: { id: "person-1" },
+        conversation: { kind: "direct" as const, id: "dm-1" },
+        route: { agentId: "main", routeSessionKey: "agent:main:public-test:dm:dm-1" },
+        reply: { to: "public-test:dm-1" },
+        message: { rawBody: "hello" },
+        channelIngress: ingress,
+      };
+
+      const publicContext = buildChannelInboundEventContext(params);
+      expect(readChannelContextAdmissionEvidence(publicContext)).toBeUndefined();
+      const ownerlessContext = buildHostChannelInboundEventContext(params);
+      expect(inspectChannelContext(ownerlessContext)).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
+      });
+    } finally {
+      dispose();
       cleanup();
     }
   });

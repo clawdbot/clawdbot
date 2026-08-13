@@ -81,17 +81,26 @@ Deprecated third-party SDK helpers may rebuild older shapes internally. New
 bundled receive paths should not translate modern results back into local
 DTOs.
 
-When execution-identity audit collection is enabled, the host-injected bundled
-runtime builder privately carries the exact admitted participant to run
-admission. The public standalone builder remains non-authoritative and cannot
-mint participant evidence.
+When execution-identity audit collection is enabled, a trusted active native
+plugin is the authoritative in-process producer of its remote participant
+fact. The host-injected registered runtime binds the resolver result to the
+exact plugin record and registry lifecycle epoch, then validates its complete
+available conversation, route, thread, event, and participant scope during a
+one-shot context handoff. The public standalone builder remains
+non-authoritative and cannot mint participant evidence.
 Queue collection retains attribution only when every contribution has valid
 evidence for the same participant; mixed, missing, stale, or unminted evidence
 is `unknown`. The carrier is opaque, bounded, one-shot, and diagnostic only.
 Plugins cannot mint participant evidence from caller-chosen sender, account,
 room, route, session, message, or transport fields. The SDK intentionally
-exposes no participant-evidence constructor. A structurally similar result or
-copied context does not gain host authority.
+exposes no record, epoch, owner capability, participant-evidence constructor,
+or evidence copier. A structurally similar result, stale record, reused result,
+or scope-changed context does not gain host authority.
+
+`boundary-verified` means core verified that the participant fact crossed this
+trusted active registered native-plugin boundary with the exact record, epoch,
+scope, and one-shot handoff. It does not mean core independently queried the
+remote service; only the channel plugin can observe that transport fact.
 
 The audit states are distinct:
 

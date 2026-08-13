@@ -499,7 +499,7 @@ const buildHostChannelInboundEventContextValue = createHostChannelInboundEventCo
   buildChannelInboundEventContextValue,
 );
 
-/** Core-only bundled channel boundary that binds diagnostic admission evidence. */
+/** Core-only ownerless boundary for explicit unsupported or unknown evidence. */
 export function buildHostChannelInboundEventContext(
   params: BuildChannelInboundEventContextAsyncParams,
 ): Promise<BuiltChannelInboundEventContext>;

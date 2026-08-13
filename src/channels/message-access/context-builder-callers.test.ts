@@ -86,7 +86,10 @@ const HOST_BUILDERS = [
   ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", "params.buildContext({"],
   ["extensions/zalo/src/monitor.ts", "core.channel.inbound.buildContext"],
   ["extensions/zalouser/src/monitor.ts", "core.channel.inbound.buildContext"],
-  ["src/channels/direct-dm.ts", "buildHostChannelInboundEventContext"],
+  [
+    "src/channels/direct-dm.ts",
+    "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
+  ],
   ["src/channels/feedback-reflection.ts", "buildHostChannelInboundEventContext"],
 ] as const;
 
@@ -141,6 +144,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   ],
   ["line", "extensions/line/src/bot.ts", "buildContext: opts.buildContext"],
   ["line", "extensions/line/src/bot-handlers.ts", "buildContext: context.buildContext"],
+  ["nostr", "extensions/nostr/src/gateway.ts", "channelRuntime,"],
   [
     "qa-channel",
     "extensions/qa-channel/src/gateway.ts",
@@ -197,7 +201,7 @@ describe("channel context builder caller inventory", () => {
     }
   });
 
-  it("routes every production sink through its host-owned context builder", () => {
+  it("routes every production sink through its selected context builder", () => {
     expect(HOST_BUILDERS).toHaveLength(26);
     for (const [relativePath, marker] of HOST_BUILDERS) {
       expect(source(relativePath), relativePath).toContain(marker);
@@ -227,6 +231,10 @@ describe("channel context builder caller inventory", () => {
 
   it("keeps direct-DM classifications at their authoritative producers", () => {
     expect(source("extensions/nostr/src/gateway.ts")).toContain("channelIngress: resolvedAccess");
+    expect(source("extensions/nostr/src/gateway.ts")).toContain("channelRuntime,");
+    expect(source("src/channels/direct-dm.ts")).toContain(
+      "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
+    );
     expect(source("extensions/reef/src/channel.ts")).toContain('channelIngress: "unsupported"');
   });
 });

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
+import { registerChannelAdmissionEvidenceOwner } from "../channels/message-access/admission-evidence.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
@@ -27,7 +28,13 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
-import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  activatePluginRecordLifecycleEpoch,
+  isPluginRecordLifecycleEpochActive,
+  isPluginRegistryActivated,
+  isPluginRegistryRetired,
+  revokePluginRecordLifecycleEpoch,
+} from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
@@ -75,6 +82,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
   const recordChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
   const registeredChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
+  const registeredRuntimeRecordById = new Map<string, PluginRecord>();
+  const registeredAdmissionOwnerByRecord = new WeakMap<
+    PluginRecord,
+    { isLive: () => boolean; dispose: () => void }
+  >();
 
   const addPluginRuntimeResolutionContext = (params: {
     error: unknown;
@@ -108,8 +120,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
   ): PluginRuntime["channel"] => {
     const cache = requireCurrentRuntimeRecord ? recordChannelRuntime : registeredChannelRuntime;
     const cached = cache.get(record);
-    if (cached) {
+    const cachedOwner = registeredAdmissionOwnerByRecord.get(record);
+    if (cached && (requireCurrentRuntimeRecord || cachedOwner?.isLive() === true)) {
       return cached;
+    }
+    if (!requireCurrentRuntimeRecord && cachedOwner) {
+      cachedOwner.dispose();
+      registeredAdmissionOwnerByRecord.delete(record);
     }
     const channel = (() => {
       try {
@@ -126,26 +143,50 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         });
       }
     })();
-    if (record.origin !== "bundled") {
+    if (record.origin !== "bundled" || requireCurrentRuntimeRecord) {
       cache.set(record, channel);
       return channel;
     }
+    const ownsLiveRegistrySlot = () =>
+      activePluginRuntimeRecords.has(record) &&
+      registeredRuntimeRecordById.get(record.id) === record &&
+      isPluginRegistryActivated(registry) &&
+      !isPluginRegistryRetired(registry) &&
+      registry.plugins.some((candidate) => candidate === record && candidate.status === "loaded");
+    const previousRecord = registeredRuntimeRecordById.get(record.id);
+    if (previousRecord && previousRecord !== record) {
+      registeredAdmissionOwnerByRecord.get(previousRecord)?.dispose();
+      registeredAdmissionOwnerByRecord.delete(previousRecord);
+      revokePluginRecordLifecycleEpoch(registry, previousRecord);
+    }
+    registeredRuntimeRecordById.set(record.id, record);
+    const epoch = activatePluginRecordLifecycleEpoch(registry, record);
+    if (!epoch) {
+      cache.set(record, channel);
+      return channel;
+    }
+    const owner = Object.freeze({
+      channelId: record.id,
+      record,
+      epoch,
+      isLive: () =>
+        ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
+    });
+    const disposeOwner = registerChannelAdmissionEvidenceOwner(owner);
+    registeredAdmissionOwnerByRecord.set(record, {
+      isLive: owner.isLive,
+      dispose: disposeOwner,
+    });
     const buildHostContext = createHostChannelInboundEventContextBuilder(
       channel.inbound.buildContext,
+      owner,
     );
     const buildContext = ((
       params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
     ) => {
-      const ownsLiveRegistrySlot =
-        activePluginRuntimeRecords.has(record) &&
-        (!requireCurrentRuntimeRecord || pluginRuntimeRecordById.get(record.id) === record) &&
-        isPluginRegistryActivated(registry) &&
-        !isPluginRegistryRetired(registry) &&
-        registry.plugins.some((candidate) => candidate === record && candidate.status === "loaded");
       // Audit provenance is passive: stale closures still build the message context,
       // but only the exact live bundled owner may attach participant evidence.
-      const builder = ownsLiveRegistrySlot ? buildHostContext : channel.inbound.buildContext;
-      return builder(params as never);
+      return buildHostContext(params as never);
     }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
     const scoped = {
       ...channel,
@@ -985,6 +1026,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const ownedRecord = record ?? pluginRuntimeRecordById.get(pluginId);
       if (ownedRecord) {
         activePluginRuntimeRecords.delete(ownedRecord);
+        revokePluginRecordLifecycleEpoch(registry, ownedRecord);
+        registeredAdmissionOwnerByRecord.get(ownedRecord)?.dispose();
+        registeredAdmissionOwnerByRecord.delete(ownedRecord);
+        if (registeredRuntimeRecordById.get(pluginId) === ownedRecord) {
+          registeredRuntimeRecordById.delete(pluginId);
+        }
       }
     },
   };

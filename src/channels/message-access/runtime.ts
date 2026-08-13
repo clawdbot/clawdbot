@@ -674,6 +674,14 @@ export async function resolveChannelMessageIngress(
     channelId,
     accountId: params.accountId,
     rawPrincipalRef: params.subject.stableId,
+    scope: {
+      conversation: {
+        kind: params.conversation.kind,
+        id: params.conversation.id,
+        parentId: params.conversation.parentId,
+        threadId: params.conversation.threadId,
+      },
+    },
     participantOutcomeAffecting:
       senderAccess.gate?.match?.matched === true &&
       (senderAccess.reasonCode === "dm_policy_allowlisted" ||

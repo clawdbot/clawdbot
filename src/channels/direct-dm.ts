@@ -6,7 +6,7 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
+import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
   resolveChannelInboundRouteEnvelope,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
@@ -48,6 +48,8 @@ type DispatchInboundDirectDmParams = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shipped SDK callers may omit provenance; bundled callers must classify it explicitly. */
   channelIngress?: ResolvedChannelMessageIngress | "unsupported";
+  /** Opaque record-scoped runtime injected by a registered native channel. */
+  channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
@@ -62,13 +64,18 @@ type DispatchInboundDirectDmParams = {
   onDispatchError: (err: unknown, info: { kind: string }) => void;
 };
 
-function buildDirectDmContext(
+async function buildDirectDmContext(
   params: DispatchInboundDirectDmParams,
   route: DirectDmRoute,
   body: string,
-): FinalizedMsgContext {
+): Promise<FinalizedMsgContext> {
   const accountId = route.accountId ?? params.accountId;
-  return buildHostChannelInboundEventContext({
+  const injectedBuilder = params.channelRuntime?.inbound?.buildContext;
+  const buildContext =
+    typeof injectedBuilder === "function"
+      ? (injectedBuilder as typeof buildChannelInboundEventContext)
+      : buildChannelInboundEventContext;
+  return await buildContext({
     channel: params.channel,
     accountId,
     provider: params.provider,
@@ -115,7 +122,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     accountId: params.accountId,
     peer: params.peer,
   });
-  const ctxPayload = buildDirectDmContext(
+  const ctxPayload = await buildDirectDmContext(
     params,
     route,
     buildEnvelope({

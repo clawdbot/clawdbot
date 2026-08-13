@@ -88,14 +88,18 @@ state for these fields:
 
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
-channel run, the person invoker comes from host-minted admission evidence; the
-room, route, account, thread, message, and transport remain non-principal
-facts. Collected messages retain a person only when every contribution proves
-the same participant. Mixed, missing, invalid, stale, or unminted evidence is
-unknown, and an adapter that explicitly lacks support is unsupported. OpenClaw
-never reconstructs a participant from `SenderId`, `From`, session keys, or
-routing metadata. Plugins cannot publicly mint or upgrade participant evidence;
-fake, copied, changed, stale, reused, or lost host carriers remain unknown.
+channel run, the trusted active registered native plugin produces the remote
+participant fact. Core accepts it only across an exact record, registry epoch,
+scope, and one-shot handoff; the room, route, account, thread, message, and
+transport remain non-principal facts. `boundary-verified` describes that
+in-process boundary verification, not an independent core query to Telegram,
+Discord, or another remote service. Collected messages retain a person only
+when every contribution proves the same participant. Mixed, missing, invalid,
+stale, replayed, or unminted evidence is unknown, and an adapter that explicitly
+lacks support is unsupported. OpenClaw never reconstructs a participant from
+`SenderId`, `From`, session keys, or routing metadata. Plugins cannot publicly
+mint or upgrade participant evidence; fake, copied, changed, stale, reused, or
+lost host carriers remain unknown.
 Other public ingress remains explicitly unknown when its
 boundary cannot prove a more specific source. A direct local execution
 is `unattributed`: the Gateway cell, local CLI ingress, configured agent, and

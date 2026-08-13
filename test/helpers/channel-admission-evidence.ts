@@ -1,7 +1,9 @@
 import {
   bindHostChannelContextAdmissionEvidence,
+  prepareHostChannelContextAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   recordChannelIngressResolution,
+  registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "../../src/channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../../src/channels/message-access/runtime-types.js";
@@ -23,21 +25,52 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
   participantId: string | number;
 }): ChannelAdmissionEvidence | undefined {
   const result = {
+    state: {
+      conversationKind: "direct",
+      event: { kind: "message", authMode: "inbound", mayPair: true },
+      routeFacts: [],
+    },
     ingress: { admission: "dispatch" },
-  } as ResolvedChannelMessageIngress;
-  recordChannelIngressResolution({
-    result,
+  } as unknown as ResolvedChannelMessageIngress;
+  const record = {};
+  const epoch = {};
+  const owner = {
     channelId: params.channelId,
-    accountId: params.accountId,
-    rawPrincipalRef: params.participantId,
-    participantOutcomeAffecting: false,
-  });
-  bindHostChannelContextAdmissionEvidence({
-    context: params.context,
-    channelId: params.channelId,
-    accountId: params.accountId,
-    ingress: result,
-    rawPrincipalRef: params.participantId,
-  });
+    record,
+    epoch,
+    isLive: () => true,
+  };
+  const dispose = registerChannelAdmissionEvidenceOwner(owner);
+  try {
+    recordChannelIngressResolution({
+      result,
+      channelId: params.channelId,
+      accountId: params.accountId,
+      rawPrincipalRef: params.participantId,
+      participantOutcomeAffecting: false,
+      scope: {
+        conversation: { kind: "direct", id: "test-conversation" },
+      },
+    });
+    const contextParams = {
+      channel: params.channelId,
+      accountId: params.accountId,
+      sender: { id: params.participantId },
+      conversation: { kind: "direct", id: "test-conversation" },
+      route: {},
+      reply: {},
+    };
+    const preparation = prepareHostChannelContextAdmissionEvidence({
+      owner,
+      channelId: params.channelId,
+      accountId: params.accountId,
+      ingress: result,
+      rawPrincipalRef: params.participantId,
+      contextParams,
+    });
+    bindHostChannelContextAdmissionEvidence({ context: params.context, preparation });
+  } finally {
+    dispose();
+  }
   return readChannelContextAdmissionEvidence(params.context);
 }

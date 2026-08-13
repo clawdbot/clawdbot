@@ -9,8 +9,12 @@ import type { MediaUnderstandingSkipError } from "../../../packages/media-unders
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import { buildHostChannelInboundEventContext } from "../../channels/inbound-event/context.js";
-import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  registerChannelAdmissionEvidenceOwner,
+} from "../../channels/message-access/admission-evidence.js";
 import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -550,6 +554,8 @@ describe("tryDispatchAcpReplyCore", () => {
       captured.push(work);
       return true;
     });
+    const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
+    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
     try {
       setReadyAcpResolution();
       const channelIngress = await resolveStableChannelMessageIngress({
@@ -560,8 +566,12 @@ describe("tryDispatchAcpReplyCore", () => {
         dmPolicy: "open",
         groupPolicy: "open",
       });
+      const buildContext = createHostChannelInboundEventContextBuilder(
+        buildChannelInboundEventContext,
+        owner,
+      );
       const ctx = finalizeInboundContext(
-        buildHostChannelInboundEventContext({
+        await buildContext({
           channel: "discord",
           accountId: "default",
           messageId: "msg-acp",
@@ -591,6 +601,7 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       ]);
     } finally {
+      clearOwner();
       clearSink();
       clearCollection();
     }
