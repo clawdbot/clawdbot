@@ -1,4 +1,8 @@
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
+} from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
@@ -31,6 +35,11 @@ export function resolveMainSessionKey(cfg: OpenClawConfig): string {
     mainKey: cfg.session?.mainKey,
     sessionScope: cfg.session?.scope,
   });
+}
+
+/** Resolves the main session owned by configured ambient system work. */
+export function resolveSystemMainSessionKey(cfg: OpenClawConfig): string {
+  return resolveAgentMainSessionKey({ cfg, agentId: resolveSystemAgentTargetAgentId(cfg) });
 }
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
