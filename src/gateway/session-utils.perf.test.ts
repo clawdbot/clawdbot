@@ -55,8 +55,8 @@ describe("listSessionsFromStore resolver cache", () => {
     const rowCount = 30;
     const rowContext = buildSessionListRowMetadataContext({ now });
     const thinkingSpy = vi
-      .spyOn(thinking, "listThinkingLevelOptions")
-      .mockReturnValue([{ id: "off", label: "Off" }]);
+      .spyOn(thinking, "resolveThinkingProfile")
+      .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
     const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig").mockReturnValue({
       input: 1,
       output: 1,

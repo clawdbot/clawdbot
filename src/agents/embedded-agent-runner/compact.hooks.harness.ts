@@ -445,7 +445,9 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
     release: vi.fn(),
   }),
 );
-export const getCurrentPluginMetadataSnapshotMock = vi.fn(() => emptyPluginMetadataSnapshot);
+export const getCurrentPluginMetadataSnapshotMock: Mock<
+  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+> = vi.fn(() => emptyPluginMetadataSnapshot);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
