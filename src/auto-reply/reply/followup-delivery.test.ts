@@ -756,7 +756,7 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
-  const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
+  const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<unknown>) => ({
     defaultModel: "claude",
     typingMode: "never" as const,
     typing: {
@@ -769,7 +769,7 @@ describe("deliverFollowupDecision", () => {
       markDispatchIdle: vi.fn(),
       cleanup: vi.fn(),
     },
-    opts: { onBlockReply },
+    opts: { onBlockReply: onBlockReply as (payload: ReplyPayload) => Promise<void> },
   });
 
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
@@ -788,6 +788,60 @@ describe("deliverFollowupDecision", () => {
 
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
+  it("settles every dispatcher payload after an earlier visible delivery", async () => {
+    const onBlockReply = vi
+      .fn<(payload: ReplyPayload) => Promise<boolean | void>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(undefined);
+    deliveryState.followupRoute = { route: "dispatcher" };
+
+    try {
+      const visible = await deliverFollowupDecision({
+        decision: {
+          kind: "deliver",
+          payloads: [{ text: "first" }, { text: "second" }, { text: "third" }],
+        },
+        turn: createTurn(),
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "first",
+        "second",
+        "third",
+      ]);
+      expect(visible).toBe(true);
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
+  it("propagates a later dispatcher rejection after an earlier visible delivery", async () => {
+    const onBlockReply = vi
+      .fn<(payload: ReplyPayload) => Promise<boolean | void>>()
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("later callback failed"));
+    deliveryState.followupRoute = { route: "dispatcher" };
+
+    try {
+      await expect(
+        deliverFollowupDecision({
+          decision: { kind: "deliver", payloads: [{ text: "first" }, { text: "second" }] },
+          turn: createTurn(),
+          defaults: createDefaults(onBlockReply),
+          runId: "run-1",
+          runFollowup: vi.fn(async () => {}),
+        }),
+      ).rejects.toThrow("later callback failed");
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
     } finally {
       deliveryState.followupRoute = undefined;
     }
@@ -840,6 +894,67 @@ describe("deliverFollowupDecision", () => {
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "same-channel reply" }),
     );
+  });
+
+  it("settles every same-channel recovery after an earlier visible recovery", async () => {
+    const onBlockReply = vi
+      .fn<(payload: ReplyPayload) => Promise<boolean | void>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "discord";
+
+    const visible = await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "first" }, { text: "second" }] },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(["first", "second"]);
+    expect(visible).toBe(true);
+  });
+
+  it("settles a cross-channel diagnostic after an earlier visible dispatcher payload", async () => {
+    const onBlockReply = vi.fn(async (payload: ReplyPayload) => {
+      if (payload.text === "first") {
+        deliveryState.followupRoute = { route: "origin" };
+        return true;
+      }
+      return false;
+    });
+    deliveryState.followupRoute = { route: "dispatcher" };
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "slack";
+
+    try {
+      const visible = await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "first" }, { text: "private" }] },
+        turn,
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+      expect(onBlockReply.mock.calls[1]?.[0].text).toContain("could not deliver");
+      expect(visible).toBe(true);
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
   });
 
   it("keeps block-status delivery out of the assistant transcript", async () => {

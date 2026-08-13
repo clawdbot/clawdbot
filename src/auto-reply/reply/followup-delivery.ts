@@ -376,9 +376,10 @@ async function sendFollowupPayloads(params: {
         });
         const origin = resolveOriginMessageProvider({ originatingChannel });
         if (origin && origin === provider && defaults.opts?.onBlockReply) {
-          visibleDelivery ||= (
-            await settleProgressVisibilityCallbackResult(defaults.opts.onBlockReply(payload))
-          ).visible;
+          const settled = await settleProgressVisibilityCallbackResult(
+            defaults.opts.onBlockReply(payload),
+          );
+          visibleDelivery = settled.visible || visibleDelivery;
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailure = true;
         } else {
@@ -402,16 +403,15 @@ async function sendFollowupPayloads(params: {
     }
   }
   if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
-    visibleDelivery ||= (
-      await settleProgressVisibilityCallbackResult(
-        defaults.opts.onBlockReply({
-          text:
-            "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
-            "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
-          isError: true,
-        }),
-      )
-    ).visible;
+    const settled = await settleProgressVisibilityCallbackResult(
+      defaults.opts.onBlockReply({
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
+          "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
+        isError: true,
+      }),
+    );
+    visibleDelivery = settled.visible || visibleDelivery;
   }
   return visibleDelivery;
 }
