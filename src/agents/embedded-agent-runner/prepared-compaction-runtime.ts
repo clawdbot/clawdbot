@@ -55,7 +55,6 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import { releasePublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   filterProviderNormalizableTools,
@@ -126,11 +125,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       return;
     }
     skillEnvironmentRestored = true;
-    try {
-      restoreSkillEnv?.();
-    } finally {
-      releasePublishedSandboxSkills(sandbox);
-    }
+    restoreSkillEnv?.();
   };
   const dispose = async () => {
     await disposeToolRuntimes();

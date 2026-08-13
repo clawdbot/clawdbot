@@ -15,7 +15,6 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
-import { leasePublishedSyncedSkillsGeneration } from "../../skills/loading/workspace-skill-sync-cache.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
@@ -24,10 +23,7 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
-import {
-  attachPublishedSandboxSkills,
-  type PublishedSandboxSkillsHandoff,
-} from "./published-skills-handoff.js";
+import { attachPublishedSandboxSkills } from "./published-skills-handoff.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
@@ -52,7 +48,6 @@ async function syncSandboxSkillsToWorkspace(params: {
   eligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
   skillsSnapshot?: SkillSnapshot;
-  releaseGeneration?: () => void;
 }> {
   try {
     const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
@@ -81,17 +76,10 @@ async function syncSandboxSkillsToWorkspace(params: {
       eligibility,
       skillsSnapshot: params.skillsSnapshot,
     });
-    // Lease the returned generation before any later await-heavy sandbox setup
-    // so a queued publish cannot prune the catalog this run already advertised.
-    const releaseGeneration = leasePublishedSyncedSkillsGeneration(
-      params.targetWorkspaceDir,
-      synced.generation,
-    );
     return {
       eligibility,
       skillUsagePaths: synced.skillUsagePaths,
       skillsSnapshot: synced.skillsSnapshot,
-      releaseGeneration,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -115,7 +103,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
-  publishedSkills?: PublishedSandboxSkillsHandoff;
+  publishedSkills?: SkillSnapshot;
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
@@ -164,14 +152,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
-    ...(syncedSkills.skillsSnapshot && syncedSkills.releaseGeneration
-      ? {
-          publishedSkills: {
-            skillsSnapshot: syncedSkills.skillsSnapshot,
-            releaseGeneration: syncedSkills.releaseGeneration,
-          },
-        }
-      : {}),
+    ...(syncedSkills.skillsSnapshot ? { publishedSkills: syncedSkills.skillsSnapshot } : {}),
     workspaceDir,
   };
 }
@@ -227,10 +208,6 @@ type ResolveSandboxContextParams = {
   workspaceDir?: string;
 };
 
-type ResolveSandboxContextInternalParams = ResolveSandboxContextParams & {
-  retainPublishedSkills?: boolean;
-};
-
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
 
 function assertSandboxSessionSecretOwnerAvailable(
@@ -249,23 +226,8 @@ function assertSandboxSessionSecretOwnerAvailable(
   });
 }
 
-function bindOrReleasePublishedSandboxSkills(
-  owner: object,
-  publishedSkills: PublishedSandboxSkillsHandoff | undefined,
-  retain: boolean | undefined,
-): void {
-  // Prompt readers opt in and release from their own cleanup. Non-prompt
-  // consumers (plugin readiness, cron cache, /btw, plugin-harness dispatch)
-  // must not keep a generation lease: WeakMap GC does not run the releaser.
-  if (retain && publishedSkills) {
-    attachPublishedSandboxSkills(owner, publishedSkills);
-    return;
-  }
-  publishedSkills?.releaseGeneration();
-}
-
 async function resolveProvisionedSandboxContext(
-  params: ResolveSandboxContextInternalParams,
+  params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
 ): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
@@ -292,121 +254,114 @@ async function resolveProvisionedSandboxContext(
     workspaceDir: params.workspaceDir,
   });
 
-  try {
-    const docker = await resolveSandboxDockerUser({
-      backend: cfg.backend,
-      docker: cfg.docker,
-      workspaceDir,
-    });
-    const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+  const docker = await resolveSandboxDockerUser({
+    backend: cfg.backend,
+    docker: cfg.docker,
+    workspaceDir,
+  });
+  const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
-    const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
-    const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
-      backendId: resolvedCfg.backend,
-      scopeKey,
-    });
-    const backend = await backendFactory({
-      sessionKey: rawSessionKey,
-      scopeKey,
-      ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      cfg: resolvedCfg,
-      ...(params.requireCurrentConfig !== undefined
-        ? { requireCurrentConfig: params.requireCurrentConfig }
-        : {}),
-    });
-    await updateRegistry({
-      containerName: backend.runtimeId,
-      backendId: backend.id,
-      runtimeLabel: backend.runtimeLabel,
-      sessionKey: scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: backend.configLabel ?? resolvedCfg.docker.image,
-      configLabelKind: backend.configLabelKind ?? "Image",
-    });
+  const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
+  const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
+    backendId: resolvedCfg.backend,
+    scopeKey,
+  });
+  const backend = await backendFactory({
+    sessionKey: rawSessionKey,
+    scopeKey,
+    ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
+    workspaceDir,
+    agentWorkspaceDir,
+    skillsWorkspaceDir,
+    cfg: resolvedCfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
+  });
+  await updateRegistry({
+    containerName: backend.runtimeId,
+    backendId: backend.id,
+    runtimeLabel: backend.runtimeLabel,
+    sessionKey: scopeKey,
+    createdAtMs: Date.now(),
+    lastUsedAtMs: Date.now(),
+    image: backend.configLabel ?? resolvedCfg.docker.image,
+    configLabelKind: backend.configLabelKind ?? "Image",
+  });
 
-    const resolvedBrowserConfig = resolvedCfg.browser.enabled
-      ? resolveBrowserConfig(params.config?.browser, params.config)
-      : undefined;
-    const evaluateEnabled =
-      resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const resolvedBrowserConfig = resolvedCfg.browser.enabled
+    ? resolveBrowserConfig(params.config?.browser, params.config)
+    : undefined;
+  const evaluateEnabled =
+    resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
-    const bridgeAuth = cfg.browser.enabled
-      ? await (async () => {
-          // Sandbox browser bridge server runs on a loopback TCP port; always wire up
-          // the same auth that loopback browser clients will send (token/password).
-          const cfgForAuth =
-            params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
-          let browserAuth = resolveBrowserControlAuth(cfgForAuth);
-          try {
-            const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
-            browserAuth = ensured.auth;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : JSON.stringify(error);
-            defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
-          }
-          return browserAuth;
-        })()
-      : undefined;
-    if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
-      throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
-    }
-    const browser =
-      resolvedCfg.browser.enabled && backend.capabilities?.browser === true
-        ? await ensureSandboxBrowser({
-            scopeKey,
-            workspaceDir,
-            agentWorkspaceDir,
-            skillsWorkspaceDir,
-            cfg: resolvedCfg,
-            evaluateEnabled,
-            bridgeAuth,
-            ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
-          })
-        : null;
-
-    const sandboxContext: SandboxContext = {
-      enabled: true,
-      backendId: backend.id,
-      sessionKey: rawSessionKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      ...(skillsEligibility ? { skillsEligibility } : {}),
-      ...(skillUsagePaths ? { skillUsagePaths } : {}),
-      workspaceAccess: resolvedCfg.workspaceAccess,
-      runtimeId: backend.runtimeId,
-      runtimeLabel: backend.runtimeLabel,
-      containerName: backend.runtimeId,
-      containerWorkdir: backend.workdir,
-      docker: resolvedCfg.docker,
-      tools: resolvedCfg.tools,
-      browserAllowHostControl: resolvedCfg.browser.allowHostControl,
-      browser: browser ?? undefined,
-      backend,
-    };
-
-    sandboxContext.fsBridge =
-      backend.createFsBridge?.({ sandbox: sandboxContext }) ??
-      createSandboxFsBridge({ sandbox: sandboxContext });
-
-    bindOrReleasePublishedSandboxSkills(
-      sandboxContext,
-      publishedSkills,
-      params.retainPublishedSkills,
-    );
-    return sandboxContext;
-  } catch (error) {
-    publishedSkills?.releaseGeneration();
-    throw error;
+  const bridgeAuth = cfg.browser.enabled
+    ? await (async () => {
+        // Sandbox browser bridge server runs on a loopback TCP port; always wire up
+        // the same auth that loopback browser clients will send (token/password).
+        const cfgForAuth =
+          params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
+        let browserAuth = resolveBrowserControlAuth(cfgForAuth);
+        try {
+          const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
+          browserAuth = ensured.auth;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : JSON.stringify(error);
+          defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
+        }
+        return browserAuth;
+      })()
+    : undefined;
+  if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
+    throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
   }
+  const browser =
+    resolvedCfg.browser.enabled && backend.capabilities?.browser === true
+      ? await ensureSandboxBrowser({
+          scopeKey,
+          workspaceDir,
+          agentWorkspaceDir,
+          skillsWorkspaceDir,
+          cfg: resolvedCfg,
+          evaluateEnabled,
+          bridgeAuth,
+          ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
+        })
+      : null;
+
+  const sandboxContext: SandboxContext = {
+    enabled: true,
+    backendId: backend.id,
+    sessionKey: rawSessionKey,
+    workspaceDir,
+    agentWorkspaceDir,
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
+    ...(skillUsagePaths ? { skillUsagePaths } : {}),
+    workspaceAccess: resolvedCfg.workspaceAccess,
+    runtimeId: backend.runtimeId,
+    runtimeLabel: backend.runtimeLabel,
+    containerName: backend.runtimeId,
+    containerWorkdir: backend.workdir,
+    docker: resolvedCfg.docker,
+    tools: resolvedCfg.tools,
+    browserAllowHostControl: resolvedCfg.browser.allowHostControl,
+    browser: browser ?? undefined,
+    backend,
+  };
+
+  sandboxContext.fsBridge =
+    backend.createFsBridge?.({ sandbox: sandboxContext }) ??
+    createSandboxFsBridge({ sandbox: sandboxContext });
+
+  if (publishedSkills) {
+    attachPublishedSandboxSkills(sandboxContext, publishedSkills);
+  }
+  return sandboxContext;
 }
 
 async function resolveSandboxContextInternal(
-  params: ResolveSandboxContextInternalParams,
+  params: ResolveSandboxContextParams,
 ): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -435,20 +390,10 @@ export async function resolveSandboxContext(params: {
   return resolveSandboxContextInternal(params);
 }
 
-// Prompt-assembly owners keep the published catalog until their cleanup path
-// releases it. The public Plugin SDK resolver stays lease-free so plugin
-// readiness, cron, /btw, and harness dispatch cannot retain generations.
-export async function resolveSandboxContextWithPublishedSkills(
-  params: ResolveSandboxContextParams,
-): Promise<SandboxContext | null> {
-  return resolveSandboxContextInternal({ ...params, retainPublishedSkills: true });
-}
-
 export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
-  retainPublishedSkills?: boolean;
 }): Promise<SandboxWorkspaceInfo | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -473,31 +418,24 @@ export async function ensureSandboxWorkspaceForSession(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  try {
-    const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
-      cfg,
-      rawSessionKey,
-      scopeKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-    });
-    const sandboxWorkspace: SandboxWorkspaceInfo = {
-      workspaceDir,
-      ...(containerWorkdir ? { containerWorkdir } : {}),
-      skillsWorkspaceDir,
-      ...(skillsEligibility ? { skillsEligibility } : {}),
-      ...(skillUsagePaths ? { skillUsagePaths } : {}),
-      workspaceAccess: cfg.workspaceAccess,
-    };
-    bindOrReleasePublishedSandboxSkills(
-      sandboxWorkspace,
-      publishedSkills,
-      params.retainPublishedSkills,
-    );
-    return sandboxWorkspace;
-  } catch (error) {
-    publishedSkills?.releaseGeneration();
-    throw error;
+  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
+    cfg,
+    rawSessionKey,
+    scopeKey,
+    workspaceDir,
+    agentWorkspaceDir,
+    skillsWorkspaceDir,
+  });
+  const sandboxWorkspace: SandboxWorkspaceInfo = {
+    workspaceDir,
+    ...(containerWorkdir ? { containerWorkdir } : {}),
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
+    ...(skillUsagePaths ? { skillUsagePaths } : {}),
+    workspaceAccess: cfg.workspaceAccess,
+  };
+  if (publishedSkills) {
+    attachPublishedSandboxSkills(sandboxWorkspace, publishedSkills);
   }
+  return sandboxWorkspace;
 }

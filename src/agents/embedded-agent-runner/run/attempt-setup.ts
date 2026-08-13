@@ -41,11 +41,7 @@ import { resolveCodeModeSkills, type CodeModeSkillReader } from "../../code-mode
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveSandboxContext, resolveSandboxContextWithPublishedSkills } from "../../sandbox.js";
-import {
-  releasePublishedSandboxSkills,
-  releasePublishedSandboxSkillsOnThrow,
-} from "../../sandbox/published-skills-handoff.js";
+import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -105,9 +101,7 @@ type AttemptWorkspaceParams = Pick<
   | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
-> & {
-  retainPublishedSkills?: boolean;
-};
+>;
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
@@ -124,47 +118,36 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     skillsSnapshot: params.skillsSnapshot,
     workspaceDir: resolvedWorkspace,
   };
-  // Media-only callers pass false; they never reach skill restore/release.
-  const retainPublishedCatalog = params.retainPublishedSkills !== false;
   const sandbox = params.skillWorkshopCollectionReconcile
     ? null
-    : retainPublishedCatalog
-      ? await resolveSandboxContextWithPublishedSkills(sandboxParams)
-      : await resolveSandboxContext(sandboxParams);
-  return await releasePublishedSandboxSkillsOnThrow(
-    retainPublishedCatalog ? sandbox : null,
-    async () => {
-      const effectiveWorkspace =
-        sandbox?.enabled && sandbox.workspaceAccess !== "rw"
-          ? sandbox.workspaceDir
-          : resolvedWorkspace;
-      const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-      if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-        throw new Error(
-          "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-        );
-      }
-      await fs.mkdir(effectiveWorkspace, { recursive: true });
-      const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-        sessionKey: params.sessionKey,
-        config: params.config,
-        agentId: params.agentId,
-      });
-      return {
-        defaultAgentId,
-        effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-        effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
-          config: params.config,
-          sessionAgentId,
-        }),
-        effectiveWorkspace,
-        resolvedWorkspace,
-        sandbox,
-        sandboxSessionKey,
-        sessionAgentId,
-      };
-    },
-  );
+    : await resolveSandboxContext(sandboxParams);
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return {
+    defaultAgentId,
+    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
+    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
+      config: params.config,
+      sessionAgentId,
+    }),
+    effectiveWorkspace,
+    resolvedWorkspace,
+    sandbox,
+    sandboxSessionKey,
+    sessionAgentId,
+  };
 }
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
@@ -496,15 +479,8 @@ export function prepareEmbeddedAttemptSkills(params: {
 }) {
   let restoreApplied = () => {};
   const restoreSkillEnv = () => {
-    try {
-      restoreApplied();
-    } finally {
-      releasePublishedSandboxSkills(params.sandbox);
-    }
+    restoreApplied();
   };
-  // Settled finalization still leases a published generation during sandbox
-  // setup. Skip skill load/env, but keep this restore hook so prune can drop
-  // that generation after the attempt instead of retaining it indefinitely.
   if (params.attempt.operation === "settled-tool-finalization") {
     return {
       restoreSkillEnv,

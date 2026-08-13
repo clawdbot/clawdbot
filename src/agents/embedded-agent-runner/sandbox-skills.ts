@@ -229,7 +229,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     // inject the wrong catalog into this run's prompt.
     const publishedSnapshot = readPublishedSandboxSkills(
       params.publishedSkillsOwner ?? params.sandbox,
-    )?.skillsSnapshot;
+    );
     const materializedSnapshot = publishedSnapshot
       ? remapMaterializedSkillsSnapshotForPrompt({
           skillsSnapshot: publishedSnapshot,
@@ -255,8 +255,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   };
 }
 
-// CLI and command inspection share this assembly. They differ only in when
-// they release the published-generation lease.
+// CLI and command inspection share this assembly.
 export function resolveSandboxedWorkspaceSkillsPrompt(params: {
   agentId: string;
   config?: OpenClawConfig;

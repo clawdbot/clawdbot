@@ -2,58 +2,24 @@
  * Opaque per-run published sandbox skill catalogs.
  *
  * The workspace-global sync cache is only a publisher. Each sandbox context or
- * session workspace object carries the catalog and generation lease selected
- * for that run so concurrent eligibility snapshots cannot steal each other's
- * prompt, and prune cannot delete files a still-running consumer advertised.
+ * session workspace object carries the catalog selected for that run, so
+ * concurrent eligibility snapshots cannot steal each other's prompt. Ownership
+ * is weak: nothing here holds a filesystem resource, so dropping the owner is
+ * the only cleanup required.
  */
 import type { SkillSnapshot } from "../../skills/types.js";
 
-export type PublishedSandboxSkillsHandoff = {
-  releaseGeneration: () => void;
-  skillsSnapshot: SkillSnapshot;
-};
+const publishedSkillsByOwner = new WeakMap<object, SkillSnapshot>();
 
-const publishedSkillsByOwner = new WeakMap<object, PublishedSandboxSkillsHandoff>();
-
-export function attachPublishedSandboxSkills(
-  owner: object,
-  handoff: PublishedSandboxSkillsHandoff,
-): void {
-  publishedSkillsByOwner.get(owner)?.releaseGeneration();
-  publishedSkillsByOwner.set(owner, handoff);
+export function attachPublishedSandboxSkills(owner: object, skillsSnapshot: SkillSnapshot): void {
+  publishedSkillsByOwner.set(owner, skillsSnapshot);
 }
 
 export function readPublishedSandboxSkills(
   owner: object | null | undefined,
-): PublishedSandboxSkillsHandoff | undefined {
+): SkillSnapshot | undefined {
   if (!owner) {
     return undefined;
   }
   return publishedSkillsByOwner.get(owner);
-}
-
-export function releasePublishedSandboxSkills(owner: object | null | undefined): void {
-  if (!owner) {
-    return;
-  }
-  const handoff = publishedSkillsByOwner.get(owner);
-  if (!handoff) {
-    return;
-  }
-  publishedSkillsByOwner.delete(owner);
-  handoff.releaseGeneration();
-}
-
-export async function releasePublishedSandboxSkillsOnThrow<T>(
-  owner: object | null | undefined,
-  work: () => Promise<T>,
-): Promise<T> {
-  // WeakMap GC does not run the releaser. If preparation throws before a
-  // runtime owner is returned, this must drop the generation lease here.
-  try {
-    return await work();
-  } catch (error) {
-    releasePublishedSandboxSkills(owner);
-    throw error;
-  }
 }

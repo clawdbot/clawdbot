@@ -108,7 +108,6 @@ import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
-import { releasePublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -250,37 +249,25 @@ async function resolveCliSkillsPrompt(params: {
   sessionKey: string;
   skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
   workspaceDir: string;
-}): Promise<{ prompt: string; publishedSkillsOwner?: object }> {
+}): Promise<string> {
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
     config: params.config,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
-    retainPublishedSkills: true,
   });
   if (!sandboxWorkspace) {
-    return {
-      prompt: resolveSkillsPrompt({
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-      }),
-    };
+    return resolveSkillsPrompt({
+      skillsSnapshot: params.skillsSnapshot,
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+    });
   }
-
-  try {
-    return {
-      prompt: resolveSandboxedWorkspaceSkillsPrompt({
-        agentId: params.agentId,
-        config: params.config,
-        workspace: sandboxWorkspace,
-      }),
-      publishedSkillsOwner: sandboxWorkspace,
-    };
-  } catch (error) {
-    releasePublishedSandboxSkills(sandboxWorkspace);
-    throw error;
-  }
+  return resolveSandboxedWorkspaceSkillsPrompt({
+    agentId: params.agentId,
+    config: params.config,
+    workspace: sandboxWorkspace,
+  });
 }
 
 /** Overrides preparation dependencies for CLI runner tests. */
@@ -1427,9 +1414,9 @@ export async function prepareCliRunContext(
           cwd,
           moduleUrl: import.meta.url,
         });
-    const cliSkillsPrompt =
+    const systemPromptSkillsPrompt =
       isSideQuestion || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
-        ? { prompt: "", publishedSkillsOwner: undefined }
+        ? ""
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
             workspaceDir,
@@ -1437,20 +1424,6 @@ export async function prepareCliRunContext(
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
-    const systemPromptSkillsPrompt = cliSkillsPrompt.prompt;
-    if (cliSkillsPrompt.publishedSkillsOwner) {
-      const publishedSkillsOwner = cliSkillsPrompt.publishedSkillsOwner;
-      const previousCleanup = preparedBackendFinal.cleanup ?? cleanupPreparedResources;
-      const cleanup = async () => {
-        try {
-          await previousCleanup?.();
-        } finally {
-          releasePublishedSandboxSkills(publishedSkillsOwner);
-        }
-      };
-      preparedBackendFinal = { ...preparedBackendFinal, cleanup };
-      cleanupPreparedResources = cleanup;
-    }
     const runtimeChannel = isSideQuestion
       ? undefined
       : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);

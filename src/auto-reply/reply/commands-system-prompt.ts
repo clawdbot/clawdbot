@@ -14,7 +14,6 @@ import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
-import { releasePublishedSandboxSkills } from "../../agents/sandbox/published-skills-handoff.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
@@ -83,21 +82,16 @@ async function resolveCommandSkillsPrompt(params: {
         config: params.config,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
-        retainPublishedSkills: true,
       });
       if (!sandboxWorkspace) {
         return "";
       }
-      try {
-        if (sandboxWorkspace.containerWorkdir) {
-          return resolveSandboxedWorkspaceSkillsPrompt({
-            agentId: params.agentId,
-            config: params.config,
-            workspace: sandboxWorkspace,
-          });
-        }
-      } finally {
-        releasePublishedSandboxSkills(sandboxWorkspace);
+      if (sandboxWorkspace.containerWorkdir) {
+        return resolveSandboxedWorkspaceSkillsPrompt({
+          agentId: params.agentId,
+          config: params.config,
+          workspace: sandboxWorkspace,
+        });
       }
       // Existing third-party backends may not expose the optional workdir
       // resolver yet. Preserve their previous host-snapshot inspection path.

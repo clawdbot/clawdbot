@@ -199,9 +199,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
           sessionId: runtime.sessionId,
           sessionKey: runtime.sessionKey,
           workspaceDir: runtime.workspaceDir,
-          // Image staging only needs the sandbox fs bridge. This path never
-          // reaches skill restore, so a catalog lease would have no owner.
-          retainPublishedSkills: false,
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
