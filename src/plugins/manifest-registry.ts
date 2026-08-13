@@ -316,7 +316,14 @@ export function resolveManifestChannelPreferOverIds(
   if (channelPreferOver?.length) {
     return channelPreferOver;
   }
-  return record.channelCatalogMeta?.preferOver ?? [];
+  // Catalog metadata describes exactly one channel, so its preference must not leak to the other
+  // channels the same plugin ships — otherwise a preference declared for channel A lets the plugin
+  // claim channel B. The runtime facade gates catalog metadata the same way (see
+  // resolveManifestChannelPlugin in src/channels/plugins/read-only.ts).
+  if (record.channelCatalogMeta?.id !== channelId) {
+    return [];
+  }
+  return record.channelCatalogMeta.preferOver ?? [];
 }
 
 export type BundledChannelConfigCollector = (params: {

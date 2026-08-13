@@ -29,6 +29,7 @@ import {
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { canPluginReplaceChannelOwner } from "./plugin-replacement-eligibility.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { resolveSecretInputRef } from "./types.secrets.js";
 import {
@@ -363,7 +364,12 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      // Ownership must ignore a denied or disabled replacement, exactly as auto-enable does, or a
+      // valid fallback config is checked against the replacement's schema and rejected.
+      const eligibilityConfig = ensureCompatConfig();
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, (pluginId) =>
+        canPluginReplaceChannelOwner(eligibilityConfig, pluginId),
+      )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {

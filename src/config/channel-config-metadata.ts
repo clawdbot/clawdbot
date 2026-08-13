@@ -160,13 +160,23 @@ export function collectPluginSchemaMetadataCore(
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
-/** Collects per-channel config metadata with the plugin that supplied the selected schema. */
+/**
+ * Collects per-channel config metadata with the plugin that supplied the selected schema.
+ *
+ * `canReplaceChannelOwner` decides whether a plugin may take a channel from the plugin it declares
+ * in `preferOver`. Auto-enable ignores a denied or explicitly disabled replacement and activates
+ * the fallback, so validation must pass the same filter here or it checks the fallback's config
+ * against the disabled replacement's schema. Omit it for config-independent metadata (docs, UI),
+ * where every declared replacement counts.
+ */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
+  canReplaceChannelOwner?: (pluginId: string) => boolean,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   // Resolving a same-origin conflict needs the CURRENT owner's manifest, not just its id.
   const recordsById = new Map(registry.plugins.map((record) => [record.id, record]));
+  const canReplace = (pluginId: string): boolean => canReplaceChannelOwner?.(pluginId) ?? true;
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
@@ -178,10 +188,21 @@ export function collectChannelSchemaMetadataWithOwnership(
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
       if (!current || originRank <= current.originRank) {
+        // Presentation travels with the selected schema owner. A same-origin record that will not
+        // win the schema must not relabel the channel, or docs and config UI show the replaced
+        // plugin's name above the replacement's fields. The winner re-sets both below.
+        const keepOwnerPresentation =
+          current?.schemaPluginId !== undefined &&
+          current.schemaPluginId !== record.id &&
+          current.originRank === originRank;
         byChannelId.set(channelId, {
           id: channelId,
-          label: rootLabel ?? current?.label,
-          description: rootDescription ?? current?.description,
+          label: keepOwnerPresentation
+            ? (current.label ?? rootLabel)
+            : (rootLabel ?? current?.label),
+          description: keepOwnerPresentation
+            ? (current.description ?? rootDescription)
+            : (rootDescription ?? current?.description),
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
@@ -206,14 +227,22 @@ export function collectChannelSchemaMetadataWithOwnership(
       // ownership has to follow the same declaration or config validation rejects the very
       // plugin the runtime activates. Mutual declarations stay order-dependent, as before.
       if (currentOwnsSchema && current.originRank === originRank && current.schemaPluginId) {
-        const replacedByIncoming = resolveManifestChannelPreferOverIds(record, channelId).includes(
-          current.schemaPluginId,
-        );
-        const currentOwnerRecord = recordsById.get(current.schemaPluginId);
-        const incomingReplacedByCurrent =
-          currentOwnerRecord !== undefined &&
-          resolveManifestChannelPreferOverIds(currentOwnerRecord, channelId).includes(record.id);
-        if (incomingReplacedByCurrent && !replacedByIncoming) {
+        const ownerId = current.schemaPluginId;
+        const incomingDeclaresOwner = resolveManifestChannelPreferOverIds(
+          record,
+          channelId,
+        ).includes(ownerId);
+        const ownerRecord = recordsById.get(ownerId);
+        const ownerDeclaresIncoming =
+          ownerRecord !== undefined &&
+          resolveManifestChannelPreferOverIds(ownerRecord, channelId).includes(record.id);
+        const incomingReplaces = incomingDeclaresOwner && canReplace(record.id);
+        const ownerReplaces = ownerDeclaresIncoming && canReplace(ownerId);
+        // A declared replacement that the operator denied or disabled must not take the channel:
+        // auto-enable activates the fallback in that case, so the fallback's schema has to win in
+        // BOTH orderings — falling through here would hand it to the disabled plugin as the last
+        // writer.
+        if ((ownerReplaces && !incomingReplaces) || (incomingDeclaresOwner && !incomingReplaces)) {
           continue;
         }
       }

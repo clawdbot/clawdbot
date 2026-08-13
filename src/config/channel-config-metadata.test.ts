@@ -31,11 +31,22 @@ function claimant({ id, origin = "global", preferOver, catalogPreferOver }: Clai
   };
 }
 
-function ownerOf(plugins: ReturnType<typeof claimant>[]): string | undefined {
+function entryFor(
+  plugins: ReturnType<typeof claimant>[],
+  channelId = "clickclack",
+  canReplace?: (pluginId: string) => boolean,
+) {
   const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
-  return collectChannelSchemaMetadataWithOwnership(registry).find(
-    (entry) => entry.id === "clickclack",
-  )?.schemaPluginId;
+  return collectChannelSchemaMetadataWithOwnership(registry, canReplace).find(
+    (entry) => entry.id === channelId,
+  );
+}
+
+function ownerOf(
+  plugins: ReturnType<typeof claimant>[],
+  canReplace?: (pluginId: string) => boolean,
+): string | undefined {
+  return entryFor(plugins, "clickclack", canReplace)?.schemaPluginId;
 }
 
 describe("collectChannelSchemaMetadataWithOwnership", () => {
@@ -78,6 +89,72 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
 
     // Origin rank still decides across origins; `preferOver` only settles same-origin ties.
     expect(ownerOf([workspace, bundled])).toBe("clickclack-core");
+  });
+
+  // Codex review P1 on #123209: auto-enable ignores a denied or explicitly disabled replacement
+  // and activates the fallback, so ownership must too. Both orderings matter — falling through
+  // would hand the channel to the disabled plugin as the last writer.
+  it.each([
+    { order: "replacement last", plugins: ["clickclack-core", "clickclack-plus"] },
+    { order: "replacement first", plugins: ["clickclack-plus", "clickclack-core"] },
+  ])(
+    "leaves the channel with the fallback when the replacement is disabled ($order)",
+    ({ plugins }) => {
+      const byId = {
+        "clickclack-core": claimant({ id: "clickclack-core" }),
+        "clickclack-plus": claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] }),
+      };
+      const ordered = plugins.map((id) => byId[id as keyof typeof byId]);
+
+      expect(ownerOf(ordered, (pluginId) => pluginId !== "clickclack-plus")).toBe(
+        "clickclack-core",
+      );
+    },
+  );
+
+  // Codex review P2 on #123209: channelCatalogMeta describes exactly one channel, so its
+  // preference must not let the plugin claim a different channel it also ships.
+  it("does not apply a catalog preference to the plugin's other channels", () => {
+    const core = {
+      id: "multi-core",
+      origin: "global",
+      channels: ["otherchat"],
+      channelConfigs: { otherchat: { schema: { type: "object", additionalProperties: true } } },
+    };
+    const wideClaimant = {
+      id: "multi-plus",
+      origin: "global",
+      channels: ["clickclack", "otherchat"],
+      // The preference is declared for clickclack only.
+      channelCatalogMeta: { id: "clickclack", preferOver: ["multi-core"] },
+      channelConfigs: { otherchat: { schema: { type: "object", additionalProperties: true } } },
+    };
+
+    const owner = entryFor(
+      [wideClaimant, core] as unknown as ReturnType<typeof claimant>[],
+      "otherchat",
+    )?.schemaPluginId;
+
+    expect(owner).toBe("multi-core");
+  });
+
+  // Codex review P2 on #123209: the losing record's `channels` pass ran before the schema was
+  // settled, so it could relabel a channel whose schema stayed with the replacement.
+  it("keeps the schema owner's label and description", () => {
+    const core = {
+      ...claimant({ id: "clickclack-core" }),
+      channelCatalogMeta: { id: "clickclack", label: "Legacy ClickClack", blurb: "the old one" },
+    };
+    const replacement = {
+      ...claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] }),
+      channelCatalogMeta: { id: "clickclack", label: "ClickClack Plus", blurb: "the replacement" },
+    };
+
+    const entry = entryFor([replacement, core] as unknown as ReturnType<typeof claimant>[]);
+
+    expect(entry?.schemaPluginId).toBe("clickclack-plus");
+    expect(entry?.label).toBe("ClickClack Plus");
+    expect(entry?.description).toBe("the replacement");
   });
 
   it("leaves undeclared same-origin claimants on the existing last-writer behavior", () => {

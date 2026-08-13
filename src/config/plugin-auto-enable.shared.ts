@@ -39,6 +39,7 @@ import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
+import { isPluginDenied, isPluginExplicitlyDisabled } from "./plugin-replacement-eligibility.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -789,22 +790,6 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   }
 
   return changes;
-}
-
-function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const builtInChannelId = normalizeChatChannelId(pluginId);
-  if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    if (asOptionalRecord(channels?.[builtInChannelId])?.enabled === false) {
-      return true;
-    }
-  }
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
-}
-
-function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
-  const deny = cfg.plugins?.deny;
-  return Array.isArray(deny) && deny.includes(pluginId);
 }
 
 function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
