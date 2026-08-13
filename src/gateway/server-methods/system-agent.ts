@@ -422,7 +422,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 },
               });
               if (!applied || applied.retrySelection) {
-                throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
+                throw new Error(
+                  `Provider setup resolution failed for "${params.authChoice}". Run \`openclaw doctor --fix\`, restart the Gateway, and try again.`,
+                );
               }
               signal.throwIfAborted();
               runnerSession.lockCancellation();
