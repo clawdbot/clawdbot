@@ -47,9 +47,10 @@ export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | u
 }
 
 /** Captures the effective token and a non-secret cache scope from the same env snapshot. */
-export function resolveGitHubApiCredentialScope(
-  env: NodeJS.ProcessEnv = process.env,
-): { token: string | undefined; cacheScope: string } {
+export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process.env): {
+  token: string | undefined;
+  cacheScope: string;
+} {
   const token = githubApiToken(env);
   return {
     token,
