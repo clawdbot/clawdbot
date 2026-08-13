@@ -1,9 +1,9 @@
 import type { Message } from "grammy/types";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
@@ -300,11 +300,14 @@ export function createTelegramMessageContextRuntime({
   RegisterTelegramHandlerParams,
   "cfg" | "accountId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
+  const messageCacheAgentId = resolveAgentRoute({
+    cfg,
+    channel: "telegram",
+    accountId,
+  }).agentId;
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
-      telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: cfg.agents ? resolveDefaultAgentId(cfg) : "main",
-      }),
+      telegramDeps.resolveStorePath(cfg.session?.store, { agentId: messageCacheAgentId }),
     ),
   });
   const resolvePromptSender = (

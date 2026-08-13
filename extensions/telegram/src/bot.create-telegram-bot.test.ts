@@ -3765,6 +3765,12 @@ describe("createTelegramBot", () => {
       agents: {
         list: [{ id: "topic-a" }, { id: "topic-b" }],
       },
+      bindings: [
+        {
+          agentId: "topic-a",
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
     });
     loadConfig.mockImplementation(configForTopicAgent);
 
