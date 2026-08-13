@@ -112,7 +112,15 @@ async function readOpenAITokenResponse(
       message: `OpenAI Codex token ${operation} failed (${response.status}): ${text || response.statusText}`,
     };
   }
-  const json = (await response.json()) as TokenResponseJson;
+  let json: TokenResponseJson;
+  try {
+    json = (await response.json()) as TokenResponseJson;
+  } catch {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+    };
+  }
   if (!isRecord(json)) {
     return {
       type: "failed",
