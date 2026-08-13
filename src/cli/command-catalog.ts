@@ -67,6 +67,22 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+const SANDBOX_BROWSER_ONLY_SUBCOMMANDS = new Set(["list", "recreate"]);
+
+// `sandbox list --browser` and `sandbox recreate --browser` only read/remove
+// containers through the core Docker browser manager
+// (src/agents/sandbox/manage.ts, src/agents/sandbox/docker-backend.ts), never
+// the plugin-populated backend registry. Loading plugins for them buys
+// nothing and lets an unrelated broken plugin block a browser-only operation
+// that previously worked without the plugin registry at all.
+function isSandboxBrowserOnlyOperation(argv: string[], commandPath: string[]): boolean {
+  const subcommand = commandPath[1];
+  if (!subcommand || !SANDBOX_BROWSER_ONLY_SUBCOMMANDS.has(subcommand)) {
+    return false;
+  }
+  return hasFlag(argv, "--browser");
+}
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -127,10 +143,18 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
-  // Sandbox backends live in plugins and register into the process-wide registry
-  // (src/agents/sandbox/backend.ts). Without them sandbox reports every non-docker
-  // runtime as stopped and removes registry entries without stopping the runtime.
-  { commandPath: ["sandbox"], policy: { loadPlugins: "always" } },
+  // Docker, Podman, and SSH sandbox backends register into the process-wide
+  // registry from core at module load (src/agents/sandbox/backend.ts); only
+  // additional plugin-provided/unregistered backend ids need plugins loaded to
+  // report live status instead of "stopped" and to stop the runtime instead of
+  // just dropping the registry entry. Browser-only list/recreate never touch
+  // that registry (see isSandboxBrowserOnlyOperation above), so they're exempt.
+  {
+    commandPath: ["sandbox"],
+    policy: {
+      loadPlugins: ({ argv, commandPath }) => !isSandboxBrowserOnlyOperation(argv, commandPath),
+    },
+  },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
     commandPath: ["agents"],

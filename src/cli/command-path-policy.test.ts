@@ -307,15 +307,66 @@ describe("command-path-policy", () => {
 
   it("loads plugins for sandbox so plugin-provided backends are registered", () => {
     // sandbox reports live runtime state and removes runtimes through the backend
-    // registry, which only plugins populate (src/agents/sandbox/backend.ts).
-    for (const commandPath of [
-      ["sandbox"],
-      ["sandbox", "list"],
-      ["sandbox", "recreate"],
-      ["sandbox", "explain"],
-    ]) {
-      expect(resolveCliCommandPathPolicy(commandPath).loadPlugins).toBe("always");
+    // registry; docker/podman/ssh register in core (src/agents/sandbox/backend.ts),
+    // but a plugin-provided/unregistered backend id still needs plugins loaded.
+    const sandboxPolicy = resolveCliCommandPathPolicy(["sandbox"]);
+    expectLoadPluginsResolver(sandboxPolicy);
+    for (const commandPath of [["sandbox"], ["sandbox", "list"], ["sandbox", "explain"]]) {
+      expect(resolveCliCommandPathPolicy(commandPath).loadPlugins).toBe(sandboxPolicy.loadPlugins);
     }
+    for (const argv of [
+      ["node", "openclaw", "sandbox"],
+      ["node", "openclaw", "sandbox", "list"],
+      ["node", "openclaw", "sandbox", "recreate", "--all"],
+      ["node", "openclaw", "sandbox", "explain"],
+    ]) {
+      expect(
+        sandboxPolicy.loadPlugins({
+          argv,
+          commandPath: argv.slice(2),
+          jsonOutputMode: false,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("skips plugin loading for sandbox browser-only list/recreate", () => {
+    // `sandbox list --browser` and `sandbox recreate --browser` only touch the
+    // core Docker browser manager (src/agents/sandbox/manage.ts), never the
+    // plugin-populated backend registry, so an unrelated broken plugin must not
+    // block them.
+    const sandboxPolicy = resolveCliCommandPathPolicy(["sandbox"]);
+    expectLoadPluginsResolver(sandboxPolicy);
+    for (const { argv, commandPath } of [
+      {
+        argv: ["node", "openclaw", "sandbox", "list", "--browser"],
+        commandPath: ["sandbox", "list"],
+      },
+      {
+        argv: ["node", "openclaw", "sandbox", "recreate", "--browser", "--all"],
+        commandPath: ["sandbox", "recreate"],
+      },
+      {
+        argv: ["node", "openclaw", "sandbox", "recreate", "--all", "--browser"],
+        commandPath: ["sandbox", "recreate"],
+      },
+    ]) {
+      expect(
+        sandboxPolicy.loadPlugins({
+          argv,
+          commandPath,
+          jsonOutputMode: false,
+        }),
+      ).toBe(false);
+    }
+    // --browser only exempts list/recreate; explain still needs plugins.
+    expect(
+      sandboxPolicy.loadPlugins({
+        argv: ["node", "openclaw", "sandbox", "explain", "--browser"],
+        commandPath: ["sandbox", "explain"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
   });
 
   it("resolves mixed startup-only rules", () => {

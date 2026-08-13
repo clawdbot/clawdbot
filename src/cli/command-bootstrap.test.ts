@@ -151,3 +151,64 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 });
+
+describe("sandbox browser-only operations survive a broken plugin", () => {
+  // `sandbox list --browser` / `sandbox recreate --browser` only read/remove
+  // containers through the core Docker browser manager, never the
+  // plugin-populated backend registry. Drive the real command-path policy
+  // resolution (unmocked) into the bootstrap step so an unrelated plugin that
+  // fails to load (mocked at the plugin-registry-loader boundary, matching its
+  // `throwOnLoadError: true` contract) cannot block the browser-only path,
+  // while a plain `sandbox list` still surfaces that same failure.
+  let ensureCliCommandBootstrap: typeof import("./command-bootstrap.js").ensureCliCommandBootstrap;
+  let resolveCliStartupPolicy: typeof import("./command-startup-policy.js").resolveCliStartupPolicy;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    ({ ensureCliCommandBootstrap } = await import("./command-bootstrap.js"));
+    ({ resolveCliStartupPolicy } = await import("./command-startup-policy.js"));
+  });
+
+  function resolveSandboxLoadPlugins(argv: string[], commandPath: string[]) {
+    return resolveCliStartupPolicy({ argv, commandPath, jsonOutputMode: false }).loadPlugins;
+  }
+
+  it("skips plugin loading for `sandbox list --browser` so a broken plugin cannot block it", async () => {
+    ensureCliPluginRegistryLoadedMock.mockRejectedValueOnce(
+      new Error("broken-plugin failed to load"),
+    );
+    const commandPath = ["sandbox", "list"];
+    const argv = ["node", "openclaw", ...commandPath, "--browser"];
+
+    await expect(
+      ensureCliCommandBootstrap({
+        runtime: {} as never,
+        commandPath,
+        skipConfigGuard: true,
+        loadPlugins: resolveSandboxLoadPlugins(argv, commandPath),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("still loads plugins for plain `sandbox list`, so a broken plugin surfaces the failure", async () => {
+    ensureCliPluginRegistryLoadedMock.mockRejectedValueOnce(
+      new Error("broken-plugin failed to load"),
+    );
+    const commandPath = ["sandbox", "list"];
+    const argv = ["node", "openclaw", ...commandPath];
+
+    await expect(
+      ensureCliCommandBootstrap({
+        runtime: {} as never,
+        commandPath,
+        skipConfigGuard: true,
+        loadPlugins: resolveSandboxLoadPlugins(argv, commandPath),
+      }),
+    ).rejects.toThrow("broken-plugin failed to load");
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalled();
+  });
+});
