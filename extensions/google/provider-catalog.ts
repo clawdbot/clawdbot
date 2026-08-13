@@ -47,8 +47,10 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MO
       cost: GOOGLE_GEMINI_COST,
       contextWindow: 1_048_576,
       maxTokens: 65_536,
-      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     };
+    if (thinkingLevelMap) {
+      model.thinkingLevelMap = thinkingLevelMap;
+    }
     if (prefersCodeMode) {
       model.compat = { codeMode: "preferred" };
     }
