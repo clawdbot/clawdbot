@@ -157,6 +157,33 @@ suite.define(() => {
           await panel.getByRole("button", { name: "Connect", exact: true }).click();
           const screen = panel.locator(".desktop-surface canvas");
           await screen.waitFor();
+          if (realVncWsUrl) {
+            await expect
+              .poll(
+                () =>
+                  screen.evaluate((element) => {
+                    const canvas = element as HTMLCanvasElement;
+                    const context = canvas.getContext("2d");
+                    if (!context || canvas.width === 0 || canvas.height === 0) {
+                      return false;
+                    }
+                    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                    for (let index = 0; index < pixels.length; index += 128) {
+                      if (
+                        (pixels[index] ?? 0) +
+                          (pixels[index + 1] ?? 0) +
+                          (pixels[index + 2] ?? 0) >
+                        0
+                      ) {
+                        return true;
+                      }
+                    }
+                    return false;
+                  }),
+                { timeout: 15_000 },
+              )
+              .toBe(true);
+          }
 
           await captureDesktopProof(page, panel, `${theme}-default`);
           expect(
