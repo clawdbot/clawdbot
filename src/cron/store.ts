@@ -28,7 +28,7 @@ import {
   repairCronRuntimeAuthorityRows,
   replaceCronRuntimeAuthorityRows,
 } from "./store/runtime-authority-store.js";
-import type { CronStoreTransactionHooks } from "./store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 import type {
   CronQuarantinedJob,
   LoadedCronStore,

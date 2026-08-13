@@ -6,14 +6,13 @@ import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
+import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
   applyTriggerNoFireResult,
-  applyTriggerRunResult,
-  type CronTriggerEvalOutcome,
-} from "./timer.js";
+} from "./timer-outcomes.js";
+import { applyTriggerRunResult, resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
