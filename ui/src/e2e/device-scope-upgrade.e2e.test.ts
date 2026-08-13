@@ -4,6 +4,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -28,6 +29,10 @@ const FULL_SCOPES = [
 const SCOPE_UPGRADE_METHODS = [
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+] as const;
+const HIDDEN_WEB_CHROME_HOSTS = [
+  { collapsed: false, label: "native web chrome", rootClass: "openclaw-native-web-chrome" },
+  { collapsed: true, label: "collapsed native navigation", rootClass: "openclaw-native-nav" },
 ] as const;
 const MANUAL_UPGRADE_GUIDANCE =
   "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
@@ -224,6 +229,56 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+    },
+  );
+
+  it.each(HIDDEN_WEB_CHROME_HOSTS)(
+    "keeps manual guidance at the normal content inset with $label",
+    async ({ collapsed, rootClass }) => {
+      const context = await createContext();
+      await context.addInitScript(
+        ({ hostClass, settingsKey, startCollapsed }) => {
+          localStorage.setItem(settingsKey, JSON.stringify({ navCollapsed: startCollapsed }));
+          const stamp = () =>
+            document.documentElement.classList.add("openclaw-native-macos", hostClass);
+          if (document.documentElement) {
+            stamp();
+          } else {
+            document.addEventListener("DOMContentLoaded", stamp);
+          }
+        },
+        {
+          hostClass: rootClass,
+          settingsKey: controlUiBundledSettingsStorageKey(server.baseUrl),
+          startCollapsed: collapsed,
+        },
+      );
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
+        operatorScopes: LIMITED_SCOPES,
+      });
+
+      await page.goto(`${server.baseUrl}chat`);
+      const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
+      await guidance.waitFor();
+      if (collapsed) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--nav-collapsed");
+      }
+      await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
+
+      const contentBox = await page.locator(".content").boundingBox();
+      const calloutBox = await page.locator("openclaw-update-banner .callout").boundingBox();
+      const contentInset = await page
+        .locator(".content")
+        .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+      expect(contentBox).not.toBeNull();
+      expect(calloutBox).not.toBeNull();
+      if (contentBox && calloutBox) {
+        expect(calloutBox.x).toBe(contentBox.x + contentInset);
+      }
     },
   );
 

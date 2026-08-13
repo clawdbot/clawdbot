@@ -140,7 +140,13 @@
   display: none;
 }
 
-.shell:not(.shell--mobile-nav):not(.shell--settings)
+/* Reserve notice space only while the corresponding in-page chrome remains visible. */
+:is(
+    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--settings),
+    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
+  )
   .content
   > :is(
     openclaw-update-banner,
