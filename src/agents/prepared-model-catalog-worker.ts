@@ -5,7 +5,8 @@ import { Worker } from "node:worker_threads";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -29,6 +30,7 @@ export type PreparedModelAuthRefreshWorkerInput = Readonly<{
   generationFingerprint: string;
   agentDir: string;
   inheritedAuthDir?: string;
+  workspaceDir?: string;
   authStore: AuthProfileStore;
   config: PreparedModelRuntimeInput["config"];
   env: NodeJS.ProcessEnv;
@@ -98,25 +100,6 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
   });
 }
 
-function projectWorkerAuthStore(store: AuthProfileStore): AuthProfileStore {
-  return {
-    ...store,
-    profiles: Object.fromEntries(
-      Object.entries(store.profiles).map(([profileId, credential]) => {
-        // Ref-only profiles still need their descriptor for discovery. Once a matching literal
-        // exists, omit the descriptor so the worker receives only the materialized credential.
-        const projected = { ...credential } as AuthProfileCredential & Record<string, unknown>;
-        if (projected.type === "api_key" && projected.key?.trim()) {
-          delete projected.keyRef;
-        } else if (projected.type === "token" && projected.token?.trim()) {
-          delete projected.tokenRef;
-        }
-        return [profileId, projected];
-      }),
-    ),
-  };
-}
-
 export function createPreparedModelCatalogWorkerInput(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
@@ -138,7 +121,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
       : {}),
     config: source.config,
   };
-  const authStore = projectWorkerAuthStore(params.agentFacts.authStore);
+  const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
   const providerIds = [...params.agentFacts.providerIds];
   return {
     kind: "catalog",
@@ -157,6 +140,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
 export function createPreparedModelAuthRefreshWorkerInput(params: {
   agentDir: string;
   inheritedAuthDir?: string;
+  workspaceDir?: string;
   authStore: AuthProfileStore;
   config: PreparedModelRuntimeInput["config"];
   env: NodeJS.ProcessEnv;
@@ -165,15 +149,17 @@ export function createPreparedModelAuthRefreshWorkerInput(params: {
   const providerIds = [...new Set(params.providerIds)].toSorted((left, right) =>
     left.localeCompare(right),
   );
-  const authStore = projectWorkerAuthStore(params.authStore);
+  const authStore = cloneAuthProfileStore(params.authStore);
   const env = { ...params.env };
   return {
     kind: "auth-refresh",
     agentDir: params.agentDir,
     ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     generationFingerprint: fingerprintPreparedRuntimeFacts({
       agentDir: params.agentDir,
       inheritedAuthDir: params.inheritedAuthDir,
+      workspaceDir: params.workspaceDir,
       authStore,
       config: params.config,
       env,

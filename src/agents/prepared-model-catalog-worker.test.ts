@@ -8,7 +8,7 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 describe("prepared model catalog worker input", () => {
-  it("strips only SecretRefs replaced by materialized literals", () => {
+  it("preserves SecretRef identity beside materialized literals", () => {
     const authStore = {
       version: 1,
       profiles: {
@@ -67,6 +67,7 @@ describe("prepared model catalog worker input", () => {
         type: "api_key",
         provider: "unrelated",
         key: "materialized-key",
+        keyRef: { source: "env", provider: "default", id: "UNRELATED_KEY" },
       },
       "ref-api:default": authStore.profiles["ref-api:default"],
       "ref-token:default": authStore.profiles["ref-token:default"],

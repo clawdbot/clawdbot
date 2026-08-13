@@ -152,6 +152,7 @@ function createFullModelCatalogAccess(params: {
       const input = createPreparedModelAuthRefreshWorkerInput({
         agentDir: params.agentFacts.input.agentDir,
         inheritedAuthDir: params.agentFacts.input.inheritedAuthDir,
+        workspaceDir: params.agentFacts.input.workspaceDir,
         authStore: params.agentFacts.authStore,
         config: params.agentFacts.input.config,
         env: params.agentFacts.env,

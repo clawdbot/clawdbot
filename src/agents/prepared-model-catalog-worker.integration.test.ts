@@ -47,6 +47,10 @@ const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
 const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
 const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
+const WORKSPACE_AUTH_PLUGIN_ID = `${PLUGIN_ID}-workspace-auth`;
+const WORKSPACE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-workspace-auth`;
+const WORKSPACE_AUTH_PROFILE_ID = `${WORKSPACE_AUTH_PROVIDER_ID}:workspace`;
+const WORKSPACE_AUTH_KEY = "workspace-external-auth-key-not-real";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -135,6 +139,56 @@ module.exports = {
   return pluginFile;
 }
 
+function writeWorkspaceExternalAuthPlugin(workspaceDir: string): void {
+  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", WORKSPACE_AUTH_PLUGIN_ID);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${WORKSPACE_AUTH_PLUGIN_ID}`,
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: WORKSPACE_AUTH_PLUGIN_ID,
+      providers: [WORKSPACE_AUTH_PROVIDER_ID],
+      contracts: { externalAuthProviders: [WORKSPACE_AUTH_PROVIDER_ID] },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = {
+  id: ${JSON.stringify(WORKSPACE_AUTH_PLUGIN_ID)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(WORKSPACE_AUTH_PROVIDER_ID)},
+      label: "Workspace external auth fixture",
+      auth: [],
+      resolveExternalAuthProfiles() {
+        return [{
+          profileId: ${JSON.stringify(WORKSPACE_AUTH_PROFILE_ID)},
+          credential: {
+            type: "api_key",
+            provider: ${JSON.stringify(WORKSPACE_AUTH_PROVIDER_ID)},
+            key: ${JSON.stringify(WORKSPACE_AUTH_KEY)},
+          },
+          persistence: "runtime-only",
+        }];
+      },
+    });
+  },
+};
+`,
+    "utf8",
+  );
+}
+
 async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessEnv = {}) {
   const root = tempDirs.make("openclaw-model-catalog-worker-");
   const stateDir = path.join(root, "state");
@@ -144,6 +198,7 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const pluginFile = writeFixturePlugin({ root, spinMs });
+  writeWorkspaceExternalAuthPlugin(workspaceDir);
   const env = {
     ...process.env,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -156,7 +211,7 @@ async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessE
   const config = {
     agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model` } },
     plugins: {
-      allow: [PLUGIN_ID],
+      allow: [PLUGIN_ID, WORKSPACE_AUTH_PLUGIN_ID],
       load: { paths: [pluginFile] },
       entries: { [PLUGIN_ID]: { enabled: true } },
     },
@@ -256,6 +311,68 @@ describe("prepared model catalog worker boundary", () => {
           [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
             key: DURABLE_AUTH_KEY,
           }),
+        },
+      },
+    });
+  });
+
+  it("preserves a materialized SecretRef when durable auth retains only its descriptor", async () => {
+    const fixture = await createStaticSnapshot(0);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [PROFILE_ID]: {
+            type: "token",
+            provider: SHARED_AUTH_PROVIDER_ID,
+            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
+          },
+        },
+      },
+      fixture.agentDir,
+    );
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
+      }),
+    );
+    expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
+      authStore: {
+        profiles: {
+          [PROFILE_ID]: expect.objectContaining({
+            token: MATERIALIZED_SECRET,
+            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
+          }),
+        },
+      },
+    });
+  });
+
+  it("refreshes workspace plugin external auth in both worker operations", async () => {
+    const fixture = await createStaticSnapshot(0);
+
+    const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, [
+      WORKSPACE_AUTH_PROVIDER_ID,
+    ]);
+    expect(refreshed).toMatchObject({
+      authModes: { [WORKSPACE_AUTH_PROVIDER_ID]: "api_key" },
+      authStore: {
+        profiles: {
+          [WORKSPACE_AUTH_PROFILE_ID]: expect.objectContaining({ key: WORKSPACE_AUTH_KEY }),
+        },
+      },
+    });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
+      authModes: { [WORKSPACE_AUTH_PROVIDER_ID]: "api_key" },
+      authStore: {
+        profiles: {
+          [WORKSPACE_AUTH_PROFILE_ID]: expect.objectContaining({ key: WORKSPACE_AUTH_KEY }),
         },
       },
     });

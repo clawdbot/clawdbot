@@ -84,6 +84,7 @@ function isExternalAuthProfileAllowed(
 function resolveExternalAuthProfileMap(params: {
   store: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   externalCli?: ExternalCliOverlayOptions;
 }): ExternalAuthProfileMap {
@@ -93,10 +94,11 @@ function resolveExternalAuthProfileMap(params: {
   const profiles = resolveProfiles({
     env,
     config: params.externalCli?.config,
+    workspaceDir: params.workspaceDir,
     context: {
       config: params.externalCli?.config,
       agentDir: params.agentDir,
-      workspaceDir: undefined,
+      workspaceDir: params.workspaceDir,
       env,
       store: params.store,
     },
@@ -153,6 +155,7 @@ function resolveExternalAuthProfileMap(params: {
 export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   externalCli?: ExternalCliOverlayOptions;
 }): RuntimeExternalOAuthProfile[] {
@@ -160,6 +163,7 @@ export function listRuntimeExternalAuthProfiles(params: {
     resolveExternalAuthProfileMap({
       store: params.store,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       env: params.env,
       externalCli: params.externalCli,
     }).values(),
@@ -189,11 +193,16 @@ function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolea
 /** Overlay external auth profiles onto a cloned auth store for runtime use. */
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: {
+    agentDir?: string;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  } & ExternalCliOverlayOptions,
 ): AuthProfileStore {
   const profiles = listRuntimeExternalAuthProfiles({
     store,
     agentDir: params?.agentDir,
+    workspaceDir: params?.workspaceDir,
     env: params?.env,
     externalCli: params,
   });
