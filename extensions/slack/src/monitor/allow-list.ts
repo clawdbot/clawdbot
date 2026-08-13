@@ -13,6 +13,7 @@ import {
 import { parseSlackTarget } from "../target-parsing.js";
 
 const SLACK_SLUG_CACHE_MAX = 512;
+const SLACK_STABLE_USER_ID_RE = /^[ubw][a-z0-9]+$/;
 const slackSlugCache = new Map<string, string>();
 
 export function normalizeSlackSlug(raw?: string) {
@@ -54,7 +55,7 @@ export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined
     return undefined;
   }
   const withoutPrefix = trimmed.replace(/^(slack:|user:)/, "");
-  return /^u[a-z0-9]+$/.test(withoutPrefix) ? withoutPrefix : undefined;
+  return SLACK_STABLE_USER_ID_RE.test(withoutPrefix) ? withoutPrefix : undefined;
 }
 
 export type SlackAllowListMatch = AllowlistMatch<

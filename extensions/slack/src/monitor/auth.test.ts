@@ -119,6 +119,7 @@ function interactiveRequest(
 
 function makeChannelMemberAuth(
   conversationsMembers = vi.fn(async () => ({ members: ["UOWNER"], response_metadata: {} })),
+  allowFromLower = ["uowner"],
 ) {
   const ctx = {
     allowFrom: [],
@@ -132,7 +133,7 @@ function makeChannelMemberAuth(
       ctx,
       channelId: "C1",
       senderId: "U_BOT",
-      allowFromLower: ["uowner"],
+      allowFromLower,
     });
   return { authorize, conversationsMembers };
 }
@@ -358,6 +359,24 @@ describe("authorizeSlackSystemEventSender", () => {
       [{ token: "xoxb-test", channel: "C1", limit: 999, cursor: "cursor-next" }],
     ]);
   });
+
+  it.each([
+    ["an org-wide user ID", "w01234567", "W01234567"],
+    ["a prefixed org-wide user ID", "slack:w01234567", "W01234567"],
+    ["a bot ID", "b01234567", "B01234567"],
+    ["a prefixed bot ID", "user:b01234567", "B01234567"],
+  ])(
+    "authorizes bot room messages when %s identifies a present owner",
+    async (_name, entry, id) => {
+      const conversationsMembers = vi.fn(async () => ({
+        members: [id],
+        response_metadata: {},
+      }));
+      const { authorize } = makeChannelMemberAuth(conversationsMembers, [entry]);
+
+      await expect(authorize()).resolves.toBe(true);
+    },
+  );
 
   it.each([
     ["a repeated cursor", ["cursor-a", "cursor-a"]],
