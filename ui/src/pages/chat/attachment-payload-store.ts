@@ -1,4 +1,3 @@
-// Control UI chat module implements attachment payload store behavior.
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 
 type AttachmentPayload = {
@@ -45,10 +44,10 @@ export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | n
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
+// Stored data URLs keep previews available when this browser cannot create object URLs.
 export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string | null {
-  return (
-    attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl ?? attachment.dataUrl ?? null
-  );
+  const storedPreview = payloads.get(attachment.id)?.previewUrl;
+  return attachment.previewUrl ?? storedPreview ?? getChatAttachmentDataUrl(attachment);
 }
 
 function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
