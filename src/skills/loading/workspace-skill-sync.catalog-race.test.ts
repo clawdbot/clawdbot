@@ -12,6 +12,7 @@ import { resetRemoteNodeSkillsForTests } from "../runtime/remote-skills.test-sup
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
+import { leasePublishedSyncedSkillsGeneration } from "./workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
   createMaterializedSkillsBridge,
@@ -318,5 +319,83 @@ describe("syncWorkspaceSkills catalog generations", () => {
     } finally {
       resetRemoteNodeSkillsForTests();
     }
+  });
+
+  it("keeps a leased generation readable after later catalogs replace it", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const publish = async (description: string) => {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", "alpha"),
+        name: "alpha",
+        description,
+        body: `# ${description}\n`,
+      });
+      const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
+        bundledSkillsDir,
+        managedSkillsDir,
+        snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+      });
+      return await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot,
+      });
+    };
+
+    const first = await publish("generation-one");
+    const firstFilePath = first.skillsSnapshot.resolvedSkills?.[0]?.filePath;
+    expect(firstFilePath).toBeTruthy();
+    const published = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: targetWorkspace,
+        workspaceAccess: "rw",
+      },
+      effectiveWorkspace: targetWorkspace,
+    });
+    const bridge = createMaterializedSkillsBridge(targetWorkspace);
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: resolveSkillsPrompt({
+        skillsSnapshot: published.skillsSnapshot,
+        workspaceDir: published.skillsPromptWorkspaceDir,
+      }),
+      candidates: published.skillsSnapshot?.resolvedSkills ?? [],
+      reader: async ({ location, signal }) =>
+        (
+          await bridge.readFile({
+            filePath: location,
+            cwd: "/workspace",
+            signal,
+          })
+        ).toString("utf8"),
+    });
+    expect(codeModeSkills).toHaveLength(1);
+    const capturedSkill = codeModeSkills[0];
+    if (!capturedSkill) {
+      throw new Error("expected a captured sandbox skill from the first generation");
+    }
+    const releasePublishedGeneration = leasePublishedSyncedSkillsGeneration(targetWorkspace);
+
+    try {
+      bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+      await publish("generation-two");
+      bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+      await publish("generation-three");
+
+      expect(await pathExists(firstFilePath ?? "")).toBe(true);
+      await expect(readCodeModeSkill(capturedSkill)).resolves.toContain("# generation-one");
+    } finally {
+      releasePublishedGeneration();
+    }
+
+    bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    await publish("generation-four");
+    expect(await pathExists(firstFilePath ?? "")).toBe(false);
   });
 });

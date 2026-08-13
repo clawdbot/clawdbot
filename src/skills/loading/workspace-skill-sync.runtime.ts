@@ -17,11 +17,13 @@ import type {
 } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { loadSkillsFromDirSafe } from "./local-loader.js";
 import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import {
+  collectRetainedSyncedSkillGenerations,
   pruneSyncedSkillsUsageCache,
   readSyncedSkillsUsageCache,
   resolveSyncedSkillsCacheKey,
@@ -259,6 +261,80 @@ async function pruneSyncedSkillGenerations(params: {
   }
 }
 
+async function hydratePublishedSyncedSkillsCache(params: {
+  targetSkillsDir: string;
+  targetWorkspaceDir: string;
+  manifest: SyncedSkillsManifest;
+  config?: OpenClawConfig;
+  skillFilter?: string[];
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+}): Promise<ReturnType<typeof readSyncedSkillsUsageCache>> {
+  // Process-local catalog cache dies on restart. Reload the last committed
+  // generation so a failed refresh cannot strand readers on an empty live scan
+  // of the bind-mounted skills root, which skips dot-prefixed generation dirs.
+  if (params.manifest.generation <= 0) {
+    return undefined;
+  }
+  const generationDir = resolveSyncedSkillGenerationDir(
+    params.targetSkillsDir,
+    params.manifest.generation,
+  );
+  try {
+    const stats = await fsp.stat(generationDir);
+    if (!stats.isDirectory()) {
+      return undefined;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  const loaded = loadSkillsFromDirSafe({
+    dir: generationDir,
+    source: "workspace",
+  });
+  if (loaded.skills.length === 0) {
+    return undefined;
+  }
+  const entries = loaded.skills.map((skill) => ({
+    skill,
+    frontmatter: loaded.frontmatterByFilePath.get(skill.filePath) ?? {},
+  }));
+  const entry = {
+    generation: params.manifest.generation,
+    manifestKey: JSON.stringify([
+      params.manifest.skillsVersion,
+      entries
+        .map((skillEntry) =>
+          resolveSyncedSkillIdentity(
+            resolveSkillKey(skillEntry.skill, skillEntry),
+            skillEntry.skill.name,
+          ),
+        )
+        .toSorted(),
+    ]),
+    skillUsagePaths: loaded.skills.map((skill) => ({
+      readPath: skill.filePath,
+      skillFile: canonicalizePath(skill.filePath),
+      skillName: skill.name,
+      skillSource: resolveSkillTelemetrySource(skill),
+    })),
+    skillsSnapshot: buildSkillSnapshot(params.targetWorkspaceDir, {
+      entries,
+      config: params.config,
+      agentId: params.agentId,
+      skillFilter: params.skillFilter,
+      eligibility: params.eligibility,
+      snapshotVersion: params.manifest.skillsVersion,
+    }),
+  };
+  writeSyncedSkillsUsageCache(params.targetSkillsDir, entry);
+  pruneSyncedSkillsUsageCache(100);
+  return entry;
+}
+
 async function ensureSyncedSkillsDirectory(targetSkillsDir: string): Promise<void> {
   let stats: fs.Stats;
   try {
@@ -315,7 +391,19 @@ export async function syncWorkspaceSkills(params: {
               .toSorted(),
           ])
         : undefined;
-    const cachedUsage = readSyncedSkillsUsageCache(targetSkillsDir);
+    const cachedUsage =
+      readSyncedSkillsUsageCache(targetSkillsDir) ??
+      (manifest
+        ? await hydratePublishedSyncedSkillsCache({
+            targetSkillsDir,
+            targetWorkspaceDir: targetDir,
+            manifest,
+            config: params.config,
+            skillFilter: params.skillFilter,
+            agentId: params.agentId,
+            eligibility: params.eligibility,
+          })
+        : undefined);
     const manifestKey = manifest
       ? JSON.stringify([manifest.skillsVersion, manifest.entryKeys])
       : undefined;
@@ -448,16 +536,13 @@ export async function syncWorkspaceSkills(params: {
       skillsSnapshot: nextSkillsSnapshot,
     });
     pruneSyncedSkillsUsageCache(100);
-    const retainGenerations = new Set<number>([nextGeneration]);
-    if (previousGeneration > 0) {
-      retainGenerations.add(previousGeneration);
-    }
-    if (cachedUsage?.generation && cachedUsage.generation > 0) {
-      retainGenerations.add(cachedUsage.generation);
-    }
     await pruneSyncedSkillGenerations({
       targetSkillsDir,
-      retainGenerations,
+      retainGenerations: collectRetainedSyncedSkillGenerations({
+        targetSkillsDir,
+        currentGeneration: nextGeneration,
+        previousGeneration,
+      }),
       retainRootBasenames,
     });
     return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };

@@ -17,6 +17,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { leasePublishedSyncedSkillsGeneration } from "../../skills/loading/workspace-skill-sync-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -100,6 +101,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveSkillAgentId,
   } = prepared;
   let restoreSkillEnv: (() => void) | undefined;
+  let releasePublishedGeneration = () => {};
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolRuntimesDisposed = false;
@@ -125,7 +127,11 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       return;
     }
     skillEnvironmentRestored = true;
-    restoreSkillEnv?.();
+    try {
+      restoreSkillEnv?.();
+    } finally {
+      releasePublishedGeneration();
+    }
   };
   const dispose = async () => {
     await disposeToolRuntimes();
@@ -144,6 +150,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
     });
+    // Same-tick lease as embedded attempts: compaction keeps captured skill
+    // locations until restoreSkillEnvironment runs.
+    releasePublishedGeneration = leasePublishedSyncedSkillsGeneration(effectiveSkillsWorkspace);
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveSkillsWorkspace,
       config: params.config,

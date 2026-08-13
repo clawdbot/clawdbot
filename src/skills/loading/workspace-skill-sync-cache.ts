@@ -17,6 +17,7 @@ type SyncedSkillsUsageCacheEntry = {
 };
 
 const syncedSkillsUsageCache = new Map<string, SyncedSkillsUsageCacheEntry>();
+const leasedGenerationCounts = new Map<string, Map<number, number>>();
 
 export function resolveSyncedSkillsCacheKey(targetWorkspaceDir: string): string {
   return path.join(resolveUserPath(targetWorkspaceDir), "skills");
@@ -44,4 +45,69 @@ export function writeSyncedSkillsUsageCache(
 
 export function pruneSyncedSkillsUsageCache(maxSize: number): void {
   pruneMapToMaxSize(syncedSkillsUsageCache, maxSize);
+}
+
+export function leasePublishedSyncedSkillsGeneration(targetWorkspaceDir: string): () => void {
+  // Attempts capture published <location> paths at start. Prune retains only
+  // current, previous, and still-leased generations; dropping this lease early
+  // lets a later catalog delete files an in-flight skillsRead still points at.
+  const targetSkillsDir = resolveSyncedSkillsCacheKey(targetWorkspaceDir);
+  const generation = readSyncedSkillsUsageCache(targetSkillsDir)?.generation ?? 0;
+  if (generation <= 0) {
+    return () => {};
+  }
+  let counts = leasedGenerationCounts.get(targetSkillsDir);
+  if (!counts) {
+    counts = new Map();
+    leasedGenerationCounts.set(targetSkillsDir, counts);
+  }
+  counts.set(generation, (counts.get(generation) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const current = leasedGenerationCounts.get(targetSkillsDir);
+    if (!current) {
+      return;
+    }
+    const remaining = (current.get(generation) ?? 0) - 1;
+    if (remaining <= 0) {
+      current.delete(generation);
+    } else {
+      current.set(generation, remaining);
+    }
+    if (current.size === 0) {
+      leasedGenerationCounts.delete(targetSkillsDir);
+    }
+  };
+}
+
+export function collectRetainedSyncedSkillGenerations(params: {
+  targetSkillsDir: string;
+  currentGeneration: number;
+  previousGeneration: number;
+}): Set<number> {
+  const retained = new Set<number>();
+  if (params.currentGeneration > 0) {
+    retained.add(params.currentGeneration);
+  }
+  if (params.previousGeneration > 0) {
+    retained.add(params.previousGeneration);
+  }
+  const leased = leasedGenerationCounts.get(params.targetSkillsDir);
+  if (!leased) {
+    return retained;
+  }
+  for (const generation of leased.keys()) {
+    retained.add(generation);
+  }
+  return retained;
+}
+
+export function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {
+  const targetSkillsDir = resolveSyncedSkillsCacheKey(targetWorkspaceDir);
+  syncedSkillsUsageCache.delete(targetSkillsDir);
+  leasedGenerationCounts.delete(targetSkillsDir);
 }

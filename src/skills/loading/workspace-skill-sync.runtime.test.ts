@@ -8,7 +8,10 @@ import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-import { peekPublishedSyncedSkillsSnapshot } from "./workspace-skill-sync-cache.js";
+import {
+  peekPublishedSyncedSkillsSnapshot,
+  dropSyncedSkillsUsageCacheForTests,
+} from "./workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 import {
   createWorkspaceSkillSyncFixtures,
@@ -459,6 +462,59 @@ describe("syncWorkspaceSkills", () => {
     await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
     expect(await pathExists(interruptedTemp)).toBe(false);
     expect(await pathExists(manifestPath)).toBe(true);
+  });
+
+  it("recovers the last committed catalog after a cold-cache copy failure", async () => {
+    const sourceWorkspace = await fixtures.createCaseDir("source");
+    const targetWorkspace = await fixtures.createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "before");
+    const firstSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: firstSnapshot,
+    };
+    const first = await syncWorkspaceSkills(syncParams);
+    const firstFilePath = first.skillsSnapshot.resolvedSkills?.[0]?.filePath;
+    expect(firstFilePath).toBeTruthy();
+
+    dropSyncedSkillsUsageCacheForTests(targetWorkspace);
+    expect(peekPublishedSyncedSkillsSnapshot(targetWorkspace)).toBeUndefined();
+
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "after");
+    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const secondSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: nextVersion,
+    });
+    const copy = vi
+      .spyOn(nodeFs.promises, "cp")
+      .mockRejectedValueOnce(new Error("injected copy failure"));
+    const recovered = await syncWorkspaceSkills({
+      ...syncParams,
+      skillsSnapshot: secondSnapshot,
+    });
+    copy.mockRestore();
+
+    expect(recovered.skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha"]);
+    expect(
+      peekPublishedSyncedSkillsSnapshot(targetWorkspace)?.skills.map((skill) => skill.name),
+    ).toEqual(["alpha"]);
+    expect(
+      await fs.readFile(path.join(path.dirname(firstFilePath ?? ""), "asset.txt"), "utf8"),
+    ).toBe("before");
+    expect(await pathExists(firstFilePath ?? "")).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(

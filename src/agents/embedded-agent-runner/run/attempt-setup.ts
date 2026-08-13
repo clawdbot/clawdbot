@@ -29,6 +29,7 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
 import { resolveSkillsPrompt } from "../../../skills/loading/workspace-skill-prompt.js";
+import { leasePublishedSyncedSkillsGeneration } from "../../../skills/loading/workspace-skill-sync-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -496,24 +497,35 @@ export function prepareEmbeddedAttemptSkills(params: {
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.attempt.config,
-    agentId: params.sessionAgentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly,
-  });
-  const restoreSkillEnv = skillsSnapshot
-    ? applySkillEnvOverridesFromSnapshot({
-        snapshot: skillsSnapshot,
-        config: params.attempt.config,
-      })
-    : applySkillEnvOverrides({
-        skills: skillEntries ?? [],
-        config: params.attempt.config,
-      });
+  // Peek then lease in the same synchronous turn so a concurrent publish cannot
+  // prune the generation whose <location> paths this attempt already captured.
+  const releasePublishedGeneration = leasePublishedSyncedSkillsGeneration(skillsWorkspaceDir);
+  let restoreApplied = () => {};
+  const restoreSkillEnv = () => {
+    try {
+      restoreApplied();
+    } finally {
+      releasePublishedGeneration();
+    }
+  };
   try {
+    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot,
+      workspaceOnly,
+    });
+    restoreApplied = skillsSnapshot
+      ? applySkillEnvOverridesFromSnapshot({
+          snapshot: skillsSnapshot,
+          config: params.attempt.config,
+        })
+      : applySkillEnvOverrides({
+          skills: skillEntries ?? [],
+          config: params.attempt.config,
+        });
     const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       skillsWorkspaceDir,
