@@ -38,6 +38,36 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
   });
 
+  it("surfaces a non-default account segment in DM labels", () => {
+    // per-account-channel-peer DM keys carry <channel>:<account>:direct:<id>;
+    // the raw key must never leak into the sidebar, and the account must be
+    // distinguishable at a glance from the default-account session.
+    expect(resolveSessionDisplayName("agent:main:telegram:cards:direct:42")).toBe(
+      "Telegram (cards) · 42",
+    );
+    expect(resolveSessionDisplayName("agent:main:telegram:cards:direct:491234567890")).toBe(
+      "Telegram (cards) · …567890",
+    );
+    expect(resolveSessionDisplayName("agent:main:signal:work:direct:+4912")).toBe(
+      "Signal (work) · +4912",
+    );
+  });
+
+  it("does not surface a default account segment in DM labels", () => {
+    expect(resolveSessionDisplayName("agent:main:telegram:default:direct:42")).toBe(
+      "Telegram · 42",
+    );
+  });
+
+  it("surfaces a non-default account segment in group labels", () => {
+    expect(resolveSessionDisplayName("agent:main:telegram:cards:group:-1001234567890")).toBe(
+      "Telegram (cards) Group",
+    );
+    expect(resolveSessionDisplayName("agent:main:telegram:group:-1001234567890")).toBe(
+      "Telegram Group",
+    );
+  });
+
   it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
     expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
       "Telegram · …67890",

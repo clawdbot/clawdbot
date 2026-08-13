@@ -20,6 +20,9 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
+/** Account segment value that session-key builders normalize absence to. */
+const DEFAULT_ACCOUNT_ID = "default";
+
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
@@ -147,28 +150,37 @@ function parseSessionKey(key: string): SessionKeyInfo {
     return { kind: "automation", prefix, fallbackName: prefix };
   }
 
-  // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer
-  // id; the gateway sends origin-derived names, so this is a last resort.
-  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
+  // Direct chat: agent:<x>:<channel>[:<account>]:direct:<id>. Never render the
+  // raw peer id; the gateway sends origin-derived names, so this is a last
+  // resort. A non-default account segment (per-account-channel-peer DM scope)
+  // is surfaced so multi-account setups stay distinguishable at a glance.
+  const directMatch = key.match(/^agent:[^:]+:([^:]+)(?::([^:]+))?:direct:(.+)$/);
   if (directMatch) {
     const channel = directMatch[1];
-    const identifier = directMatch[2];
+    const account = directMatch[2];
+    const identifier = directMatch[3];
     if (!channel || !identifier) {
       return { prefix: "", fallbackName: key };
     }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
+    const accountSuffix = account && account !== DEFAULT_ACCOUNT_ID ? ` (${account})` : "";
+    return {
+      prefix: "",
+      fallbackName: `${channelLabel}${accountSuffix} · ${shortenPeerId(identifier)}`,
+    };
   }
 
-  // Group chat: agent:<x>:<channel>:group:<id>.
-  const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
+  // Group chat: agent:<x>:<channel>[:<account>]:group:<id>.
+  const groupMatch = key.match(/^agent:[^:]+:([^:]+)(?::([^:]+))?:group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
+    const account = groupMatch[2];
     if (!channel) {
       return { prefix: "", fallbackName: key };
     }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} Group` };
+    const accountSuffix = account && account !== DEFAULT_ACCOUNT_ID ? ` (${account})` : "";
+    return { prefix: "", fallbackName: `${channelLabel}${accountSuffix} Group` };
   }
 
   // Channel-prefixed keys like "telegram:123": durable session rows written by
