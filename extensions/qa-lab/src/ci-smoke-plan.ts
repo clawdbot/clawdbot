@@ -207,5 +207,7 @@ export function createQaSmokeCiPart(
     throw new Error(`${QA_SMOKE_PROFILE} CI profile part ${partId} did not resolve any scenarios.`);
   }
 
-  return { id: partId, runs };
+  // Reconstruct from the validated index so the id carries the template type
+  // without asserting on the caller-supplied string.
+  return { id: `profile-${partIndex + 1}`, runs };
 }
