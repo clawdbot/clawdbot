@@ -655,6 +655,8 @@ describe("SystemAgentChatEngine approval", () => {
     "channels.synology-chat.webhookUrl",
     "channels.synology-chat[webhookUrl]",
     "channels.synology-chat.accounts[work].webhookUrl",
+    'channels.synology-chat.accounts["prod.guild"].webhookUrl',
+    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
     "channels.synology-chat.incomingUrl",
     "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",
@@ -689,9 +691,54 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it.each([
+    "config set gateway.auth..token very-secret",
+    "config set gateway.auth.token=very-secret",
+  ])("keeps malformed sensitive config write %s away from every model path", async (command) => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle(command);
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain("Invalid config path");
+    expect(proposed.text).not.toContain("very-secret");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
+  it("redacts separator-less malformed config writes from model-visible history", async () => {
+    const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
+      reply: "noted",
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: planner as never,
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("config set gateway.auth.token=very-secret");
+    await engine.handle("did that work?");
+
+    const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+    const userTurns = history.filter((turn) => turn.role === "user").map((turn) => turn.text);
+    expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("<redacted secret>"))).toBe(true);
+  });
+
+  it.each([
     "channels.telegram.botToken",
     "channels.synology-chat[webhookUrl]",
     "channels.synology-chat.accounts[work].webhookUrl",
+    'channels.synology-chat.accounts["prod.guild"].webhookUrl',
+    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
+    "gateway.auth..token",
     "channels.synology-chat.incomingUrl",
     "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",

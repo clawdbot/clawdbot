@@ -363,7 +363,7 @@ function startsWithAsciiIgnoreCase(buffer: Buffer, start: number, expected: stri
     return false;
   }
   for (let index = 0; index < expected.length; index += 1) {
-    const byte = buffer[start + index];
+    const byte = buffer[start + index]!;
     const lower = byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
     if (lower !== expected.charCodeAt(index)) {
       return false;
@@ -392,7 +392,7 @@ function readAsciiRootTag(buffer: Buffer, start: number): string | undefined {
   }
   cursor += 1;
   while (cursor < buffer.length) {
-    const byte = buffer[cursor];
+    const byte = buffer[cursor]!;
     if (
       (byte >= 0x41 && byte <= 0x5a) ||
       (byte >= 0x61 && byte <= 0x7a) ||

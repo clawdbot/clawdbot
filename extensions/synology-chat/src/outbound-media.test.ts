@@ -47,7 +47,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
 
-// openclaw-temp-dir: allow suite state must survive reopen tests; afterAll closes SQLite before removal.
+// openclaw-temp-dir: each test gets clean SQLite state; reopen cases retain it within that test.
 const testStateDir = fs.mkdtempSync(
   path.join(resolvePreferredOpenClawTmpDir(), "openclaw-synology-media-"),
 );
@@ -101,17 +101,23 @@ function utf16Buffer(value: string, endian: "le" | "be", includeBom = true): Buf
 }
 
 function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
-  const codePoints = [...value].map((character) => character.codePointAt(0) ?? 0xfffd);
+  const codePoints = Array.from(value, (character) => character.codePointAt(0) ?? 0xfffd);
   const bomBytes = includeBom ? 4 : 0;
   const buffer = Buffer.alloc(bomBytes + codePoints.length * 4);
   if (includeBom) {
-    endian === "le" ? buffer.writeUInt32LE(0xfeff, 0) : buffer.writeUInt32BE(0xfeff, 0);
+    if (endian === "le") {
+      buffer.writeUInt32LE(0xfeff, 0);
+    } else {
+      buffer.writeUInt32BE(0xfeff, 0);
+    }
   }
   codePoints.forEach((codePoint, index) => {
     const offset = bomBytes + index * 4;
-    endian === "le"
-      ? buffer.writeUInt32LE(codePoint, offset)
-      : buffer.writeUInt32BE(codePoint, offset);
+    if (endian === "le") {
+      buffer.writeUInt32LE(codePoint, offset);
+    } else {
+      buffer.writeUInt32BE(codePoint, offset);
+    }
   });
   return buffer;
 }
@@ -124,6 +130,8 @@ describe("Synology Chat hosted outbound media", () => {
 
   beforeEach(() => {
     resetPluginStateStoreForTests();
+    fs.rmSync(testStateDir, { recursive: true, force: true });
+    fs.mkdirSync(testStateDir, { recursive: true });
     installRuntime();
     loadWebMediaMock.mockReset();
     loadWebMediaMock.mockResolvedValue({

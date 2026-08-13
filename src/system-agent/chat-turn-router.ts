@@ -21,6 +21,7 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { isInvalidConfigSetOperation } from "./operations-internal.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
@@ -75,6 +76,9 @@ function formatOperationError(error: unknown): string {
 
 export function redactSensitiveCommandText(text: string): string {
   const operation = parseSystemAgentOperation(text);
+  if (isInvalidConfigSetOperation(operation)) {
+    return "config set <invalid path> <redacted secret>";
+  }
   if (
     operation.kind === "config-set" &&
     isSystemAgentSensitiveConfigValue(operation.path, operation.value)
@@ -221,6 +225,9 @@ export class ChatTurnRouter {
       return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
     }
     const typed = parseSystemAgentOperation(text);
+    if (isInvalidConfigSetOperation(typed)) {
+      return { text: typed.message, action: "none" };
+    }
     if (typed.kind === "config-set" && isSystemAgentSensitiveConfigValue(typed.path, typed.value)) {
       return await this.runOperation(typed, undefined);
     }

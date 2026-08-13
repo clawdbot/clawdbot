@@ -1,4 +1,5 @@
 // OpenClaw operation grammar, approval descriptions, and public types.
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -8,6 +9,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
 import { isSystemAgentSensitiveConfigValue } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
+import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
 
@@ -76,10 +78,7 @@ const CONFIG_PATH = String.raw`[A-Za-z0-9_.[\]-]+`;
 
 // Every command pattern is anchored to the whole input. Optional clauses use a
 // fixed order (workspace before model) so filler words never become values.
-const CONFIG_SET_RE = new RegExp(
-  String.raw`^(?:config\s+set|set\s+config)\s+(?<path>${CONFIG_PATH})\s+(?<value>.+)$`,
-  "i",
-);
+const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
 const CONFIG_GET_RE = new RegExp(String.raw`^config\s+get\s+(?<path>${CONFIG_PATH})$`, "i");
 const CONFIG_SCHEMA_RE = new RegExp(
   String.raw`^config\s+schema(?:\s+(?<path>${CONFIG_PATH}))?$`,
@@ -137,6 +136,35 @@ const OPEN_GATEWAY_SETUP_RE = /^open\s+gateway\s+wizard$/i;
 
 const NO_MATCH_MESSAGE =
   "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+
+function parseConfigSetCommand(
+  input: string,
+): { path: string; value: string; valid: true } | { valid: false } | undefined {
+  const prefix = input.match(CONFIG_SET_PREFIX_RE)?.[0];
+  if (!prefix) {
+    return undefined;
+  }
+  const body = input.slice(prefix.length);
+  for (const separator of body.matchAll(/\s+/gu)) {
+    const path = body.slice(0, separator.index);
+    const value = body.slice(separator.index).trim();
+    if (!value) {
+      continue;
+    }
+    try {
+      // Reuse the writer's grammar so quoted/escaped dynamic keys cannot fall
+      // through to model-visible text while remaining valid config commands.
+      parseConfigSetPath(path);
+      return { path, value, valid: true };
+    } catch {
+      continue;
+    }
+  }
+  // Keep malformed writes on the host side so their values never reach the
+  // model. This outcome is deliberately non-executable.
+  return body.trim() ? { valid: false } : undefined;
+}
+
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -199,12 +227,15 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       ...(configSetRefMatch.groups.provider ? { provider: configSetRefMatch.groups.provider } : {}),
     };
   }
-  const configSetMatch = trimmed.match(CONFIG_SET_RE);
-  if (configSetMatch?.groups?.path && configSetMatch.groups.value?.trim()) {
+  const configSet = parseConfigSetCommand(trimmed);
+  if (configSet) {
+    if (!configSet.valid) {
+      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+    }
     return {
       kind: "config-set",
-      path: configSetMatch.groups.path,
-      value: configSetMatch.groups.value.trim(),
+      path: configSet.path,
+      value: configSet.value,
     };
   }
   const configGetMatch = trimmed.match(CONFIG_GET_RE);

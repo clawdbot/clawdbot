@@ -188,6 +188,25 @@ describe("runSystemAgent", () => {
     );
   });
 
+  it("keeps malformed config writes away from the one-shot assistant planner", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
+
+    await runSystemAgent(
+      {
+        ...createVerifiedRunOptions(),
+        message: "config set gateway.auth.token=very-secret",
+        planWithAssistant,
+        ...systemAgentOverviewDeps,
+      },
+      runtime,
+    );
+
+    expect(planWithAssistant).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("Invalid config path");
+    expect(lines.join("\n")).not.toContain("very-secret");
+  });
+
   it("does not apply a one-shot plan after the verified route changes", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     const changedConfig = {
