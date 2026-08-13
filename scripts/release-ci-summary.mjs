@@ -288,8 +288,12 @@ function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
   return jobs;
 }
 
+function parentJobLogArgs(jobId, repository = DEFAULT_REPO) {
+  return ["api", `repos/${repository}/actions/jobs/${jobId}/logs`, "--allow-escape-sequences"];
+}
+
 function parentJobLog(jobId, repository = DEFAULT_REPO) {
-  return gh(["api", `repos/${repository}/actions/jobs/${jobId}/logs`]);
+  return gh(parentJobLogArgs(jobId, repository));
 }
 
 function normalizeOptionalRunId(value, label) {

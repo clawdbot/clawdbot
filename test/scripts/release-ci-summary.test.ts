@@ -165,6 +165,13 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
       expect(shimCalls).toContain(
         `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
       );
+      expect(shimCalls).toContain(
+        JSON.stringify([
+          "api",
+          `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
+          "--allow-escape-sequences",
+        ]),
+      );
       expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
       expect(plainCalls.trim()).toBe(
         JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
