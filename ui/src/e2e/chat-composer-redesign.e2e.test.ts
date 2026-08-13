@@ -633,7 +633,7 @@ suite.define(() => {
     });
   });
 
-  it("refreshes the configured usable catalog after advertised chat metadata", async () => {
+  it("keeps the replace-mode hint after chat metadata refresh", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.3-codex-spark",
@@ -659,6 +659,7 @@ suite.define(() => {
             thinkingLevel: null,
           },
           "chat.metadata": {
+            catalogMode: "replace",
             commands: [],
             models: [
               { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
@@ -719,6 +720,14 @@ suite.define(() => {
       await expect.poll(() => unavailableDefault.count()).toBe(1);
       await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const hint = composer.locator(".chat-controls__catalog-hint");
+      await expect
+        .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
+        .toBe("Replace mode filters models according to your model settings. Manage models");
+      await expect
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .toBe("/settings/model-providers");
     });
   });
 

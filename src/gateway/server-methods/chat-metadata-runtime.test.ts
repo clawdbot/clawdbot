@@ -537,7 +537,7 @@ describe("gateway chat metadata runtime", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(config, config);
     try {
       const harness = createHarness(config, { useDefaultProjection: true });
