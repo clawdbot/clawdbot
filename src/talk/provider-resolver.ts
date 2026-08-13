@@ -126,7 +126,12 @@ export function resolveConfiguredRealtimeVoiceProvider(
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) => {
       const supportedBrains = provider.capabilities?.brains;
-      if (params.brain && supportedBrains && !supportedBrains.includes(params.brain)) {
+      if (
+        params.brain &&
+        (supportedBrains === undefined
+          ? params.brain === "codex-realtime"
+          : !supportedBrains.includes(params.brain))
+      ) {
         return false;
       }
       return isRealtimeVoiceProviderConfigured({

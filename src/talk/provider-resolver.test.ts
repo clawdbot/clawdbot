@@ -77,10 +77,19 @@ describe("realtime voice provider resolver", () => {
   });
 
   it("skips auto-selected providers that do not support the selected brain", () => {
+    const legacy: RealtimeVoiceProviderPlugin = {
+      id: "legacy",
+      label: "Legacy",
+      autoSelectOrder: 1,
+      isConfigured: () => true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
     const codex: RealtimeVoiceProviderPlugin = {
       id: "codex",
       label: "Codex",
-      autoSelectOrder: 1,
+      autoSelectOrder: 2,
       capabilities: {
         transports: ["gateway-relay" as const],
         brains: ["codex-realtime" as const],
@@ -96,7 +105,7 @@ describe("realtime voice provider resolver", () => {
     const consult: RealtimeVoiceProviderPlugin = {
       id: "consult",
       label: "Consult",
-      autoSelectOrder: 2,
+      autoSelectOrder: 3,
       capabilities: {
         transports: ["gateway-relay" as const],
         brains: ["agent-consult" as const],
@@ -110,6 +119,13 @@ describe("realtime voice provider resolver", () => {
       },
     };
 
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        brain: "codex-realtime",
+        providers: [legacy, codex],
+        providerConfigs: { codex: { enabled: true } },
+      }).provider.id,
+    ).toBe("codex");
     expect(
       resolveConfiguredRealtimeVoiceProvider({
         brain: "agent-consult",
