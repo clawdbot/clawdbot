@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementDispatchRequest,
+} from "../worker-environments/service-contract.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -169,13 +173,11 @@ describe("sessions.dispatch", () => {
         code: "device-runner-transport-unimplemented",
       }),
     );
+    const workerEnvironmentService = {} as WorkerEnvironmentServiceContract;
+    bindDeviceWorkerAvailability(workerEnvironmentService, async () => true);
     const respond = await invoke(
       makeContext({
-        nodeRegistry: {
-          listCurrentConnected: vi.fn(async () => [
-            { nodeId: "device-1", commands: ["system.run"] },
-          ]),
-        } as never,
+        workerEnvironmentService,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -205,11 +207,11 @@ describe("sessions.dispatch", () => {
 
   it("rejects a device target without a connected session-capable pairing", async () => {
     const dispatch = vi.fn();
+    const workerEnvironmentService = {} as WorkerEnvironmentServiceContract;
+    bindDeviceWorkerAvailability(workerEnvironmentService, async () => false);
     const respond = await invoke(
       makeContext({
-        nodeRegistry: {
-          listCurrentConnected: vi.fn(async () => [{ nodeId: "device-1", commands: ["camera"] }]),
-        } as never,
+        workerEnvironmentService,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -221,8 +223,8 @@ describe("sessions.dispatch", () => {
       false,
       undefined,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("connected session-capable paired node"),
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("reconnect or reprovision"),
       }),
     );
   });

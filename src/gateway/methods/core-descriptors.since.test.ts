@@ -101,6 +101,7 @@ const CURRENT_TRAIN_METHODS = [
   "desktop.launch",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+  "node.protocolFeatures.update",
 ] as const;
 
 describe("core gateway method release trains", () => {

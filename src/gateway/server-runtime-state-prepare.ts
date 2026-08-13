@@ -162,7 +162,7 @@ export async function prepareGatewayKernelState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents, bindDeviceNodeRegistry } =
+  const { workerEnvironmentService, workerLiveEvents, bindDeviceNodeControl } =
     workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
@@ -478,7 +478,7 @@ export async function prepareGatewayKernelState(params: {
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
-    bindDeviceNodeRegistry,
+    bindDeviceNodeControl,
     workerDispatchAuthority,
     workerPlacementRuntime,
     workerPlacementControlAvailable,

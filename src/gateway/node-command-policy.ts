@@ -13,6 +13,8 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_WORKER_SUPERVISOR_COMMANDS,
+  isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -444,6 +446,9 @@ function resolveNodeCommandAllowlistInternal(
       allow.delete(trimmed);
     }
   }
+  for (const privateCommand of NODE_WORKER_SUPERVISOR_COMMANDS) {
+    allow.delete(privateCommand);
+  }
   return allow;
 }
 
@@ -472,7 +477,7 @@ function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
   const normalized: string[] = [];
   for (const value of commands) {
     const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
+    if (!trimmed || seen.has(trimmed) || isPrivateNodeInvokeCommand(trimmed)) {
       continue;
     }
     seen.add(trimmed);
@@ -498,6 +503,9 @@ export function isNodeCommandAllowed(params: {
   const command = params.command.trim();
   if (!command) {
     return { ok: false, reason: "command required" };
+  }
+  if (isPrivateNodeInvokeCommand(command)) {
+    return { ok: false, reason: "command not allowlisted" };
   }
   if (!params.allowlist.has(command)) {
     return { ok: false, reason: "command not allowlisted" };

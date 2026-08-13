@@ -102,7 +102,7 @@ export async function prepareGatewayLifecycle(params: {
     residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
-    bindDeviceNodeRegistry,
+    bindDeviceNodeControl,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -164,6 +164,7 @@ export async function prepareGatewayLifecycle(params: {
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
+    nodeWorkerSupervisorTransport,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
@@ -200,7 +201,7 @@ export async function prepareGatewayLifecycle(params: {
         })
       : undefined;
   nodeDesktopServiceRef.current = nodeDesktopService;
-  bindDeviceNodeRegistry?.(nodeRegistry);
+  bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,

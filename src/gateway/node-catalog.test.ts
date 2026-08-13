@@ -2,6 +2,7 @@
  * Gateway node catalog regression tests.
  */
 import { describe, expect, it } from "vitest";
+import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
@@ -58,6 +59,21 @@ function pendingNode(overrides: Partial<TestPendingNode> = {}): TestPendingNode 
 }
 
 describe("gateway/node-catalog", () => {
+  it("never projects private worker controls from persisted or pending state", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_SUPERVISOR_COMMANDS] })],
+      pendingNodes: [
+        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_SUPERVISOR_COMMANDS] }),
+      ],
+      connectedNodes: [],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.commands).toEqual(["system.run"]);
+    expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
+  });
+
   it("filters paired nodes by active node token instead of sticky historical roles", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
