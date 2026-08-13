@@ -423,7 +423,10 @@ function hydratePublishedSyncedSkillsCache(params: {
   // The process-local catalog cache dies on restart. Rebuild it from the last
   // committed manifest so a cold start never re-copies a tree that concurrent
   // runs are already reading.
-  const skillUsagePaths = params.manifest.skillUsagePaths?.map((usage) => ({ ...usage }));
+  // Copy so the cache never aliases the parsed manifest object.
+  const skillUsagePaths = params.manifest.skillUsagePaths
+    ? structuredClone(params.manifest.skillUsagePaths)
+    : undefined;
   if (!skillUsagePaths?.length) {
     return undefined;
   }
@@ -546,7 +549,8 @@ export async function syncWorkspaceSkills(params: {
           skillsSnapshot: projected,
         });
         return {
-          skillUsagePaths: cachedUsage.skillUsagePaths.map((usage) => ({ ...usage })),
+          // Copy so a caller cannot mutate the cached catalog in place.
+          skillUsagePaths: structuredClone(cachedUsage.skillUsagePaths),
           skillsSnapshot: projected,
         };
       }
