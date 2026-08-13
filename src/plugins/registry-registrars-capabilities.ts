@@ -53,7 +53,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     id: Parameters<OpenClawPluginApi["registerContextEngine"]>[0],
     factory: Parameters<OpenClawPluginApi["registerContextEngine"]>[1],
-    runtimeCapable: boolean,
+    fullyActivated: boolean,
   ) => {
     const normalizedId = normalizeOptionalString(id) ?? "";
     if (!normalizedId) {
@@ -90,10 +90,11 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       `plugin:${record.id}`,
       {
         allowSameOwnerRefresh: true,
-        // Runtime-capable registration (live activation or a private runtime handle) makes
-        // the engine usable; discovery-only registration stays readOnlyDiscovery so resolve
-        // falls back to the default engine until runtime activation registers it.
-        lifecycle: runtimeCapable ? "runtime" : "readOnlyDiscovery",
+        // Only genuine live activation (registrationMode==='full') registers a runtime factory.
+        // A private runtime handle over a discovery-mode plugin stays readOnlyDiscovery so resolve
+        // never force-constructs a discovery-conditioned factory; promotion from the active
+        // registry supplies the runtime-safe factory when the plugin is active there.
+        lifecycle: fullyActivated ? "runtime" : "readOnlyDiscovery",
       },
     );
     if (!result.ok) {

@@ -231,6 +231,9 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
+  // Runtime handles are cached apart from plain discovery handles: post-load promotion mutates
+  // a runtime handle's context-engine registrations, so it must not share a cached registry with
+  // a read-only discovery handle.
   const handleRegistrationMode = params.handleRegistrationMode;
   const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
     {
@@ -412,8 +415,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
-    shouldRegisterRuntimeCapabilities:
-      options.activate !== false || handleRegistrationMode === "runtime",
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,

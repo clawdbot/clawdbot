@@ -63,7 +63,7 @@ it("keeps injected instance runtime surfaces independent of the broad runtime mo
   expect(loadPluginModule).not.toHaveBeenCalled();
 });
 
-it("registers runtime capabilities in an explicitly runtime-owned private handle", () => {
+it("keeps a private runtime handle's context engine read-only for promotion", () => {
   useNoBundledPlugins();
   const root = loadAndActivateRootPluginRegistry({ cache: false, config: {} });
   const plugin = writePlugin({
@@ -71,8 +71,10 @@ it("registers runtime capabilities in an explicitly runtime-owned private handle
     body: `module.exports = {
       id: "private-runtime-context-engine",
       register(api) {
-        // Pure capability registration must run without the public 'full' signal so a
-        // private runtime handle can register a runtime-usable engine.
+        // Capability registration runs without the public 'full' signal, but a private
+        // runtime handle over a discovery-mode plugin must stay read-only: the runtime-safe
+        // factory arrives via promotion from the active registry, not by force-marking
+        // this discovery registration 'runtime'.
         api.registerContextEngine("private-runtime-engine", () => ({
           info: { id: "private-runtime-engine", name: "Private runtime engine" },
         }));
@@ -102,11 +104,13 @@ it("registers runtime capabilities in an explicitly runtime-owned private handle
     handleRegistrationMode: "runtime",
   });
 
-  // Runtime-usable lifecycle without presenting 'full': resolve() will not fall back to legacy.
+  // Discovery-mode registration stays read-only even for a runtime handle. resolve() honors
+  // the read-only-discovery contract and never force-constructs the discovery factory;
+  // promotion from the active registry supplies the runtime-safe factory when one exists.
   expect(handle.contextEngines.get("private-runtime-engine")).toEqual(
     expect.objectContaining({
       owner: `plugin:${plugin.id}`,
-      lifecycle: "runtime",
+      lifecycle: "readOnlyDiscovery",
     }),
   );
   // The plugin observed 'discovery', so its full-only side-effect branch never ran.
@@ -211,8 +215,9 @@ describe("resolvePluginLoadCacheContext", () => {
       handleRegistrationMode: "runtime",
     });
 
-    expect(discovery.shouldRegisterRuntimeCapabilities).toBe(false);
-    expect(runtime.shouldRegisterRuntimeCapabilities).toBe(true);
+    // A runtime handle is cached apart from a plain discovery handle so post-load promotion,
+    // which mutates the runtime handle's context-engine registrations, never leaks into a
+    // cached read-only discovery registry.
     expect(runtime.cacheKey).not.toBe(discovery.cacheKey);
   });
 

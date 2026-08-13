@@ -18,6 +18,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRecord } from "../plugins/registry-types.js";
 import {
   requireActivePluginRegistry,
   setActivePluginRegistry,
@@ -40,6 +41,7 @@ import {
   activateContextEngineRegistrations,
   getContextEngineRegistration,
   listContextEngineQuarantines,
+  promoteMatchingRuntimeContextEngineRegistrations,
   registerContextEngineForOwner,
   registerContextEngineInRegistry,
   resolveContextEngine,
@@ -1305,6 +1307,67 @@ describe("Read-only plugin discovery registrations", () => {
     expect(stillRuntimeEngine.info.id).toBe("lossless-claw");
     expect(readOnlyFactoryCalls).toBe(0);
     expect(runtimeFactoryCalls).toBe(2);
+  });
+
+  it("resolves a promoted runtime factory without constructing the private discovery factory", async () => {
+    const engineId = uniqueEngineId("promoted-engine");
+    const pluginId = "promoted-claw";
+    const owner = `plugin:${pluginId}`;
+    const source = "npm:promoted-claw@1.0.0";
+    let runtimeSafeCalls = 0;
+    let throwingDiscoveryCalls = 0;
+
+    // The active gateway registry is loaded in full mode and owns the runtime-safe factory.
+    const activeRuntimeRegistry = createEmptyPluginRegistry();
+    activeRuntimeRegistry.plugins.push({ id: pluginId, source } as PluginRecord);
+    registerContextEngineInRegistry(
+      activeRuntimeRegistry,
+      engineId,
+      () => {
+        runtimeSafeCalls += 1;
+        return {
+          info: { id: "lossless-claw", name: "Lossless Claw" },
+          async ingest() {
+            return { ingested: true };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        } satisfies ContextEngine;
+      },
+      owner,
+      { allowSameOwnerRefresh: true, lifecycle: "runtime" },
+    );
+
+    // The private prepared-runtime handle (what resolve reads) registers the same engine
+    // read-only. Its discovery-mode factory is construction-unsafe: promotion must replace it
+    // before any resolve constructs it.
+    const preparedHandle = requireActivePluginRegistry();
+    preparedHandle.plugins.push({ id: pluginId, source } as PluginRecord);
+    registerContextEngineInRegistry(
+      preparedHandle,
+      engineId,
+      () => {
+        throwingDiscoveryCalls += 1;
+        throw new Error("private discovery-mode factory must never be constructed");
+      },
+      owner,
+      { allowSameOwnerRefresh: true, lifecycle: "readOnlyDiscovery" },
+    );
+
+    promoteMatchingRuntimeContextEngineRegistrations(preparedHandle, activeRuntimeRegistry);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    // Promotion carried the runtime-safe factory in, so resolve constructs the right engine...
+    expect(engine.info.id).toBe("lossless-claw");
+    expect(runtimeSafeCalls).toBeGreaterThanOrEqual(1);
+    // ...and never touches the construction-unsafe discovery factory or records a quarantine.
+    expect(throwingDiscoveryCalls).toBe(0);
+    expect(listContextEngineQuarantines().some((entry) => entry.engineId === engineId)).toBe(false);
   });
 });
 

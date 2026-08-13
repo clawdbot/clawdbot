@@ -138,16 +138,10 @@ export function createPluginApiFactory(
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
       registrationMode?: PluginRegistrationMode;
-      registerRuntimeCapableCapabilities?: boolean;
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
-    // Runtime-capability registration is a separate axis from the public 'full' signal:
-    // a private runtime handle registers runtime-usable capabilities while presenting
-    // 'discovery' to plugins. Default to the public mode for callers that do not split them.
-    const runtimeCapableCapabilities =
-      params.registerRuntimeCapableCapabilities ?? registrationMode === "full";
     setPluginRuntimeRecord(record);
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
@@ -239,7 +233,7 @@ export function createPluginApiFactory(
                 registerConversationBindingResolvedHandler(record, handler),
               registerCommand: (command) => registerCommand(record, command),
               registerContextEngine: (id, factory) =>
-                registerContextEngine(record, id, factory, runtimeCapableCapabilities),
+                registerContextEngine(record, id, factory, registrationMode === "full"),
               registerCompactionProvider: (provider) =>
                 registerCompactionProvider(record, provider),
               registerCodexAppServerExtensionFactory: (factory) => {

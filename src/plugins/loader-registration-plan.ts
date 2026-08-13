@@ -15,12 +15,6 @@ export type PluginRegistrationPlan = {
   runRuntimeCapabilityPolicy: boolean;
   /** Register metadata that only belongs to live activation. */
   runFullActivationOnlyRegistrations: boolean;
-  /**
-   * Register runtime-usable capabilities (context engine lifecycle='runtime') while the
-   * public `mode` stays 'discovery'. A private runtime handle needs this so plugin
-   * side-effect branches gated on `registrationMode === 'full'` do not fire.
-   */
-  registerRuntimeCapableCapabilities: boolean;
 };
 
 /** Converts loader intent into explicit entrypoint and activation behavior. */
@@ -32,7 +26,6 @@ export function resolvePluginRegistrationPlan(params: {
   shouldLoadModules: boolean;
   validateOnly: boolean;
   shouldActivate: boolean;
-  shouldRegisterRuntimeCapabilities: boolean;
   manifestRecord: PluginManifestRecord;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -46,7 +39,6 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: false,
       runRuntimeCapabilityPolicy: false,
       runFullActivationOnlyRegistrations: false,
-      registerRuntimeCapableCapabilities: false,
     };
   }
   if (
@@ -65,7 +57,6 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: false,
       runRuntimeCapabilityPolicy: true,
       runFullActivationOnlyRegistrations: false,
-      registerRuntimeCapableCapabilities: false,
     };
   }
   const loadSetupRuntimeEntry =
@@ -85,12 +76,12 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: true,
       runRuntimeCapabilityPolicy: false,
       runFullActivationOnlyRegistrations: false,
-      registerRuntimeCapableCapabilities: false,
     };
   }
   // Public activation signal is 'full' only when this load globally activates the plugin.
-  // The runtime-capable axis is separate: a private runtime handle registers runtime-usable
-  // capabilities while keeping 'discovery' as the public mode plugins observe.
+  // A private runtime handle keeps 'discovery' as the public mode plugins observe, so
+  // full-only side-effect branches do not fire; its selected context engine becomes
+  // runtime-usable through promotion from the active registry, not direct activation here.
   const mode = params.shouldActivate ? "full" : "discovery";
   return {
     mode,
@@ -98,6 +89,5 @@ export function resolvePluginRegistrationPlan(params: {
     loadSetupRuntimeEntry: false,
     runRuntimeCapabilityPolicy: true,
     runFullActivationOnlyRegistrations: params.shouldActivate,
-    registerRuntimeCapableCapabilities: params.shouldRegisterRuntimeCapabilities,
   };
 }
