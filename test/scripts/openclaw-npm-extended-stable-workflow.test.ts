@@ -90,8 +90,10 @@ describe("minimal npm extended-stable workflow", () => {
     expect(apiDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
       "${{ inputs.plugin_sdk_api_acknowledgement }}",
     );
+    expect(apiDiff.env?.PREFLIGHT_ONLY).toBe("${{ inputs.preflight_only && 'true' || 'false' }}");
     expect(apiDiff.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
     expect(apiDiff.run).toContain("--require-acknowledgement");
+    expect(apiDiff.run).toContain('if [ "$PREFLIGHT_ONLY" != "true" ]');
     expect(apiDiff.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
   });
 

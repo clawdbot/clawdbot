@@ -1042,6 +1042,29 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
+    const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
+    const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const dispatch = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Dispatch publish workflows",
+    );
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(dispatch.run).toContain(
+      '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
+    );
+  });
+
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
     const selected = runReleasePublishInputValidation({
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",

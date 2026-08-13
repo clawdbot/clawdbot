@@ -11,6 +11,11 @@ on:
         description: Successful OpenClaw NPM Release preflight run id, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
+      plugin_sdk_api_acknowledgement:
+        description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
+        required: false
+        default: ""
+        type: string
       full_release_validation_run_id:
         description: Successful Full Release Validation run id for this tag/SHA, required for OpenClaw npm or all-publishable plugin publication
         required: false
@@ -842,6 +847,7 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -2221,6 +2227,7 @@ jobs:
                 -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
                 -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
+                -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
               echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             fi

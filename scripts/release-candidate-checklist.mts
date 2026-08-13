@@ -142,6 +142,8 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
+  --plugin-sdk-api-acknowledgement <digest>
+                                      8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
@@ -201,6 +203,7 @@ export function parseArgs(argv: string[]) {
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
+    pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
     outputDir: "",
@@ -218,6 +221,7 @@ export function parseArgs(argv: string[]) {
           ["--repo", "repo"],
           ["--full-release-run", "fullReleaseRunId"],
           ["--npm-preflight-run", "npmPreflightRunId"],
+          ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
@@ -257,6 +261,12 @@ export function parseArgs(argv: string[]) {
   }
   if (options.targetSha && !/^[a-f0-9]{40}$/u.test(options.targetSha)) {
     throw new Error("--target-sha must be a full lowercase commit SHA");
+  }
+  if (
+    options.pluginSdkApiAcknowledgement &&
+    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+  ) {
+    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
   }
   if (options.tag.includes("-alpha.")) {
     if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
@@ -1407,6 +1417,7 @@ export function buildPublishCommand(
   const fields: Array<[string, string | number | undefined]> = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
+    ["plugin_sdk_api_acknowledgement", options.pluginSdkApiAcknowledgement],
     ["full_release_validation_run_id", options.fullReleaseRunId],
     ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
     ["npm_dist_tag", options.npmDistTag],
@@ -1828,6 +1839,7 @@ async function main() {
       tag: targetSha,
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
+      plugin_sdk_api_acknowledgement: options.pluginSdkApiAcknowledgement,
     });
     candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
       npmPreflightRunId: options.npmPreflightRunId,

@@ -335,6 +335,7 @@ jobs:
       - name: Verify Plugin SDK API changes
         env:
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only && 'true' || 'false' }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
@@ -351,8 +352,10 @@ jobs:
             --head HEAD
             --json .artifacts/plugin-sdk-api-release-diff.json
             --summary "$GITHUB_STEP_SUMMARY"
-            --require-acknowledgement
           )
+          if [ "$PREFLIGHT_ONLY" != "true" ]; then
+            diff_args+=(--require-acknowledgement)
+          fi
           if [ -n "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" ]; then
             diff_args+=(--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT")
           fi
