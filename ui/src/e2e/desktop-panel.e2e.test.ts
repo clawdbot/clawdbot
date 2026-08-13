@@ -668,7 +668,24 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
+      const overlayCoversStage = await panel.evaluate((element) => {
+        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
+        const overlay = element.shadowRoot?.querySelector<HTMLElement>(
+          ".desktop-stage__take-control",
+        );
+        if (!stage || !overlay) {
+          return false;
+        }
+        const stageRect = stage.getBoundingClientRect();
+        const overlayRect = overlay.getBoundingClientRect();
+        return (
+          Math.abs(stageRect.width - overlayRect.width) < 1 &&
+          Math.abs(stageRect.height - overlayRect.height) < 1
+        );
+      });
+      expect(overlayCoversStage).toBe(true);
+      await takeControl.click();
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
       const observeRequests = await gateway.getRequests("desktop.observe");
       expect(observeRequests[2]?.params).toEqual({

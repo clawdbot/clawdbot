@@ -596,18 +596,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
             </div>`
           : nothing}
         <span class="desktop-toolbar__spacer"></span>
-        ${!this.controlling
-          ? html`<button
-              class="desktop-toolbar-action"
-              type="button"
-              title=${t("desktop.takeControl")}
-              aria-label=${t("desktop.takeControl")}
-              @click=${() =>
-                this.environmentId && void this.connectEnvironment(this.environmentId, true)}
-            >
-              ${t("desktop.takeControl")}
-            </button>`
-          : nothing}
         <button
           class="desktop-toolbar-action"
           type="button"
@@ -620,6 +608,16 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       </div>
       <div class="desktop-stage">
         <div class="desktop-surface"></div>
+        ${!this.controlling
+          ? html`<button
+              class="desktop-stage__take-control"
+              type="button"
+              title=${t("desktop.takeControl")}
+              aria-label=${t("desktop.takeControl")}
+              @click=${() =>
+                this.environmentId && void this.connectEnvironment(this.environmentId, true)}
+            ></button>`
+          : nothing}
         ${this.state === "connecting"
           ? html`<div class="desktop-connecting" role="status" aria-live="polite">
               <span class="desktop-connecting__monitor" aria-hidden="true">${icons.monitor}</span>
