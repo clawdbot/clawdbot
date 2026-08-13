@@ -30,8 +30,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -74,6 +73,7 @@ const restartRecoveryMocks = vi.hoisted(() => ({
     skipped: 0,
   })),
 }));
+const preparedThinkingPolicy = vi.hoisted(() => ({ fallback: "off" as "base" | "off" }));
 
 vi.mock(
   "../agents/main-session-recovery/main-session-restart-recovery.js",
@@ -89,6 +89,21 @@ vi.mock(
     };
   },
 );
+
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: (params: { context?: { reasoning?: boolean } }) => {
+    const offOnly =
+      params.context?.reasoning === false ||
+      (params.context?.reasoning === undefined && preparedThinkingPolicy.fallback === "off");
+    return offOnly
+      ? {
+          levels: [{ id: "off", label: "off" }],
+          defaultLevel: "off",
+          preserveWhenCatalogReasoningFalse: true,
+        }
+      : undefined;
+  },
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 1 } as const;
@@ -122,6 +137,65 @@ function createChatVisionModelCatalogSnapshot(): Awaited<
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
+const gatewayPluginMetadataSnapshot: PluginMetadataSnapshot = {
+  policyHash: "gateway-chat-test-plugin-policy",
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "gateway-chat-test-plugin-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
+  registryDiagnostics: [],
+  manifestRegistry: {
+    plugins: [
+      {
+        id: "openai",
+        channels: [],
+        providers: ["openai"],
+        cliBackends: [],
+        providerAuthChoices: [
+          { provider: "openai", method: "oauth", choiceId: "openai" },
+          { provider: "openai", method: "api-key", choiceId: "openai-api-key" },
+        ],
+        modelSupport: { modelPrefixes: ["gpt-"] },
+        skills: [],
+        hooks: [],
+        origin: "bundled",
+        rootDir: "/test/openai",
+        source: "/test/openai/index.js",
+        manifestPath: "/test/openai/openclaw.plugin.json",
+      },
+    ],
+    diagnostics: [],
+  },
+  plugins: [],
+  diagnostics: [],
+  byPluginId: new Map(),
+  normalizePluginId: (pluginId) => pluginId,
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map([["openai", ["openai"]]]),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+  metrics: {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 1,
+  },
+};
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
@@ -1188,7 +1262,6 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
-        let releasePluginMetadata: () => boolean = () => false;
         openDirectChatSession();
         try {
           const config = {
@@ -1196,13 +1269,18 @@ describe("gateway server chat", () => {
               defaults: {
                 model: { primary: "openai/gpt-5.5" },
                 models: { "openai/gpt-5.5": {} },
+                heartbeat: { agentId: "main" },
+                sessionStore: { agentId: "main" },
+                systemAgent: { agentId: "main" },
               },
-              entries: { main: { default: true }, work: {} },
+              entries: { main: {}, work: {} },
             },
             auth: {
               order: { openai: ["openai:api", "openai:chatgpt", "openai:expired"] },
             },
+            talk: { agentId: "main" },
           };
+          testState.agentsConfig = config.agents;
           await state.writeConfig(config);
           clearConfigCache();
           await writeSessionStore({
@@ -1353,6 +1431,7 @@ describe("gateway server chat", () => {
               cfg: config,
               agentId,
               snapshot: catalogSnapshot,
+              metadataSnapshot: gatewayPluginMetadataSnapshot,
               preparedAuthStore: preparedAuthStoreByAgentId.get(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
@@ -1397,6 +1476,11 @@ describe("gateway server chat", () => {
                 projectAgent(context, "work"),
                 projectAgent(context, agentId, sessionEntry),
               ]);
+              preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
+                (entry) => entry.reasoning === true,
+              )
+                ? "base"
+                : "off";
               return {
                 metadata: sessionProjection.metadata,
                 sessionModelCatalog: sessionProjection.modelCatalog,
@@ -1411,15 +1495,7 @@ describe("gateway server chat", () => {
               };
             }),
           });
-          const persistedConfig = getRuntimeConfig();
-          // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
-          // Otherwise every route projector rediscovers the full plugin metadata graph.
-          const pluginMetadata = resolvePluginMetadataSnapshot({ config, env: process.env });
-          releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(pluginMetadata, {
-            config,
-            compatibleConfigs: [persistedConfig],
-            env: process.env,
-          }).release;
+          const persistedConfig = config;
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
             "openai:chatgpt",
@@ -1429,6 +1505,7 @@ describe("gateway server chat", () => {
             cfg: persistedConfig,
             agentId: "work",
             snapshot: catalogSnapshot,
+            metadataSnapshot: gatewayPluginMetadataSnapshot,
             preferredProfileId: "openai:expired",
           }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
           expect(expiredPreferenceEvaluation).toMatchObject({
@@ -1518,8 +1595,9 @@ describe("gateway server chat", () => {
             }
           }
         } finally {
+          preparedThinkingPolicy.fallback = "off";
+          testState.agentsConfig = undefined;
           testState.sessionStorePath = undefined;
-          releasePluginMetadata();
         }
       },
     );
