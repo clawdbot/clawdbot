@@ -1,3 +1,5 @@
+import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals-core.js";
+
 export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "read",
   "write",
@@ -44,8 +46,8 @@ export type WorkerToolAuthority = {
    * consumers must treat an absent value as denied rather than re-deriving it worker-side.
    */
   exec?: {
-    host: "sandbox" | "gateway" | "node";
-    security: "deny" | "allowlist" | "full";
-    ask: "off" | "on-miss" | "always";
+    host: ExecHost;
+    security: ExecSecurity;
+    ask: ExecAsk;
   };
 };
