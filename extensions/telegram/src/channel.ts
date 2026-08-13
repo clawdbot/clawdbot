@@ -56,6 +56,12 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
+import {
+  findTelegramTokenOwnerAccountId,
+  formatDuplicateTelegramTokenReason,
+  resolveTelegramConfigAccessorAccount,
+  telegramConfigAdapter,
+} from "./config-adapter.js";
 import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
@@ -86,13 +92,7 @@ import {
 } from "./session-conversation.js";
 import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
-import {
-  createTelegramPluginBase,
-  findTelegramTokenOwnerAccountId,
-  formatDuplicateTelegramTokenReason,
-  resolveTelegramConfigAccessorAccount,
-  telegramConfigAdapter,
-} from "./shared.js";
+import { createTelegramPluginBase } from "./shared.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";

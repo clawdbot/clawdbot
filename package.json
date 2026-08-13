@@ -951,6 +951,9 @@
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
     },
+    "./plugin-sdk/channel-config-ui-hints": {
+      "default": "./dist/plugin-sdk/channel-config-ui-hints.js"
+    },
     "./plugin-sdk/channel-config-writes": {
       "default": "./dist/plugin-sdk/channel-config-writes.js"
     },
