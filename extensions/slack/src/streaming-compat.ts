@@ -53,16 +53,6 @@ function mapSlackLegacyDraftStreamModeToStreaming(mode: SlackLegacyDraftStreamMo
   return "partial";
 }
 
-export function mapStreamingModeToSlackLegacyDraftStreamMode(mode: StreamingMode) {
-  if (mode === "block") {
-    return "append" as const;
-  }
-  if (mode === "progress") {
-    return "status_final" as const;
-  }
-  return "replace" as const;
-}
-
 export function resolveSlackStreamingMode(
   params: {
     streamMode?: unknown;

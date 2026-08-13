@@ -5,10 +5,7 @@ import {
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  buildSlackProgressStreamStartChunks,
-  buildSlackProgressStreamUpdateChunks,
-} from "../../progress-blocks.js";
+import { buildSlackProgressStreamChunks } from "../../progress-blocks.js";
 
 export function resolveStructuredProgressLines(
   lines: readonly ChannelProgressDraftCompositorLine[],
@@ -83,17 +80,13 @@ export function combineProgressHeadlineAndExplanation(
 
 export function buildNativeProgressChunks(params: {
   snapshot: ChannelProgressDraftCompositorSnapshot;
-  streamStarted: boolean;
   title?: string;
   maxLineChars?: number;
 }) {
-  const input = {
+  return buildSlackProgressStreamChunks({
     title: params.title,
     lines: resolveNativeProgressLines(params.snapshot),
     plan: resolveNativeProgressPlan(params.snapshot),
     maxLineChars: params.maxLineChars,
-  };
-  return params.streamStarted
-    ? buildSlackProgressStreamUpdateChunks(input)
-    : buildSlackProgressStreamStartChunks(input);
+  });
 }

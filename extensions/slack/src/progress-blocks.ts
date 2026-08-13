@@ -255,7 +255,7 @@ function resolvePlanTitle(params: {
   );
 }
 
-function buildSlackProgressStreamChunks(params: {
+export function buildSlackProgressStreamChunks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
@@ -498,26 +498,6 @@ export function reconcileSlackNativeTaskChunks(params: {
       ? terminalized
       : params.chunks;
   return { chunks, tasks: nextTasks };
-}
-
-export function buildSlackProgressStreamStartChunks(params: {
-  label?: string;
-  title?: string;
-  lines: readonly ChannelProgressDraftLine[];
-  plan?: readonly AgentPlanStep[];
-  maxLineChars?: number;
-}): AnyChunk[] | undefined {
-  return buildSlackProgressStreamChunks(params);
-}
-
-export function buildSlackProgressStreamUpdateChunks(params: {
-  label?: string;
-  title?: string;
-  lines: readonly ChannelProgressDraftLine[];
-  plan?: readonly AgentPlanStep[];
-  maxLineChars?: number;
-}): AnyChunk[] | undefined {
-  return buildSlackProgressStreamChunks(params);
 }
 
 export function buildSlackProgressStreamCompletionChunks(params: {

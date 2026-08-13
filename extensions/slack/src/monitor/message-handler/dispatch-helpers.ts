@@ -60,19 +60,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function shouldEnableSlackPreviewStreaming(params: {
-  mode: "off" | "partial" | "block" | "progress";
-}): boolean {
-  return params.mode !== "off";
-}
-
-export function shouldInitializeSlackDraftStream(params: {
-  previewStreamingEnabled: boolean;
-  useStreaming: boolean;
-}): boolean {
-  return params.previewStreamingEnabled && !params.useStreaming;
-}
-
 export function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;

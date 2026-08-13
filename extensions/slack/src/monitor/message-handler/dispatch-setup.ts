@@ -10,7 +10,6 @@ import {
   resolveAgentOutboundIdentity,
   resolveChannelMessageSourceReplyDeliveryMode,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -30,8 +29,6 @@ import {
   resolveSlackDisableBlockStreaming,
   resolveSlackNativeProgressTaskCards,
   resolveSlackStreamingThreadHint,
-  shouldEnableSlackPreviewStreaming,
-  shouldInitializeSlackDraftStream,
   shouldUseStreaming,
 } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -270,10 +267,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
   });
 
-  const slackStreaming = resolveSlackStreamingConfig({
-    streaming: account.config.streaming,
-    nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
-  });
+  const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
   const streamThreadHint =
     forcedReplyThreadTs ??
     resolveSlackStreamingThreadHint({
@@ -290,11 +284,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
   const allowPreHookProviderStreaming = !modifyingHooksRegistered;
   const previewStreamingEnabled =
-    allowPreHookProviderStreaming &&
-    !sourceRepliesAreToolOnly &&
-    shouldEnableSlackPreviewStreaming({
-      mode: slackStreaming.mode,
-    });
+    allowPreHookProviderStreaming && !sourceRepliesAreToolOnly && slackStreaming.mode !== "off";
   const hasSlackCustomIdentity = Boolean(
     slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
   );
@@ -310,10 +300,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
-    previewStreamingEnabled,
-    useStreaming,
-  });
+  const shouldUseDraftStream = previewStreamingEnabled && !useStreaming;
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true

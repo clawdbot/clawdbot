@@ -167,11 +167,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (payload.isReasoning === true) {
       return { visibleReplySent: false };
     }
-    if (
-      info.kind === "final" &&
-      slackStreaming.mode === "progress" &&
-      progress.streamMode === "status_final"
-    ) {
+    if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);
         return;
@@ -551,7 +547,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
-          if (progress.streamMode === "status_final" && payload.kind === "preamble") {
+          if (progress.isProgressMode && payload.kind === "preamble") {
             if (progress.shouldYieldDraftProgress()) {
               return false;
             }

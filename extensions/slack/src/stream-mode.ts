@@ -1,9 +1,7 @@
 // Slack plugin module implements stream mode behavior.
 import {
-  mapStreamingModeToSlackLegacyDraftStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
-  type SlackLegacyDraftStreamMode,
   type StreamingMode,
 } from "./streaming-compat.js";
 
@@ -16,14 +14,10 @@ export function resolveSlackStreamingConfig(params: {
 }): {
   mode: SlackStreamingMode;
   nativeStreaming: boolean;
-  draftMode: SlackLegacyDraftStreamMode;
 } {
-  const mode = resolveSlackStreamingMode(params);
-  const nativeStreaming = resolveSlackNativeStreaming(params);
   return {
-    mode,
-    nativeStreaming,
-    draftMode: mapStreamingModeToSlackLegacyDraftStreamMode(mode),
+    mode: resolveSlackStreamingMode(params),
+    nativeStreaming: resolveSlackNativeStreaming(params),
   };
 }
 
