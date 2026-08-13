@@ -645,7 +645,7 @@ export function applyOutcomeToStoredJob(
       scheduleOwnership: "stale",
       deferredNotifications: opts?.deferredNotifications,
     });
-    emitJobFinished(state, result.job, result, result.startedAt);
+    emitCronOutcomeForJob(state, result.job, result);
     state.deps.log.info(
       { jobId: result.jobId, status: result.status },
       "cron: finalized run after job was removed during execution",
@@ -713,14 +713,14 @@ export function applyOutcomeToAuthoritativeJob(
   job.state.startupCatchupAtMs = undefined;
 
   if (opts?.emit !== false) {
-    emitJobFinished(state, job, result, result.startedAt);
+    emitCronOutcomeForJob(state, job, result);
   }
 
   return shouldDelete;
 }
 
 /** Records a terminal task/event fact before the fallible runtime-row commit. */
-export function emitCronOutcomeForJob(
+function emitCronOutcomeForJob(
   state: CronServiceState,
   job: CronJob,
   result: TimedCronRunOutcome,
@@ -728,16 +728,12 @@ export function emitCronOutcomeForJob(
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     return;
   }
-  emitJobFinished(state, job, result, result.startedAt);
+  recordCronOutcomeForJob(state, job, result);
+  emitCronOutcomeEventForJob(state, job, result);
 }
 
-function emitJobFinished(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-  runAtMs: number,
-) {
-  const event = {
+function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
+  return {
     jobId: job.id,
     action: "finished",
     job,
@@ -760,6 +756,14 @@ function emitJobFinished(
     provider: result.provider,
     usage: result.usage,
   } as const;
+}
+
+export function recordCronOutcomeForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  const event = cronOutcomeEvent(job, result, result.startedAt);
   tryFinishCronTaskRun(state, {
     taskRunId: result.taskRunId,
     job,
@@ -768,5 +772,12 @@ function emitJobFinished(
     ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
   });
-  emit(state, event);
+}
+
+export function emitCronOutcomeEventForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  emit(state, cronOutcomeEvent(job, result, result.startedAt));
 }

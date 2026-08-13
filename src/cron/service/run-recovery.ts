@@ -110,6 +110,15 @@ function repairInDatabase(params: {
   let changed = false;
   if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
     delete job.state.queuedAtMs;
+    if (proposal.receipt && currentReceipt) {
+      finishCronRunReceiptInDatabase({
+        database: database.db,
+        handle: proposal.receipt,
+        status: "interrupted",
+        finishedAtMs: state.deps.nowMs(),
+        error: "cron: queued run interrupted by owner process exit",
+      });
+    }
     changed = true;
   }
   let interrupted: InterruptedStartupRun | undefined;
@@ -219,13 +228,45 @@ export function proposeCronRunRecovery(
   return {
     jobId,
     ...(queuedAtMs !== undefined ? { queuedAtMs } : {}),
-    ...(runningAtMs !== undefined
+    ...(queuedAtMs !== undefined || runningAtMs !== undefined
       ? {
-          runningAtMs,
           receipt: inspectActiveCronRunReceipt({ storePath: state.deps.storePath, jobId }),
         }
       : {}),
+    ...(runningAtMs !== undefined ? { runningAtMs } : {}),
   };
+}
+
+/** Reconciles only persisted queued markers so a live sibling can adopt dead reservations. */
+export function recoverQueuedCronRunReservations(state: CronServiceState): {
+  repaired: boolean;
+  receipts: CronRunReceiptRecoveryCandidate[];
+  notifications: DeferredCronNotifications;
+} {
+  let repaired = false;
+  const receipts: CronRunReceiptRecoveryCandidate[] = [];
+  const notifications: DeferredCronNotifications = [];
+  for (const job of state.store?.jobs ?? []) {
+    const queuedAtMs = job.state.queuedAtMs;
+    if (queuedAtMs === undefined) {
+      continue;
+    }
+    const proposal = proposeCronRunRecovery(state, job.id, queuedAtMs, undefined);
+    const result = recoverCronRunProposal(state, proposal);
+    if (result.kind === "live") {
+      if (result.receipt.ownerPid !== process.pid) {
+        receipts.push(result.receipt);
+      }
+    } else if (result.kind === "superseded") {
+      if (result.receipt && result.receipt.ownerPid !== process.pid) {
+        receipts.push(result.receipt);
+      }
+    } else {
+      repaired = true;
+      notifications.push(...result.notifications);
+    }
+  }
+  return { repaired, receipts, notifications };
 }
 
 export function recoverCronRunProposal(

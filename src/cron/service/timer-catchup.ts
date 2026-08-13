@@ -316,11 +316,11 @@ async function planStartupCatchup(
     });
 
     return {
-      candidates: reservedStartupCandidates.map((job) => ({
+      candidates: reservedStartupCandidates.map(({ job, runReceipt }) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now, { runReceipt }),
       })),
       deferredJobs: deferred,
     };

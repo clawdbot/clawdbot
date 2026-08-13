@@ -1,8 +1,11 @@
+import type { DatabaseSync } from "node:sqlite";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import {
+  activateCronRunReceiptInDatabase,
   assertNoActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
+  assertCronRunReceiptOwnedInDatabase,
   claimCronRunReceiptInDatabase,
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
@@ -45,19 +48,30 @@ export function prepareServiceCronRunReceiptClaim(params: {
   });
 }
 
-export function cronRunReceiptClaimHooks(params: {
-  state: CronServiceState;
-  prepared: PreparedCronRunReceiptClaim;
-}): CronStoreTransactionHooks {
-  return {
-    beforeWrite: (database) => {
-      claimCronRunReceiptInDatabase({
-        database,
-        prepared: params.prepared,
-        resolveAgentId: resolveAgentId(params.state),
-      });
-    },
-  };
+export function claimServiceCronRunReceiptInDatabase(
+  state: CronServiceState,
+  database: DatabaseSync,
+  prepared: PreparedCronRunReceiptClaim,
+): CronRunReceiptHandle {
+  return claimCronRunReceiptInDatabase({
+    database,
+    prepared,
+    resolveAgentId: resolveAgentId(state),
+  });
+}
+
+export function activateServiceCronRunReceiptInDatabase(
+  state: CronServiceState,
+  database: DatabaseSync,
+  handle: CronRunReceiptHandle,
+  startedAtMs: number,
+): CronRunReceiptHandle {
+  return activateCronRunReceiptInDatabase({
+    database,
+    handle,
+    startedAtMs,
+    resolveAgentId: resolveAgentId(state),
+  });
 }
 
 export function cronRunReceiptOwnerMutationHooks(params: {
@@ -135,6 +149,7 @@ export function trackServiceCronRunReceiptSettlement(params: {
 export function cronRunReceiptPersistHooks(params: {
   state: CronServiceState;
   handle: CronRunReceiptHandle;
+  allowMissingJob?: boolean;
   terminal?: {
     status: CronRunStatus;
     triggerFired?: boolean;
@@ -162,11 +177,15 @@ export function cronRunReceiptPersistHooks(params: {
           `cron run owner ${params.handle.agentId} is no longer configured`,
         );
       }
-      assertCronRunReceiptCurrentInDatabase({
-        database,
-        handle: params.handle,
-        resolveAgentId: resolveAgentId(params.state),
-      });
+      if (params.allowMissingJob) {
+        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
+      } else {
+        assertCronRunReceiptCurrentInDatabase({
+          database,
+          handle: params.handle,
+          resolveAgentId: resolveAgentId(params.state),
+        });
+      }
     },
     ...(terminal && !deferTerminal
       ? {

@@ -187,8 +187,8 @@ describe("cron service run admission", () => {
     inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: failingJob.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TRIGGER reject_scheduled_sibling_activation
-      BEFORE INSERT ON cron_run_receipts
+      CREATE TEMP TRIGGER reject_scheduled_sibling_activation
+      BEFORE UPDATE OF started_at_ms ON cron_run_receipts
       WHEN NEW.job_id = '${failingJob.id}'
       BEGIN
         SELECT RAISE(ABORT, 'scheduled sibling activation failed');

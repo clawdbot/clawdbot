@@ -7,6 +7,7 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type { CronJob } from "../types.js";
+import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { hasScheduledNextRunAtMs, nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
@@ -17,7 +18,7 @@ import {
   reserveQueuedCronRun,
   resolveRunConcurrency,
 } from "./run-admission.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { recomputeUnownedCronSchedules, recoverQueuedCronRunReservations } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
@@ -189,6 +190,15 @@ async function onAdmittedTimer(state: CronServiceState) {
         );
         return [];
       }
+      // Timer-owned liveness reconciliation is bounded to durable queued leases.
+      const queuedRecovery = recoverQueuedCronRunReservations(state);
+      runPostPersistCronNotifications(state, queuedRecovery.notifications);
+      for (const receipt of queuedRecovery.receipts) {
+        enrollForeignReceipt(state, receipt);
+      }
+      if (queuedRecovery.repaired) {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      }
       const dueCheckNow = state.deps.nowMs();
       const due = collectRunnableJobs(state, dueCheckNow);
 
@@ -211,11 +221,11 @@ async function onAdmittedTimer(state: CronServiceState) {
         candidates: due,
         reservedAtMs: now,
       });
-      const reservedDue = reservedJobs.map((job) => ({
+      const reservedDue = reservedJobs.map(({ job, runReceipt }) => ({
         id: job.id,
         job,
         reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now, { runReceipt }),
       }));
       return reservedDue;
     });

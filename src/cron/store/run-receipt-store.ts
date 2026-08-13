@@ -461,10 +461,9 @@ export function isCronRunReceiptOwnerDefinitelyStale(
 }
 
 /** Synchronous transaction guard used immediately before a run side effect or state write. */
-export function assertCronRunReceiptCurrentInDatabase(params: {
+export function assertCronRunReceiptOwnedInDatabase(params: {
   database: DatabaseSync;
   handle: CronRunReceiptHandle;
-  resolveAgentId: ResolveReceiptAgentId;
 }): void {
   const current = activeRow(params.database, params.handle.storeKey, params.handle.jobId);
   if (
@@ -478,11 +477,39 @@ export function assertCronRunReceiptCurrentInDatabase(params: {
       "cron run fence is no longer current",
     );
   }
+}
+
+/** Synchronous transaction guard used immediately before a run side effect or state write. */
+export function assertCronRunReceiptCurrentInDatabase(params: {
+  database: DatabaseSync;
+  handle: CronRunReceiptHandle;
+  resolveAgentId: ResolveReceiptAgentId;
+}): void {
+  assertCronRunReceiptOwnedInDatabase(params);
   validateCurrentJob({
     database: params.database,
     handle: params.handle,
     resolveAgentId: params.resolveAgentId,
   });
+}
+
+/** Advances a queued lease to its execution start inside the marker transaction. */
+export function activateCronRunReceiptInDatabase(params: {
+  database: DatabaseSync;
+  handle: CronRunReceiptHandle;
+  startedAtMs: number;
+  resolveAgentId: ResolveReceiptAgentId;
+}): CronRunReceiptHandle {
+  assertCronRunReceiptCurrentInDatabase(params);
+  executeSqliteQuerySync(
+    params.database,
+    query(params.database)
+      .updateTable("cron_run_receipts")
+      .set({ started_at_ms: params.startedAtMs })
+      .where("receipt_id", "=", params.handle.receiptId)
+      .where("status", "=", "running"),
+  );
+  return { ...params.handle, startedAtMs: params.startedAtMs };
 }
 
 export function assertCronRunReceiptCurrent(params: {

@@ -9,14 +9,63 @@ import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
+  releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import { persistQueuedCronRunReservations } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
+import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-admission-conflict-" });
+
+it("recovers an ownerless queued lease on a live sibling without restart", async () => {
+  const store = fixtures.makeStorePath();
+  const now = Date.parse("2026-08-13T15:30:00.000Z");
+  const job = createDueIsolatedJob({ id: "queued-owner-exit", nowMs: now, nextRunAtMs: now });
+  await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+  const owner = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  await list(owner);
+  const [reserved] = await persistQueuedCronRunReservations({
+    state: owner,
+    candidates: [job],
+    reservedAtMs: now,
+  });
+  if (!reserved) {
+    throw new Error("expected durable reservation");
+  }
+  // Simulate process exit after the atomic queued-marker/receipt commit.
+  releaseLocalCronRunReceiptOwnership(reserved.runReceipt);
+
+  const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+  const sibling = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now + 1,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob,
+  });
+  await onTimer(sibling);
+
+  expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+  expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+    lastRunStatus: "ok",
+  });
+  expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+  stop(owner);
+  stop(sibling);
+});
 
 it("preserves foreign state while retrying an unrelated reservation", async () => {
   const store = fixtures.makeStorePath();
@@ -69,14 +118,15 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     },
   );
 
+  let reserved: Awaited<ReturnType<typeof persistQueuedCronRunReservations>> = [];
   try {
-    const reserved = await persistQueuedCronRunReservations({
+    reserved = await persistQueuedCronRunReservations({
       state,
       candidates: [foreignJob, pendingJob],
       reservedAtMs: now + 2,
     });
 
-    expect(reserved.map((job) => job.id)).toEqual([pendingJob.id]);
+    expect(reserved.map(({ job }) => job.id)).toEqual([pendingJob.id]);
     const persisted = await loadCronStore(store.storePath);
     expect(persisted.jobs.find((job) => job.id === foreignJob.id)?.state).toMatchObject({
       runningAtMs: startedAtMs,
@@ -87,6 +137,13 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     ).toBeUndefined();
     expect(persisted.jobs.find((job) => job.id === pendingJob.id)?.state.queuedAtMs).toBe(now + 2);
   } finally {
+    for (const reservation of reserved) {
+      finishCronRunReceipt({
+        handle: reservation.runReceipt,
+        status: "skipped",
+        finishedAtMs: now + 3,
+      });
+    }
     if (receipt) {
       finishCronRunReceipt({
         handle: receipt,

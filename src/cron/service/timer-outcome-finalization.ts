@@ -18,7 +18,8 @@ import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
   applyOutcomeToAuthoritativeJob,
   applyOutcomeToStoredJob,
-  emitCronOutcomeForJob,
+  emitCronOutcomeEventForJob,
+  recordCronOutcomeForJob,
 } from "./timer-outcomes.js";
 
 type CronTaskRunFinalizationOutcome = {
@@ -141,20 +142,15 @@ export async function finalizeCompletedCronRunOutcomes(
 
       const postPersistNotifications: DeferredCronNotifications = [];
       for (const outcome of finalizedOutcomes) {
-        if (
-          outcome.activeJobMarker?.jobRemoved === true ||
-          !state.store?.jobs.some((job) => job.id === outcome.jobId)
-        ) {
-          applyOutcomeToStoredJob(state, outcome, {
-            deferredNotifications: postPersistNotifications,
-          });
-        } else {
-          const previewJob = structuredClone(outcome.job);
-          applyOutcomeToAuthoritativeJob(state, previewJob, outcome, {
+        if (outcome.status !== "ok" || outcome.triggerEval?.fired !== false) {
+          const taskJob = structuredClone(
+            state.store?.jobs.find((job) => job.id === outcome.jobId) ?? outcome.job,
+          );
+          applyOutcomeToAuthoritativeJob(state, taskJob, outcome, {
             deferredNotifications: [],
             emit: false,
           });
-          emitCronOutcomeForJob(state, previewJob, outcome);
+          recordCronOutcomeForJob(state, taskJob, outcome);
         }
       }
       const receiptHooks = finalizedOutcomes
@@ -163,6 +159,9 @@ export async function finalizeCompletedCronRunOutcomes(
           cronRunReceiptPersistHooks({
             state,
             handle: outcome.runReceipt!,
+            allowMissingJob:
+              outcome.activeJobMarker?.jobRemoved === true ||
+              !state.store?.jobs.some((job) => job.id === outcome.jobId),
             terminal: {
               status: outcome.status,
               ...(outcome.triggerEval ? { triggerFired: outcome.triggerEval.fired } : {}),
@@ -203,9 +202,11 @@ export async function finalizeCompletedCronRunOutcomes(
         mutate: ({ jobs }) => {
           const upsertedJobs: CronJob[] = [];
           const removedJobs: CronJob[] = [];
+          const eventPlans: Array<{ outcome: TimedCronRunOutcome; job?: CronJob }> = [];
           for (const outcome of finalizedOutcomes) {
             const job = jobs.get(outcome.jobId);
             if (!job || outcome.activeJobMarker?.jobRemoved === true) {
+              eventPlans.push({ outcome });
               continue;
             }
             if (
@@ -218,20 +219,30 @@ export async function finalizeCompletedCronRunOutcomes(
             } else {
               upsertedJobs.push(job);
             }
+            eventPlans.push({ outcome, job: structuredClone(job) });
           }
           return {
             deleteJobIds: removedJobs.map((job) => job.id),
             upsertJobIds: upsertedJobs.map((job) => job.id),
-            value: { removedJobs, upsertedJobs },
+            value: { eventPlans, removedJobs, upsertedJobs },
           };
         },
       });
-      runPostPersistCronNotifications(state, postPersistNotifications);
       applyCronRuntimeRowsToState(
         state,
         committed.upsertedJobs,
         committed.removedJobs.map((job) => job.id),
       );
+      for (const plan of committed.eventPlans) {
+        if (plan.job) {
+          emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
+        } else {
+          applyOutcomeToStoredJob(state, plan.outcome, {
+            deferredNotifications: postPersistNotifications,
+          });
+        }
+      }
+      runPostPersistCronNotifications(state, postPersistNotifications);
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of committed.removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });

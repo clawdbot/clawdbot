@@ -89,9 +89,11 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       return;
     }
     for (const receipt of listForeignReceipts(state)) {
+      const job = state.store?.jobs.find((entry) => entry.id === receipt.jobId);
       const proposal: CronRunRecoveryProposal = {
         jobId: receipt.jobId,
-        runningAtMs: receipt.startedAtMs,
+        ...(job?.state.queuedAtMs !== undefined ? { queuedAtMs: job.state.queuedAtMs } : {}),
+        ...(job?.state.runningAtMs !== undefined ? { runningAtMs: job.state.runningAtMs } : {}),
         receipt,
       };
       schedulingChanged =

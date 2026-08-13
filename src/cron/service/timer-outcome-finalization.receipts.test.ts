@@ -1,0 +1,144 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDueIsolatedJob,
+  noopLogger,
+  setupCronRegressionFixtures,
+} from "../../../test/helpers/cron/service-regression-fixtures.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { markCronJobActive } from "../active-jobs.js";
+import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
+import {
+  claimCronRunReceiptInDatabase,
+  finishCronRunReceipt,
+  prepareCronRunReceiptClaim,
+} from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
+import { createCronServiceState } from "./state.js";
+import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
+import { onTimer } from "./timer.test-support.js";
+
+const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receipts-" });
+
+function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
+  const prepared = prepareCronRunReceiptClaim({
+    storePath,
+    job,
+    agentId: job.agentId ?? "main",
+    startedAtMs,
+  });
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    claimCronRunReceiptInDatabase({
+      database: db,
+      prepared,
+      resolveAgentId: (current) => current.agentId ?? "main",
+    }),
+  );
+}
+
+describe("cron outcome receipt finalization", () => {
+  it("emits only committed authoritative outcomes after a rejected batch attempt", async () => {
+    const store = fixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:04:59.250Z");
+    const stale = createDueIsolatedJob({
+      id: "rejected-event",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    const current = createDueIsolatedJob({
+      id: "committed-event",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    stale.state.runningAtMs = startedAt;
+    current.state.runningAtMs = startedAt;
+    await saveCronStore(store.storePath, { version: 1, jobs: [stale, current] });
+    const staleReceipt = claimReceipt(store.storePath, stale, startedAt);
+    const currentReceipt = claimReceipt(store.storePath, current, startedAt);
+    finishCronRunReceipt({
+      handle: staleReceipt,
+      status: "superseded",
+      finishedAtMs: startedAt + 1,
+    });
+    const edited = await loadCronStore(store.storePath);
+    edited.jobs.find((job) => job.id === current.id)!.name = "authoritative edited name";
+    await saveCronStore(store.storePath, edited);
+    const events: Array<{ action: string; jobId: string; job?: CronJob }> = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startedAt + 2,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      onEvent: (event) => events.push(event),
+    });
+
+    await finalizeCompletedCronRunOutcomes(state, [
+      {
+        jobId: stale.id,
+        job: stale,
+        activeJobMarker: markCronJobActive(stale.id),
+        runReceipt: staleReceipt,
+        status: "ok",
+        startedAt,
+        endedAt: startedAt + 2,
+      },
+      {
+        jobId: current.id,
+        job: current,
+        activeJobMarker: markCronJobActive(current.id),
+        runReceipt: currentReceipt,
+        status: "ok",
+        startedAt,
+        endedAt: startedAt + 2,
+      },
+    ]);
+
+    expect(events.filter((event) => event.action === "finished")).toEqual([
+      expect.objectContaining({
+        jobId: current.id,
+        job: expect.objectContaining({ name: "authoritative edited name" }),
+      }),
+    ]);
+  });
+
+  it("records a non-firing scheduled trigger as a skipped receipt", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:04:59.500Z");
+    const job = createDueIsolatedJob({
+      id: "scheduled-trigger-not-fired",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
+    job.trigger = { script: "return false" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated", fire: false })),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("skipped");
+  });
+});

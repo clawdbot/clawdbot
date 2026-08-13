@@ -349,16 +349,18 @@ export async function prepareManualRun(
     }
     // Persist the queued marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
-    const [reservedJob] = await persistQueuedCronRunReservations({
+    const [reserved] = await persistQueuedCronRunReservations({
       state,
       candidates: [job],
       ...(mode === "force" ? { forcedJobIds: new Set([job.id]) } : {}),
       reservedAtMs: reservationAt,
     });
-    if (!reservedJob) {
+    if (!reserved) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
+    const reservedJob = reserved.job;
     const reservationIdentity = reserveQueuedCronRun(state, reservedJob.id, reservationAt, {
+      runReceipt: reserved.runReceipt,
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
     });
     if (state.stopped) {

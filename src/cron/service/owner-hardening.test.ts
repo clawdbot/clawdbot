@@ -270,7 +270,7 @@ describe("cron durable run ownership", () => {
     const recovered = makeParentService(storePath);
     try {
       await recovered.start();
-      expect(receipts(storePath, job.id)).toEqual([]);
+      expect(receipts(storePath, job.id)).toMatchObject([{ status: "interrupted" }]);
       const persisted = (await loadCronStore(storePath)).jobs[0];
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();

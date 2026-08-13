@@ -77,41 +77,6 @@ function findCronTask(jobId: string) {
 }
 
 describe("cron batch outcome finalization", () => {
-  it("records a non-firing scheduled trigger as a skipped receipt", async () => {
-    const store = fixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:04:59.500Z");
-    const job = createDueIsolatedJob({
-      id: "scheduled-trigger-not-fired",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
-    job.trigger = { script: "return false" };
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronServiceState({
-      cronEnabled: true,
-      cronConfig: { triggers: { enabled: true } },
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated", fire: false })),
-      runIsolatedAgentJob,
-    });
-
-    await onTimer(state);
-
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    const receipt = openOpenClawStateDatabase()
-      .db.prepare(
-        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
-      )
-      .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
-    expect(receipt?.status).toBe("skipped");
-  });
-
   it.each([
     { trigger: "scheduled", installSuccessor: false },
     { trigger: "scheduled", installSuccessor: true },
@@ -244,9 +209,7 @@ describe("cron batch outcome finalization", () => {
           status: "succeeded",
           terminalSummary: "finished before terminal store failure",
         });
-        expect(events.filter((event) => event.action === "finished")).toEqual([
-          expect.objectContaining({ jobId: job.id, status: "ok" }),
-        ]);
+        expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
         recoveryState = createCronServiceState({
@@ -284,7 +247,7 @@ describe("cron batch outcome finalization", () => {
           enabled: false,
           state: { lastRunAtMs: startedAt, lastRunStatus: "ok", lastStatus: "ok" },
         });
-        expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
+        expect(events.filter((event) => event.action === "finished")).toHaveLength(0);
       } finally {
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
         stop(state);
