@@ -118,9 +118,9 @@ suite.define(() => {
         )
         .toMatchObject({ params: { agentId: "main", limitPerHost: 1 } });
 
-      await page.locator('[data-chat-model-select="true"]').click();
-      const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
-      await expect.poll(() => cliGroup.isVisible()).toBe(true);
+      const cliGroup = page.locator("wa-select.new-session-page__target-picker");
+      await cliGroup.click();
+      await expect.poll(() => cliGroup.getAttribute("open")).toBe("");
       await pollLocatorText(cliGroup).toContain("CLI agents");
       await pollLocatorText(cliGroup).toContain("Claude Code");
       expect(await cliGroup.textContent()).not.toContain("History only");
@@ -132,7 +132,12 @@ suite.define(() => {
         });
       }
 
-      await cliGroup.getByRole("option", { name: "Claude Code" }).click();
+      await cliGroup.evaluate(async (element) => {
+        const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+        select.value = "claude";
+        await select.updateComplete;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
       await expect.poll(() => new URL(page.url()).searchParams.get("catalog")).toBe("claude");
       await expect
         .poll(async () =>
@@ -142,7 +147,7 @@ suite.define(() => {
         )
         .toMatchObject({ params: { agentId: "main", catalogId: "claude" } });
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
-      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      expect(await page.locator("wa-select.chat-controls__model-picker").count()).toBe(0);
       if (captureCliAgentsProof) {
         await page.screenshot({
           animations: "disabled",
@@ -469,18 +474,18 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("chat.metadata");
 
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const modelSelect = page.locator("wa-select.chat-controls__model-picker");
       await expect.poll(() => modelSelect.textContent()).toContain("Models unavailable");
       await modelSelect.click();
       await expect
         .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
         .toBe(true);
-      expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
+      expect(await modelSelect.locator("wa-option").count()).toBe(1);
 
       await page.locator('[data-chat-model-catalog-retry="true"]').click();
 
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
+      await expect.poll(() => modelSelect.locator("wa-option").count()).toBe(3);
       expect(await page.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
     } finally {
       await context.close();
@@ -525,11 +530,15 @@ suite.define(() => {
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
 
       const modelSelect = page.locator(
-        '.new-session-page__composer [data-chat-model-select="true"]',
+        ".new-session-page__composer wa-select.chat-controls__model-picker",
       );
       await modelSelect.click();
       await expect
-        .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
+        .poll(() =>
+          modelSelect
+            .locator('wa-option[value="openai/gpt-5.6-luna"] .picker-select__label')
+            .textContent(),
+        )
         .toContain(recoveredModel.name);
 
       expect(await gateway.getRequests("chat.metadata")).toEqual([
@@ -609,7 +618,7 @@ suite.define(() => {
       await pollLocatorText(runtime).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
       expect(await page.locator('.new-session-page__trigger[title="Agent"]').count()).toBe(0);
-      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      expect(await page.locator("wa-select.chat-controls__model-picker").count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
       await page.getByRole("button", { name: "Start session" }).click();

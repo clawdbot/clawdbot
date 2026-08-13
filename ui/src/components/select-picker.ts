@@ -15,13 +15,17 @@ export type PickerParams<Option extends PickerOption> = {
   options: readonly Option[];
   disabled?: boolean;
   className?: string;
-  onChange: (value: string) => void;
+  title?: string;
+  placement?: "top" | "bottom";
+  onChange: (value: string, select: HTMLElement) => void;
   renderLeading?: (option: Option) => unknown;
 };
 
 export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
   const options =
-    params.value === null || params.options.some((option) => option.value === params.value)
+    params.value === null ||
+    params.value === "" ||
+    params.options.some((option) => option.value === params.value)
       ? params.options
       : [...params.options, { value: params.value, label: params.value } as Option];
   const leading = (option: Option | undefined) => {
@@ -35,13 +39,15 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
       id=${params.id ?? nothing}
       class=${`settings-select picker-select ${params.className ?? ""}`}
       style="width:100%;min-width:0"
+      title=${params.title ?? nothing}
+      placement=${params.placement ?? nothing}
       .value=${params.value}
       ?disabled=${params.disabled}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: unknown }).value;
         const option = typeof value === "string" && options.find((entry) => entry.value === value);
         if (option && !option.disabled) {
-          params.onChange(value);
+          params.onChange(value, event.currentTarget as HTMLElement);
         }
       }}
     >

@@ -821,11 +821,19 @@ suite.define(() => {
         await page.locator("#cron-name").fill("Model override task");
 
         const modelInput = page.locator("#cron-payload-model");
+        const modelPicker = page.locator("#cron-payload-model-picker");
+        const customValue = await modelPicker
+          .locator("wa-option", { hasText: "Custom model…" })
+          .getAttribute("value");
+        expect(customValue).not.toBeNull();
+        await modelPicker.evaluate((select, value) => {
+          (select as HTMLElement & { value: string }).value = String(value);
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        }, customValue);
         await modelInput.fill("openai/gpt-5.5");
-        expect(await modelInput.getAttribute("list")).toBe("cron-model-suggestions");
         expect(
-          await page
-            .locator("#cron-model-suggestions option")
+          await modelPicker
+            .locator("wa-option")
             .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
         ).toContain(configuredModel);
 

@@ -830,6 +830,26 @@ wa-select.settings-select wa-option:state(current) {
   white-space: normal;
 }
 
+.model-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-picker__provider-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.model-picker__provider-icon.provider-brand-icon--fallback {
+  font-size: 9px;
+}
+
+.model-picker__custom[hidden] {
+  display: none;
+}
+
 /* Forced colors suppresses the box-shadow ring and accent fill that stand in
    for the outlines removed above, so restore system-color outlines there. */
 @media (forced-colors: active) {

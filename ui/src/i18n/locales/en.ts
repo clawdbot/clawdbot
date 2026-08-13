@@ -5859,6 +5859,7 @@ export const en: TranslationMap = {
       lightContext: "Light context",
       lightContextHelp: "Use lightweight bootstrap context for this agent job.",
       model: "Model",
+      customModel: "Custom model…",
       modelPlaceholder: "openai/gpt-5.2",
       modelHelp: "Start typing to pick a known model, or enter a custom one.",
       thinking: "Reasoning",

@@ -22,6 +22,8 @@ import { renderChannelPicker, type ChannelPickerOption } from "../../components/
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { icon, icons } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
+import { renderModelPicker } from "../../components/model-picker.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
@@ -412,7 +414,6 @@ export function renderCron(props: CronProps) {
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
     ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
-    ${renderSuggestionList("cron-model-suggestions", props.modelSuggestions)}
     ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
     ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
     ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
@@ -1237,15 +1238,34 @@ function renderPromptSection(
           { value: "agentTurn", label: t("cron.form.agentTurn") },
         ],
       });
+  const modelLabel = t("cron.form.model");
+  const modelError = props.fieldErrors.payloadModel;
+  const modelOptions = uniqueStrings(props.modelSuggestions).map((value) => {
+    const provider = providerIdFromModelRef(value);
+    return { value, label: value, ...(provider ? { provider } : {}) };
+  });
   const agentTurnRows = ctx.isAgentTurn
     ? html`
-        ${renderCronInputField(props, "payloadModel", {
-          label: t("cron.form.model"),
+        ${renderFieldRow({
+          label: modelLabel,
+          controlId: "",
           help: t("cron.form.modelHelp"),
-          errorKey: "payloadModel",
-          describeError: false,
-          list: "cron-model-suggestions",
-          placeholder: t("cron.form.modelPlaceholder"),
+          error: modelError,
+          errorId: errorIdForField("payloadModel"),
+          control: renderModelPicker({
+            id: "cron-payload-model-picker",
+            label: modelLabel,
+            value: props.form.payloadModel,
+            options: [{ value: "", label: t("common.default") }, ...modelOptions],
+            custom: {
+              id: inputIdForField("payloadModel"),
+              label: t("cron.form.customModel"),
+              placeholder: t("cron.form.modelPlaceholder"),
+              invalid: Boolean(modelError),
+              describedBy: modelError ? errorIdForField("payloadModel") : undefined,
+            },
+            onChange: (payloadModel) => props.onFormChange({ payloadModel }),
+          }),
         })}
         ${renderCronInputField(props, "payloadThinking", {
           label: t("cron.form.thinking"),

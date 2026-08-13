@@ -534,7 +534,7 @@ describe("cron view editor", () => {
     prompt.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormChange).toHaveBeenCalledWith({ payloadText: "do the thing" });
 
-    for (const field of ["name", "sessionKey", "deliveryAccountId", "payloadModel"] as const) {
+    for (const field of ["name", "sessionKey", "deliveryAccountId"] as const) {
       const id = `cron-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       const input = getElement(container, `#${id}`, HTMLInputElement);
       if (field === "sessionKey" || field === "deliveryAccountId") {
@@ -544,6 +544,26 @@ describe("cron view editor", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       expect(onFormChange).toHaveBeenLastCalledWith({ [field]: field });
     }
+
+    const modelPicker = getElement(
+      container,
+      "#cron-payload-model-picker",
+      HTMLElement,
+    ) as HTMLElement & { value: string };
+    const customModel = Array.from(modelPicker.querySelectorAll("wa-option")).find(
+      (option) => option.textContent?.trim() === "Custom model…",
+    );
+    Object.defineProperty(modelPicker, "value", {
+      configurable: true,
+      value: customModel?.getAttribute("value"),
+    });
+    modelPicker.dispatchEvent(new Event("change", { bubbles: true }));
+    Reflect.deleteProperty(modelPicker, "value");
+    const modelInput = getElement(container, "#cron-payload-model", HTMLInputElement);
+    expect(modelInput.hidden).toBe(false);
+    modelInput.value = "vendor/model with spaces";
+    modelInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onFormChange).toHaveBeenLastCalledWith({ payloadModel: "vendor/model with spaces" });
 
     const channel = getElement(
       container,
@@ -1047,7 +1067,7 @@ describe("cron view editor", () => {
     expect(onToggle).toHaveBeenCalledWith(job, true);
   });
 
-  it("renders suggestion datalists for agent/model/thinking/timezone", () => {
+  it("renders model-picker suggestions with the remaining text datalists", () => {
     const container = renderView({
       createOpen: true,
       agentSuggestions: ["main"],
@@ -1059,7 +1079,6 @@ describe("cron view editor", () => {
     });
     for (const id of [
       "cron-agent-suggestions",
-      "cron-model-suggestions",
       "cron-thinking-suggestions",
       "cron-tz-suggestions",
       "cron-delivery-to-suggestions",
@@ -1067,8 +1086,10 @@ describe("cron view editor", () => {
     ]) {
       expect(container.querySelector(`datalist#${id}`)).not.toBeNull();
     }
-    const model = getElement(container, "#cron-payload-model", HTMLInputElement);
-    expect(model.getAttribute("list")).toBe("cron-model-suggestions");
+    const model = getElement(container, "#cron-payload-model-picker", HTMLElement);
+    expect(model.querySelector('wa-option[value="openai/gpt-5.2"]')).not.toBeNull();
+    expect(model.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>("#cron-payload-model")?.hidden).toBe(true);
   });
 });
 
