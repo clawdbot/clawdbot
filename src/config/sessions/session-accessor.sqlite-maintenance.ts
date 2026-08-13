@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -10,6 +11,7 @@ import {
   type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryCount } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
@@ -30,7 +32,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
+import {
+  collectSessionMaintenancePreserveKeys,
+  collectSessionMaintenancePreserveKeysForStore,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -60,18 +65,32 @@ function collectSqliteSessionMaintenanceBaseKeys(
   return keys;
 }
 
-function hasStaleSessionEntryCandidate(
-  store: Record<string, SessionEntry>,
+function hasStaleSqliteSessionEntryCandidate(
+  database: OpenClawAgentDatabase,
   pruneAfterMs: number,
   preserveKeys: ReadonlySet<string> | undefined,
 ): boolean {
   const cutoffMs = Date.now() - pruneAfterMs;
-  return Object.entries(store).some(([key, entry]) => {
-    if (entry.updatedAt == null || entry.updatedAt >= cutoffMs) {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select(["entry_json", "session_key"])
+      .where("updated_at", "<", cutoffMs)
+      .where(
+        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column. */
+        sql<boolean>`json_extract(entry_json, '$.archivedAt') IS NULL`,
+      )
+      .orderBy("updated_at", "asc"),
+  ).rows;
+  return rows.some((row) => {
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
       return false;
     }
     return !shouldPreserveMaintenanceEntry({
-      key,
+      key: normalizeStoreSessionKey(row.session_key),
       entry,
       preserveKeys,
     });
@@ -115,20 +134,14 @@ export function applySessionEntryMaintenance(
     return { entryRemovals: [], stateDeletePlans: [] };
   }
 
-  // Trigger and eviction decisions use the same snapshot. All rows consume the cap, while the
-  // preservation boundary below controls only which rows may satisfy an overflow.
-  const store = loadSqliteSessionMaintenanceStore(database);
-  const preserveKeys =
-    collectSessionMaintenancePreserveKeysForStore({
-      storePath: params.storePath,
-      store,
-      baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
-    }) ?? new Set<string>();
-  const entryCount = Object.keys(store).length;
-  const hasStaleCandidate = hasStaleSessionEntryCandidate(
-    store,
+  // Count all rows before loading their payloads. Protection controls eviction candidates, not
+  // whether a row consumes maxEntries; the full snapshot is needed only when maintenance runs.
+  const entryCount = readSessionEntryCount(database);
+  const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
+    database,
     maintenance.pruneAfterMs,
-    preserveKeys,
+    preserveCandidateKeys,
   );
   const shouldMaintainStore =
     params.forceMaintenance === true ||
@@ -148,6 +161,13 @@ export function applySessionEntryMaintenance(
     return { entryRemovals: [], stateDeletePlans: [] };
   }
 
+  const store = loadSqliteSessionMaintenanceStore(database);
+  const preserveKeys =
+    collectSessionMaintenancePreserveKeysForStore({
+      storePath: params.storePath,
+      store,
+      baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
+    }) ?? new Set<string>();
   const removedKeys = new Set<string>();
   const removedEntriesByKey = new Map<string, SessionEntry>();
   const removedSessionIds = new Set<string>();
