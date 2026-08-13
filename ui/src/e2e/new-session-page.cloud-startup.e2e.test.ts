@@ -126,12 +126,16 @@ suite.define(() => {
         })),
       ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await page.locator("#new-session-where-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__where-popover");
       await place.getByRole("button", { name: "Cloud · aws" }).click();
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      const detailTrigger = page.locator("#new-session-detail-trigger");
+      await detailTrigger.click();
+      const detail = page.locator("wa-popover.new-session-page__detail-popover");
+      expect(await detail.getByRole("button", { name: "Worktree" }).isDisabled()).toBe(true);
+      await detail.getByText("Cloud workers require a managed worktree", { exact: true }).waitFor();
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
 
       const effortSelect = page.locator(
@@ -157,14 +161,16 @@ suite.define(() => {
 
       // Picking a Gateway repo keeps the cloud selection: that folder is what
       // the managed worktree checks out and dispatch syncs to the worker.
-      await trigger.click();
-      await place.getByRole("button", { name: "Browse folders" }).click();
+      const projectTrigger = page.locator("#new-session-project-trigger");
+      const project = page.locator("wa-popover.new-session-page__project-popover");
+      await projectTrigger.click();
+      await project.getByRole("button", { name: "Browse folders" }).click();
       await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
-      await trigger.click();
-      await pollLocatorText(place.locator(".new-session-page__menu-note")).toContain(
+      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      await detailTrigger.click();
+      await pollLocatorText(detail.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the cloud worker",
       );
       await captureUiProof(page, "01-cloud-worker-target.png");
@@ -433,12 +439,12 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
 
       await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
@@ -448,7 +454,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await pollLocatorText(trigger).toContain("Cloud · aws");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
@@ -456,7 +462,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .locator("wa-popover.new-session-page__place-popover")
+            .locator("wa-popover.new-session-page__where-popover")
             .getByRole("button", { name: "Cloud · aws" })
             .isDisabled(),
         )
@@ -471,7 +477,9 @@ suite.define(() => {
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect
+        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .toBe("false");
     } finally {
       await context.close();
     }
@@ -544,9 +552,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {
@@ -728,9 +736,9 @@ suite.define(() => {
         ),
       ).toBeNull();
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");
@@ -787,9 +795,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
@@ -870,9 +878,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
@@ -981,9 +989,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {

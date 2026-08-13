@@ -101,8 +101,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
       await gateway.waitForRequest("environments.list");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      await page.locator("#new-session-place-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await page.locator("#new-session-where-trigger").click();
       const device = place.locator('[data-value="node:capable-mac"]');
       await device.waitFor();
       await captureEnvironmentMetadataUiProof(page);

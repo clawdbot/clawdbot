@@ -235,7 +235,7 @@ export async function waitForCommittedChatRoute(page: Page) {
 }
 
 export async function choosePackagesFolder(page: Page) {
-  await page.locator("#new-session-place-trigger").click();
+  await page.locator("#new-session-project-trigger").click();
   await page.getByRole("button", { name: "Browse folders" }).click();
   await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
   await page.getByRole("button", { name: "Use this folder" }).click();
