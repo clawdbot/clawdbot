@@ -115,6 +115,15 @@ export function createSlackProgressRuntime(runtimeParams: {
   let nativeProgressChunkKey: string | undefined;
   let nativeNarrationRenderedText = "";
   let nativeNarrationSourceText = "";
+  // Native streaming appends; overlapping updates would re-append identical
+  // narration/chunks because delta state commits only after network success.
+  // One chain keeps each update's compute -> append -> commit atomic.
+  let nativeStreamOrder: Promise<unknown> = Promise.resolve();
+  const withNativeStreamOrder = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = nativeStreamOrder.then(task, task);
+    nativeStreamOrder = run.catch(() => undefined);
+    return run;
+  };
   const progressReceipt = createChannelProgressReceiptTracker();
   const progressSeed = `${account.accountId}:${message.channel}`;
   const useDraftProgressCard = Boolean(draftStream) && streamMode === "status_final";
@@ -194,7 +203,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     };
   };
 
-  const updateNativeProgressStream = async (): Promise<boolean> => {
+  const updateNativeProgressStream = (): Promise<boolean> =>
+    withNativeStreamOrder(updateNativeProgressStreamNow);
+
+  const updateNativeProgressStreamNow = async (): Promise<boolean> => {
     const snapshot = progressDraft.getSnapshot();
     const progressLines = resolveNativeProgressLines(snapshot);
     const narrationUpdate = resolveNarrationUpdate(resolveNativeProgressNarration(snapshot));
@@ -264,7 +276,12 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
   };
 
-  const appendNativeNarration = async (
+  const appendNativeNarration = (
+    payload: ReplyPayload,
+    kind: ReplyDispatchKind,
+  ): Promise<boolean> => withNativeStreamOrder(() => appendNativeNarrationNow(payload, kind));
+
+  const appendNativeNarrationNow = async (
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<boolean> => {
@@ -333,7 +350,10 @@ export function createSlackProgressRuntime(runtimeParams: {
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
 
-  const deliverNativeFinal = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
+  const deliverNativeFinal = (payload: ReplyPayload, kind: ReplyDispatchKind): Promise<void> =>
+    withNativeStreamOrder(() => deliverNativeFinalNow(payload, kind));
+
+  const deliverNativeFinalNow = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
     progressDraft.markFinalReplyStarted();
     const streamReady = await nativeTransport.waitForStart();
     const finalThreadTs = delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;

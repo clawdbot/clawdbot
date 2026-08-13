@@ -95,6 +95,19 @@ describe("applyAppendOnlyStreamUpdate", () => {
     });
   });
 
+  it("extends rendered when source continues after an appended chunk", () => {
+    const next = applyAppendOnlyStreamUpdate({
+      incoming: "next chunk grows",
+      rendered: "hello world\nnext chunk",
+      source: "next chunk",
+    });
+    expect(next).toEqual({
+      rendered: "hello world\nnext chunk grows",
+      source: "next chunk grows",
+      changed: true,
+    });
+  });
+
   it("appends non-prefix incoming chunks", () => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: "next chunk",
