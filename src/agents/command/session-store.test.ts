@@ -159,11 +159,22 @@ describe("updateSessionStoreAfterAgentRun", () => {
           models: {
             providers: {
               openai: {
-                models: [{ id: "gpt-5.5", cost: { input: 2, output: 4 } }],
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 8_192,
+                  },
+                ],
               },
             },
           },
-        } as OpenClawConfig,
+        } satisfies OpenClawConfig,
         agentDir: path.join(dir, "agents", "marie", "agent"),
         sessionId,
         sessionKey,
