@@ -208,6 +208,42 @@ describe("voice-call call record store", () => {
     expect(restored.activeCalls.get("call-interrupted")?.state).toBe("ringing");
   });
 
+  it("removes stranded partial records on restore", () => {
+    const storePath = createTestStorePath();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(makePersistedCall({ callId: "call-keep", state: "ringing" })),
+    );
+    const events = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>("voice-call", {
+      namespace: CALL_RECORD_EVENTS_NAMESPACE,
+      maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+      env,
+    });
+    const chunks = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>("voice-call", {
+      namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+      maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+      env,
+    });
+    chunks.register("event:legacy:000001:orphan:chunk:0000", { index: 0, dataBase64: "e30=" });
+    events.register("event:partial:000002:dangling", {
+      chunkCount: 2,
+      byteLength: 4,
+      persistedAt: 1,
+      sequence: 2,
+    });
+    chunks.register("event:partial:000002:dangling:chunk:0000", { index: 0, dataBase64: "e30=" });
+
+    const restored = loadActiveCallsFromStore(storePath);
+
+    expect(restored.activeCalls.get("call-keep")?.state).toBe("ringing");
+    const survivingEvents = events.entries();
+    const survivingChunks = chunks.entries();
+    expect(survivingEvents).toHaveLength(1);
+    expect(survivingChunks).toHaveLength(1);
+    expect(survivingChunks[0]?.key).toBe(`${survivingEvents[0]?.key}:chunk:0000`);
+  });
+
   it("replays same-millisecond snapshots in write order", () => {
     vi.useFakeTimers({ now: new Date("2026-05-31T10:00:00.000Z") });
     const storePath = createTestStorePath();

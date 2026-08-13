@@ -325,6 +325,34 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
     .map((entry) => entry.call);
 }
 
+/**
+ * Delete partial persistence debris: chunks with no metadata row (stranded by
+ * the old chunk-first write order) and metadata rows missing chunks. Runs only
+ * from manager startup, before any new writes, so it cannot race a live write.
+ */
+function reconcileCallRecordEventRows(stores: CallRecordStateStores): void {
+  const storedChunkKeys = new Set(stores.chunks.entries().map((entry) => entry.key));
+  const referencedChunkKeys = new Set<string>();
+  for (const entry of stores.events.entries()) {
+    const chunkKeys: string[] = [];
+    for (let index = 0; index < entry.value.chunkCount; index += 1) {
+      chunkKeys.push(buildChunkKey(entry.key, index));
+    }
+    if (chunkKeys.every((key) => storedChunkKeys.has(key))) {
+      for (const key of chunkKeys) {
+        referencedChunkKeys.add(key);
+      }
+    } else {
+      deleteCallRecordEventRows(stores, entry.key);
+    }
+  }
+  for (const key of storedChunkKeys) {
+    if (!referencedChunkKeys.has(key)) {
+      stores.chunks.delete(key);
+    }
+  }
+}
+
 /** Persist one call record event to plugin state. */
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   try {
@@ -348,10 +376,17 @@ export function loadActiveCallsFromStore(storePath: string): {
 } {
   const stores = tryCreateCallRecordStateStores(storePath);
   let calls: CallRecord[] = [];
-  try {
-    calls = stores ? readCallRecordEvents(stores) : [];
-  } catch (err) {
-    console.error("[voice-call] Failed to read SQLite call records:", err);
+  if (stores) {
+    try {
+      reconcileCallRecordEventRows(stores);
+    } catch (err) {
+      console.error("[voice-call] Failed to reconcile call record rows:", err);
+    }
+    try {
+      calls = readCallRecordEvents(stores);
+    } catch (err) {
+      console.error("[voice-call] Failed to read SQLite call records:", err);
+    }
   }
   if (calls.length === 0) {
     return {
