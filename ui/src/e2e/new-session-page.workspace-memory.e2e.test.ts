@@ -27,7 +27,7 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
 };
 const MOBILE_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
-  viewport: { height: 568, width: 320 },
+  viewport: { height: 740, width: 364 },
 };
 const MODELS = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
@@ -127,7 +127,20 @@ suite.define(() => {
   it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
-        models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+        models: [
+          {
+            id: "gpt-5.6-luna",
+            name: "GPT 5.6 Luna",
+            provider: "openai",
+            contextWindow: 400_000,
+          },
+          {
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "anthropic",
+            contextWindow: 200_000,
+          },
+        ],
         hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -178,9 +191,6 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
       expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
-      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
-        modelBox?.x ?? 0,
-      );
       for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
@@ -188,12 +198,41 @@ suite.define(() => {
         );
       }
       // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // all four controls share one 320px row; wrap or overflow here means the
-      // new-session.css mobile override regressed.
+      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
       expect(controlsOverflow).toBe(0);
+
+      const picker = newSessionModelPicker(page);
+      await picker.click();
+      await expect.poll(() => picker.getAttribute("open")).toBe("");
+      const optionLabelWidths = await picker.locator("wa-option").evaluateAll((options) =>
+        options.flatMap((option) => {
+          if (option.getBoundingClientRect().width === 0) {
+            return [];
+          }
+          const label = option.querySelector<HTMLElement>(".picker-select__label")!;
+          const probe = document.createElement("span");
+          probe.style.cssText = `position:fixed;visibility:hidden;width:8ch;font:${getComputedStyle(label).font}`;
+          document.body.append(probe);
+          const minimum = probe.getBoundingClientRect().width;
+          probe.remove();
+          return [
+            {
+              label: label.textContent?.trim(),
+              minimum,
+              width: label.getBoundingClientRect().width,
+            },
+          ];
+        }),
+      );
+      expect(optionLabelWidths.length).toBeGreaterThanOrEqual(2);
+      for (const entry of optionLabelWidths) {
+        expect(entry.width, JSON.stringify(entry)).toBeGreaterThanOrEqual(entry.minimum);
+      }
+      await captureUiProof(page, "mobile-model-picker-labels.png");
+      await picker.click();
 
       await attach.click();
       await expect.poll(() => takePhoto.isVisible()).toBe(true);

@@ -3763,12 +3763,8 @@ button.chat-reply-preview--message:disabled {
     margin-left: 0;
   }
 
-  /* Reserve the readable model trigger, 44px effort target, and their gap;
-     keep the picker cluster right-aligned like desktop while transient status
-     text yields before either picker does. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
-    min-width: 138px;
   }
 
   .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
