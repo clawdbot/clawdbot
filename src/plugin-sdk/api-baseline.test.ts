@@ -24,6 +24,7 @@ import {
   parsePluginSdkApiDiffSurface,
   pluginSdkApiAcknowledgement,
   readPluginSdkApiEntrypoints,
+  type PluginSdkApiDiff,
 } from "./api-diff.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -437,6 +438,34 @@ describe("Plugin SDK API baseline", () => {
     expect(report).toContain("oldValue: string");
     expect(report).toContain("newValue: number");
     expect(report).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
+  });
+
+  it("bounds reports by UTF-8 bytes without splitting multibyte text", () => {
+    const diff: PluginSdkApiDiff = {
+      digest: "a".repeat(64),
+      entrypointsAdded: [],
+      entrypointsRemoved: [],
+      exports: [
+        {
+          after: {
+            closureHash: "b".repeat(64),
+            declaration: `type Wide = "${"界".repeat(70_000)}";`,
+            kind: "type",
+          },
+          before: null,
+          change: "added",
+          declarationChanges: [],
+          entrypoint: "fixture",
+          exportName: "Wide",
+          importSpecifier: "openclaw/plugin-sdk/fixture",
+        },
+      ],
+    };
+
+    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+    expect(Buffer.byteLength(report, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(report).toContain("summary truncated");
+    expect(report).not.toContain("�");
   });
 
   it("renders byte-identical surfaces deterministically", async () => {

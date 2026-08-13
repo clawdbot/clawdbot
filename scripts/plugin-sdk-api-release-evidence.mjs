@@ -47,9 +47,16 @@ function hasChanges(payload) {
   );
 }
 
-export function createPluginSdkApiReleaseEvidence({ baseRef, baseSha, diff, headSha }) {
+export function createPluginSdkApiReleaseEvidence({
+  baseRef,
+  baseSha,
+  diff,
+  headSha,
+  workflowSha,
+}) {
   assertSha(baseSha, "Plugin SDK API evidence base SHA");
   assertSha(headSha, "Plugin SDK API evidence head SHA");
+  assertSha(workflowSha, "Plugin SDK API evidence workflow SHA");
   if (typeof baseRef !== "string" || baseRef.length === 0) {
     throw new Error("Plugin SDK API evidence base ref is required");
   }
@@ -67,6 +74,7 @@ export function createPluginSdkApiReleaseEvidence({ baseRef, baseSha, diff, head
     hasChanges: hasChanges(payload),
     digest,
     diff,
+    workflowSha,
   };
 }
 
@@ -76,8 +84,8 @@ export function validatePluginSdkApiReleaseEvidence({
   currentSelectorSha = "",
   evidence,
   expectedHeadSha,
+  expectedWorkflowSha,
   targetRef = "",
-  targetPackage,
 }) {
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
   if (
@@ -86,15 +94,10 @@ export function validatePluginSdkApiReleaseEvidence({
   ) {
     throw new Error("Plugin SDK API release evidence is missing or invalid");
   }
-  if (evidence.status === "unavailable") {
-    assertSha(evidence.headSha, "Plugin SDK API evidence head SHA");
-    if (evidence.headSha !== expectedHeadSha) {
-      throw new Error("Plugin SDK API evidence head SHA does not match the release");
-    }
-    if (targetPackage?.scripts?.["plugin-sdk:api:diff"]) {
-      throw new Error("Plugin SDK API evidence cannot be unavailable for a current release target");
-    }
-    return { acknowledgement: null, digest: null, hasChanges: false, status: "unavailable" };
+  assertSha(evidence.workflowSha, "Plugin SDK API evidence workflow SHA");
+  assertSha(expectedWorkflowSha, "Expected Plugin SDK API evidence workflow SHA");
+  if (evidence.workflowSha !== expectedWorkflowSha) {
+    throw new Error("Plugin SDK API evidence workflow SHA does not match trusted tooling");
   }
   if (evidence.status !== "checked") {
     throw new Error("Plugin SDK API release evidence has an invalid status");
@@ -166,12 +169,12 @@ function readArgs(argv) {
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) {
       throw new Error(
-        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --target-package <path> [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
+        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --workflow-sha <sha> [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
       );
     }
     values.set(flag, value);
   }
-  for (const flag of ["--manifest", "--head", "--target-package"]) {
+  for (const flag of ["--manifest", "--head", "--workflow-sha"]) {
     if (!values.has(flag)) {
       throw new Error(`${flag} is required`);
     }
@@ -188,8 +191,8 @@ function main() {
     currentSelectorSha: args.get("--current-selector-sha"),
     evidence: manifest.pluginSdkApi,
     expectedHeadSha: args.get("--head"),
+    expectedWorkflowSha: args.get("--workflow-sha"),
     targetRef: args.get("--target-ref"),
-    targetPackage: readJson(args.get("--target-package")),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

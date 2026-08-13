@@ -403,6 +403,22 @@ function appendText(lines: string[], label: "after" | "before", text: string | n
   }
 }
 
+function truncateUtf8(text: string, maxBytes: number): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) {
+    return text;
+  }
+  let end = maxBytes;
+  while (end > 0) {
+    const excludedByte = bytes[end];
+    if (excludedByte === undefined || (excludedByte & 0xc0) !== 0x80) {
+      break;
+    }
+    end -= 1;
+  }
+  return bytes.subarray(0, end).toString("utf8");
+}
+
 function appendExportChanges(
   lines: string[],
   title: string,
@@ -537,5 +553,6 @@ export function formatPluginSdkApiDiffReport(params: {
   if (Buffer.byteLength(report, "utf8") <= REPORT_BYTE_LIMIT) {
     return report;
   }
-  return `${report.slice(0, REPORT_BYTE_LIMIT - 80)}\n\n… summary truncated; inspect the JSON artifact.\n`;
+  const suffix = "\n\n… summary truncated; inspect the JSON artifact.\n";
+  return `${truncateUtf8(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
 }

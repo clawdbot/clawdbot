@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -185,7 +186,7 @@ async function main(): Promise<void> {
   const repoRoot = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   const baseCommit = git(repoRoot, ["rev-parse", "--verify", `${args.base}^{commit}`]);
   const headCommit = git(repoRoot, ["rev-parse", "--verify", `${args.head}^{commit}`]);
-  const temporaryParent = process.env.RUNNER_TEMP ?? path.join(repoRoot, ".local");
+  const temporaryParent = process.env.RUNNER_TEMP ?? os.tmpdir();
   await fs.mkdir(temporaryParent, { recursive: true });
   const temporaryRoot = await fs.mkdtemp(
     path.join(temporaryParent, "openclaw-plugin-sdk-api-diff-"),
@@ -195,6 +196,32 @@ async function main(): Promise<void> {
     { commit: headCommit, name: "head" },
   ] as const;
   const addedWorktrees: string[] = [];
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      let cleanupError: Error | undefined;
+      for (const worktree of addedWorktrees.toReversed()) {
+        try {
+          git(repoRoot, ["worktree", "remove", "--force", worktree]);
+        } catch (error) {
+          cleanupError ??=
+            error instanceof Error ? error : new Error("Plugin SDK API worktree cleanup failed");
+        }
+      }
+      await fs.rm(temporaryRoot, { force: true, recursive: true });
+      if (cleanupError) {
+        throw cleanupError;
+      }
+    })();
+    return cleanupPromise;
+  };
+  const stop = (exitCode: number): void => {
+    void cleanup().finally(() => process.exit(exitCode));
+  };
+  const stopOnInterrupt = (): void => stop(130);
+  const stopOnTerminate = (): void => stop(143);
+  process.once("SIGINT", stopOnInterrupt);
+  process.once("SIGTERM", stopOnTerminate);
 
   try {
     for (const root of roots) {
@@ -228,6 +255,7 @@ async function main(): Promise<void> {
         baseSha: baseCommit,
         diff,
         headSha: headCommit,
+        workflowSha: git(repoRoot, ["rev-parse", "HEAD"]),
       });
       await writeFile(args.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     }
@@ -245,10 +273,9 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    for (const worktree of addedWorktrees.toReversed()) {
-      git(repoRoot, ["worktree", "remove", "--force", worktree]);
-    }
-    await fs.rm(temporaryRoot, { force: true, recursive: true });
+    process.off("SIGINT", stopOnInterrupt);
+    process.off("SIGTERM", stopOnTerminate);
+    await cleanup();
   }
 }
 

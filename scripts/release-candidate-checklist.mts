@@ -1866,6 +1866,7 @@ async function main() {
   });
 
   const npmDir = join(options.outputDir, "npm-preflight");
+  const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
   const fullDir = join(options.outputDir, "full-release-validation");
   const npmArtifact = await downloadResolvedArtifact(
     options.repo,
@@ -1875,6 +1876,15 @@ async function main() {
     npmDir,
   );
   const npmArtifactName = npmArtifact.name;
+  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
+    throw new Error(`OpenClaw npm preflight run ${options.npmPreflightRunId} has invalid attempt.`);
+  }
+  downloadArtifact(
+    options.repo,
+    options.npmPreflightRunId,
+    `plugin-sdk-api-release-diff-${options.npmPreflightRunId}-${npmRun.runAttempt}`,
+    pluginSdkApiDir,
+  );
   if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
@@ -1882,6 +1892,15 @@ async function main() {
   downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const immutablePluginSdkApiEvidence = readJson(
+    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
+    "immutable Plugin SDK API evidence",
+  );
+  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
+    throw new Error(
+      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
+    );
+  }
   const fullManifest = readJson(
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
@@ -1912,7 +1931,7 @@ async function main() {
     acknowledgement: options.pluginSdkApiAcknowledgement,
     evidence: npmManifest.pluginSdkApi,
     expectedHeadSha: targetSha,
-    targetPackage: readJson("package.json", "release target package manifest"),
+    expectedWorkflowSha: npmRun.headSha,
   });
   validateFullManifest(fullManifest, {
     targetSha,
