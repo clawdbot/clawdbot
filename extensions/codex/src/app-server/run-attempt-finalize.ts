@@ -323,7 +323,6 @@ export async function finalizeCodexAttempt(
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
-    turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult");
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext

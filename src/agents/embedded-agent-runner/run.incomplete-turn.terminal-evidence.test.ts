@@ -120,7 +120,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
         timedOut: true,
-        promptError: new Error("LLM idle timeout"),
       }),
     );
 
@@ -164,27 +163,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       aborted: false,
       timedOut: false,
     },
-    {
-      label: "prompt error without idle timeout",
-      terminal: { kind: "ok" } as const,
-      aborted: false,
-      timedOut: false,
-      promptError: new Error("closed"),
-    },
-  ])(
-    "does not finalize settled tools after a $label",
-    ({ terminal, aborted, timedOut, promptError }) => {
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
-        makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
-          aborted,
-          timedOut,
-          promptError,
-        }),
-      );
+  ])("does not finalize settled tools after a $label", ({ terminal, aborted, timedOut }) => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
+        aborted,
+        timedOut,
+      }),
+    );
 
-      expect(instruction).toBeNull();
-    },
-  );
+    expect(instruction).toBeNull();
+  });
 
   it("does not use a settled prior-turn batch to authorize idle-timeout finalization", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(

@@ -403,7 +403,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
-  it("continues once after settled side-effecting tools finish without a final answer", async () => {
+  it("finalizes once after a provider error follows settled side-effecting tools", async () => {
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [
@@ -421,6 +421,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
+        promptError: new Error("Selected model is at capacity. Please try a different model."),
+        promptErrorSource: "prompt",
         latestMcpAppChannelView: { viewId: "view-after-tools" },
         toolMetas: [{ toolName: "write", meta: "path=note.txt" }, { toolName: "cron" }],
         successfulNestedToolNames: ["read"],
