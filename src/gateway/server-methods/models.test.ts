@@ -11,11 +11,13 @@ import {
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -34,8 +36,10 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
           choiceId: "anthropic-cli",
           deprecatedChoiceIds: ["claude-cli"],
         },
+        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
         { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
       ],
+      modelSupport: { modelPrefixes: ["claude-"] },
       skills: [],
       hooks: [],
       origin: "bundled",
@@ -47,6 +51,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       id: "byteplus",
       channels: [],
       providers: ["byteplus", "byteplus-plan"],
+      syntheticAuthRefs: [],
       providerAuthAliases: { "byteplus-plan": "byteplus" },
       providerAuthChoices: [
         { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
@@ -63,8 +68,14 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       id: "github-copilot",
       channels: [],
       providers: ["github-copilot"],
+      syntheticAuthRefs: [],
       providerAuthChoices: [
         { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
+        {
+          provider: "github-copilot",
+          method: "device-enterprise",
+          choiceId: "github-copilot-enterprise",
+        },
       ],
       cliBackends: [],
       skills: [],
@@ -85,6 +96,8 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       policyHash: "models-test-plugin-policy",
       generatedAtMs: 0,
       installRecords: {},
+      // A real isolated bundled snapshot has no installed-index rows; bundled
+      // manifest records remain the authoritative graph for this fixture.
       plugins: [],
       diagnostics: [],
     },
@@ -151,6 +164,7 @@ const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
 let modelsTestState: OpenClawTestState;
 
 beforeAll(async () => {
+  assertPluginMetadataSnapshotConsistency(modelPluginMetadataSnapshot as PluginMetadataSnapshot);
   modelsTestState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-models-list-",
