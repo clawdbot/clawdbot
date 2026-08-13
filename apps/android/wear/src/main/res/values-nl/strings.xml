@@ -11,7 +11,7 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dicteren"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Live"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gespreksdraad"</string>
-    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Discussie openen"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Thread openen"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Veeg →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ingedrukt houden"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tikken"</string>
@@ -27,11 +27,11 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stop met spreken"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spreek het laatste antwoord uit"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aan het spreken"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aan het luisteren"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Luisteren"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbinding maken"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aan het nadenken"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aan het typen"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aan het verzenden"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verzenden"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agent is bezig"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fout"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gereed"</string>

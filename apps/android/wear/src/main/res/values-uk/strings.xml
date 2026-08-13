@@ -27,9 +27,9 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Припинити говорити"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучити останню відповідь"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорить"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Слухає"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прослуховування"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Підключення"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обмірковує"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Мислення"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Вводить текст"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Надсилання"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Агент працює"</string>
@@ -60,7 +60,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Зчитування агентів, сеансів і чату"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Телефон готовий"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway підключено"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway не в мережі"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway офлайн"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Повторно підключіть Gateway в OpenClaw на спареному телефоні."</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відкрийте OpenClaw на телефоні"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Годинник ніколи не запускає та не автентифікує Gateway самостійно."</string>
