@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
@@ -27,7 +26,6 @@ export function renderSubagentDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
   host: SubagentDetailHost;
-  onClose: () => void;
   task: TaskSummary | undefined;
   transcript: ChatTranscriptController;
 }): TemplateResult {
@@ -36,7 +34,7 @@ export function renderSubagentDetailPanel(params: {
     resetSubagentDetail(params.host);
     return html`
       <div class="sidebar-panel chat-subagent-detail" data-subagent-detail-panel>
-        ${renderSubagentHeader(t("chat.backgroundTasks.subagentDetailTitle"), params.onClose)}
+        ${renderSubagentHeader(t("chat.backgroundTasks.subagentDetailTitle"))}
         <div class="sidebar-content chat-subagent-detail__state">
           ${t("chat.backgroundTasks.subagentUnavailable")}
         </div>
@@ -51,15 +49,13 @@ export function renderSubagentDetailPanel(params: {
     : renderSubagentFallback(currentTask, backgroundTasks, params.host);
   return html`
     <div class="sidebar-panel chat-subagent-detail" data-subagent-detail-panel>
-      ${renderSubagentHeader(taskTitle(currentTask), params.onClose, currentTask, backgroundTasks)}
-      ${content}
+      ${renderSubagentHeader(taskTitle(currentTask), currentTask, backgroundTasks)} ${content}
     </div>
   `;
 }
 
 function renderSubagentHeader(
   title: string,
-  onClose: () => void,
   task?: TaskSummary,
   backgroundTasks?: BackgroundTasksProps,
 ): TemplateResult {
@@ -93,9 +89,9 @@ function renderSubagentHeader(
             </div>`
           : nothing}
       </div>
-      <div class="sidebar-header__actions">
-        ${task && active && backgroundTasks?.canCancel
-          ? html`<button
+      ${task && active && backgroundTasks?.canCancel
+        ? html`<div class="sidebar-header__actions">
+            <button
               class="btn btn--ghost btn--sm"
               type="button"
               aria-label=${t("chat.backgroundTasks.stopTask", { title })}
@@ -103,19 +99,9 @@ function renderSubagentHeader(
               @click=${() => backgroundTasks.onCancel(task.id)}
             >
               ${cancelling ? icons.loader : icons.stop} ${t("chat.runControls.stop")}
-            </button>`
-          : nothing}
-        <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-          <button
-            class="btn"
-            type="button"
-            aria-label=${t("chat.detailPanel.close")}
-            @click=${onClose}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </div>
+            </button>
+          </div>`
+        : nothing}
     </div>
   `;
 }

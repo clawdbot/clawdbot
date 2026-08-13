@@ -32,7 +32,6 @@ export function renderChatDetailSlot(params: {
       backgroundTasks: params.backgroundTasks,
       chat: params.chat,
       host,
-      onClose: host.handleCloseSidebar,
       task: params.backgroundTasks.tasks?.find((task) => task.id === content.taskId) ?? undefined,
       transcript: params.transcript,
     });

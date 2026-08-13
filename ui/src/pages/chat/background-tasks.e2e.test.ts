@@ -469,7 +469,7 @@ suite.define(() => {
           path: path.join(activityDir, "02-one-subagent-finished.png"),
           fullPage: true,
         });
-        await detailPanel.getByRole("button", { name: "Close" }).click();
+        await page.getByRole("button", { name: "Close Details" }).click();
         await detailPanel.waitFor({ state: "detached" });
       },
     );
