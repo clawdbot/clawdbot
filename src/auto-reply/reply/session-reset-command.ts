@@ -239,6 +239,18 @@ function isTranscriptOnlyCommand(ctx: MsgContext, commandText: string): boolean 
   );
 }
 
+/**
+ * Decides whether an explicit reset trigger keeps the user's sidebar category.
+ *
+ * `/reset` clears conversation context but stays in the group the user filed the
+ * session under; `/new` starts a fresh ungrouped chat. Implicit rollovers
+ * (idle/daily) pass `undefined` and keep the category, matching the Gateway
+ * reset writer which only drops it for `reason: "new"`.
+ */
+export function explicitResetPreservesSessionCategory(matchedResetTriggerLower?: string): boolean {
+  return matchedResetTriggerLower === undefined || matchedResetTriggerLower === "/reset";
+}
+
 export function resolveSessionResetCommand(params: {
   commandText: string;
   rawText: string;

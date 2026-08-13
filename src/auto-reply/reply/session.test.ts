@@ -3169,6 +3169,30 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("keeps the sidebar category on /reset and clears it on /new", async () => {
+    const storePath = await createStorePath("openclaw-reset-sidebar-category-");
+    const sessionKey = "agent:main:telegram:dm:user-sidebar-category";
+    const existingSessionId = "existing-session-sidebar-category";
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: { category: "Operations" },
+    });
+
+    for (const { name, result, stored } of cases) {
+      expect(result.resetTriggered, name).toBe(true);
+      const storedEntry = expectDefined(stored[sessionKey], "stored[sessionKey] test invariant");
+      if (name === "reset") {
+        expect(result.sessionEntry.category, name).toBe("Operations");
+        expect(storedEntry.category, name).toBe("Operations");
+      } else {
+        expect(result.sessionEntry.category, name).toBeUndefined();
+        expect(storedEntry.category, name).toBeUndefined();
+      }
+    }
+  });
+
   it("preserves selected auth profile overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";

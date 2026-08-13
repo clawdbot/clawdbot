@@ -825,6 +825,43 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+  it("keeps the sidebar category on /reset and clears it on /new during fast bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-category-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:fast-reset-category";
+
+    for (const testCase of [
+      { body: "/reset", expected: "Operations" as string | undefined },
+      { body: "/new", expected: undefined },
+    ]) {
+      await seedFastPathSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "existing-fast-reset-category",
+          updatedAt: Date.now(),
+          category: "Operations",
+        },
+      });
+
+      const result = initFastReplySessionState({
+        ctx: buildGetReplyCtx({
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          SessionKey: sessionKey,
+        }),
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        agentId: "main",
+        commandAuthorized: true,
+        workspaceDir: home,
+      });
+
+      expect(result.resetTriggered, testCase.body).toBe(true);
+      // Fast bootstrap only mints the entry; the store row is written later by the
+      // reply run, so the prepared entry is the observable contract here.
+      expect(result.sessionEntry.category, testCase.body).toBe(testCase.expected);
+    }
+  });
+
   it("preserves the exact multiline reset payload during fast bootstrap", () => {
     const payload = "keep [Q3]\nline 2";
     const result = initFastReplySessionState({

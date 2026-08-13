@@ -120,7 +120,10 @@ import {
 } from "./session-init-conflict-retry.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
-import { resolveSessionResetCommand } from "./session-reset-command.js";
+import {
+  explicitResetPreservesSessionCategory,
+  resolveSessionResetCommand,
+} from "./session-reset-command.js";
 import {
   stripThreadFromSessionRoute,
   stripThreadIdFromDeliveryContext,
@@ -379,7 +382,11 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+function resolveReplySessionRolloverState(params: {
+  entry: SessionEntry;
+  preservesCategory: boolean;
+}): Partial<SessionEntry> {
+  const { entry } = params;
   const preservedSelection = resolveResetPreservedSelection({ entry });
   return {
     thinkingLevel: entry.thinkingLevel,
@@ -394,6 +401,10 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     displayName: entry.displayName,
+    // `/reset` keeps the sidebar group the user filed this session under; only an
+    // explicit `/new` starts an ungrouped chat. Implicit idle/daily rollovers keep
+    // the group too, matching the Gateway reset writer's reason-based rule.
+    ...(params.preservesCategory ? { category: entry.category } : {}),
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
@@ -789,7 +800,10 @@ async function initSessionStateAttemptLocked(
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
       // Lineage/control facts belong to the session node and survive ANY rollover
       // from an existing entry, following the #90119 carry pattern.
-      preservedState = resolveReplySessionRolloverState(entry);
+      preservedState = resolveReplySessionRolloverState({
+        entry,
+        preservesCategory: explicitResetPreservesSessionCategory(matchedResetTriggerLower),
+      });
     }
   }
 
