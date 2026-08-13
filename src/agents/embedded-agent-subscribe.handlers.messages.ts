@@ -876,9 +876,43 @@ export function handleMessageUpdate(
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
-    // Prefer full partial-message thinking when available; fall back to event payloads.
-    const partialThinking = extractAssistantThinking(msg);
-    ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+    // perf(agents): native-delta fast path. `thinking_delta` events for a
+    // single, unambiguous native reasoning content block carry a pure
+    // transport delta (assistantRecord.delta) — accumulate it directly
+    // instead of re-deriving the whole snapshot via extractAssistantThinking
+    // (map/filter/join over msg.content) on every chunk, which made hot-path
+    // cost grow with the length of the reasoning produced so far. Only
+    // engage when the content block index is present and stable across
+    // chunks; anything ambiguous (no contentIndex, block change mid-message,
+    // thinking_start/thinking_end boundaries) falls back to the original,
+    // fully-general extraction below.
+    const contentIndex =
+      typeof assistantRecord?.contentIndex === "number" ? assistantRecord.contentIndex : undefined;
+    const canUseNativeDeltaFastPath =
+      evtType === "thinking_delta" &&
+      thinkingDelta.length > 0 &&
+      contentIndex !== undefined &&
+      (ctx.state.nativeReasoningContentIndex === undefined ||
+        ctx.state.nativeReasoningContentIndex === contentIndex);
+    if (canUseNativeDeltaFastPath) {
+      if (ctx.state.nativeReasoningContentIndex === undefined) {
+        ctx.state.nativeReasoningContentIndex = contentIndex;
+        ctx.state.nativeReasoningRaw = "";
+      }
+      ctx.state.nativeReasoningRaw = (ctx.state.nativeReasoningRaw ?? "") + thinkingDelta;
+      const trimmed = ctx.state.nativeReasoningRaw.trim();
+      ctx.emitReasoningStream(trimmed, thinkingDelta);
+    } else {
+      // Ambiguous or multi-block: mark the fast path unusable for the rest
+      // of this message (a sentinel distinct from "not yet started") so we
+      // don't flip back and forth between the two accumulators mid-message.
+      if (contentIndex !== undefined && ctx.state.nativeReasoningContentIndex !== contentIndex) {
+        ctx.state.nativeReasoningContentIndex = -1;
+      }
+      // Prefer full partial-message thinking when available; fall back to event payloads.
+      const partialThinking = extractAssistantThinking(msg);
+      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+    }
     if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
       // Mirror the open gate above: when message-tool-only delivery has made the
       // reasoning lane private, do not force-open it just to close it — that

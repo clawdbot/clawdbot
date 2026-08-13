@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -1687,6 +1687,226 @@ describe("subscribeEmbeddedAgentSession", () => {
       outcome: "no_change",
       notify: false,
       summary: "Nothing needs attention.",
+    });
+  });
+
+  // perf(agents): native reasoning delta fast-path regression coverage.
+  // These tests pin the OLD-equivalent event contract (stream:"thinking",
+  // data.text = trimmed snapshot, data.delta = incremental text since the
+  // previous emission) for the accumulator introduced to avoid rebuilding
+  // the whole reasoning snapshot via extractAssistantThinking(msg) on every
+  // thinking_delta chunk.
+  describe("native reasoning delta fast path", () => {
+    afterEach(() => {
+      // Guard against a failed assertion leaving emitAgentEvent mocked,
+      // which would leak fake "thinking" events into subsequent tests.
+      vi.restoreAllMocks();
+    });
+
+    function collectThinkingEvents(emitAgentEventSpy: ReturnType<typeof vi.spyOn>) {
+      return emitAgentEventSpy.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { text?: string; delta?: string } })
+        .filter((evt) => evt?.stream === "thinking");
+    }
+
+    function thinkingDelta(delta: string, contentIndex?: number) {
+      return {
+        type: "message_update" as const,
+        message: {
+          role: "assistant" as const,
+          content: [{ type: "thinking" as const, thinking: delta }],
+        },
+        assistantMessageEvent: {
+          type: "thinking_delta" as const,
+          delta,
+          ...(contentIndex === undefined ? {} : { contentIndex }),
+        },
+      };
+    }
+
+    it('splits ["a ", "b"] into text/delta snapshots identical to full-reconstruction semantics', () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit(thinkingDelta("a ", 0));
+      emit(thinkingDelta("b", 0));
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      expect(events.map((e) => e.data?.text)).toEqual(["a", "a b"]);
+      expect(events.map((e) => e.data?.delta)).toEqual(["a", " b"]);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it('splits ["abc", " ", "def"] preserving internal whitespace in delta', () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit(thinkingDelta("abc", 0));
+      emit(thinkingDelta(" ", 0));
+      emit(thinkingDelta("def", 0));
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      // The whitespace-only middle chunk keeps the trimmed snapshot
+      // identical to the prior emission ("abc".trim() === "abc"), so the
+      // existing dedup (trimmed === lastStreamedReasoning) suppresses it —
+      // this matches OLD behavior exactly, verified against a standalone
+      // reference implementation of extractAssistantThinking + startsWith.
+      expect(events.map((e) => e.data?.text)).toEqual(["abc", "abc def"]);
+      expect(events.map((e) => e.data?.delta)).toEqual(["abc", " def"]);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("does not emit an event for a leading whitespace-only chunk", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit(thinkingDelta("   ", 0));
+      emit(thinkingDelta("Hello", 0));
+      emit(thinkingDelta(" world", 0));
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      expect(events.map((e) => e.data?.text)).toEqual(["Hello", "Hello world"]);
+      expect(events.map((e) => e.data?.delta)).toEqual(["Hello", " world"]);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("falls back to full reconstruction when the content block index changes mid-message", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit(thinkingDelta("First block", 0));
+      // A second, distinct reasoning block starts (different contentIndex):
+      // the fast path must recognize the ambiguity and defer to the
+      // full-message extractor instead of silently concatenating text from
+      // two unrelated blocks.
+      emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "First block" },
+            { type: "thinking", thinking: "Second block" },
+          ],
+        },
+        assistantMessageEvent: { type: "thinking_delta", delta: "Second block", contentIndex: 1 },
+      });
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      expect(events.at(-1)?.data?.text).toBe("First block\nSecond block");
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("falls back to full reconstruction when no transport delta is present", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      // Some providers report only the cumulative `content` snapshot, no
+      // incremental `delta` field on the assistant message event.
+      emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Snapshot only" }],
+        },
+        assistantMessageEvent: { type: "thinking_delta", content: "Snapshot only" },
+      });
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      expect(events.at(-1)?.data?.text).toBe("Snapshot only");
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("closes reasoning correctly on thinking_end after fast-path deltas", () => {
+      const onReasoningEnd = vi.fn();
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+        onReasoningEnd,
+      });
+
+      emit(thinkingDelta("Thinking", 0));
+      emit(thinkingDelta(" more", 0));
+      emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Thinking more" }],
+        },
+        assistantMessageEvent: { type: "thinking_end" },
+      });
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      // thinking_end re-runs the fallback extractor, which reproduces the
+      // same trimmed text already emitted by the fast path — the existing
+      // dedup (trimmed === lastStreamedReasoning) correctly suppresses a
+      // redundant third event (matches OLD: verified against a standalone
+      // reference implementation).
+      expect(events.length).toBe(2);
+      expect(events.at(-1)?.data?.text).toBe("Thinking more");
+      expect(events.at(-1)?.data?.delta).toBe(" more");
+      expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+      emitAgentEventSpy.mockRestore();
+    });
+
+    it("resets the native accumulator between messages (message_start)", () => {
+      const emitAgentEventSpy = vi
+        .spyOn(agentEvents, "emitAgentEvent")
+        .mockImplementation(() => {});
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+      });
+
+      emit(thinkingDelta("First message reasoning", 0));
+      emit({
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      emit(thinkingDelta("Second message reasoning", 0));
+
+      const events = collectThinkingEvents(emitAgentEventSpy);
+      const lastEvent = events.at(-1);
+      // If the accumulator leaked across the reset, the delta would be
+      // empty (nothing new) or the text would contain both messages
+      // concatenated.
+      expect(lastEvent?.data?.text).toBe("Second message reasoning");
+      expect(lastEvent?.data?.delta).toBe("Second message reasoning");
+      emitAgentEventSpy.mockRestore();
     });
   });
 });

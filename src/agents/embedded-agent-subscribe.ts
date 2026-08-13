@@ -232,6 +232,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
+    nativeReasoningRaw: undefined,
+    nativeReasoningTrimmedLen: undefined,
+    nativeReasoningContentIndex: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
@@ -489,6 +492,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
+    state.nativeReasoningRaw = undefined;
+    state.nativeReasoningTrimmedLen = undefined;
+    state.nativeReasoningContentIndex = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
@@ -1274,21 +1280,45 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     })();
   };
 
-  const emitReasoningStream = (text: string) => {
+  const emitReasoningStream = (text: string, knownDelta?: string) => {
     if (params.silentExpected) {
       return;
     }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return;
+    let trimmed: string;
+    let delta: string;
+    if (typeof knownDelta === "string") {
+      // perf(agents): native-delta fast path — the caller has already
+      // maintained an append-only accumulator (state.nativeReasoningRaw) and
+      // guarantees `text` is its trimmed value, so the previously-emitted
+      // snapshot is always a prefix of `text` by construction. Skip the
+      // O(n) startsWith(prior) check and slice using the known prior length
+      // instead of re-deriving it. Avoids rescanning/copying the whole
+      // accumulated reasoning text on every streamed chunk (was O(n^2) over
+      // a long reasoning burst).
+      trimmed = text;
+      if (!trimmed) {
+        return;
+      }
+      if (trimmed === state.lastStreamedReasoning) {
+        return;
+      }
+      const priorLen = state.nativeReasoningTrimmedLen ?? 0;
+      delta = trimmed.slice(priorLen);
+      state.nativeReasoningTrimmedLen = trimmed.length;
+    } else {
+      // Fallback path (unchanged): used for multi-block/ambiguous native
+      // reasoning, the tag-based <think> stream, and the final/end-of-turn
+      // emission, where a reliable incremental accumulator isn't available.
+      trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (trimmed === state.lastStreamedReasoning) {
+        return;
+      }
+      const prior = state.lastStreamedReasoning ?? "";
+      delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     }
-    if (trimmed === state.lastStreamedReasoning) {
-      return;
-    }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim altering earlier content).
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     state.lastStreamedReasoning = trimmed;
 
     // Emit-always: the thinking stream always reaches the bus and session

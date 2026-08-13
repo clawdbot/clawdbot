@@ -135,6 +135,16 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
+  // Native reasoning delta fast-path (perf(agents): avoid O(n^2) rescans in
+  // native thinking_delta hot path). Tracks the raw, unbroken accumulation of
+  // assistantRecord.delta chunks for the single active native reasoning
+  // content block, so emitReasoningStream can compute the emitted delta via
+  // a cheap length-based slice instead of extractAssistantThinking(msg) +
+  // startsWith(prior) on every chunk. Reset whenever the active content
+  // block changes (or is ambiguous) so the fallback path takes over safely.
+  nativeReasoningRaw?: string;
+  nativeReasoningTrimmedLen?: number;
+  nativeReasoningContentIndex?: number;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
@@ -242,7 +252,13 @@ export type EmbeddedAgentSubscribeContext = {
     assistantMessageIndex?: number;
     final?: boolean;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string) => void;
+  // `knownDelta`, when provided, must be the exact accumulated-so-far
+  // computation of `text` minus the previously emitted snapshot (i.e. the
+  // caller has already maintained an append-only accumulator). When set,
+  // emitReasoningStream skips the O(n) startsWith/slice recomputation and
+  // uses it directly. Omit for any case where that invariant cannot be
+  // guaranteed (multi-block, tag-based, or final/fallback emission).
+  emitReasoningStream: (text: string, knownDelta?: string) => void;
   consumeReplyDirectives: (
     text: string,
     options?: { final?: boolean },
