@@ -16,7 +16,6 @@ import {
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
   syncDevicePairSetupCountdown,
-  type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
 import {
   createDeviceAuthMigrationLoader,

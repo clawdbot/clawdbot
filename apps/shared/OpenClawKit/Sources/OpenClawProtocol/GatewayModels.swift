@@ -18143,7 +18143,6 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupid: String?
-    public let expiresatms: Int?
     public let setupcode: String
     public let joinurl: String?
     public let qrdataurl: String?
@@ -18153,10 +18152,10 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let urlsource: String
     public let access: AnyCodable?
     public let accessdowngraded: Bool?
+    public let expiresatms: Int?
 
     public init(
         setupid: String? = nil,
-        expiresatms: Int? = nil,
         setupcode: String,
         joinurl: String? = nil,
         qrdataurl: String? = nil,
@@ -18165,10 +18164,10 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         auth: AnyCodable,
         urlsource: String,
         access: AnyCodable? = nil,
-        accessdowngraded: Bool? = nil)
+        accessdowngraded: Bool? = nil,
+        expiresatms: Int? = nil)
     {
         self.setupid = setupid
-        self.expiresatms = expiresatms
         self.setupcode = setupcode
         self.joinurl = joinurl
         self.qrdataurl = qrdataurl
@@ -18178,11 +18177,11 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         self.urlsource = urlsource
         self.access = access
         self.accessdowngraded = accessdowngraded
+        self.expiresatms = expiresatms
     }
 
     private enum CodingKeys: String, CodingKey {
         case setupid = "setupId"
-        case expiresatms = "expiresAtMs"
         case setupcode = "setupCode"
         case joinurl = "joinUrl"
         case qrdataurl = "qrDataUrl"
@@ -18192,6 +18191,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case urlsource = "urlSource"
         case access
         case accessdowngraded = "accessDowngraded"
+        case expiresatms = "expiresAtMs"
     }
 }
 
