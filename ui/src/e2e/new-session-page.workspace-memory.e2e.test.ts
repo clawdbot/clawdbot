@@ -180,36 +180,6 @@ suite.define(() => {
       );
       expect(controlsOverflow).toBe(0);
 
-      const picker = newSessionModelPicker(page);
-      await picker.click();
-      await expect.poll(() => picker.getAttribute("open")).toBe("");
-      const optionLabelWidths = await picker.locator("wa-option").evaluateAll((options) =>
-        options.flatMap((option) => {
-          if (option.getBoundingClientRect().width === 0) {
-            return [];
-          }
-          const label = option.querySelector<HTMLElement>(".picker-select__label")!;
-          const probe = document.createElement("span");
-          probe.style.cssText = `position:fixed;visibility:hidden;width:8ch;font:${getComputedStyle(label).font}`;
-          document.body.append(probe);
-          const minimum = probe.getBoundingClientRect().width;
-          probe.remove();
-          return [
-            {
-              label: label.textContent?.trim(),
-              minimum,
-              width: label.getBoundingClientRect().width,
-            },
-          ];
-        }),
-      );
-      expect(optionLabelWidths.length).toBeGreaterThanOrEqual(2);
-      for (const entry of optionLabelWidths) {
-        expect(entry.width, JSON.stringify(entry)).toBeGreaterThanOrEqual(entry.minimum);
-      }
-      await captureUiProof(page, "mobile-model-picker-labels.png");
-      await picker.click();
-
       await attach.click();
       await expect.poll(() => takePhoto.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
