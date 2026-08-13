@@ -4,14 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA = "openclaw.plugin-sdk-api-release-evidence/v1";
+const PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA = "openclaw.plugin-sdk-api-release-evidence/v1";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 
 // Release workflows fetch this file directly from their trusted workflow SHA,
 // so it must stay runnable without a workspace install.
-function isRecord(value) {
+function isReleaseEvidenceObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -23,7 +23,7 @@ function assertSha(value, label) {
 
 function diffPayload(diff) {
   if (
-    !isRecord(diff) ||
+    !isReleaseEvidenceObject(diff) ||
     !Array.isArray(diff.entrypointsAdded) ||
     !Array.isArray(diff.entrypointsRemoved) ||
     !Array.isArray(diff.exports) ||
@@ -77,7 +77,10 @@ export function validatePluginSdkApiReleaseEvidence({
   targetPackage,
 }) {
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
-  if (!isRecord(evidence) || evidence.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA) {
+  if (
+    !isReleaseEvidenceObject(evidence) ||
+    evidence.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA
+  ) {
     throw new Error("Plugin SDK API release evidence is missing or invalid");
   }
   if (evidence.status === "unavailable") {
