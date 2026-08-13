@@ -248,7 +248,7 @@ async function updateCommandInternal(
   }
 
   const installKind = updateStatus.installKind;
-  const selectedChannel =
+  const channel =
     requestedChannel ??
     storedChannel ??
     (installKind === "git"
@@ -257,7 +257,7 @@ async function updateCommandInternal(
           currentVersion: VERSION,
           installKind,
         }).channel);
-  if (selectedChannel === "extended-stable" && installKind === "git") {
+  if (channel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
       installKind,
@@ -267,19 +267,12 @@ async function updateCommandInternal(
     });
     return;
   }
-  const switchToGit = requestedChannel === "dev" && installKind !== "git";
+  // The effective dev channel (stored or explicit) must select the git flow:
+  // npm publishes no "dev" dist-tag, so a package-mode dev update can only fail.
+  const switchToGit = channel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
-  const channel =
-    requestedChannel ??
-    storedChannel ??
-    (updateInstallKind === "git"
-      ? DEFAULT_GIT_CHANNEL
-      : resolveEffectiveUpdateChannel({
-          currentVersion: VERSION,
-          installKind: updateInstallKind,
-        }).channel);
   if (channel === "dev" && requestedChannel !== "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {

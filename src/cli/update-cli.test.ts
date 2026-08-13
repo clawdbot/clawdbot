@@ -3872,6 +3872,14 @@ describe("update-cli", () => {
       expectedPersistedChannel: undefined,
     },
     {
+      name: "routes a stored dev channel on package installs to the git update flow",
+      installKind: "package" as const,
+      options: { yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: "dev" as const,
+      expectedPersistedChannel: undefined,
+    },
+    {
       name: "switches git installs to package mode for explicit beta and persists it",
       installKind: "git" as const,
       options: { channel: "beta" },
@@ -3884,7 +3892,8 @@ describe("update-cli", () => {
     async ({ installKind, options, storedChannel, expectedChannel, expectedPersistedChannel }) => {
       if (installKind === "package") {
         mockPackageInstallStatus(createCaseDir("openclaw-update"));
-      } else {
+      }
+      if (installKind === "git" || expectedChannel !== undefined) {
         vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode: "git" }));
       }
       if (storedChannel) {
