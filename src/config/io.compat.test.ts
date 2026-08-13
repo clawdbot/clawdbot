@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
@@ -39,7 +40,15 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
-  return withTempDir("openclaw-config-compat-", run);
+  return withTempDir("openclaw-config-compat-", async (home) => {
+    try {
+      return await run(home);
+    } finally {
+      // Config observation opens the shared SQLite DB under this temp home.
+      // Close it before Windows tries to remove the directory tree.
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
 }
 
 async function writeConfig(

@@ -273,6 +273,10 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs config IO compatibility cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain("src/config/io.compat.test.ts");
+  });
+
   it("runs snapshot repository verification coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/snapshot/local-repository.windows.test.ts",

@@ -4,6 +4,13 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes config IO compatibility cleanup coverage to Windows", () => {
+    expect(detectChangedScope(["src/config/io.compat.test.ts"])).toMatchObject({
+      runNode: true,
+      runWindows: true,
+    });
+  });
+
   it("routes SQLite transcript archive changes to Windows", () => {
     for (const archivePath of [
       "src/config/sessions/session-accessor.sqlite-archive.ts",
