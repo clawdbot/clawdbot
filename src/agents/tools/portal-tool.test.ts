@@ -15,6 +15,8 @@ import type {
 } from "./in-process-gateway.js";
 import { createPortalTool } from "./portal-tool.js";
 
+type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
+
 const portal: PortalSummary = {
   id: "p3000",
   title: "App",
@@ -27,7 +29,7 @@ const portal: PortalSummary = {
 };
 
 function recorder() {
-  const calls: Array<[string, Record<string, unknown>]> = [];
+  const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
   const reply = <T>(method: string): T => {
     if (method === "portal.list") {
@@ -45,11 +47,9 @@ function recorder() {
     calls.push([method, params]);
     return reply<T>(method);
   };
-  const callGatewayRequest: AgentToolGatewayRequestCaller = async <T>(request: {
-    method: string;
-    params?: Record<string, unknown>;
-    scopes?: readonly string[];
-  }): Promise<T> => {
+  const callGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+    request: AgentToolGatewayRequest,
+  ): Promise<T> => {
     calls.push([request.method, request.params ?? {}]);
     requestScopes.push([request.method, request.scopes]);
     return reply<T>(request.method);
