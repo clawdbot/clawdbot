@@ -116,6 +116,11 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  /** Navigates and resolves after any route-specific handoff completes. */
+  readonly navigateAndWait: (
+    routeId: TRouteId,
+    options?: ApplicationNavigationOptions,
+  ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
   readonly preload: (routeId: TRouteId) => Promise<void>;
