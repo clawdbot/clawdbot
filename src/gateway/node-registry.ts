@@ -1034,7 +1034,8 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
-      forgetNodeWorkerSupervisorProtocolFeatures(this, node.connId);
+      // Protocol features describe this exact live process. Keep the connection
+      // declaration while private proof resolution binds the new generation.
       settleNodeRegistryPairingGenerationChange({
         registry: this,
         nodeId,

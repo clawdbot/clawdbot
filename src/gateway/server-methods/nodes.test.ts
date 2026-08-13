@@ -7,6 +7,8 @@ import {
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
+  isPairedDeviceNodeBindingCurrent,
+  resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
 import {
@@ -42,8 +44,8 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeHandlers } from "./nodes.js";
+import { createWorkerSupervisorNodeClient } from "./nodes.protocol-features.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const createdStates: OpenClawTestState[] = [];
@@ -201,172 +203,6 @@ describe("nodeHandlers node.skills.update", () => {
       { nodeId: "node-1", skills: [skill] },
       undefined,
     );
-  });
-});
-
-function protocolFeatureNodeClient(connId = "conn-1"): GatewayWsClient {
-  return {
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: {
-      readyState: 1,
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    } as unknown as GatewayWsClient["socket"],
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "test",
-        platform: "linux",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-      device: { id: "node-1" },
-      caps: [],
-      commands: ["system.run"],
-    } as unknown as GatewayWsClient["connect"],
-  };
-}
-
-describe("nodeHandlers node.protocolFeatures.update", () => {
-  it("publishes the closed worker dialect for the exact authenticated node session", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = protocolFeatureNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    const { context, opts } = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
-      { client: client as never },
-    );
-    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
-
-    await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    )(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingGeneration: "generation-1",
-      }),
-    ]);
-    runtime.nodeRegistry.unregister("conn-1");
-  });
-
-  it("stays retryable until same-connection pairing promotion can bind the proof", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = protocolFeatureNodeClient();
-    runtime.nodeRegistry.register(client, { pairingIdentity: "identity-1" });
-    const { context, opts } = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
-      { client: client as never },
-    );
-    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
-    const handler = expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    );
-
-    await handler(opts);
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
-
-    expect(
-      runtime.nodeRegistry.updateSurface(
-        "node-1",
-        { commands: ["system.run"] },
-        {
-          expectedConnId: "conn-1",
-          expectedPairingIdentity: "identity-1",
-          nextPairingGeneration: "generation-1",
-        },
-      ),
-    ).not.toBeNull();
-    vi.mocked(opts.respond).mockClear();
-    await handler(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ pairingGeneration: "generation-1" }),
-    ]);
-    runtime.nodeRegistry.unregister("conn-1");
-  });
-
-  it.each([
-    { name: "missing list", params: {} },
-    { name: "extra key", params: { protocolFeatures: [], extra: true } },
-    { name: "non-array", params: { protocolFeatures: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } },
-    {
-      name: "too many",
-      params: {
-        protocolFeatures: [
-          NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        ],
-      },
-    },
-    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v2"] } },
-  ])("rejects $name without changing private eligibility", async ({ params }) => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = protocolFeatureNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    const { context, opts } = createOptions(params, { client: client as never });
-    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
-
-    await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    )(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
-    runtime.nodeRegistry.unregister("conn-1");
-  });
-
-  it("rejects a stale connection without replacing the current session proof", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const current = protocolFeatureNodeClient("conn-current");
-    runtime.nodeRegistry.register(current, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    const stale = protocolFeatureNodeClient("conn-stale");
-    const { context, opts } = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
-      { client: stale as never },
-    );
-    Object.assign(context, { nodeRegistry: runtime.nodeRegistry });
-
-    await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    )(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
-    runtime.nodeRegistry.unregister("conn-current");
   });
 });
 
@@ -545,6 +381,73 @@ describe("nodeHandlers node.pair.approve", () => {
       expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
       undefined,
     );
+  });
+
+  it("keeps private worker eligibility across exact live reapproval", async () => {
+    const state = await createState("node-approve-retains-worker-dialect");
+    const nodeId = "node-1";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
+    const previousState = await captureNodePairingState(nodeId);
+    expect(previousState?.generation).not.toBeNull();
+
+    const runtime = createNodeRegistryRuntime(
+      () =>
+        new NodeRegistry({
+          resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
+          isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+        }),
+    );
+    const client = createWorkerSupervisorNodeClient("conn-surface-reapproval");
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: previousState?.identity.key ?? "",
+      pairingGeneration: previousState?.generation?.key,
+    });
+    const publication = createOptions(
+      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      { client: client as never },
+    );
+    Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.protocolFeatures.update"],
+      'nodeHandlers["node.protocolFeatures.update"] test invariant',
+    )(publication.opts);
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ pairingGeneration: previousState?.generation?.key }),
+    ]);
+
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "linux",
+        deviceFamily: "Linux",
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        displayName: "Worker host reapproved",
+      },
+      state.stateDir,
+    );
+    const approval = createOptions({ requestId: pending.request.requestId });
+    Object.assign(approval.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(approval.opts);
+
+    const nextGeneration = await captureNodePairingGeneration(nodeId);
+    expect(nextGeneration?.key).not.toBe(previousState?.generation?.key);
+    expect(approval.opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({
+        connId: "conn-surface-reapproval",
+        pairingGeneration: nextGeneration?.key,
+      }),
+    ]);
+    runtime.nodeRegistry.unregister("conn-surface-reapproval");
   });
 
   it("does not promote a session authenticated before external device reapproval", async () => {

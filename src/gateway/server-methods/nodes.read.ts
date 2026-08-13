@@ -367,20 +367,6 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = normalizeOptionalString(client?.connect?.device?.id);
-    const nodeSession = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
-    if (
-      protocolFeatures.length > 0 &&
-      nodeSession &&
-      nodeSession.connId === client?.connId &&
-      !nodeSession.pairingGeneration
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "node pairing generation unavailable"),
-      );
-      return;
-    }
     if (
       !nodeId ||
       !updateNodeWorkerSupervisorProtocolFeatures({

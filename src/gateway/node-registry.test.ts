@@ -376,8 +376,19 @@ describe("gateway/node-registry", () => {
         },
       ),
     ).not.toBeNull();
-    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ pairingGeneration: "generation-b" }),
+    ]);
 
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-2", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-b" },
+    );
+    await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     expect(
       updateNodeWorkerSupervisorProtocolFeatures({
         registry: nodeRegistry,
@@ -385,9 +396,17 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       }),
+    ).toBe(false);
+    expect(
+      updateNodeWorkerSupervisorProtocolFeatures({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-2",
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      }),
     ).toBe(true);
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ pairingGeneration: "generation-b" }),
+      expect.objectContaining({ connId: "conn-2", pairingGeneration: "generation-b" }),
     ]);
   });
 

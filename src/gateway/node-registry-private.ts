@@ -82,7 +82,10 @@ export type NodeWorkerSupervisorTransport = {
   }): Promise<NodeInvokeResult>;
 };
 
-type NodeProtocolFeatureProof = Omit<NodeWorkerSupervisorNodeProof, "commands"> & {
+type NodeProtocolFeatureDeclaration = Omit<
+  NodeWorkerSupervisorNodeProof,
+  "commands" | "pairingGeneration"
+> & {
   protocolFeatures: readonly string[];
 };
 
@@ -115,7 +118,7 @@ type GenerationBoundPendingInvoke = {
 
 type NodeRegistryPrivateState = {
   context: NodeRegistryPrivateContext;
-  protocolFeaturesByConn: Map<string, NodeProtocolFeatureProof>;
+  protocolFeaturesByConn: Map<string, NodeProtocolFeatureDeclaration>;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
   invokeCore: (params: NodeInvokeParams, allowPrivateCommand: boolean) => Promise<NodeInvokeResult>;
   updateProtocolFeatures: (params: {
@@ -174,22 +177,21 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
 
 function resolveWorkerSupervisorProof(
   node: NodeRegistryPrivateSession,
-  protocolFeaturesByConn: ReadonlyMap<string, NodeProtocolFeatureProof>,
+  protocolFeaturesByConn: ReadonlyMap<string, NodeProtocolFeatureDeclaration>,
 ): NodeWorkerSupervisorNodeProof | undefined {
-  const proof = protocolFeaturesByConn.get(node.connId);
+  const declaration = protocolFeaturesByConn.get(node.connId);
   if (
-    !proof ||
+    !declaration ||
     !node.pairingIdentity ||
     !node.pairingGeneration ||
     node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
     node.clientMode !== "node" ||
-    proof.nodeId !== node.nodeId ||
-    proof.pairingIdentity !== node.pairingIdentity ||
-    proof.pairingGeneration !== node.pairingGeneration ||
-    proof.clientId !== node.clientId ||
-    proof.clientMode !== node.clientMode ||
-    proof.protocolFeature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
-    !proof.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE)
+    declaration.nodeId !== node.nodeId ||
+    declaration.pairingIdentity !== node.pairingIdentity ||
+    declaration.clientId !== node.clientId ||
+    declaration.clientMode !== node.clientMode ||
+    declaration.protocolFeature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
+    !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE)
   ) {
     return undefined;
   }
@@ -232,7 +234,6 @@ function updateWorkerSupervisorProtocolFeatures(
   },
 ): boolean {
   const node = state.context.getNode(params.nodeId);
-  const pairingGeneration = node?.pairingGeneration;
   const publishesSupervisorDialect = params.protocolFeatures.includes(
     NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   );
@@ -241,8 +242,7 @@ function updateWorkerSupervisorProtocolFeatures(
     node.client.invalidated === true ||
     node.connId !== params.connId ||
     node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
-    node.clientMode !== "node" ||
-    (publishesSupervisorDialect && !pairingGeneration)
+    node.clientMode !== "node"
   ) {
     return false;
   }
@@ -251,14 +251,10 @@ function updateWorkerSupervisorProtocolFeatures(
     state.context.publishActiveNodeContext();
     return true;
   }
-  if (!pairingGeneration) {
-    return false;
-  }
   state.protocolFeaturesByConn.set(node.connId, {
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
-    pairingGeneration,
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
