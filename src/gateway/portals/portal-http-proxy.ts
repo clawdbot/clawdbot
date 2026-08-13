@@ -19,6 +19,10 @@ function portalAuthCookieName(listenPort: number): string {
 // Cookies are hostname-scoped, not port-scoped. Per-target prefixes keep Gateway
 // and sibling portal cookies from leaking into an agent-run application.
 const PORTAL_COOKIE_PREFIX = "oc_portal_";
+// The portal URL carries the bearer token in its query, so the browser must never
+// attach it as a Referer. The target controls its own response headers, so this is
+// forced after upstream headers are copied rather than merely defaulted.
+const PORTAL_REFERRER_POLICY = "no-referrer";
 const MAX_WEBSOCKET_RESPONSE_HEADER_BYTES = 64 * 1024;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -178,6 +182,7 @@ function htmlResponse(
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
   res.setHeader("Content-Length", String(Buffer.byteLength(html)));
   res.end(headOnly ? undefined : html);
 }
@@ -224,6 +229,11 @@ function proxyHeaders(headers: IncomingHttpHeaders, targetPort?: number): Outgoi
       if (cookie) {
         result.cookie = cookie;
       }
+      continue;
+    }
+    // A referrer that still carries the bearer query would hand the target the
+    // credential it is being kept away from; drop it rather than forward it.
+    if (normalized === "referer" && String(value).includes(`${PORTAL_AUTH_NAME}=`)) {
       continue;
     }
     result[normalized] = value;
@@ -273,6 +283,9 @@ export function handlePortalProxyRequest(params: {
         setProxyResponseHeader(res, name, value, target.targetPort);
       }
     }
+    // Overwrite, never default: a target answering with `unsafe-url` would otherwise
+    // send the token-bearing portal URL to every third-party origin it references.
+    res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
     res.statusCode = proxyRes.statusCode ?? 502;
     proxyRes.pipe(res);
   });
@@ -305,6 +318,9 @@ function websocketHeaders(req: IncomingMessage, targetPort: number, requestPath:
       if (cookie) {
         lines.push(`cookie: ${cookie}`);
       }
+      continue;
+    }
+    if (normalized === "referer" && String(value).includes(`${PORTAL_AUTH_NAME}=`)) {
       continue;
     }
     for (const item of Array.isArray(value) ? value : [value]) {

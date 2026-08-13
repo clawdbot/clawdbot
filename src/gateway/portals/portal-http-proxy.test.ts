@@ -351,6 +351,34 @@ describe("portal HTTP proxy", () => {
     expect(receivedCookiesB).toEqual([undefined, "session=b"]);
   });
 
+  it("forces no-referrer and never forwards a token-bearing referrer", async () => {
+    let receivedReferer: string | undefined;
+    targetHandler = (req, res) => {
+      receivedReferer = req.headers.referer;
+      // A hostile or careless target must not be able to widen the policy.
+      res.setHeader("Referrer-Policy", "unsafe-url");
+      res.statusCode = 200;
+      res.end("proxied");
+    };
+    const portal = await portalService().open({ targetPort });
+    const token = portal.tokenQuery.slice("openclaw_portal=".length);
+
+    const result = await httpCall({
+      port: portal.listenPort,
+      headers: {
+        Cookie: `openclaw_portal_${portal.listenPort}=${token}`,
+        Referer: `http://127.0.0.1:${portal.listenPort}/?${portal.tokenQuery}`,
+      },
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.headers["referrer-policy"]).toBe("no-referrer");
+    expect(receivedReferer).toBeUndefined();
+
+    const unauthorized = await httpCall({ port: portal.listenPort });
+    expect(unauthorized.headers["referrer-policy"]).toBe("no-referrer");
+  });
+
   it("streams POST bodies to the target", async () => {
     let body = "";
     targetHandler = (req, res) => {
