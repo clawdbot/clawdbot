@@ -916,12 +916,16 @@ describe("gateway session utils", () => {
       store: {
         upper: {
           sessionId: "upper",
+          providerOverride: "custom",
+          modelOverride: "CaseModel",
           modelProvider: "custom",
           model: "CaseModel",
           updatedAt: 2,
         } satisfies SessionEntry,
         lower: {
           sessionId: "lower",
+          providerOverride: "custom",
+          modelOverride: "casemodel",
           modelProvider: "custom",
           model: "casemodel",
           updatedAt: 1,
@@ -3359,7 +3363,7 @@ describe("listSessionsFromStore selected model display", () => {
     });
   });
 
-  test("infers canonical provider for bare CLI models before default-provider fallback", () => {
+  test("ignores bare CLI runtime metadata when the selected default differs", () => {
     const cfg = createModelDefaultsConfig({
       primary: "openai/gpt-5.4",
       models: {
@@ -3382,8 +3386,8 @@ describe("listSessionsFromStore selected model display", () => {
       opts: {},
     });
 
-    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
-    expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+    expect(result.sessions[0]?.modelProvider).toBe("openai");
+    expect(result.sessions[0]?.model).toBe("gpt-5.4");
   });
 
   test("uses qualified selected defaults for rows without runtime model metadata", () => {
@@ -3435,7 +3439,7 @@ describe("listSessionsFromStore selected model display", () => {
     ]);
   });
 
-  test("uses persisted runtime model metadata before selected defaults", () => {
+  test("uses selected defaults before persisted runtime model metadata", () => {
     const cfg = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },
@@ -3457,8 +3461,8 @@ describe("listSessionsFromStore selected model display", () => {
       opts: {},
     });
 
-    expect(result.sessions[0]?.modelProvider).toBe("openai");
-    expect(result.sessions[0]?.model).toBe("gpt-5.5");
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
   });
 
   test("uses complete model overrides without default-model fallback", () => {

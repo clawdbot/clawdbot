@@ -1753,6 +1753,8 @@ describe("session.message websocket events", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
           modelProvider: "openai",
           model: "gpt-5.4",
           contextTokens: 123_456,

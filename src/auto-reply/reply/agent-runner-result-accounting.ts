@@ -253,7 +253,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
     isHeartbeat,
-    preserveRuntimeModel: fallbackExhausted,
+    preserveRuntimeModel:
+      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,
