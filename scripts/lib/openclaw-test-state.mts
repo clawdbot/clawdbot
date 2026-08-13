@@ -127,6 +127,7 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
         },
       },
       agents: {
+        ownership: "explicit",
         defaults: {
           model: {
             primary: "openai/gpt-5.6-luna",
@@ -136,7 +137,6 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
         },
         entries: {
           main: {
-            default: true,
             name: "Main",
             workspace: "~/workspace",
             model: {
@@ -176,10 +176,8 @@ function scenarioConfig(scenario: string, options: TestStateOptions = {}) {
         discord: {
           enabled: true,
           token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["111111111111111111"],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["111111111111111111"],
           groupPolicy: "allowlist",
           guilds: {
             "222222222222222222": {
@@ -472,6 +470,7 @@ OPENCLAW_TEST_STATE_JSON
     }
   },
   "agents": {
+    "ownership": "explicit",
     "defaults": {
       "model": {
         "primary": "openai/gpt-5.6-luna"
@@ -481,10 +480,8 @@ OPENCLAW_TEST_STATE_JSON
         "memory"
       ]
     },
-    "list": [
-      {
-        "id": "main",
-        "default": true,
+    "entries": {
+      "main": {
         "name": "Main",
         "workspace": "~/workspace",
         "model": {
@@ -496,8 +493,7 @@ OPENCLAW_TEST_STATE_JSON
         ],
         "contextTokens": 64000
       },
-      {
-        "id": "ops",
+      "ops": {
         "name": "Ops",
         "workspace": "~/workspace/ops",
         "model": {
@@ -505,7 +501,7 @@ OPENCLAW_TEST_STATE_JSON
         },
         "fastModeDefault": true
       }
-    ]
+    }
   },
   "skills": {
     "allowBundled": [
@@ -545,12 +541,10 @@ OPENCLAW_TEST_STATE_JSON
         "provider": "default",
         "id": "DISCORD_BOT_TOKEN"
       },
-      "dm": {
-        "policy": "allowlist",
-        "allowFrom": [
-          "111111111111111111"
-        ]
-      },
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "111111111111111111"
+      ],
       "groupPolicy": "allowlist",
       "guilds": {
         "222222222222222222": {

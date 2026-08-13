@@ -146,6 +146,21 @@ describe("upgrade survivor config recipe command resolution", () => {
     ]);
   });
 
+  it("pins the shipped v2026.7.1-2 agent and Discord aliases", () => {
+    const recipeRoot = join(process.cwd(), "scripts/e2e/lib/upgrade-survivor/config-recipe");
+    const agents = JSON.parse(readFileSync(join(recipeRoot, "agents.json"), "utf8"));
+    const discord = JSON.parse(readFileSync(join(recipeRoot, "channels-discord.json"), "utf8"));
+
+    expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
+    expect(agents.list[0]).toMatchObject({ id: "main", default: true });
+    expect(agents).not.toHaveProperty("entries");
+    expect(discord.dm).toEqual({
+      policy: "allowlist",
+      allowFrom: ["111111111111111111"],
+    });
+    expect(discord).not.toHaveProperty("dmPolicy");
+  });
+
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();

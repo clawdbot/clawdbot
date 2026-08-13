@@ -1,5 +1,5 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -444,6 +444,118 @@ describe("upgrade survivor assertions", () => {
         expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
         expect(timestamp).toBeLessThanOrEqual(afterSeed);
       }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires canonical agent and Discord config after Doctor", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-stage-"));
+    try {
+      const configPath = join(root, "openclaw.json");
+      const coveragePath = join(root, "coverage.json");
+      writeJson(coveragePath, {
+        acceptedIntents: ["agents", "discord-channel"],
+        skippedIntents: [],
+      });
+      const discord = {
+        enabled: true,
+        groupPolicy: "allowlist",
+        guilds: {
+          "222222222222222222": {
+            channels: { "333333333333333333": { requireMention: true } },
+          },
+        },
+        threadBindings: { idleHours: 72 },
+      };
+      const legacy = {
+        agents: {
+          defaults: { contextTokens: 64000 },
+          list: [
+            { id: "main", default: true, contextTokens: 64000 },
+            { id: "ops", fastModeDefault: true },
+          ],
+        },
+        channels: {
+          discord: {
+            ...discord,
+            dm: { policy: "allowlist", allowFrom: ["111111111111111111"] },
+          },
+        },
+      };
+      const canonical = {
+        agents: {
+          ownership: "explicit",
+          defaults: { contextTokens: 64000 },
+          entries: {
+            main: { contextTokens: 64000 },
+            ops: { fastModeDefault: true },
+          },
+        },
+        channels: {
+          discord: {
+            ...discord,
+            dmPolicy: "allowlist",
+            allowFrom: ["111111111111111111"],
+          },
+        },
+      };
+      const run = (config: unknown, stage: "baseline" | "survival") => {
+        writeJson(configPath, config);
+        return spawnSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+            OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+          },
+        });
+      };
+
+      expect(run(legacy, "baseline").status).toBe(0);
+      expect(run(legacy, "survival").status).not.toBe(0);
+      expect(run(canonical, "survival").status).toBe(0);
+
+      expect(
+        run(
+          {
+            ...canonical,
+            agents: {
+              ...canonical.agents,
+              entries: {
+                ...canonical.agents.entries,
+                main: { ...canonical.agents.entries.main, default: true },
+              },
+            },
+          },
+          "survival",
+        ).status,
+      ).not.toBe(0);
+
+      const {
+        allowFrom: _allowFrom,
+        dmPolicy: _dmPolicy,
+        ...discordWithoutCanonicalDm
+      } = canonical.channels.discord;
+      expect(
+        run(
+          {
+            ...canonical,
+            channels: {
+              discord: {
+                ...discordWithoutCanonicalDm,
+                dm: {
+                  policy: "allowlist",
+                  allowFrom: ["111111111111111111"],
+                },
+              },
+            },
+          },
+          "survival",
+        ).status,
+      ).not.toBe(0);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

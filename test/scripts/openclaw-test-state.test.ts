@@ -233,11 +233,17 @@ describe("scripts/lib/openclaw-test-state", () => {
           source: "env",
         },
       });
+      expect(payload.config.agents.ownership).toBe("explicit");
+      expect(Object.keys(payload.config.agents.entries)).toEqual(["main", "ops"]);
+      expect(payload.config.agents).not.toHaveProperty("list");
+      for (const agent of Object.values(payload.config.agents.entries)) {
+        expect(agent).not.toHaveProperty("default");
+      }
       expect(payload.config.channels.discord.enabled).toBe(true);
-      expect(payload.config.channels.discord.dm).toStrictEqual({
-        allowFrom: ["111111111111111111"],
-        policy: "allowlist",
-      });
+      expect(payload.config.channels.discord.dmPolicy).toBe("allowlist");
+      expect(payload.config.channels.discord.allowFrom).toEqual(["111111111111111111"]);
+      expect(payload.config.channels.discord.dm?.policy).toBeUndefined();
+      expect(payload.config.channels.discord.dm?.allowFrom).toBeUndefined();
       expect(payload.config.channels.telegram.enabled).toBe(true);
       expect(payload.config.channels.whatsapp.enabled).toBe(true);
     } finally {
@@ -272,6 +278,22 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
       expect(payload.secretKey).toMatch(secretKeyPattern);
       expect(payload.config).toStrictEqual({});
+
+      const upgradeProbe = await execFileAsync("bash", [
+        "-lc",
+        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "upgrade-function-tmp"))}; source ${shellQuote(snippetFile)}; openclaw_test_state_create "upgrade case" upgrade-survivor; node -e 'const fs=require("node:fs"); process.stdout.write(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8"));'`,
+      ]);
+      const upgradeConfig = JSON.parse(upgradeProbe.stdout);
+      expect(upgradeConfig.agents.ownership).toBe("explicit");
+      expect(Object.keys(upgradeConfig.agents.entries)).toEqual(["main", "ops"]);
+      expect(upgradeConfig.agents).not.toHaveProperty("list");
+      for (const agent of Object.values(upgradeConfig.agents.entries)) {
+        expect(agent).not.toHaveProperty("default");
+      }
+      expect(upgradeConfig.channels.discord.dmPolicy).toBe("allowlist");
+      expect(upgradeConfig.channels.discord.allowFrom).toEqual(["111111111111111111"]);
+      expect(upgradeConfig.channels.discord.dm?.policy).toBeUndefined();
+      expect(upgradeConfig.channels.discord.dm?.allowFrom).toBeUndefined();
 
       const trailingTmpDir = path.join(tempRoot, "function-trailing-tmp");
       const trailingProbe = await execFileAsync("bash", [

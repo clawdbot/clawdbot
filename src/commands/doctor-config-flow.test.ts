@@ -1723,13 +1723,10 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
-  it("materializes ambient roles for a multi-agent configured default", async () => {
+  it("materializes ambient roles for the shipped multi-agent list default", async () => {
     const rawConfig = {
       agents: {
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
+        list: [{ id: "main", default: true }, { id: "ops" }],
       },
       channels: { telegram: { enabled: true } },
       talk: { provider: "test" },
@@ -1744,16 +1741,25 @@ describe("doctor config flow", () => {
 
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.cfg.bindings).toEqual([
-      { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+      { agentId: "main", match: { channel: "telegram", accountId: "*" } },
     ]);
     expect(result.cfg.agents?.defaults).toMatchObject({
-      heartbeat: { agentId: "ops" },
-      systemAgent: { agentId: "ops" },
-      authInheritance: { agentId: "ops" },
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
     });
-    expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "ops" });
-    expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(result.cfg.agents?.defaults?.authInheritance).toBeUndefined();
+    expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "main" });
+    expect(result.cfg.agents).not.toHaveProperty("list");
+    expect(result.cfg.agents?.entries?.main).not.toHaveProperty("default");
     expect(result.cfg.agents?.ownership).toBe("explicit");
+
+    const secondRun = await runDoctorConfigWithInput({
+      config: result.cfg,
+      parsedConfig: result.cfg,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(secondRun.shouldWriteConfig).toBe(false);
   });
 
   it("preserves shared all-agent heartbeat enrollment during materialization", async () => {

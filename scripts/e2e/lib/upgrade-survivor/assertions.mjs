@@ -407,11 +407,22 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "agents")) {
+    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
     const legacyAgents = config.agents?.list ?? [];
-    const mainAgent =
-      config.agents?.entries?.main ?? legacyAgents.find((agent) => agent?.id === "main");
-    const opsAgent =
-      config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
+    const entries = config.agents?.entries;
+    if (stage !== "baseline") {
+      assert(config.agents?.ownership === "explicit", "agent ownership was not canonicalized");
+      assert(entries && typeof entries === "object", "keyed agent entries missing after Doctor");
+      assert(!Object.hasOwn(config.agents ?? {}, "list"), "legacy agent list survived Doctor");
+      for (const entry of Object.values(entries ?? {})) {
+        assert(
+          !Object.hasOwn(entry ?? {}, "default"),
+          "legacy agent default marker survived Doctor",
+        );
+      }
+    }
+    const mainAgent = entries?.main ?? legacyAgents.find((agent) => agent?.id === "main");
+    const opsAgent = entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
     if (hasCoverage(coverage)) {
@@ -467,10 +478,23 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "discord-channel")) {
+    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
     const discord = config.channels?.discord;
     assert(discord?.enabled === true, "discord enabled flag changed");
-    const discordAllowFrom = discord.allowFrom ?? discord.dm?.allowFrom;
-    const discordDmPolicy = discord.dmPolicy ?? discord.dm?.policy;
+    const discordAllowFrom =
+      stage === "baseline" ? (discord.allowFrom ?? discord.dm?.allowFrom) : discord.allowFrom;
+    const discordDmPolicy =
+      stage === "baseline" ? (discord.dmPolicy ?? discord.dm?.policy) : discord.dmPolicy;
+    if (stage !== "baseline") {
+      assert(
+        !Object.hasOwn(discord.dm ?? {}, "policy"),
+        "legacy Discord DM policy survived Doctor",
+      );
+      assert(
+        !Object.hasOwn(discord.dm ?? {}, "allowFrom"),
+        "legacy Discord allowFrom survived Doctor",
+      );
+    }
     assert(discordDmPolicy === "allowlist", "discord DM policy changed");
     assert(
       Array.isArray(discordAllowFrom) && discordAllowFrom.includes("111111111111111111"),
