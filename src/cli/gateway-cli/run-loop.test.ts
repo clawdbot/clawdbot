@@ -776,7 +776,7 @@ describe("runGatewayLoop", () => {
           );
 
           expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
-          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
           expect(close).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
 
@@ -811,7 +811,7 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "gateway active-work drain timeout reached; proceeding with shutdown: 2 active embedded run(s)",
       );
@@ -833,7 +833,7 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "gateway active-work drain failed; proceeding with shutdown: active-work drain unavailable",
       );
@@ -1498,7 +1498,7 @@ describe("runGatewayLoop", () => {
         expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
         expect(runtime.exit).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(24_999);
+        await vi.advanceTimersByTimeAsync(324_999);
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
 
