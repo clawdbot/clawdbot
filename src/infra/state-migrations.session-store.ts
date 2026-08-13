@@ -616,9 +616,11 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const persistedStoreAgentId =
+    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
   const persistedStorePath =
-    persistedStoreOwner.kind === "configured" && storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, persistedStoreOwner.agentId, env)
+    persistedStoreAgentId && storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, persistedStoreAgentId, env)
       : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
@@ -638,8 +640,8 @@ export async function migrateOrphanedSessionKeys(params: {
     // A fixed-store owner is durable migration provenance. Keep other configured
     // agents from making that store's unscoped rows look ambiguous.
     const ownerId =
-      persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
-        ? persistedStoreOwner.agentId
+      persistedStoreAgentId && persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
+        ? persistedStoreAgentId
         : id;
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
