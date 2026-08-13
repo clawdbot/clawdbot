@@ -3,7 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteSchemaContains,
+  collectSqliteNamedIndexContract,
   collectSqliteSchemaIssues,
+  getCanonicalSqliteNamedIndexContracts,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
@@ -81,7 +83,7 @@ CREATE INDEX idx_commitments_agent_sent
   ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
-const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL = `
+const SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL = `
 CREATE TABLE commitments (
   id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -91,22 +93,22 @@ CREATE TABLE commitments (
   recipient_id TEXT,
   thread_id TEXT,
   sender_id TEXT,
-  kind TEXT NOT NULL DEFAULT 'followup',
-  sensitivity TEXT NOT NULL DEFAULT 'normal',
-  source TEXT NOT NULL DEFAULT 'unknown',
+  kind TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  source TEXT NOT NULL,
   status TEXT NOT NULL,
-  reason TEXT NOT NULL DEFAULT '',
-  suggested_text TEXT NOT NULL DEFAULT '',
-  dedupe_key TEXT NOT NULL DEFAULT '',
-  confidence REAL NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL,
+  suggested_text TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  confidence REAL NOT NULL,
   due_earliest_ms INTEGER NOT NULL,
   due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL DEFAULT 'UTC',
+  due_timezone TEXT NOT NULL,
   source_message_id TEXT,
   source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL,
   last_attempt_at_ms INTEGER,
   sent_at_ms INTEGER,
   dismissed_at_ms INTEGER,
@@ -118,21 +120,16 @@ CREATE INDEX idx_commitments_scope_due
   ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
 CREATE INDEX idx_commitments_status_due
   ON commitments(status, due_earliest_ms, due_latest_ms);
-CREATE INDEX idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
 CREATE INDEX idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
-CREATE INDEX idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
-const RETIRED_COMMITMENTS_INDEX_NAMES = [
-  "idx_commitments_agent_due",
-  "idx_commitments_agent_sent",
-  "idx_commitments_scope_dedupe",
-  "idx_commitments_scope_due",
-  "idx_commitments_status_due",
-] as const;
+const RETIRED_COMMITMENTS_INDEX_FINGERPRINTS = new Map(
+  getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
+    ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
+  ),
+);
+const RETIRED_COMMITMENTS_INDEX_NAMES = [...RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.keys()];
 
 const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.account_id",
@@ -178,11 +175,6 @@ const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
 };
 
-const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
-  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
-  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
-};
-
 function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
@@ -201,9 +193,11 @@ function hasSupportedRetiredCommitmentsSchema(
           ORDER BY type, name`,
     )
     .all() as Array<{ name: string; type: string }>;
-  const expectedIndexes = new Set<string>(RETIRED_COMMITMENTS_INDEX_NAMES);
   return attachedObjects.every(
-    (object) => object.type === "index" && expectedIndexes.has(object.name),
+    (object) =>
+      object.type === "index" &&
+      JSON.stringify(collectSqliteNamedIndexContract(db, object.name)) ===
+        RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.get(object.name),
   );
 }
 
@@ -231,8 +225,8 @@ function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
     ) ||
     hasSupportedRetiredCommitmentsSchema(
       db,
-      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+      SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
+      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     )
   );
 }
