@@ -11,7 +11,6 @@ import {
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
@@ -28,8 +27,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearMemoryPluginState();
 });
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Codex app-server attempt context", () => {
   it("treats missing mirrored session history as empty without hook warning", async () => {
@@ -151,28 +148,32 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("does not load OpenClaw-managed workspace context when injection is never", async () => {
-    const workspaceDir = tempDirs.make("codex-context-injection-never-");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "must not reach the prompt");
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-context-injection-never-"));
+    try {
+      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "must not reach the prompt");
 
-    const context = await buildCodexWorkspaceBootstrapContext({
-      params: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        agentId: "main",
-        config: {
-          agents: {
-            defaults: { workspace: workspaceDir, contextInjection: "never" },
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          agentId: "main",
+          config: {
+            agents: {
+              defaults: { workspace: workspaceDir, contextInjection: "never" },
+            },
           },
-        },
-      } as EmbeddedRunAttemptParams,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      memoryToolNames: [],
-    });
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: [],
+      });
 
-    expect(context).toEqual({ bootstrapFiles: [], contextFiles: [] });
+      expect(context).toEqual({ bootstrapFiles: [], contextFiles: [] });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("passes agent context to Codex memory collaboration guidance", async () => {
