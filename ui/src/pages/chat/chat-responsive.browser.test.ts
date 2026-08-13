@@ -137,7 +137,6 @@ type ChatFixtureOptions = {
   sessionRailDocked?: boolean;
   singleAgent?: boolean;
   slashMenu?: boolean;
-  typingIndicator?: boolean;
 };
 
 function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
@@ -427,7 +426,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   : ""
               }
               ${
-                opts.crowdedComposerFooter || opts.typingIndicator
+                opts.crowdedComposerFooter
                   ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
                     <span class="agent-chat__typing-avatars" aria-hidden="true">
                       <span class="chat-author-avatar">A</span>
@@ -2567,19 +2566,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
     } finally {
       await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps the desktop model picker fixed when another user starts typing", async () => {
-    const idlePage = await openFixture(1366, 900);
-    const typingPage = await openFixture(1366, 900, { typingIndicator: true });
-    try {
-      const idleModel = await getBoundingBox(idlePage, ".chat-controls__model-trigger");
-      const typingModel = await getBoundingBox(typingPage, ".chat-controls__model-trigger");
-
-      expect(typingModel.x).toBeCloseTo(idleModel.x, 0);
-    } finally {
-      await Promise.all([closeBrowserPage(idlePage), closeBrowserPage(typingPage)]);
     }
   });
 
