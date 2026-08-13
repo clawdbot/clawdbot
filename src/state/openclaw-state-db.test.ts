@@ -311,6 +311,63 @@ function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
   markStateDatabaseVersion(database, 6);
 }
 
+function seedV2026_7_1_2CommitmentSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE commitments (
+      id TEXT NOT NULL PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      account_id TEXT,
+      recipient_id TEXT,
+      thread_id TEXT,
+      sender_id TEXT,
+      kind TEXT NOT NULL,
+      sensitivity TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      suggested_text TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      due_earliest_ms INTEGER NOT NULL,
+      due_latest_ms INTEGER NOT NULL,
+      due_timezone TEXT NOT NULL,
+      source_message_id TEXT,
+      source_run_id TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      attempts INTEGER NOT NULL,
+      last_attempt_at_ms INTEGER,
+      sent_at_ms INTEGER,
+      dismissed_at_ms INTEGER,
+      snoozed_until_ms INTEGER,
+      expired_at_ms INTEGER,
+      record_json TEXT NOT NULL
+    );
+    CREATE INDEX idx_commitments_scope_due
+      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_status_due
+      ON commitments(status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_scope_dedupe
+      ON commitments(agent_id, session_key, channel, dedupe_key, status);
+    INSERT INTO commitments (
+      id, agent_id, session_key, channel, kind, sensitivity, source, status,
+      reason, suggested_text, dedupe_key, confidence, due_earliest_ms,
+      due_latest_ms, due_timezone, created_at_ms, updated_at_ms, attempts, record_json
+    ) VALUES (
+      'released-commitment', 'main', 'agent:main:main', 'telegram', 'followup',
+      'normal', 'message', 'pending', 'inert', 'follow up', 'released-dedupe',
+      1.0, 10, 20, 'UTC', 1, 1, 0, '{}'
+    );
+    INSERT INTO state_leases (
+      scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
+    ) VALUES ('test', 'released-preserved-lease', 'migration-test', 100, 50, '{}', 1, 2);
+    PRAGMA user_version = 1;
+    UPDATE schema_meta SET schema_version = 1 WHERE meta_key = 'primary';
+  `);
+}
+
 function seedPartiallyAdditiveV6CommitmentSchema(database: DatabaseSync): void {
   database.exec(`
     CREATE TABLE commitments (
@@ -1547,6 +1604,79 @@ describe("openclaw state database", () => {
   );
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "retires the shipped v2026.7.1-2 commitments layout through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const released = new DatabaseSync(databasePath);
+      seedV2026_7_1_2CommitmentSchema(released);
+      expect(readSqliteNumberPragma(released, "user_version")).toBe(1);
+      expect(
+        released.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: 1 });
+      expect(
+        released.prepare("SELECT strict FROM pragma_table_list WHERE name = 'commitments'").get(),
+      ).toEqual({ strict: 0 });
+      expect(
+        released
+          .prepare(
+            `SELECT name
+               FROM sqlite_schema
+              WHERE type = 'index'
+                AND tbl_name = 'commitments'
+                AND sql IS NOT NULL
+              ORDER BY name`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_commitments_scope_dedupe" },
+        { name: "idx_commitments_scope_due" },
+        { name: "idx_commitments_status_due" },
+      ]);
+      released.close();
+
+      if (migrationPath === "doctor repair") {
+        const result = repairOpenClawStateDatabaseSchema(options);
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toContain("Retired shared state commitments table and indexes");
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(
+        migrated.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 7 });
+      for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
+        expect(
+          migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
+        ).toBeUndefined();
+      }
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
+                    created_at, updated_at
+               FROM state_leases
+              WHERE scope = 'test' AND lease_key = 'released-preserved-lease'`,
+          )
+          .get(),
+      ).toEqual({
+        scope: "test",
+        lease_key: "released-preserved-lease",
+        owner: "migration-test",
+        expires_at: 100,
+        heartbeat_at: 50,
+        payload_json: "{}",
+        created_at: 1,
+        updated_at: 2,
+      });
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "preserves a foreign commitments table and colliding index through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
@@ -1622,6 +1752,14 @@ describe("openclaw state database", () => {
       sql: `CREATE TRIGGER foreign_commitments_delete
               AFTER DELETE ON commitments BEGIN SELECT 1; END;`,
       type: "trigger",
+    },
+    {
+      label: "drifted optional agent-due index",
+      name: "idx_commitments_agent_due",
+      sql: `DROP INDEX idx_commitments_agent_due;
+            CREATE INDEX idx_commitments_agent_due
+              ON commitments(agent_id, status, session_key);`,
+      type: "index",
     },
   ])("preserves an $label on the final v6 commitments layout", ({ name, sql, type }) => {
     const stateDir = createTempStateDir();
