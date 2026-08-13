@@ -232,7 +232,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       if (mode === "realtime") {
         const runtimeConfig = context.getRuntimeConfig();
         const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
-        const brain = normalizeBrain({ mode, brain: params.brain ?? realtimeConfig.brain });
+        const configuredRelayBrain =
+          realtimeConfig.brain === "agent-consult" || realtimeConfig.brain === "codex-realtime"
+            ? realtimeConfig.brain
+            : undefined;
+        const brain = normalizeBrain({ mode, brain: params.brain ?? configuredRelayBrain });
         const configuredRealtimeProviders = runtimeConfig.talk?.realtime?.providers
           ? Object.keys(runtimeConfig.talk.realtime.providers)
           : [];

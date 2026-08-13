@@ -1653,7 +1653,6 @@ describe("talk.session unified handlers", () => {
         sessionKey: "agent:main:main",
         mode: "realtime",
         transport: "gateway-relay",
-        brain: "agent-consult",
         provider: "openai",
         model: "gpt-realtime",
         voice: "alloy",
@@ -1675,6 +1674,7 @@ describe("talk.session unified handlers", () => {
             },
             talk: {
               realtime: {
+                brain: "direct-tools",
                 provider: "openai",
                 providers: { openai: { apiKey: "openai-key" } },
                 instructions: "Speak warmly.",
