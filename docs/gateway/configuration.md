@@ -718,7 +718,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets). The `provider: "default"` alias used above is a built-in env alias and does not need a `secrets.providers.default` entry; see [Secrets Management](/gateway/secrets) for when a custom alias is required.
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets). The `provider: "default"` alias used above is the built-in default for `env` (and `store`) refs and does not need a `secrets.providers.default` entry; see [Secrets Management](/gateway/secrets) for when a custom alias is required.
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 
