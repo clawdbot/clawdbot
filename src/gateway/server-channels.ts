@@ -691,13 +691,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             knownAccountDeferredToCaller.delete(rKey);
             recoveryStopTimedOut.delete(rKey);
             recoveryStartRequested.delete(rKey);
+            const lateStopAccountErrorMessage = formatErrorMessage(lateStopAccountError);
             setRuntime(channelId, id, {
               accountId: id,
               running: true,
               restartPending: false,
-              lastError: formatErrorMessage(lateStopAccountError),
+              lastError: lateStopAccountErrorMessage,
             });
-            throw lateStopAccountError;
+            throw lateStopAccountError instanceof Error
+              ? lateStopAccountError
+              : new Error(lateStopAccountErrorMessage);
           }
           if (store.stopAccountFences.get(id) === stopAccountFence) {
             store.stopAccountFences.delete(id);
@@ -1480,7 +1483,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   settled: stopAccountAttempt,
                   getLateError: () => lateStopAccountError,
                 };
-                stopAccountFence.settled.finally(() => {
+                void stopAccountFence.settled.finally(() => {
                   if (
                     lateStopAccountError === undefined &&
                     store.stopAccountFences.get(id) === stopAccountFence
