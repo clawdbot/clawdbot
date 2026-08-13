@@ -809,6 +809,39 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     {
+      name: "mixed UI TypeScript and CSS",
+      paths: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+      oxlintTargets: ["ui/src/app-routes.ts"],
+      stylelintTargets: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+    },
+    {
+      name: "UI CSS only",
+      paths: ["ui/src/styles/base.css"],
+      oxlintTargets: [],
+      stylelintTargets: ["ui/src/styles/base.css"],
+    },
+  ])("targets style lint for $name without broad core lint", (testCase) => {
+    const plan = createChangedCheckPlan(detectChangedLanes(testCase.paths), {
+      env: { PATH: "/usr/bin" },
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:core");
+    const oxlint = plan.commands.find((command) => command.name.startsWith("lint core changed"));
+    if (testCase.oxlintTargets.length === 0) {
+      expect(oxlint).toBeUndefined();
+    } else {
+      expect(oxlint?.args.slice(3)).toEqual(testCase.oxlintTargets);
+    }
+    expect(
+      plan.commands.find((command) => command.name.startsWith("lint UI changed style")),
+    ).toMatchObject({
+      bin: "node",
+      args: ["--import", "tsx", "scripts/run-stylelint.mts", ...testCase.stylelintTargets],
+    });
+  });
+
+  it.each([
+    {
       owner: "core",
       paths: [
         "src/gateway/node-registry.ts",
