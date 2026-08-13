@@ -3,7 +3,7 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
-  extractEmbeddedIpv4CandidatesFromIpv6,
+  extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
@@ -316,9 +316,8 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     if (isBlockedSpecialUseIpv6Address(strictIp, ipv6BlockOptions)) {
       return true;
     }
-    return extractEmbeddedIpv4CandidatesFromIpv6(strictIp).some((ipv4) =>
-      isBlockedSpecialUseIpv4Address(ipv4, blockOptions),
-    );
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
+    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions) : false;
   }
 
   // Security-critical parse failures should fail closed for any malformed IPv6 literal.
@@ -420,7 +419,7 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   if (!parsed || isIpv4Address(parsed)) {
     return false;
   }
-  return extractEmbeddedIpv4CandidatesFromIpv6(parsed).some((ipv4) => ipv4.range() === "loopback");
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "loopback";
 }
 
 function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
@@ -437,9 +436,7 @@ function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   if (parsed.range() === "loopback") {
     return false;
   }
-  return extractEmbeddedIpv4CandidatesFromIpv6(parsed).some(
-    (ipv4) => ipv4.range() === "unspecified",
-  );
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
 }
 
 function isExplicitLoopbackHostname(hostname: string): boolean {

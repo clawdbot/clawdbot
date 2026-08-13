@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
-  extractEmbeddedIpv4CandidatesFromIpv6,
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
@@ -50,6 +49,7 @@ describe("shared ip helpers", () => {
       ["64:ff9b:1:7f00:0:100:808:808", "127.0.0.1"],
       ["64:ff9b:1:6464:64:c800:808:808", "100.100.100.200"],
       ["64:ff9b:1:808:808:808:808:808", "8.8.8.8"],
+      ["64:ff9b:1::8.8.8.8", "0.0.0.0"],
       ["2002:0808:0808::", "8.8.8.8"],
       ["2001::f7f7:f7f7", "8.8.8.8"],
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
@@ -64,26 +64,14 @@ describe("shared ip helpers", () => {
     }
   });
 
-  it("extracts local-use NAT64 candidates across supported RFC6052 layouts", () => {
-    const parsed = parseCanonicalIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe");
-    expect(parsed?.kind()).toBe("ipv6");
-    if (!parsed || !isIpv6Address(parsed)) {
-      throw new Error("expected ipv6 fixture");
-    }
-
-    expect(extractEmbeddedIpv4FromIpv6(parsed)?.toString()).toBe("8.8.8.8");
-    expect(
-      extractEmbeddedIpv4CandidatesFromIpv6(parsed).map((address) => address.toString()),
-    ).toContain("169.254.169.254");
-  });
-
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:7f00:1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:7f00:0:100:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }
@@ -105,7 +93,6 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
     expect(isLinkLocalIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
-    expect(isLinkLocalIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe")).toBe(true);
     expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
@@ -119,7 +106,6 @@ describe("shared ip helpers", () => {
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("64:ff9b:1:6464:64:c800:808:808")).toBe(true);
-    expect(isCloudMetadataIpAddress("64:ff9b:1:808:808:808:6464:64c8")).toBe(true);
     expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
     expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
