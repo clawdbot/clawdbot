@@ -25,11 +25,6 @@ export function resolveSyncedSkillsCacheKey(targetWorkspaceDir: string): string 
   return path.join(resolveUserPath(targetWorkspaceDir), "skills");
 }
 
-function peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir: string): SkillSnapshot | undefined {
-  return readSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspaceDir))
-    ?.skillsSnapshot;
-}
-
 export function readSyncedSkillsUsageCache(
   targetSkillsDir: string,
 ): SyncedSkillsUsageCacheEntry | undefined {
@@ -115,6 +110,5 @@ function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.syncedSkillsCacheTestApi")] = {
     dropSyncedSkillsUsageCacheForTests,
-    peekPublishedSyncedSkillsSnapshot,
   };
 }

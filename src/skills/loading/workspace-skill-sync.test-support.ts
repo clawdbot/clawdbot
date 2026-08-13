@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { createSandboxFsBridgeFromResolver } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import type { SkillSnapshot } from "../types.js";
-import "./workspace-skill-sync-cache.js";
+import {
+  readSyncedSkillsUsageCache,
+  resolveSyncedSkillsCacheKey,
+} from "./workspace-skill-sync-cache.js";
 
 type SyncedSkillsCacheTestApi = {
   dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void;
-  peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir: string): SkillSnapshot | undefined;
 };
 
 function getSyncedSkillsCacheTestApi(): SyncedSkillsCacheTestApi {
@@ -19,7 +21,8 @@ function getSyncedSkillsCacheTestApi(): SyncedSkillsCacheTestApi {
 export function peekPublishedSyncedSkillsSnapshot(
   targetWorkspaceDir: string,
 ): SkillSnapshot | undefined {
-  return getSyncedSkillsCacheTestApi().peekPublishedSyncedSkillsSnapshot(targetWorkspaceDir);
+  return readSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspaceDir))
+    ?.skillsSnapshot;
 }
 
 export function dropSyncedSkillsUsageCacheForTests(targetWorkspaceDir: string): void {

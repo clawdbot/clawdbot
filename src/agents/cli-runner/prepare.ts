@@ -46,7 +46,6 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
@@ -101,10 +100,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  resolveSandboxSkillRuntimeInputs,
-} from "../embedded-agent-runner/sandbox-skills.js";
+import { resolveSandboxedWorkspaceSkillsPrompt } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
@@ -273,53 +269,11 @@ async function resolveCliSkillsPrompt(params: {
   }
 
   try {
-    const {
-      skillsEligibility,
-      skillsPromptWorkspaceDir,
-      skillsSnapshot: skillsSnapshotForRun,
-      skillsWorkspaceDir,
-      workspaceOnly,
-    } = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        ...(sandboxWorkspace.containerWorkdir
-          ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
-          : {}),
-        ...(sandboxWorkspace.skillsEligibility
-          ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-          : {}),
-        ...(sandboxWorkspace.skillsWorkspaceDir
-          ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-          : {}),
-        ...(sandboxWorkspace.workspaceAccess
-          ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-          : {}),
-      },
-      effectiveWorkspace: sandboxWorkspace.workspaceDir,
-      publishedSkillsOwner: sandboxWorkspace,
-      skillsSnapshot: params.skillsSnapshot,
-    });
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: skillsWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly,
-    });
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
     return {
-      prompt: resolveSkillsPrompt({
-        skillsSnapshot: skillsSnapshotForRun,
-        entries: promptSkillEntries,
-        workspaceDir: skillsPromptWorkspaceDir,
-        config: params.config,
+      prompt: resolveSandboxedWorkspaceSkillsPrompt({
         agentId: params.agentId,
-        eligibility: skillsEligibility,
+        config: params.config,
+        workspace: sandboxWorkspace,
       }),
       publishedSkillsOwner: sandboxWorkspace,
     };

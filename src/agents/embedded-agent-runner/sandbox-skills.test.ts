@@ -13,6 +13,7 @@ import { syncWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.r
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillSnapshot } from "../../skills/types.js";
+import { attachPublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -22,6 +23,13 @@ import {
 vi.mock("../../skills/loading/plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
+
+function bindPublishedSandboxSnapshot(owner: object, skillsSnapshot: SkillSnapshot): void {
+  attachPublishedSandboxSkills(owner, {
+    skillsSnapshot,
+    releaseGeneration: () => {},
+  });
+}
 
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
 const hostSkillBaseDir = "/usr/lib/node_modules/openclaw/skills/demo";
@@ -113,15 +121,16 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         pluginSkillsDir: path.join(sourceWorkspace, ".plugin-skills"),
       });
 
+      const sandbox = {
+        enabled: true as const,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: targetWorkspace,
+        workspaceAccess: "rw" as const,
+      };
+      bindPublishedSandboxSnapshot(sandbox, synced.skillsSnapshot);
       const resolved = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
+        sandbox,
         effectiveWorkspace: path.join(root, "workspace"),
-        publishedSkillsSnapshot: synced.skillsSnapshot,
         skillsSnapshot: snapshot,
       });
 
@@ -167,15 +176,16 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       const hostFilePath =
         synced.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "demoalpha")
           ?.filePath ?? "";
+      const sandbox = {
+        enabled: true as const,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: targetWorkspace,
+        workspaceAccess: "rw" as const,
+      };
+      bindPublishedSandboxSnapshot(sandbox, synced.skillsSnapshot);
       const resolved = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
+        sandbox,
         effectiveWorkspace: path.join(root, "workspace"),
-        publishedSkillsSnapshot: synced.skillsSnapshot,
         skillsSnapshot: snapshot,
       });
       const prompt = resolveSkillsPrompt({
@@ -229,15 +239,16 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
     };
 
+    const sandbox = {
+      enabled: true as const,
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir: targetWorkspace,
+      workspaceAccess: "rw" as const,
+    };
+    bindPublishedSandboxSnapshot(sandbox, skillsSnapshot);
     const resolved = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: targetWorkspace,
-        workspaceAccess: "rw",
-      },
+      sandbox,
       effectiveWorkspace: "/workspace",
-      publishedSkillsSnapshot: skillsSnapshot,
     });
     const prompt = resolved.skillsSnapshot?.prompt ?? "";
 

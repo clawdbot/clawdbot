@@ -14,6 +14,7 @@ import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/
 import { recordRemoteSkillNodeInfo, replaceRemoteNodeSkills } from "../runtime/remote-skills.js";
 import { resetRemoteNodeSkillsForTests } from "../runtime/remote-skills.test-support.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import type { SkillSnapshot } from "../types.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
 import { leasePublishedSyncedSkillsGeneration } from "./workspace-skill-sync-cache.js";
@@ -28,6 +29,26 @@ import {
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
+
+function resolveBoundSandboxCatalog(params: {
+  skillsSnapshot: SkillSnapshot;
+  targetWorkspace: string;
+}) {
+  const sandbox = {
+    enabled: true as const,
+    containerWorkdir: "/workspace",
+    skillsWorkspaceDir: params.targetWorkspace,
+    workspaceAccess: "rw" as const,
+  };
+  attachPublishedSandboxSkills(sandbox, {
+    skillsSnapshot: params.skillsSnapshot,
+    releaseGeneration: () => {},
+  });
+  return resolveSandboxSkillRuntimeInputs({
+    sandbox,
+    effectiveWorkspace: params.targetWorkspace,
+  });
+}
 
 const fixtures = createWorkspaceSkillSyncFixtures("openclaw-skills-sync-catalog-race");
 
@@ -137,15 +158,9 @@ describe("syncWorkspaceSkills catalog generations", () => {
         skillsPromptWorkspaceDir,
         skillsWorkspaceDir,
         workspaceOnly,
-      } = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
-        effectiveWorkspace: targetWorkspace,
-        publishedSkillsSnapshot: first.skillsSnapshot,
+      } = resolveBoundSandboxCatalog({
+        skillsSnapshot: first.skillsSnapshot,
+        targetWorkspace,
       });
       const { shouldLoadSkillEntries } = resolveEmbeddedRunSkillEntries({
         workspaceDir: skillsWorkspaceDir,
@@ -204,15 +219,9 @@ describe("syncWorkspaceSkills catalog generations", () => {
         newCatalog,
       );
 
-      const publishedAfter = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
-        effectiveWorkspace: targetWorkspace,
-        publishedSkillsSnapshot: second.skillsSnapshot,
+      const publishedAfter = resolveBoundSandboxCatalog({
+        skillsSnapshot: second.skillsSnapshot,
+        targetWorkspace,
       });
       const newPrompt = resolveSkillsPrompt({
         skillsSnapshot: publishedAfter.skillsSnapshot,
@@ -305,15 +314,9 @@ describe("syncWorkspaceSkills catalog generations", () => {
         synced.skillsSnapshot.resolvedSkills?.some((skill) => skill.filePath === nodeLocation),
       ).toBe(true);
 
-      const resolved = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: targetWorkspace,
-          workspaceAccess: "rw",
-        },
-        effectiveWorkspace: targetWorkspace,
-        publishedSkillsSnapshot: synced.skillsSnapshot,
+      const resolved = resolveBoundSandboxCatalog({
+        skillsSnapshot: synced.skillsSnapshot,
+        targetWorkspace,
       });
       expect(resolved.skillsSnapshot?.prompt).toContain(nodeLocation);
       expect(resolved.skillsSnapshot?.prompt).toContain(

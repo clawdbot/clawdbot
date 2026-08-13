@@ -496,7 +496,6 @@ export function prepareEmbeddedAttemptSkills(params: {
     sandbox: params.sandbox,
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
-    publishedSkillsOwner: params.sandbox,
   });
   let restoreApplied = () => {};
   const restoreSkillEnv = () => {

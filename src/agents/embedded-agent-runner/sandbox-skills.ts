@@ -5,7 +5,10 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { escapeSkillXml, type Skill } from "../../skills/loading/skill-contract.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
@@ -13,7 +16,7 @@ import type {
   SkillUsagePath,
 } from "../../skills/types.js";
 import { readPublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
-import type { SandboxContext } from "../sandbox/types.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
 type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
@@ -202,7 +205,6 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   effectiveWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
   publishedSkillsOwner?: object | null;
-  publishedSkillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
   skillsPromptWorkspaceDir: string;
@@ -225,10 +227,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     // publisher cache. Concurrent sessions can publish different eligibility
     // snapshots into the same skills directory; peeking the last writer would
     // inject the wrong catalog into this run's prompt.
-    const publishedSnapshot =
-      params.publishedSkillsSnapshot ??
-      readPublishedSandboxSkills(params.publishedSkillsOwner)?.skillsSnapshot ??
-      readPublishedSandboxSkills(params.sandbox)?.skillsSnapshot;
+    const publishedSnapshot = readPublishedSandboxSkills(
+      params.publishedSkillsOwner ?? params.sandbox,
+    )?.skillsSnapshot;
     const materializedSnapshot = publishedSnapshot
       ? remapMaterializedSkillsSnapshotForPrompt({
           skillsSnapshot: publishedSnapshot,
@@ -252,4 +253,58 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     skillsWorkspaceDir: params.effectiveWorkspace,
     workspaceOnly: false,
   };
+}
+
+// CLI and command inspection share this assembly. They differ only in when
+// they release the published-generation lease.
+export function resolveSandboxedWorkspaceSkillsPrompt(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  workspace: SandboxWorkspaceInfo;
+}): string {
+  const {
+    skillsEligibility,
+    skillsPromptWorkspaceDir,
+    skillsSnapshot,
+    skillsWorkspaceDir,
+    workspaceOnly,
+  } = resolveSandboxSkillRuntimeInputs({
+    sandbox: {
+      enabled: true,
+      ...(params.workspace.containerWorkdir
+        ? { containerWorkdir: params.workspace.containerWorkdir }
+        : {}),
+      ...(params.workspace.skillsEligibility
+        ? { skillsEligibility: params.workspace.skillsEligibility }
+        : {}),
+      ...(params.workspace.skillsWorkspaceDir
+        ? { skillsWorkspaceDir: params.workspace.skillsWorkspaceDir }
+        : {}),
+      ...(params.workspace.workspaceAccess
+        ? { workspaceAccess: params.workspace.workspaceAccess }
+        : {}),
+    },
+    effectiveWorkspace: params.workspace.workspaceDir,
+    publishedSkillsOwner: params.workspace,
+  });
+  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+    workspaceDir: skillsWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+    skillsSnapshot,
+    workspaceOnly,
+  });
+  return resolveSkillsPrompt({
+    skillsSnapshot,
+    entries: mapSandboxSkillEntriesForPrompt({
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir,
+      skillsPromptWorkspaceDir,
+    }),
+    workspaceDir: skillsPromptWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+  });
 }

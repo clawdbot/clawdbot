@@ -148,7 +148,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       sandbox,
       effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
-      publishedSkillsOwner: sandbox,
     });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveSkillsWorkspace,
