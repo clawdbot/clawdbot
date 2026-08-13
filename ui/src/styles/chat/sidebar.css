@@ -303,7 +303,6 @@ openclaw-chat-sidebar-region,
   flex: 0 0 auto;
   align-items: center;
   min-width: 0;
-  background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
 }
 
 /* Canonical rail header contract. The header owns geometry; actions are bare
@@ -319,6 +318,7 @@ openclaw-chat-sidebar-region,
   gap: 8px;
   padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
   border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+  background: var(--rail-header-background);
 }
 
 .rail-header__copy {

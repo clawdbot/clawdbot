@@ -1,6 +1,7 @@
-import { css, html, nothing, svg, type TemplateResult } from "lit";
+import { css, html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { icons } from "./icons.ts";
 import "./web-awesome-tabs.ts";
 
 export type PanelTabStripTab = {
@@ -15,9 +16,6 @@ export type PanelTabStripTab = {
   className?: string;
   closeLabel: string;
 };
-
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 
 const reconciledTabOrders = new WeakMap<Element, string>();
 const keyboardCloseActivations = new WeakSet<Element>();
@@ -102,7 +100,7 @@ export function renderPanelTabStrip(params: {
       aria-label=${params.newLabel}
       @click=${params.onNew}
     >
-      ${PLUS_GLYPH}
+      ${icons.plus}
     </button>
   `;
   if (params.tabs.length === 0) {
@@ -212,7 +210,7 @@ export function renderPanelTabStrip(params: {
                 }
               }}
             >
-              <span class="tabstrip-tab__close-box">${CLOSE_GLYPH}</span>
+              <span class="tabstrip-tab__close-box">${icons.x}</span>
             </button>
           `;
         },

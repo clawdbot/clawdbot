@@ -52,6 +52,7 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-copy-gap: 2px;
+  --rail-header-background: var(--bg);
   --rail-header-eyebrow-size: var(--control-ui-text-xs);
   --rail-header-eyebrow-letter-spacing: 0.04em;
   --rail-header-title-size: var(--control-ui-text-sm);

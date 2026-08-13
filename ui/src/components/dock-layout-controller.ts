@@ -313,6 +313,7 @@ export const dockPanelStyles = css`
     padding: 0 var(--rail-header-padding-end, 8px) 0 var(--rail-header-padding-start, 12px);
     border-bottom: var(--rail-divider-size, 1px) solid
       var(--rail-divider-color, var(--border, #262b34));
+    background: var(--rail-header-background, var(--bg, #0e1015));
   }
   .rail-header__actions {
     display: flex;

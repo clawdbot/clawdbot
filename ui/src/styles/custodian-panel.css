@@ -85,10 +85,6 @@ openclaw-custodian-panel {
   background: var(--accent);
 }
 
-.cp-header {
-  background: var(--bg);
-}
-
 .cp-title,
 .cp-actions {
   display: flex;
