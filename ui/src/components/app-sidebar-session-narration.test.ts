@@ -85,7 +85,6 @@ describe("SidebarSessionNarrationController", () => {
         { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
         runningRow("agent:main:active"),
       ],
-      openSessionKey: "",
       agentId: "main",
     });
     await Promise.resolve();
@@ -113,7 +112,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -216,7 +214,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity,
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
     await Promise.resolve();
@@ -266,7 +263,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -299,7 +295,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -337,7 +332,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -370,7 +364,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -412,7 +405,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -450,7 +442,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -497,7 +488,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -557,7 +547,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -595,7 +584,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -636,7 +624,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -676,7 +663,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -732,7 +718,6 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      openSessionKey: "",
       agentId: "main",
     };
 
@@ -765,7 +750,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("global")],
-      openSessionKey: "",
     };
 
     controller.sync({ ...base, agentId: "main" });
@@ -802,7 +786,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
@@ -852,7 +835,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity,
       source: firstSource,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
     controller.sync({
@@ -861,7 +843,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity,
       source: secondSource,
       rows: [],
-      openSessionKey: "",
       agentId: "main",
     });
     resolveFirst({ key: "agent:main:run", agentId: null });
@@ -871,28 +852,6 @@ describe("SidebarSessionNarrationController", () => {
       key: "agent:main:run",
       agentId: null,
     });
-  });
-
-  it("does not hand an old agent's global subscription to the open chat", async () => {
-    const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
-      Promise.resolve({ key, agentId: options?.agentId ?? null }),
-    );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
-    const controller = new SidebarSessionNarrationController(() => undefined);
-    const base = {
-      enabled: true,
-      connected: true,
-      connectionIdentity: {},
-      source,
-      rows: [runningRow("global")],
-    };
-
-    controller.sync({ ...base, openSessionKey: "", agentId: "main" });
-    await Promise.resolve();
-    controller.sync({ ...base, openSessionKey: "global", agentId: "research" });
-
-    expect(unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
   });
 
   it("keeps the newest sentence after a response exceeds the retained tail", async () => {
@@ -908,7 +867,6 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       rows: [runningRow("agent:main:run")],
-      openSessionKey: "",
       agentId: "main",
     });
 
