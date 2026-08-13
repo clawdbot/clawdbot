@@ -34,6 +34,7 @@ import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
   ChannelRuntimeSnapshot,
@@ -280,6 +281,7 @@ type GatewayKernelContext = {
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
 type GatewayTransportContext = {
+  portalService?: GatewayPortalService;
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;

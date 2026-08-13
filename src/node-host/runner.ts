@@ -234,6 +234,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    enableWorkerRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = opts.preferGatewayBootstrapToken
@@ -490,6 +491,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // restart-scoped availability, not a capability upgrade requiring re-pairing.
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
+      workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),

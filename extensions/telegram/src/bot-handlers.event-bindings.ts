@@ -58,7 +58,7 @@ export function createTelegramEventBindings({
   authorization,
   registerMessages,
 }: CreateTelegramEventBindingsOptions): TelegramEventBindings {
-  const { accountId, bot, cfg, runtime, shouldSkipUpdate, telegramDeps } = params;
+  const { accountId, ownerAgentId, bot, cfg, runtime, shouldSkipUpdate, telegramDeps } = params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
   const {
     buildSyntheticContext,
@@ -95,7 +95,10 @@ export function createTelegramEventBindings({
         }
         if (
           reactionMode === "own" &&
-          !telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg)
+          !telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
+            accountId,
+            agentId: ownerAgentId,
+          })
         ) {
           logVerbose(
             `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,

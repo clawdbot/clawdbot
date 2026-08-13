@@ -422,7 +422,7 @@ suite.define(() => {
     });
   });
 
-  it("uses identity-scoped server project recents instead of the shared roster", async () => {
+  it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -452,7 +452,14 @@ suite.define(() => {
       methodResponses: {
         "projects.list": {
           projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
-          recents: [{ kind: "project", projectId: "registered", displayName: "Registered" }],
+          recents: [
+            { kind: "project", projectId: "registered", displayName: "Registered" },
+            {
+              kind: "folder",
+              folder: `${WORKSPACE}/scratch`,
+              displayName: "scratch",
+            },
+          ],
         },
         "sessions.list": {
           count: 1,
@@ -474,10 +481,13 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
-      const recent = page.locator('[data-value="recent-project:registered"]');
-      await recent.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents.png");
-      await recent.click();
+      expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
+      const project = page.locator('[data-value="project:registered"]');
+      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      await project.waitFor();
+      await recentFolder.waitFor();
+      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");

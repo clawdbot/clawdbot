@@ -161,6 +161,7 @@ export function createService(
       | "executeInference"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
+      | "resolveNodeWorkerBuild"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"

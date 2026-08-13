@@ -296,6 +296,7 @@ function resolveTelegramWebhookRateLimitKey(
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
+  ownerAgentId?: string;
   config?: OpenClawConfig;
   path?: string;
   port?: number;
@@ -360,6 +361,7 @@ export async function startTelegramWebhook(opts: {
     accountAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
+    ownerAgentId: opts.ownerAgentId,
     telegramTransport,
   });
   const runShutdownPhase = async (

@@ -1484,6 +1484,7 @@ export interface WorkerEnvironmentSshFallbackPorts {
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
+  bootstrap_install_kind: string | null;
   bootstrap_openclaw_version: string | null;
   bootstrap_protocol_features_json: string | null;
   created_at_ms: number;

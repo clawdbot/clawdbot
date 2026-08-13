@@ -363,6 +363,10 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // Event/list rows must not rediscover plugin-backed configured catalog metadata.
+  // Lightweight projections may use an already-active provider policy, but must
+  // not fall through to public artifacts that reload the manifest registry.
+  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -370,8 +374,9 @@ export function buildGatewaySessionRow(params: {
     model: thinkingModel,
     sessionKey: acpSessionKey,
     entry,
-    modelCatalog: params.modelCatalog,
+    modelCatalog: thinkingModelCatalog,
     rowContext,
+    providerPolicySource: lightweight ? "active" : undefined,
   });
   const fastModeState = resolveFastModeState({
     cfg,

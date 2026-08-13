@@ -1,10 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import {
-  type WorkerAdmissionHandshake,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -17,7 +14,8 @@ import {
   type WorkerSshEndpoint,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { VERSION } from "../../version.js";
+import { resolveLocalWorkerBuild, verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -53,6 +51,7 @@ type WorkerProviderLifecycleOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
+  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   providerCallTimeoutMs?: number;
   tunnelManager?: WorkerTunnelManager;
   credentialBroker: WorkerCredentialBroker;
@@ -103,13 +102,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const saveError = options.saveError;
   const serviceError = options.serviceError;
   const withLock = options.withLock;
-  const {
-    credentialExpiry,
-    credentialMaterial,
-    ensurePendingCredential,
-    grantFrom,
-    stageCredential,
-  } = options.credentialBroker;
+  const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
   function requireWorkerProfile(value: unknown): WorkerProfile {
     const error = validateCloudWorkerProfileSettings(value);
@@ -239,24 +232,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     } catch (error) {
       return await failBootstrap(record, leaseId, provider, error);
     }
-    const material = credentialMaterial();
-    // Receipt, owner epoch, and credential hash commit together. A failed write leaves the
-    // durable lease bootstrapping so reconcile can retry without admitting a partial identity.
-    const ready = move(record, "ready", {
-      bootstrapReceipt: receipt,
-      credential: {
-        credentialHash: material.credentialHash,
-        sessionId: null,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
-        expiresAtMs: credentialExpiry(),
-      },
-    });
-    const grant = grantFrom({
-      credential: material.credential,
-      record: store.getCredential(record.environmentId),
-    });
-    stageCredential(grant);
-    return ready;
+    return commitReady(record, { ...receipt, installKind: "bundle" });
   };
 
   const finishProvision = async (
@@ -297,7 +273,24 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       desktop: lease.desktop ?? null,
     };
     if (lease.node) {
-      return move(record, "ready", { ...patch, sshEndpoint: null });
+      const nodeBuild = await options.resolveNodeWorkerBuild?.(lease.node.deviceId);
+      if (!nodeBuild) {
+        const detail = `Device worker no longer advertises session hosting: ${lease.node.deviceId}`;
+        move(record, "failed", { lastError: detail });
+        throw serviceError("bootstrap_failure", detail);
+      }
+      if (nodeBuild.openclawVersion !== VERSION) {
+        const detail = `Device worker runs OpenClaw ${nodeBuild.openclawVersion}, but this gateway runs ${VERSION}; update the node to match the gateway, then retry`;
+        move(record, "failed", { lastError: detail });
+        throw serviceError("bootstrap_failure", detail);
+      }
+      // Admin pairing already trusts this machine. Pinning its exact claimed hash plus an exact
+      // version match prevents skew; milestone 7 replaces the claim with Gateway-pushed bytes.
+      return commitReady(
+        record,
+        { ...nodeBuild, installKind: "local" },
+        { ...patch, sshEndpoint: null },
+      );
     }
     const bootstrapping = move(record, "bootstrapping", {
       ...patch,
@@ -395,16 +388,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     let currentBundle: WorkerInstallationArtifact | undefined;
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
+      const localBuild = resolveLocalWorkerBuild(record.bootstrapReceipt);
       try {
-        currentBundle = await options.prepareInstallation("bundle");
-        if (
-          record.bootstrapReceipt &&
-          verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
-        ) {
-          const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
-          if (record.state !== "attached" || sessionId) {
-            ensurePendingCredential(record, sessionId ?? null);
-            record = store.get(record.environmentId) ?? record;
+        currentBundle = localBuild ? undefined : await options.prepareInstallation("bundle");
+        const expectedBuild = localBuild ?? currentBundle;
+        if (record.bootstrapReceipt && expectedBuild) {
+          if (verifyWorkerAdmissionHandshake(record.bootstrapReceipt, expectedBuild)) {
+            const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
+            if (record.state !== "attached" || sessionId) {
+              ensurePendingCredential(record, sessionId ?? null);
+              record = store.get(record.environmentId) ?? record;
+            }
           }
         }
       } catch {

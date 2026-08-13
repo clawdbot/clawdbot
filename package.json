@@ -58,6 +58,7 @@
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
+    "!dist/plugin-sdk/channel-config-ui-hints.d.ts",
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
@@ -951,6 +952,9 @@
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
     },
+    "./plugin-sdk/channel-config-ui-hints": {
+      "default": "./dist/plugin-sdk/channel-config-ui-hints.js"
+    },
     "./plugin-sdk/channel-config-writes": {
       "default": "./dist/plugin-sdk/channel-config-writes.js"
     },
@@ -1522,7 +1526,6 @@
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import tsx scripts/check-wrapper-shadowing.mts",
-    "check:wrapper-shadowing:gen": "node --import tsx scripts/check-wrapper-shadowing.mts --update-debt-baseline",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node --import tsx scripts/check-timed.mts",
     "check:timed:all-types": "node --import tsx scripts/check-timed.mts --include-test-types",
@@ -1649,7 +1652,6 @@
     "lint:tmp:channel-agnostic-boundaries": "node --import tsx scripts/check-channel-agnostic-boundaries.mts",
     "lint:tmp:dynamic-import-warts": "node --import tsx scripts/check-dynamic-import-warts.mts",
     "lint:tmp:export-name-collisions": "node --import tsx scripts/check-export-name-collisions.mts",
-    "lint:tmp:export-name-collisions:gen": "node --import tsx scripts/check-export-name-collisions.mts --update-debt-baseline",
     "lint:tmp:no-random-messaging": "node --import tsx scripts/check-no-random-messaging-tmp.mts",
     "lint:tmp:no-raw-channel-fetch": "node --import tsx scripts/check-no-raw-channel-fetch.mts",
     "lint:tmp:no-raw-http2-imports": "node --import tsx scripts/check-no-raw-http2-imports.mts",
@@ -1996,7 +1998,7 @@
     "@openclaw/fs-safe": "0.5.5",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.14.1",
+    "@trycua/cua-driver": "0.19.3",
     "acorn": "8.17.0",
     "chalk": "6.0.0",
     "chokidar": "5.0.0",

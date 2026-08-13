@@ -556,6 +556,7 @@ export async function prepareGatewayKernelState(params: {
     getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
+    getPortalService: transportBridge.getPortalService,
     workerGatewayEndpoint,
   };
 }

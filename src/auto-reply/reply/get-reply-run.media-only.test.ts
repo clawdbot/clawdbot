@@ -4,10 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -60,6 +56,84 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
 
 vi.mock("../../agents/harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
+}));
+
+// Harness selection and built-in execution are owned by their focused suites. These tests keep
+// the real visible-reply policy resolver while supplying its default OpenClaw harness leaf.
+const preparedReplyMockState = vi.hoisted(() => ({
+  unexpectedCalls: [] as string[],
+}));
+const selectAgentHarnessMock = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      provider: string;
+      modelId?: string;
+      agentHarnessId?: string;
+      agentHarnessRuntimeOverride?: string;
+    }) => {
+      const isSourceProviderCandidate = params.modelId === undefined;
+      const isDefaultModelCandidate =
+        params.provider === "anthropic" && params.modelId === "claude-opus-4-1";
+      if (
+        (!isSourceProviderCandidate && !isDefaultModelCandidate) ||
+        params.agentHarnessId ||
+        params.agentHarnessRuntimeOverride
+      ) {
+        preparedReplyMockState.unexpectedCalls.push("selectAgentHarness");
+      }
+      return { id: "openclaw", deliveryDefaults: {} };
+    },
+  ),
+);
+vi.mock("../../agents/harness/selection.js", () => ({
+  selectAgentHarness: selectAgentHarnessMock,
+}));
+
+vi.mock("../../agents/model-selection.js", () => ({
+  buildModelAliasIndex: vi.fn(
+    (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
+      if (params.cfg.agents?.defaults?.models) {
+        preparedReplyMockState.unexpectedCalls.push("buildModelAliasIndex");
+      }
+      return { byAlias: new Map(), byKey: new Map() };
+    },
+  ),
+  resolveDefaultModelForAgent: vi.fn(
+    (params: { cfg: { agents?: { defaults?: { model?: unknown } } } }) => {
+      if (params.cfg.agents?.defaults?.model) {
+        preparedReplyMockState.unexpectedCalls.push("resolveDefaultModelForAgent");
+      }
+      return { provider: "anthropic", model: "claude-opus-4-1" };
+    },
+  ),
+  resolveModelRefFromString: vi.fn(() => {
+    preparedReplyMockState.unexpectedCalls.push("resolveModelRefFromString");
+    return undefined;
+  }),
+}));
+
+const resolveSessionRuntimeOverrideForProviderMock = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      entry?: {
+        agentHarnessId?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+      };
+    }) => {
+      if (
+        params.entry?.agentHarnessId ||
+        params.entry?.agentRuntimeOverride ||
+        params.entry?.modelSelectionLocked
+      ) {
+        preparedReplyMockState.unexpectedCalls.push("resolveSessionRuntimeOverrideForProvider");
+      }
+      return undefined;
+    },
+  ),
+);
+vi.mock("../../agents/session-runtime-compat.js", () => ({
+  resolveSessionRuntimeOverrideForProvider: resolveSessionRuntimeOverrideForProviderMock,
 }));
 
 // Provider policy projection belongs to its adapter and provider-local suites. These tests
@@ -157,6 +231,21 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./stored-model-override.js", () => ({
+  resolveStoredModelOverride: vi.fn(
+    (params: {
+      sessionEntry?: { providerOverride?: string; modelOverride?: string };
+      sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
+    }) => {
+      const entries = [params.sessionEntry, ...Object.values(params.sessionStore ?? {})];
+      if (entries.some((entry) => entry?.providerOverride || entry?.modelOverride)) {
+        preparedReplyMockState.unexpectedCalls.push("resolveStoredModelOverride");
+      }
+      return null;
+    },
+  ),
 }));
 
 vi.mock("./session-reset-prompt.js", () => ({
@@ -359,6 +448,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
+    preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
@@ -371,11 +461,12 @@ describe("runPreparedReply media-only handling", () => {
     replyRunTesting.resetReplyRunRegistry();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     resetSystemEventsForTest();
     const paths = cleanupPaths.splice(0);
-    return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
+    await Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
+    expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -1850,28 +1941,48 @@ describe("runPreparedReply media-only handling", () => {
   });
   it("interrupts embedded-only active runs even without a reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    let embeddedRunActive = true;
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    const embeddedAbort = vi.fn();
-    const embeddedHandle = {
-      queueMessage: vi.fn(async () => {}),
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: embeddedAbort,
-    };
-    setActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
-
-    const runPromise = runPrepared({
-      isNewSession: false,
-      sessionId: "session-embedded-only",
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation(() =>
+      embeddedRunActive ? "session-embedded-only" : undefined,
+    );
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockImplementation(
+      () => embeddedRunActive,
+    );
+    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockImplementation(async () => {
+      embeddedRunActive = false;
+      return true;
     });
 
-    await Promise.resolve();
-    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-    expect(embeddedAbort).not.toHaveBeenCalled();
+    try {
+      await expect(
+        runPrepared({
+          isNewSession: false,
+          sessionId: "session-embedded-only",
+        }),
+      ).resolves.toEqual({ text: "ok" });
+    } finally {
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockResolvedValue(true);
+    }
 
-    clearActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
-
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledTimes(2);
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
+      1,
+      "session-embedded-only",
+    );
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
+      2,
+      "session-embedded-only",
+    );
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledOnce();
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
+      "session-embedded-only",
+    );
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("refreshes goal context after interrupt admission waits", async () => {
@@ -3322,6 +3433,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
+    selectAgentHarnessMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
     // internally; the wake provider ("heartbeat") must not leak into the
     // stable context as a non-internal surface or the fact diverges from
@@ -3353,6 +3465,15 @@ describe("runPreparedReply media-only handling", () => {
 
     const run = requireRunReplyAgentCall(0).followupRun.run;
     expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(
+      selectAgentHarnessMock.mock.calls.map(([params]) => ({
+        provider: params.provider,
+        modelId: params.modelId,
+      })),
+    ).toEqual([
+      { provider: "heartbeat", modelId: undefined },
+      { provider: "anthropic", modelId: "claude-opus-4-1" },
+    ]);
   });
 
   it("downgrades the synthetic stable mode when the message tool is policy-denied", async () => {

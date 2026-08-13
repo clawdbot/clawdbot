@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
-} from "../agents/tools/sessions-helpers.js";
+  resolveSessionToolAccess,
+} from "../agents/tools/sessions-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
@@ -685,14 +685,28 @@ describe("session companion tool scope", () => {
     expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
     expect(cfg.tools?.codeMode).toMatchObject({ enabled: false });
 
-    const guard = await createSessionVisibilityGuard({
+    const targetAccess = await resolveSessionToolAccess({
       action: "history",
+      requesterAgentId: "main",
       requesterSessionKey: "agent:main:target",
+      targetAgentId: "main",
+      targetSessionKey: "agent:main:target",
+      requesterOwned: false,
       visibility: "self",
       a2aPolicy: createAgentToAgentPolicy(cfg),
     });
-    expect(guard.check("agent:main:target")).toMatchObject({ allowed: true });
-    expect(guard.check("agent:main:different")).toMatchObject({
+    expect(targetAccess).toMatchObject({ allowed: true });
+    const differentAccess = await resolveSessionToolAccess({
+      action: "history",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:target",
+      targetAgentId: "main",
+      targetSessionKey: "agent:main:different",
+      requesterOwned: false,
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy(cfg),
+    });
+    expect(differentAccess).toMatchObject({
       allowed: false,
       status: "forbidden",
     });

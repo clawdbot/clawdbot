@@ -86,7 +86,7 @@ function summarizeNodeEnvironment(
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
-    sessionHost: false,
+    sessionHost: node.connected === true && node.sessionHost === true,
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),

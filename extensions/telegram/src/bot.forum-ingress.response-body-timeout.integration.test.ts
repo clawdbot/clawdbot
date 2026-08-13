@@ -94,6 +94,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     };
     const params: RegisterTelegramHandlerParams = {
       accountId: "default",
+      ownerAgentId: "main",
       bot,
       cfg: {},
       mediaMaxBytes: 1,

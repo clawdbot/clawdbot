@@ -1881,12 +1881,17 @@ describe("scripts/changed-lanes", () => {
         "src/channels/turn/run-channel-turn.ts",
         "scripts/check-wrapper-shadowing.mts",
         "scripts/check-export-name-collisions.mts",
-        "scripts/lib/wrapper-shadowing-baseline.json",
         "scripts/lib/ts-guard-utils.mts",
         "package.json",
       ]),
     ).toBe(true);
-    expect(shouldRunWrapperShadowingCheck(["docs/concepts/message-lifecycle.md"])).toBe(false);
+    expect(
+      shouldRunWrapperShadowingCheck([
+        "docs/concepts/message-lifecycle.md",
+        "scripts/lib/wrapper-shadowing-baseline.json",
+        "scripts/lib/export-name-collision-baseline.json",
+      ]),
+    ).toBe(false);
 
     const plan = createChangedCheckPlan(
       detectChangedLanes(["scripts/check-wrapper-shadowing.mts"]),

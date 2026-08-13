@@ -27,6 +27,21 @@ function sessionsList(placement: "local" | "active") {
   };
 }
 
+const workerDesktopEnvironment = {
+  id: "worker-desktop-1",
+  type: "worker",
+  status: "available",
+  desktop: true,
+  worker: {
+    providerId: "crabbox",
+    state: "attached",
+    ageMs: 1_000,
+    attachedSessionIds: ["main"],
+    tunnelStatus: "connected",
+    desktopApps: ["browser", "terminal"],
+  },
+} as const;
+
 async function openPalette(page: import("playwright").Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
@@ -41,6 +56,16 @@ async function openDesktopPanel(page: import("playwright").Page) {
   const panel = page.locator("openclaw-desktop-panel");
   await panel.locator("section[aria-label='Desktop']").waitFor();
   return panel;
+}
+
+async function openDirectDesktop(page: import("playwright").Page, environmentId: string) {
+  await page.evaluate((targetEnvironmentId) => {
+    window.dispatchEvent(
+      new CustomEvent("openclaw:desktop-toggle", {
+        detail: { open: true, environmentId: targetEnvironmentId },
+      }),
+    );
+  }, environmentId);
 }
 
 async function installDesktopClientFake(panel: import("playwright").Locator) {
@@ -105,8 +130,185 @@ suite.define(() => {
       expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
       await page.getByRole("option", { name: "Desktop", exact: true }).click();
-      await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").waitFor();
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.locator("section[aria-label='Desktop']").waitFor();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
       await gateway.waitForRequest("environments.list");
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    });
+  });
+
+  it("refreshes direct-target inventory before observing the exact worker", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            environments: [workerDesktopEnvironment],
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=direct",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const panel = page.locator("openclaw-desktop-panel");
+      await installDesktopClientFake(panel);
+      const requestCount = (await gateway.getRequests()).length;
+
+      await openDirectDesktop(page, "worker-desktop-1");
+
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
+      expect(
+        (await gateway.getRequests())
+          .slice(requestCount)
+          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .map((request) => request.method),
+      ).toEqual(["environments.list", "desktop.observe"]);
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+    });
+  });
+
+  it("reports an unavailable direct target without showing another source", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+          },
+          "desktop.observe": {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "requested worker desktop is temporarily unavailable",
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      await openDirectDesktop(page, "missing-worker");
+
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "missing-worker" },
+        control: false,
+      });
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.getByText(/requested worker desktop is temporarily unavailable/).waitFor();
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
+    });
+  });
+
+  it("shows direct-target inventory failure without observing or falling back", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "desktop inventory is temporarily unavailable",
+            },
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=degraded",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openDirectDesktop(page, "worker-desktop-1");
+
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.getByRole("alert").filter({ hasText: "inventory" }).waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
+
+      await gateway.setMethodResponse("environments.list", {
+        environments: [workerDesktopEnvironment],
+      });
+      await installDesktopClientFake(panel);
+      const requestCount = (await gateway.getRequests()).length;
+      await panel.getByRole("button", { name: "Retry", exact: true }).click();
+
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(2);
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
+      expect(
+        (await gateway.getRequests())
+          .slice(requestCount)
+          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .map((request) => request.method),
+      ).toEqual(["environments.list", "desktop.observe"]);
+      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+      expect(await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+    });
+  });
+
+  it("does not observe a direct target after its inventory refresh is closed", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "environments.list": { environments: [] },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=stale",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.deferNext("environments.list");
+      const inventoryCount = (await gateway.getRequests("environments.list")).length;
+
+      await openDirectDesktop(page, "worker-desktop-1");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(inventoryCount + 1);
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+        );
+      });
+      await gateway.resolveDeferred("environments.list", { environments: [] });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(
+        await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
+      ).toBe(0);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
     });
   });
 

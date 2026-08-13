@@ -1265,6 +1265,7 @@ function runConcurrentSchemaProbe(params: {
           ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
           ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
           ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+          ALTER TABLE worker_environments DROP COLUMN bootstrap_install_kind;
           ALTER TABLE worker_environments DROP COLUMN owner_epoch;
           ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
           ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
@@ -4133,6 +4134,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+      ALTER TABLE worker_environments DROP COLUMN bootstrap_install_kind;
       ALTER TABLE worker_environments DROP COLUMN owner_epoch;
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
@@ -4152,6 +4154,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         "bootstrap_bundle_hash",
         "bootstrap_openclaw_version",
         "bootstrap_protocol_features_json",
+        "bootstrap_install_kind",
         "owner_epoch",
         "teardown_terminal_state",
         "ssh_host_key",

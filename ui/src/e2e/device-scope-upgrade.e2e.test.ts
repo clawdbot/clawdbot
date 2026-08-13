@@ -194,6 +194,24 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     },
   );
 
+  it("does not misreport limited Custodian access as an outdated Gateway", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", ...SCOPE_UPGRADE_METHODS],
+      operatorScopes: LIMITED_SCOPES,
+    });
+
+    await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+
+    expect(
+      await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+    await captureProof(page, "custodian-limited.png");
+  });
+
   it("keeps manual repair guidance when the banner module fails to load", async () => {
     const context = await createContext();
     const page = await context.newPage();

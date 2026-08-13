@@ -254,6 +254,9 @@
       "openclaw/plugin-sdk/direct-dm-guard-policy": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/direct-dm-guard-policy.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-config-ui-hints": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-ui-hints.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-config-writes": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-writes.d.ts"
       ],

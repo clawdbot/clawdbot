@@ -3,6 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { VERSION } from "../../version.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -78,9 +79,19 @@ describe("worker environment service", () => {
     } as unknown as WorkerTunnelManager;
     const workerService = support.createService(
       support.createProvider({
-        provision: async () => ({ leaseId: "device-lease", node: { deviceId: "device-1" } }),
+        provision: async () => ({
+          leaseId: "device-lease",
+          node: { deviceId: "device-1" },
+        }),
       }),
-      { tunnelManager },
+      {
+        tunnelManager,
+        resolveNodeWorkerBuild: async () => ({
+          bundleHash: "c".repeat(64),
+          openclawVersion: VERSION,
+          protocolFeatures: ["worker-heartbeat-v1"],
+        }),
+      },
     );
     const environment = await workerService.create("development", "device-tunnel-gate");
 
