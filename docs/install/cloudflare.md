@@ -25,7 +25,7 @@ The template lives in [`scripts/cloudflare`](https://github.com/openclaw/opencla
 
 ## How it works
 
-The Worker forwards every HTTP and WebSocket request to one stable Durable Object name. That Durable Object owns one Container instance and is the single-writer fence around the Litestream replica. The Container exposes OpenClaw on port `8080`; `/startupz` is its traffic-readiness check.
+The Worker forwards every HTTP and WebSocket request to one stable Durable Object name. That Durable Object owns one Container instance and is the single-writer fence around the Litestream replica. The Container exposes OpenClaw on port `8080`, and the Durable Object polls `/healthz` there before routing to it.
 
 ```mermaid
 flowchart TD
@@ -179,20 +179,22 @@ Measured on this template against a real R2 bucket: about 2.4 seconds from write
 
 Run these checks after the first bootstrap, before you depend on this deployment.
 
-Confirm the Gateway admits traffic. `/startupz` reports startup completion and ignores channel health, so it stays green when one channel account is broken:
+Confirm the Gateway answers. `/healthz` reports that the listener is up. `/startupz` additionally reports that startup work finished while ignoring channel health, so it stays green when one channel account is broken; it is served only by images built from the release that added it:
 
 ```bash
-curl -sS https://<worker-subdomain>.workers.dev/startupz
+curl -sS https://<worker-subdomain>.workers.dev/healthz
 curl -sS -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   https://<worker-subdomain>.workers.dev/readyz
 ```
 
-Confirm replication is actually reaching R2. Objects should appear under `replicas/` within seconds of activity:
+Confirm replication is actually reaching R2. Litestream writes keys under `replicas/state/<database>/<generation>/`, so list that prefix with any S3-compatible client using the same R2 credentials you gave Litestream. Wrangler cannot list object keys, only fetch them by exact path:
 
 ```bash
-npx wrangler r2 object get openclaw-backups/replicas --remote 2>/dev/null || true
-npx wrangler r2 bucket list
+aws s3 ls "s3://openclaw-backups/replicas/" --recursive \
+  --endpoint-url "https://<account-id>.r2.cloudflarestorage.com"
 ```
+
+The Cloudflare dashboard's R2 object browser shows the same tree. An empty prefix after several minutes of activity means replication is not working; fix it before continuing.
 
 Rehearse recovery before you need it. An untested restore path is not a backup:
 
@@ -267,7 +269,9 @@ Test updates and rollbacks against a separate R2 bucket first. Preserve current 
 
 **Worker returns 5xx and the Container never becomes ready** -- Cloudflare only runs `linux/amd64` images pulled from a public registry. Rebuild with `--platform linux/amd64`, confirm the derived Docker Hub repository is public, and confirm `containers[].image` uses the pushed digest rather than a moving tag.
 
-**Deployment succeeds but every request times out** -- The Container helper waits for `GET /startupz`. Check that the Gateway inside the Container listens on port `8080` and that no bootstrap step changed the port.
+**Deployment succeeds but every request times out** -- The Container helper waits for `GET /healthz`. Check that the Gateway inside the Container listens on port `8080` and that no bootstrap step changed the port.
+
+**A probe passes but the Gateway is not actually serving** -- The Control UI answers unknown paths with a catch-all `200`, so probing a route your image does not serve looks permanently healthy. Verify the response body is JSON, not HTML, before trusting a probe.
 
 **Litestream logs authentication or signature errors** -- Litestream needs R2 S3 API credentials, which are not the same as a Cloudflare API token. Create an R2 API token and use its access key ID and secret access key, and confirm `LITESTREAM_ENDPOINT` contains your account ID.
 

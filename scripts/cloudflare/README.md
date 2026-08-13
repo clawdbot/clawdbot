@@ -21,7 +21,7 @@ OpenClaw + Litestream container :8080
         +--> R2 S3 API (SQLite replicas)
 ```
 
-Every HTTP and WebSocket request is forwarded to port `8080`. The Container helper checks `GET /startupz` before admitting traffic. `max_instances: 1` and the single Durable Object name are the installation's outer single-writer fence.
+Every HTTP and WebSocket request is forwarded to port `8080`. The Container helper polls `GET /healthz`, which every published image serves, before admitting traffic. `max_instances: 1` and the single Durable Object name are the installation's outer single-writer fence.
 
 ## Prerequisites
 
@@ -128,7 +128,7 @@ Keep the exact bootstrap recipe in a private, reproducible runbook. Litestream d
 ## 5. Verify before relying on it
 
 ```bash
-curl -sS https://<worker-subdomain>.workers.dev/startupz
+curl -sS https://<worker-subdomain>.workers.dev/healthz
 npx wrangler tail
 ```
 
@@ -170,7 +170,8 @@ Treat rollbacks like restores: stop traffic where possible, preserve the current
 ## Troubleshooting
 
 - **Container never becomes ready:** the image must be `linux/amd64` and pulled from a public registry, referenced by digest rather than a moving tag.
-- **Requests time out after a successful deploy:** the Container helper waits for `GET /startupz` on port `8080`; confirm the Gateway still binds that port.
+- **Requests time out after a successful deploy:** the Container helper waits for `GET /healthz` on port `8080`; confirm the Gateway still binds that port.
+- **A probe passes but nothing serves:** the Control UI answers unknown paths with a catch-all `200`, so probing a route the image does not serve looks healthy forever; assert the JSON body, not just the status.
 - **Litestream authentication or signature errors:** Litestream needs R2 _S3 API_ credentials, not a Cloudflare API token, and `LITESTREAM_ENDPOINT` must contain the account ID.
 - **First boot reports no databases to restore:** expected on an empty bucket; the entrypoint treats that as a fresh installation.
 - **`/readyz` is 503 while `/startupz` is 200:** by design. Startup finished and a channel account is unhealthy; inspect channel status instead of restarting.
