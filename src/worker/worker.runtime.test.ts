@@ -54,9 +54,15 @@ import {
   markBackgrounded,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import type { SessionPlacementTurnParams } from "../agents/session-placement-admission.js";
+import { resolveWorkerToolAuthority } from "../gateway/worker-environments/worker-tool-authority.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  buildWorkerConnectParams,
+  parseWorkerLaunchDescriptor,
+  type WorkerLaunchDescriptor,
+} from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -852,6 +858,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   };
@@ -1907,6 +1914,119 @@ describe("worker runtime", () => {
 
     await expect(runWorkerDescriptor(launch)).rejects.toThrow(
       "worker workspace path escapes its assigned containment root",
+    );
+  });
+
+  function restrictedTurn(workspaceDir: string, exec: Record<string, unknown>) {
+    return {
+      sessionId: SESSION_ID,
+      sessionKey: `worker:${SESSION_ID}`,
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      cwd: workspaceDir,
+      prompt: "run",
+      timeoutMs: 1_000,
+      runId: RUN_ID,
+      provider: MODEL_REF.provider,
+      model: MODEL_REF.model,
+      agentId: "main",
+      toolsAllow: ["exec", "process"],
+      config: { tools: { exec } },
+    } as SessionPlacementTurnParams;
+  }
+
+  it("does not reconstruct denied exec authority as full across the launch boundary", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    // Match the JSON-only handoff to the real worker process: the restricted
+    // Gateway config is not ambient state in the worker, only this descriptor is.
+    launch.assignment.toolAuthority = { allowedToolNames: ["exec", "process"] };
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests).toHaveLength(2);
+    expect(
+      gateway.inferenceRequests[1]?.context.messages.some(
+        (message) => message.role === "toolResult",
+      ),
+    ).toBe(true);
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: MODEL_REF,
+        turn: restrictedTurn(workspaceDir, { security: "deny", ask: "off" }),
+      }).allowedToolNames,
+    ).toEqual(launch.assignment.toolAuthority.allowedToolNames);
+  });
+
+  it("keeps explicit deny through owner hooks, construction defaults, and plugin filtering", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "deny", ask: "off" },
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "exec",
+      "process",
+    ]);
+    expect(gateway.inferenceRequests).toHaveLength(2);
+  });
+
+  it("preserves resolved deny through serialized descriptor admission and worker execution", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+      modelRef: MODEL_REF,
+      turn: restrictedTurn(workspaceDir, { security: "deny", ask: "off" }),
+    });
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    expect(admitted.assignment.toolAuthority).toMatchObject({
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "deny", ask: "off" },
+    });
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests).toHaveLength(2);
+  });
+
+  it("honors reachable full sandbox-host authority in the isolated worker", async () => {
+    const { workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "sandbox", security: "full", ask: "off" },
+    };
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    expect(admitted.assignment.toolAuthority.exec).toEqual({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+    });
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+      "worker-local",
+    );
+  });
+
+  it("retains explicit full gateway-host execution", async () => {
+    const { workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "full", ask: "off" },
+    };
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+      "worker-local",
     );
   });
 

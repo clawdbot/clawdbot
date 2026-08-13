@@ -117,16 +117,28 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 }
 
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
+  const exec = isRecord(value) ? value.exec : undefined;
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["allowedToolNames"]) ||
+    !hasExactKeys(value, ["allowedToolNames"], ["exec"]) ||
     !Array.isArray(value.allowedToolNames) ||
     !value.allowedToolNames.every(isWorkerToolName) ||
-    new Set(value.allowedToolNames).size !== value.allowedToolNames.length
+    new Set(value.allowedToolNames).size !== value.allowedToolNames.length ||
+    (exec !== undefined &&
+      (!isRecord(exec) ||
+        !hasExactKeys(exec, ["host", "security", "ask"]) ||
+        (exec.host !== "sandbox" && exec.host !== "gateway" && exec.host !== "node") ||
+        (exec.security !== "deny" && exec.security !== "allowlist" && exec.security !== "full") ||
+        (exec.ask !== "off" && exec.ask !== "on-miss" && exec.ask !== "always")))
   ) {
     return undefined;
   }
-  return { allowedToolNames: [...value.allowedToolNames] };
+  return {
+    allowedToolNames: [...value.allowedToolNames],
+    ...(exec === undefined
+      ? {}
+      : { exec: { ...exec } as NonNullable<WorkerToolAuthority["exec"]> }),
+  };
 }
 
 function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescriptor | undefined {

@@ -31,7 +31,60 @@ function authority(
   }).allowedToolNames;
 }
 
+function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) {
+  return resolveWorkerToolAuthority({
+    modelRef: { provider: "openai", model: "gpt-test" },
+    turn: turn(overrides),
+  });
+}
+
 describe("resolveWorkerToolAuthority", () => {
+  it.each([
+    {
+      name: "explicit deny",
+      exec: { security: "deny" as const, ask: "off" as const },
+      expected: { security: "deny", ask: "off" },
+    },
+    {
+      name: "allowlist mode",
+      exec: { mode: "allowlist" as const },
+      expected: { security: "allowlist", ask: "off" },
+    },
+  ])(
+    "carries effective exec authority for $name instead of only the tool name",
+    ({ exec, expected }) => {
+      const resolved = resolvedAuthority({
+        config: { tools: { exec } },
+        toolsAllow: ["exec", "process"],
+      });
+
+      expect(resolved.allowedToolNames).toEqual(["exec", "process"]);
+      expect(resolved.exec).toMatchObject(expected);
+    },
+  );
+
+  it.each(["sandbox", "node"] as const)(
+    "emits reachable %s-host authority that the worker consumer must honor",
+    (host) => {
+      expect(
+        resolvedAuthority({
+          config: { tools: { exec: { host, mode: "full" } } },
+          toolsAllow: ["exec", "process"],
+        }),
+      ).toMatchObject({
+        allowedToolNames: ["exec", "process"],
+        exec: { host, security: "full", ask: "off" },
+      });
+    },
+  );
+
+  it("still carries exec authority when every tool is withheld", () => {
+    expect(resolvedAuthority({ disableTools: true })).toMatchObject({
+      allowedToolNames: [],
+      exec: { security: "full", ask: "off" },
+    });
+  });
+
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual([
       "read",

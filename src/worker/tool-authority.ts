@@ -39,4 +39,13 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
 
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
+  /**
+   * Effective exec policy resolved at the Gateway. Optional for protocol compatibility only;
+   * consumers must treat an absent value as denied rather than re-deriving it worker-side.
+   */
+  exec?: {
+    host: "sandbox" | "gateway" | "node";
+    security: "deny" | "allowlist" | "full";
+    ask: "off" | "on-miss" | "always";
+  };
 };

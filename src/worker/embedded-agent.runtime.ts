@@ -41,6 +41,7 @@ import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
   WORKER_TOOL_NAMES,
+  type WorkerToolAuthority,
   type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
@@ -94,6 +95,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
+  execAuthority: WorkerToolAuthority["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   signal?: AbortSignal;
@@ -159,6 +161,13 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
+  // The Gateway resolves effective exec policy before dispatch; deriving it from the worker's
+  // isolated config would reconstruct restricted turns with wider authority.
+  const execAuthority = params.execAuthority ?? {
+    host: "gateway" as const,
+    security: "deny" as const,
+    ask: "off" as const,
+  };
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
@@ -177,10 +186,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
       bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
-      host: "gateway",
+      ...execAuthority,
+      // The worker is already isolated; a nested sandbox runtime does not exist here.
+      host: execAuthority.host === "sandbox" ? "gateway" : execAuthority.host,
       mode: permissionToolPolicy?.execMode ?? "full",
-      security: "full",
-      ask: "off",
       // Safe clamp v1 keeps allowlist hits local but denies misses before review.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
       nonInteractiveApproval: Boolean(
