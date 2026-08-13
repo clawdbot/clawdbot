@@ -154,6 +154,28 @@ read_when: signals: user announcing a conversion task
     expect(result.issues).toEqual([]);
   });
 
+  it("recovers quoted freeform keys with colon-rich values", () => {
+    const content = `---
+name: sample-skill
+"description": signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("recovers single-quoted freeform keys with colon-rich values", () => {
+    const content = `---
+name: sample-skill
+'read_when': signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
   it("leaves valid YAML description semantics untouched", () => {
     expect(
       parseFrontmatterBlock(`---

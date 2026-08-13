@@ -105,12 +105,14 @@ function normalizeFreeformFieldAtError(block: string): string {
   const lineEnd = block.indexOf("\n", pos);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  const match = line.match(/^([\w-]+):\s*(.*)$/);
-  const keyName = match?.[1];
+  // Match unquoted, double-quoted, and single-quoted freeform keys. Current
+  // main recovers all three for `description`; preserve that compatibility.
+  const match = line.match(/^(?:([\w-]+)|"([\w-]+)"|'([\w-]+)'):\s*(.*)$/);
+  const keyName = match?.[1] ?? match?.[2] ?? match?.[3];
   if (!keyName || !FREEFORM_TEXT_FIELDS.has(keyName)) {
     return block;
   }
-  const rawValue = match?.[2]?.trim();
+  const rawValue = match?.[4]?.trim();
   if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue) || !/: /.test(rawValue)) {
     return block;
   }
