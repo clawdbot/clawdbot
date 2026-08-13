@@ -540,16 +540,38 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
   });
 
-  it("rejects --use-env when every declared env var is missing", async () => {
-    vi.stubEnv("TYPED_CHAT_TOKEN", "");
-    vi.stubEnv("TYPED_CHAT_SECRET", "");
+  // A declared contract without `envVarMode: "any"` is all-required, so a partially supplied
+  // environment must reject too. Covering only the both-missing case would still pass if that
+  // check regressed to rejecting solely when nothing at all is set.
+  it.each([
+    {
+      case: "every declared env var is missing",
+      token: "",
+      secret: "",
+      missing: ["TYPED_CHAT_TOKEN", "TYPED_CHAT_SECRET"],
+    },
+    {
+      case: "only the trailing declared env var is missing",
+      token: "typed-chat-token",
+      secret: "",
+      missing: ["TYPED_CHAT_SECRET"],
+    },
+    {
+      case: "only the leading declared env var is missing",
+      token: "",
+      secret: "typed-chat-secret",
+      missing: ["TYPED_CHAT_TOKEN"],
+    },
+  ])("rejects --use-env when $case", async ({ token, secret, missing }) => {
+    vi.stubEnv("TYPED_CHAT_TOKEN", token);
+    vi.stubEnv("TYPED_CHAT_SECRET", secret);
     registerEnvContractSetupPlugin(["TYPED_CHAT_TOKEN", "TYPED_CHAT_SECRET"]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
     await channelsAddCommand({ channel: "typed-chat", useEnv: true }, runtime, { hasFlags: true });
 
-    for (const missing of ["TYPED_CHAT_TOKEN", "TYPED_CHAT_SECRET"]) {
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
+    for (const name of missing) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(name));
     }
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
