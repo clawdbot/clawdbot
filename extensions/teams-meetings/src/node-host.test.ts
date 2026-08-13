@@ -7,8 +7,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
-import { teamsMeetingsConfig } from "./config.js";
-import { handleTeamsMeetingsNodeHostCommand } from "./node-host.js";
+let teamsMeetingsConfig: (typeof import("./config.js"))["teamsMeetingsConfig"];
+let handleTeamsMeetingsNodeHostCommand: (typeof import("./node-host.js"))["handleTeamsMeetingsNodeHostCommand"];
 
 const successfulProbe = {
   pid: 123,
@@ -29,10 +29,13 @@ function setupParams() {
 }
 
 describe("Teams meeting node-host prerequisite deadline", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue(successfulProbe);
+    ({ teamsMeetingsConfig } = await import("./config.js"));
+    ({ handleTeamsMeetingsNodeHostCommand } = await import("./node-host.js"));
   });
 
   afterEach(() => {
