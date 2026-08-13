@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
+import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -614,6 +615,11 @@ export async function migrateOrphanedSessionKeys(params: {
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const persistedStorePath =
+    persistedStoreOwner.kind === "configured" && storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, persistedStoreOwner.agentId, env)
+      : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
     listPluginDoctorSessionStoreAgentIds({
@@ -629,6 +635,12 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeMap = new Map<string, Set<string>>();
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
+    // A fixed-store owner is durable migration provenance. Keep other configured
+    // agents from making that store's unscoped rows look ambiguous.
+    const ownerId =
+      persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
+        ? persistedStoreOwner.agentId
+        : id;
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
@@ -638,9 +650,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     const existing = storeMap.get(storePath);
     if (existing) {
-      existing.add(id);
+      existing.add(ownerId);
     } else {
-      storeMap.set(storePath, new Set([id]));
+      storeMap.set(storePath, new Set([ownerId]));
     }
   };
   // Configured ownership includes normal agents plus ACP runtime/default hints.
