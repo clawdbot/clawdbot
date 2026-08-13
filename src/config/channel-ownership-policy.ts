@@ -12,16 +12,26 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function createConfiguredChannelOwnershipPolicy(params: {
   config: OpenClawConfig;
+  /**
+   * The operator's own config, before auto-enable materializes plugin entries. Explicit selection
+   * must be read from it: auto-enable writes `plugins.entries.<id>.enabled` for the plugins it
+   * turns on, so reading the materialized config would report every auto-enabled plugin as
+   * hand-picked and suppress the replacement rule entirely. `disableImplicitPreferredOverPlugin`
+   * checks its own `originalConfig` for the same reason. Defaults to `config` for callers that
+   * validate a raw config file.
+   */
+  sourceConfig?: OpenClawConfig;
   registry: PluginManifestRegistry;
   env: NodeJS.ProcessEnv;
 }): ChannelOwnershipPolicy {
   // Policy lists accept a plugin's channel ids and legacy ids; Gateway startup canonicalizes them
   // through the registry, so ownership has to resolve them the same way.
   const resolveAlias = createManifestPluginAliasResolver(params.registry);
+  const sourceConfig = params.sourceConfig ?? params.config;
   return {
     isPluginActive: (pluginId) => !isPluginPolicyDisabled(params.config, pluginId, resolveAlias),
     isPluginExplicitlySelected: (pluginId) =>
-      isPluginExplicitlySelected(params.config, resolveAlias(pluginId)),
+      isPluginExplicitlySelected(sourceConfig, resolveAlias(pluginId)),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({ record, channelId, env: params.env }),
   };

@@ -1,6 +1,7 @@
 // Builds runtime config schema defaults from agent and workspace state.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  type ChannelOwnershipPolicy,
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
@@ -8,6 +9,7 @@ import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-poli
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
@@ -20,22 +22,31 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
 
 // The operator-facing schema must describe the plugin the runtime actually activates, or config UI
 // offers fields that `config validate` then rejects.
-function ownershipPolicy(config: OpenClawConfig, registry: PluginManifestRegistry) {
-  return createConfiguredChannelOwnershipPolicy({ config, registry, env: process.env });
+function ownershipPolicy(
+  config: OpenClawConfig,
+  registry: PluginManifestRegistry,
+  sourceConfig: OpenClawConfig | null | undefined,
+) {
+  return createConfiguredChannelOwnershipPolicy({
+    config,
+    ...(sourceConfig ? { sourceConfig } : {}),
+    registry,
+    env: process.env,
+  });
 }
 
 /**
  * Builds one config schema from an exact manifest registry. Callers holding the active config pass
- * the replacement predicate so the schema names the owner the runtime activates; callers that only
- * have a registry (CLI redaction hints) omit it and get the unfiltered owner.
+ * the ownership policy so the schema names the owner the runtime activates; callers that only have
+ * a registry (CLI redaction hints) omit it and get the unfiltered owner.
  */
 export function buildRuntimeConfigSchemaFromRegistry(
   registry: PluginManifestRegistry,
-  canReplaceOwner?: (pluginId: string) => boolean,
+  policy?: ChannelOwnershipPolicy,
 ): ConfigSchemaResponse {
   return buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),
-    channels: collectChannelSchemaMetadataCore(registry, canReplaceOwner),
+    channels: collectChannelSchemaMetadataCore(registry, policy),
   });
 }
 
@@ -43,7 +54,10 @@ export function buildRuntimeConfigSchemaFromRegistry(
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
-  return buildRuntimeConfigSchemaFromRegistry(registry, ownershipPolicy(config, registry));
+  return buildRuntimeConfigSchemaFromRegistry(
+    registry,
+    ownershipPolicy(config, registry, getRuntimeConfigSourceSnapshot()),
+  );
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
@@ -54,6 +68,9 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
-    channels: collectChannelSchemaMetadataCore(registry, ownershipPolicy(config, registry)),
+    channels: collectChannelSchemaMetadataCore(
+      registry,
+      ownershipPolicy(config, registry, snapshot.valid ? snapshot.sourceConfig : undefined),
+    ),
   });
 }
