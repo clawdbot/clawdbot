@@ -580,6 +580,27 @@ describe("upgrade survivor assertions", () => {
     ).not.toThrow();
   });
 
+  it("rejects retired sessionFile metadata in SQLite-backed session rows", () => {
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+            JSON.stringify({
+              sessionFile: join(stateDir, "sessions", "upgrade-main-session.jsonl"),
+            }),
+            "agent:main:main",
+          );
+        } finally {
+          db.close();
+        }
+      }),
+    ).toThrow(/retained retired sessionFile metadata/);
+  });
+
   it("rejects ClawHub npm-pack installs outside the managed extensions root", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-outside-"));
     try {
