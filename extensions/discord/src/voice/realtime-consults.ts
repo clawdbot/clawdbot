@@ -213,8 +213,15 @@ export class DiscordRealtimeConsults {
     forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined,
     providerEpoch: number,
   ): Promise<void> {
+    const usesRealtimeAgentHandoff = this.params.usesRealtimeAgentHandoff();
+    const usesFallbackTalkback = this.params.isAgentProxy && !usesRealtimeAgentHandoff;
+    // Claim fallback talkback context before active-run control awaits. Concurrent
+    // final transcripts can otherwise resume out of order and swap owner flags.
+    const fallbackSpeakerContext = usesFallbackTalkback
+      ? (forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext())
+      : undefined;
     const pendingForcedConsult =
-      this.params.isAgentProxy && this.params.usesRealtimeAgentHandoff()
+      this.params.isAgentProxy && usesRealtimeAgentHandoff
         ? this.prepareForcedAgentProxyConsult(acceptedText, forcedSpeakerContext)
         : undefined;
     let control: Awaited<ReturnType<typeof maybeControlDiscordVoiceAgentRun>> | undefined;
@@ -248,16 +255,13 @@ export class DiscordRealtimeConsults {
     if (!this.params.isAgentProxy) {
       return;
     }
-    if (this.params.usesRealtimeAgentHandoff()) {
+    if (usesRealtimeAgentHandoff) {
       if (pendingForcedConsult) {
         this.schedulePreparedForcedAgentProxyConsult(pendingForcedConsult);
       }
       return;
     }
-    this.talkback.enqueue(
-      acceptedText,
-      forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext(),
-    );
+    this.talkback.enqueue(acceptedText, fallbackSpeakerContext);
   }
 
   private createTalkbackQueue(): RealtimeVoiceAgentTalkbackQueue {
