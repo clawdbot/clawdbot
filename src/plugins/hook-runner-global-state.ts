@@ -8,10 +8,8 @@ import type {
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  getPluginRuntimeGenerationRegistry,
-} from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];

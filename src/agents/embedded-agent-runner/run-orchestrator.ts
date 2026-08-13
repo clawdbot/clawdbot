@@ -21,7 +21,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {

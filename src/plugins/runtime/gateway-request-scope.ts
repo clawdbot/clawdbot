@@ -1,15 +1,11 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
-import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
 
 type PluginRuntimeGatewayRequestScope = {
@@ -42,14 +38,6 @@ const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
 );
 
-const PLUGIN_RUNTIME_GENERATION_REGISTRY_SCOPE_KEY: unique symbol = Symbol.for(
-  "openclaw.pluginRuntimeGenerationRegistryScope",
-);
-
-const pluginRuntimeGenerationRegistryScope = resolveGlobalSingleton<
-  AsyncLocalStorage<PluginRegistry>
->(PLUGIN_RUNTIME_GENERATION_REGISTRY_SCOPE_KEY, () => new AsyncLocalStorage<PluginRegistry>());
-
 /**
  * Runs plugin gateway handlers with request-scoped context that runtime helpers can read.
  */
@@ -72,30 +60,6 @@ export function withPluginRuntimeRegistryScope<T>(
   return pluginRuntimeGatewayRequestScope.run(
     { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
     run,
-  );
-}
-
-/** Carries one prepared plugin generation through all nested runtime lookups. */
-export function withPluginRuntimeGenerationScope<T>(
-  generation: {
-    config: OpenClawConfig;
-    metadataSnapshot: PluginMetadataSnapshot;
-    pluginRegistry?: PluginRegistry;
-    workspaceDir?: string;
-  },
-  run: () => T,
-): T {
-  const pluginRegistry = generation.pluginRegistry ?? createEmptyPluginRegistry();
-  return withPluginMetadataSnapshotScope(
-    generation.metadataSnapshot,
-    () =>
-      pluginRuntimeGenerationRegistryScope.run(pluginRegistry, () =>
-        withPluginRuntimeRegistryScope(pluginRegistry, run),
-      ),
-    {
-      config: generation.config,
-      ...(generation.workspaceDir ? { workspaceDir: generation.workspaceDir } : {}),
-    },
   );
 }
 
@@ -142,9 +106,4 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
-}
-
-/** Exact registry owned by the prepared generation, when one is active. */
-export function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {
-  return pluginRuntimeGenerationRegistryScope.getStore();
 }

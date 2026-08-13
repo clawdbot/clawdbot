@@ -20,10 +20,8 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGenerationScope,
-} from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 function createSnapshot(
   params: {

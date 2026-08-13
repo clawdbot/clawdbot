@@ -19,7 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";

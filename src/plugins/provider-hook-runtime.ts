@@ -22,10 +22,8 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  getPluginRuntimeGenerationRegistry,
-} from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,

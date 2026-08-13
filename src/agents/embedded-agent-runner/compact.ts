@@ -4,7 +4,7 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
