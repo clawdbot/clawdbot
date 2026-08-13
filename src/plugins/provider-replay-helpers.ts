@@ -1,7 +1,13 @@
 // Provides shared replay-policy helpers for provider plugins.
+import {
+  preservesClaudeThinkingBlocks,
+  resolveClaudeModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
@@ -94,39 +100,49 @@ export function buildStrictAnthropicReplayPolicy(
 
 /**
  * Returns true for Claude models that preserve thinking blocks in context
- * natively (generation 4 and newer). For these models, dropping thinking blocks
- * from prior turns breaks replay and prompt caching.
+ * natively. For these models, dropping thinking blocks from prior turns breaks
+ * replay and prompt caching.
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
  *
  * @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks.
  */
-export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
-  if (!id.includes("claude")) {
-    return false;
-  }
-
-  // Claude 4 and newer preserve thinking blocks natively; 3.x and earlier must drop them.
-  // The generation follows the family for current ids (claude-opus-5, claude-sonnet-4-6) but
-  // precedes it for legacy ones (claude-3-7-sonnet), so skip any family segment before reading it.
-  const generation = id.match(/claude-[a-z-]*?(\d+)/)?.[1];
-  return generation !== undefined && Number(generation) >= 4;
+export function shouldPreserveThinkingBlocks(
+  modelId?: string,
+  model?: Pick<ProviderRuntimeModel, "params">,
+): boolean {
+  return preservesClaudeThinkingBlocks({ id: modelId, params: model?.params });
 }
 
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
-export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
-  const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
+export function shouldDropClaudeThinkingBlocks(
+  modelId?: string,
+  model?: Pick<ProviderRuntimeModel, "params">,
+): boolean {
+  const ref = { id: modelId, params: model?.params };
+  const canonicalId = resolveClaudeModelIdentity(ref);
+  const isClaude =
+    canonicalId.startsWith("claude-") || resolveClaudeOpus5ModelIdentity(ref) !== undefined;
+  return isClaude && !preservesClaudeThinkingBlocks(ref);
+}
+
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
+export function buildAnthropicReplayPolicyForModel(
+  modelId?: string,
+  model?: Pick<ProviderRuntimeModel, "params">,
+): ProviderReplayPolicy {
   return buildStrictAnthropicReplayPolicy({
-    dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
+    dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
   });
 }
 
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
-export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
-  const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
+export function buildNativeAnthropicReplayPolicyForModel(
+  modelId?: string,
+  model?: Pick<ProviderRuntimeModel, "params">,
+): ProviderReplayPolicy {
   return buildStrictAnthropicReplayPolicy({
-    dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
+    dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
     sanitizeToolCallIds: true,
     preserveNativeAnthropicToolUseIds: true,
   });
@@ -138,12 +154,10 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
-    const isClaude = normalizeLowercaseStringOrEmpty(ctx.modelId).includes("claude");
     return buildStrictAnthropicReplayPolicy({
       dropThinkingBlocks:
         options.anthropicModelDropThinkingBlocks &&
-        isClaude &&
-        !shouldPreserveThinkingBlocks(ctx.modelId),
+        shouldDropClaudeThinkingBlocks(ctx.modelId, ctx.model),
     });
   }
 

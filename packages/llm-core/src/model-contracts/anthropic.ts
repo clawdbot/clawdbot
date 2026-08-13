@@ -112,6 +112,17 @@ export function resolveClaudeOpus5ModelIdentity(ref: ClaudeModelRef): string | u
   return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
 }
 
+/** Return whether Anthropic preserves prior thinking blocks for this Claude model. */
+export function preservesClaudeThinkingBlocks(ref: ClaudeModelRef): boolean {
+  const modelId = resolveClaudeModelIdentity(ref);
+  return (
+    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
+    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+      modelId,
+    )
+  );
+}
+
 /** Return whether a Claude model supports adaptive thinking. */
 export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
