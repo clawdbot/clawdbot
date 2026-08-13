@@ -390,11 +390,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }),
   );
   for (const details of messageActionDetails) {
-    if (
-      details?.shouldFetchFullMessage &&
-      details.messageId &&
-      !opts.getAssistantMessageExpansion?.(details.messageId)
-    ) {
+    if (!details?.shouldFetchFullMessage || !details.messageId) {
+      continue;
+    }
+    const expansion = opts.getAssistantMessageExpansion?.(details.messageId);
+    // A transient load failure must not pin the truncated preview for the
+    // whole session: retry on later render passes, bounded by revision
+    // (each attempt costs 2 revisions) so a dead loader cannot hot-loop.
+    if (!expansion || (expansion.status === "error" && expansion.revision < 6)) {
       opts.onToggleAssistantMessageExpanded?.(details.messageId);
     }
   }
