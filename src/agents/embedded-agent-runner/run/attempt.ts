@@ -47,6 +47,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import { renderExplicitSkillPrompt } from "./explicit-skill-prompt.js";
 import {
   measureEmbeddedAgentPreparation,
   measureEmbeddedAgentPreparationSync,
@@ -165,6 +166,17 @@ export async function runEmbeddedAttempt(
     );
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
     const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    const executionAttempt = params.explicitSkillSelections?.length
+      ? {
+          ...params,
+          prompt: renderExplicitSkillPrompt({
+            prompt: params.prompt,
+            selections: params.explicitSkillSelections,
+            sandboxed: sandbox?.enabled === true,
+            usagePaths: skillUsagePaths,
+          }),
+        }
+      : params;
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
@@ -447,7 +459,7 @@ export async function runEmbeddedAttempt(
         { config: params.config },
       );
       const executionResult = await runEmbeddedAttemptExecutionPhase({
-        attempt: params,
+        attempt: executionAttempt,
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
         isRawModelRun,

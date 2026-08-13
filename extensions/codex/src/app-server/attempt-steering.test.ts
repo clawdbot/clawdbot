@@ -32,6 +32,7 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
+      cwd: "/repo",
       claimPendingUserInput: options.claimPendingUserInput ?? (() => undefined),
       signal: options.signal ?? new AbortController().signal,
     });
@@ -79,6 +80,7 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 1_000,
+      cwd: "/repo",
       claimPendingUserInput: () => undefined,
       signal: new AbortController().signal,
     });
@@ -111,6 +113,7 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
+      cwd: "/repo",
       claimPendingUserInput: () => undefined,
       signal: controller.signal,
     });
@@ -128,6 +131,58 @@ describe("Codex app-server steering queue", () => {
     await rejected;
     expect(pendingRequests.size).toBe(0);
     harness.client.close();
+  });
+
+  it("carries structured skill selections through an accepted steer", async () => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: "/repo",
+              skills: [
+                {
+                  name: "example-manual",
+                  description: "Manual workflow",
+                  path: "/skills/example-manual/SKILL.md",
+                  scope: "repo",
+                  enabled: true,
+                },
+              ],
+              errors: [],
+            },
+          ],
+        };
+      }
+      return { turnId: "turn-1" };
+    });
+    const queue = createQueue(request);
+    const queued = queue.queue("Use $example-manual", {
+      debounceMs: 0,
+      explicitSkillSelections: [
+        { name: "example-manual", path: "/skills/example-manual/SKILL.md" },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const steerCall = request.mock.calls.find(([method]) => method === "turn/steer");
+    const params = steerCall?.[1] as {
+      clientUserMessageId?: string;
+      input?: Array<Record<string, unknown>>;
+    };
+    expect(params.input).toContainEqual({
+      type: "skill",
+      name: "example-manual",
+      path: "/skills/example-manual/SKILL.md",
+    });
+    expect(
+      (params.input ?? [])
+        .filter((item) => item.type === "text")
+        .map((item) => item.text)
+        .join(""),
+    ).toBe("Use $example-manual");
+    expect(queue.confirmConsumed(params.clientUserMessageId ?? "")).toBe(true);
+    await queued;
   });
 
   it("handles user-message completion before the steer response", async () => {

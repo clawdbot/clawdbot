@@ -237,6 +237,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
+        explicitSkillSelections: turn.followupRun.explicitSkillSelections,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",

@@ -230,8 +230,18 @@ describe("resolveSkillCommandInvocation", () => {
 
 describe("resolveSkillReferenceInvocations", () => {
   const skillCommands = [
-    { name: "demo_skill", skillName: "demo-skill", description: "Demo" },
-    { name: "release_notes", skillName: "Release Notes", description: "Release notes" },
+    {
+      name: "demo_skill",
+      skillFile: "/skills/demo-skill/SKILL.md",
+      skillName: "demo-skill",
+      description: "Demo",
+    },
+    {
+      name: "release_notes",
+      skillFile: "/skills/release-notes/SKILL.md",
+      skillName: "Release Notes",
+      description: "Release notes",
+    },
   ];
 
   it("resolves and deduplicates composable skill references", () => {
@@ -270,11 +280,27 @@ describe("resolveSkillReferenceInvocations", () => {
     ).toEqual([]);
   });
 
+  it("leaves linked app, MCP, and plugin mentions to their native owners", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use [$demo_skill](app://demo) and [$demo_skill](mcp://demo) and [$demo_skill](plugin://demo)",
+        skillCommands,
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps lowercase skill names that overlap common shell variables", () => {
     expect(
       resolveSkillReferenceInvocations({
         text: "Use $home but keep $HOME and $EDITOR literal.",
-        skillCommands: [{ name: "home", skillName: "home", description: "Home automation" }],
+        skillCommands: [
+          {
+            name: "home",
+            skillFile: "/skills/home/SKILL.md",
+            skillName: "home",
+            description: "Home automation",
+          },
+        ],
       }).map((command) => command.name),
     ).toEqual(["home"]);
   });
@@ -288,20 +314,29 @@ describe("resolveSkillReferenceInvocations", () => {
     ).toEqual(["demo_skill"]);
   });
 
-  it("excludes slash-only skills that are hidden from the model prompt", () => {
+  it("allows user-invocable skills that are hidden from implicit model selection", () => {
     expect(
       resolveSkillReferenceInvocations({
         text: "Use $hidden_skill.",
         skillCommands: [
           {
             name: "hidden_skill",
+            skillFile: "/skills/hidden-skill/SKILL.md",
             skillName: "hidden-skill",
             description: "Slash only",
             modelVisible: false,
           },
         ],
       }),
-    ).toEqual([]);
+    ).toEqual([
+      {
+        name: "hidden_skill",
+        skillFile: "/skills/hidden-skill/SKILL.md",
+        skillName: "hidden-skill",
+        description: "Slash only",
+        modelVisible: false,
+      },
+    ]);
   });
 });
 

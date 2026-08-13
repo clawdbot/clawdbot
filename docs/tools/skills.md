@@ -155,9 +155,9 @@ reference more than one skill:
 Use $github and $release_notes to summarize this change for the release.
 ```
 
-OpenClaw resolves these references against the current agent's eligible,
-user-invocable, model-visible skills and tells the model to read each referenced `SKILL.md`
-before acting. A single message can reference up to eight distinct skills;
+OpenClaw resolves these references from the authorized current inbound message against the
+current agent's eligible, user-invocable skills and tells the active harness to load each
+referenced `SKILL.md` before acting. A single message can reference up to eight distinct skills;
 OpenClaw returns a visible error instead of ignoring extra references. The `$`
 form is composable prompt text; `/release_notes ...`
 remains the standalone command form and may use direct tool dispatch when the
@@ -165,12 +165,12 @@ skill declares `command-dispatch: tool`. Common uppercase shell variables such
 as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase
 `$home`, `$path`, or `$editor` to reference skills with those names.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker because
-their instructions are intentionally absent from the model's prompt. Invoke
-those explicitly with their standalone slash command instead.
+Skills with `disable-model-invocation: true` stay out of implicit model selection but remain
+available through an authorized explicit `$name` reference or their standalone slash command.
 
-`$` references are interpreted on WebChat/Control UI turns. Other messaging
-channels keep `$name` as ordinary text; use the skill's slash command there.
+`$` references are interpreted consistently on authorized turns across WebChat/Control UI and
+messaging channels. Historical conversation, quoted replies, hook context, and workspace context
+never count as a current explicit invocation.
 
 ## Skill Workshop
 

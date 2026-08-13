@@ -113,6 +113,7 @@ import {
 import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   buildDeveloperInstructions,
   buildTurnStartParams,
@@ -196,6 +197,28 @@ function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
 }
 
+function readTurnStartInputText(request: { params?: unknown } | undefined): string {
+  const params = request?.params as { input?: Array<{ text?: string; type?: string }> } | undefined;
+  return (params?.input ?? [])
+    .filter((item) => item.type === "text")
+    .map((item) => item.text ?? "")
+    .join("");
+}
+
+function readTurnStartAdditionalContext(request: { params?: unknown } | undefined): string {
+  const params = request?.params as
+    | { additionalContext?: Record<string, { value?: string }> }
+    | undefined;
+  return Object.entries(params?.additionalContext ?? {})
+    .filter(([key]) => key.startsWith("openclaw_turn_context_"))
+    .map(([, entry]) => entry.value ?? "")
+    .join("");
+}
+
+function readTurnStartModelText(request: { params?: unknown } | undefined): string {
+  return `${readTurnStartAdditionalContext(request)}${readTurnStartInputText(request)}`;
+}
+
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -256,6 +279,10 @@ async function writeExistingBinding(
     model: "gpt-5.4-codex",
     modelProvider: "openai",
     historyCoveredThrough: new Date().toISOString(),
+    nativeSkillIsolationFingerprint: fingerprintJsonObject({
+      version: 2,
+      disabledUserSkillPaths: [],
+    }),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
     ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
     ...overrides,
@@ -1860,17 +1887,14 @@ describe("runCodexAppServerAttempt", () => {
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       const turnStart = harness.requests.find((request) => request.method === "turn/start");
-      const turnStartParams = turnStart?.params as {
-        input?: Array<{ text?: string }>;
-      };
-      const inputText = turnStartParams.input?.[0]?.text ?? "";
-      expect(inputText).toContain("OpenClaw delivery metadata:");
-      expect(inputText).toContain(
+      const inputText = readTurnStartInputText(turnStart);
+      const contextText = readTurnStartAdditionalContext(turnStart);
+      expect(contextText).toContain("OpenClaw delivery metadata:");
+      expect(contextText).toContain(
         "This delivery metadata is runtime routing guidance, not the user's request.",
       );
-      expect(inputText).toContain(deliveryHint);
-      expect(inputText).toContain("Current user request:\nhello");
-      expect(inputText).not.toContain("Current user request:\nDelivery:");
+      expect(contextText).toContain(deliveryHint);
+      expect(inputText).toBe("hello");
     }
   });
 
@@ -2627,17 +2651,68 @@ describe("runCodexAppServerAttempt", () => {
     const turnStartParams = turnStart?.params as
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
       | undefined;
-    expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
-    ]);
+    expect(turnStartParams?.input).toEqual([{ type: "text", text: "hello", text_elements: [] }]);
+    expect(readTurnStartAdditionalContext(turnStart)).toContain("queued context");
+    expect(readTurnStartAdditionalContext(turnStart)).toContain("tail context");
     expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
       { historyMessages?: unknown[]; prompt?: string },
       unknown,
     ];
-    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
+    expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.historyMessages).toEqual([]);
     expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
+  });
+
+  it("sends raw current text plus an authoritative structured skill selection", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const skillPath = path.join(workspaceDir, ".agents", "skills", "example-manual", "SKILL.md");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: workspaceDir,
+              skills: [
+                {
+                  name: "example-manual",
+                  description: "Manual workflow",
+                  path: skillPath,
+                  scope: "repo",
+                  enabled: true,
+                },
+              ],
+              errors: [],
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "Use $example_manual now";
+    params.transcriptPrompt = params.prompt;
+    params.explicitSkillSelections = [
+      { mention: "example_manual", name: "example-manual", path: skillPath },
+    ];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const input = (turnStart?.params as { input?: Array<Record<string, unknown>> })?.input ?? [];
+    expect(
+      input
+        .filter((item) => item.type === "text")
+        .map((item) => item.text)
+        .join(""),
+    ).toBe(params.prompt);
+    expect(input).toContainEqual({ type: "skill", name: "example-manual", path: skillPath });
+    expect(
+      input.some((item) => item.type === "text" && String(item.text).includes("$example_manual")),
+    ).toBe(false);
   });
 
   it("fails closed when before_prompt_build restricts Codex tools", async () => {
@@ -2763,15 +2838,12 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("older next-step anchor: keep the handoff checklist");
-    expect(inputText).toContain("we are fixing the Opik default project");
-    expect(inputText).toContain("Opik default project context");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("make the default webpage openclaw");
+    const contextText = readTurnStartAdditionalContext(turnStart);
+    expect(contextText).toContain("OpenClaw assembled context for this turn:");
+    expect(contextText).toContain("older next-step anchor: keep the handoff checklist");
+    expect(contextText).toContain("we are fixing the Opik default project");
+    expect(contextText).toContain("Opik default project context");
+    expect(readTurnStartInputText(turnStart)).toBe("make the default webpage openclaw");
   });
   it("projects canonical SQLite continuity when starting without a native thread binding", async () => {
     const sessionId = "session-sqlite-fresh-continuity";
@@ -2797,15 +2869,12 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
+    const contextText = readTurnStartAdditionalContext(turnStart);
     expect(harness.requests.map((request) => request.method)).toContain("thread/start");
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("canonical SQLite startup question");
-    expect(inputText).toContain("canonical SQLite startup answer");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("continue the canonical SQLite startup");
+    expect(contextText).toContain("OpenClaw assembled context for this turn:");
+    expect(contextText).toContain("canonical SQLite startup question");
+    expect(contextText).toContain("canonical SQLite startup answer");
+    expect(readTurnStartInputText(turnStart)).toBe("continue the canonical SQLite startup");
   });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2836,15 +2905,11 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(inputText.length).toBeLessThanOrEqual(1 << 20);
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("recent continuity anchor: resume the database migration");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("current prompt survives");
-    expect(inputText).not.toContain("older next-step anchor: keep the handoff checklist");
+    const modelText = readTurnStartModelText(turnStart);
+    expect(modelText.length).toBeLessThanOrEqual(1 << 20);
+    expect(modelText).toContain("recent continuity anchor: resume the database migration");
+    expect(readTurnStartInputText(turnStart)).toContain("current prompt survives");
+    expect(modelText).not.toContain("older next-step anchor: keep the handoff checklist");
   });
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
@@ -2894,12 +2959,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
     expect(threadStartParams?.developerInstructions).not.toContain("custom codex system 2");
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(inputText).toContain("queued context");
-    expect(inputText).toContain("prior visible context");
-    expect(inputText).not.toContain("hook-side mutation");
+    const contextText = readTurnStartAdditionalContext(turnStart);
+    expect(contextText).toContain("queued context");
+    expect(contextText).toContain("prior visible context");
+    expect(contextText).not.toContain("hook-side mutation");
   });
   it("does not replay mirrored history already covered by an existing Codex binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -3067,16 +3130,13 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).not.toContain("old native-owned context");
-    expect(inputText).toContain("we were discussing the Sonnet leak screenshots");
-    expect(inputText).toContain("David Ondrej was mentioned in that prior thread");
-    expect(inputText).toContain("copilot mirror context also matters");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("is the previous message trustworthy?");
+    const contextText = readTurnStartAdditionalContext(turnStart);
+    expect(contextText).toContain("OpenClaw assembled context for this turn:");
+    expect(contextText).not.toContain("old native-owned context");
+    expect(contextText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(contextText).toContain("David Ondrej was mentioned in that prior thread");
+    expect(contextText).toContain("copilot mirror context also matters");
+    expect(readTurnStartInputText(turnStart)).toBe("is the previous message trustworthy?");
   });
   it("projects newer canonical SQLite continuity when a resumed binding is stale", async () => {
     const sessionId = "session-sqlite-resume-continuity";
@@ -3112,16 +3172,13 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
+    const contextText = readTurnStartAdditionalContext(turnStart);
     expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).not.toContain("old canonical SQLite native-owned context");
-    expect(inputText).toContain("new canonical SQLite resume question");
-    expect(inputText).toContain("new canonical SQLite resume answer");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("continue the canonical SQLite resume");
+    expect(contextText).toContain("OpenClaw assembled context for this turn:");
+    expect(contextText).not.toContain("old canonical SQLite native-owned context");
+    expect(contextText).toContain("new canonical SQLite resume question");
+    expect(contextText).toContain("new canonical SQLite resume answer");
+    expect(readTurnStartInputText(turnStart)).toBe("continue the canonical SQLite resume");
   });
   it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -3234,12 +3291,10 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const firstTurnStart = firstHarness.requests.find((request) => request.method === "turn/start");
-    const firstInputText =
-      (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
-        ?.text ?? "";
-    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
-    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
-    expect(firstInputText).toContain("is the previous message trustworthy?");
+    const firstContextText = readTurnStartAdditionalContext(firstTurnStart);
+    expect(firstContextText).toContain("OpenClaw assembled context for this turn:");
+    expect(firstContextText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(readTurnStartInputText(firstTurnStart)).toBe("is the previous message trustworthy?");
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
     secondParams.prompt = "continue from there";
@@ -3250,13 +3305,11 @@ describe("runCodexAppServerAttempt", () => {
     const secondTurnStart = secondHarness.requests.find(
       (request) => request.method === "turn/start",
     );
-    const secondInputText =
-      (secondTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
-        ?.text ?? "";
-    expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(secondInputText).not.toContain("we were discussing the Sonnet leak screenshots");
-    expect(secondInputText).not.toContain("is the previous message trustworthy?");
-    expect(secondInputText).toContain("continue from there");
+    const secondContextText = readTurnStartAdditionalContext(secondTurnStart);
+    expect(secondContextText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(secondContextText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(secondContextText).not.toContain("is the previous message trustworthy?");
+    expect(readTurnStartInputText(secondTurnStart)).toBe("continue from there");
   });
 
   it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
@@ -3488,13 +3541,11 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as {
-      input?: Array<{ text?: string }>;
-    };
-    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    const inputText = readTurnStartInputText(turnStart);
+    const contextText = readTurnStartAdditionalContext(turnStart);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain("memory_search");
-    expect(inputText).toContain(memorySummary);
+    expect(contextText).toContain(memorySummary);
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
     );
@@ -5277,12 +5328,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests.map((entry) => entry.method)).toContain("thread/start");
     expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
     const turnStart = requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
-    expect(inputText).toContain("post-binding user context: resume the release checklist");
-    expect(inputText).toContain("post-binding assistant context");
+    const modelText = readTurnStartModelText(turnStart);
+    expect(modelText).toContain("pre-binding native-owned context: keep the original plan");
+    expect(modelText).toContain("post-binding user context: resume the release checklist");
+    expect(modelText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
   });

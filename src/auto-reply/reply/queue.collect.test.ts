@@ -2618,12 +2618,19 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    const first = createRun({ prompt: "first" });
+    first.explicitSkillSelections = [
+      { name: "example-manual", path: "/skills/example-manual/SKILL.md" },
+    ];
+    enqueueFollowupRun(key, first, settings);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
 
     await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
+    expect(calls[0]?.explicitSkillSelections).toEqual([
+      { name: "example-manual", path: "/skills/example-manual/SKILL.md" },
+    ]);
   });
 
   it("persists overflow summaries to the session selected after queue admission", async () => {
@@ -3324,6 +3331,9 @@ describe("followup queue collect routing", () => {
           transcriptPrompt: `${prompt} transcript`,
           userTurnTranscriptRecorder: recorder,
           currentInboundContext: { text: "shared gateway context", promptJoiner: " " },
+          explicitSkillSelections: [
+            { name: `${prompt}-skill`, path: `/skills/${prompt}/SKILL.md` },
+          ],
           deliveryCorrelations: [deliveryCorrelation],
           abortSignal: new AbortController().signal,
           turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
@@ -3346,6 +3356,10 @@ describe("followup queue collect routing", () => {
       "Queued #2 context:\nshared gateway context",
     );
     expect(calls[0]?.currentInboundContext?.promptJoiner).toBe("\n\n");
+    expect(calls[0]?.explicitSkillSelections).toEqual([
+      { name: "first-skill", path: "/skills/first/SKILL.md" },
+      { name: "second-skill", path: "/skills/second/SKILL.md" },
+    ]);
     expect(calls[0]?.deliveryCorrelations).toEqual([firstCorrelation, secondCorrelation]);
     expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(firstRecorder);
     expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(secondRecorder);

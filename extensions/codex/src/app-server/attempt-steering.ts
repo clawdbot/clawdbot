@@ -11,6 +11,8 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
+import { resolveCodexSkillInputPlan } from "./explicit-skill-input.js";
+import type { CodexUserInput } from "./protocol.js";
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
@@ -27,6 +29,7 @@ export type CodexSteeringQueueOptions = {
   debounceMs?: number;
   images?: EmbeddedRunAttemptParams["images"];
   isInboundUserMessage?: boolean;
+  explicitSkillSelections?: EmbeddedRunAttemptParams["explicitSkillSelections"];
   onQueueAccepted?: (accepted: boolean) => void;
 };
 
@@ -39,6 +42,8 @@ export function createCodexSteeringQueue(params: {
   threadId: string;
   turnId: string;
   requestTimeoutMs: number;
+  cwd: string;
+  preserveNativeSkillMentions?: boolean;
   claimPendingUserInput: () =>
     | {
         answer: (text: string) => boolean;
@@ -51,6 +56,7 @@ export function createCodexSteeringQueue(params: {
     acceptance: "open" | "accepted" | "rejected";
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
+    explicitSkillSelections?: EmbeddedRunAttemptParams["explicitSkillSelections"];
     onQueueAccepted?: (accepted: boolean) => void;
     resolve: () => void;
     reject: (error: unknown) => void;
@@ -180,12 +186,32 @@ export function createCodexSteeringQueue(params: {
       // Without a deadline and the run signal the caller only unblocks when the
       // app-server client closes, which strands whichever channel handler is
       // awaiting delivery and wedges every later steer behind sendChain.
+      const input: CodexUserInput[] = [];
+      for (const item of liveItems) {
+        const skillInputPlan = await resolveCodexSkillInputPlan({
+          client: params.client,
+          cwd: params.cwd,
+          preserveNativeSkillMentions: params.preserveNativeSkillMentions,
+          selections: item.explicitSkillSelections,
+          signal: params.signal,
+          text: item.text,
+        });
+        input.push(
+          ...buildCodexUserInput(
+            item.text,
+            item.images,
+            skillInputPlan.explicitSkillSelections,
+            params.preserveNativeSkillMentions !== true,
+            skillInputPlan.suppressedSkillNames,
+          ),
+        );
+      }
       await params.client.request(
         "turn/steer",
         {
           threadId: params.threadId,
           expectedTurnId: params.turnId,
-          input: liveItems.flatMap((item) => buildCodexUserInput(item.text, item.images)),
+          input,
           clientUserMessageId,
         },
         { timeoutMs: params.requestTimeoutMs, signal: params.signal },
@@ -248,6 +274,7 @@ export function createCodexSteeringQueue(params: {
       acceptance: "open" as const,
       text,
       images: options?.images,
+      explicitSkillSelections: options?.explicitSkillSelections,
       onQueueAccepted: options?.onQueueAccepted,
       resolve: resolveDelivery,
       reject: rejectDelivery,
@@ -275,7 +302,9 @@ export function createCodexSteeringQueue(params: {
       // Only operator ingress can answer a pending prompt; internal steering stays transcript input.
       const pendingUserInput =
         options?.isInboundUserMessage === true ? params.claimPendingUserInput() : undefined;
-      if (pendingUserInput) {
+      if (pendingUserInput && options?.explicitSkillSelections?.length) {
+        pendingUserInput.cancel();
+      } else if (pendingUserInput) {
         if (!options?.images?.length) {
           const answered = pendingUserInput.answer(text);
           options?.onQueueAccepted?.(answered);

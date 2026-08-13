@@ -944,6 +944,7 @@ export async function getReplyFromConfig(
         storePath,
         workspaceDir,
         abortedLastRun,
+        explicitSkillSelections: [],
         autoFallbackPrimaryProbe,
       }),
     );
@@ -1110,6 +1111,7 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
+  const explicitSkillSelections = inlineActionResult.explicitSkillSelections ?? [];
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1286,6 +1288,7 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
+      explicitSkillSelections,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );

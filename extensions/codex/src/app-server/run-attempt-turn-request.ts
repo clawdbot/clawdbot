@@ -8,6 +8,7 @@ import {
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { resolveCodexSkillInputPlan } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -42,6 +43,14 @@ export async function prepareCodexAttemptTurnRequest(
     runAbortController,
   } = connection;
   const { state } = turnRuntime;
+  const skillInputPlan = await resolveCodexSkillInputPlan({
+    client: resourceState.client,
+    cwd: resourceState.codexExecutionCwd,
+    preserveNativeSkillMentions: usesSupervisionConnection,
+    selections: runtimeParams.explicitSkillSelections,
+    signal: runAbortController.signal,
+    text: turnState.codexTurnPromptText,
+  });
   const buildCodexModelInputMessages = () => [
     ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
@@ -105,6 +114,9 @@ export async function prepareCodexAttemptTurnRequest(
       cwd: resourceState.codexExecutionCwd,
       appServer: turnAppServer,
       promptText: turnState.codexTurnPromptText,
+      additionalContextText: turnState.codexTurnAdditionalContext,
+      explicitSkillSelections: skillInputPlan.explicitSkillSelections,
+      suppressedSkillNames: skillInputPlan.suppressedSkillNames,
       sandboxPolicy: resourceState.codexSandboxPolicy,
       environmentSelection: resourceState.codexEnvironmentSelection,
       clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,

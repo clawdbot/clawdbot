@@ -330,6 +330,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,

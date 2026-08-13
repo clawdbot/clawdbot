@@ -156,6 +156,13 @@ describe("prepareEmbeddedAttemptStream", () => {
     const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
+    await expect(
+      prepared.queueHandle.queueMessage("Use $example-manual", {
+        explicitSkillSelections: [
+          { name: "example-manual", path: "/skills/example-manual/SKILL.md" },
+        ],
+      }),
+    ).rejects.toThrow("explicit skill selections require a new OpenClaw harness turn");
     const decision = subscriptionInput.onBeforeTerminalDelivery?.({
       messages: [],
       willRetry: false,

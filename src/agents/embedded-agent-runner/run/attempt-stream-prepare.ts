@@ -407,6 +407,9 @@ export function prepareEmbeddedAttemptStream(input: {
     if (!canInject()) {
       throw new Error("active session is finalizing");
     }
+    if (options?.explicitSkillSelections?.length) {
+      throw new Error("explicit skill selections require a new OpenClaw harness turn");
+    }
     activeQueueAdmissions++;
     try {
       if (options?.steeringMode) {

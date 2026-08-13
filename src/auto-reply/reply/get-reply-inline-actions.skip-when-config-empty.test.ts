@@ -806,11 +806,13 @@ describe("handleInlineActions", () => {
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "office_hours",
+        skillFile: "/skills/office-hours/SKILL.md",
         skillName: "office-hours",
         description: "Engineering office hours",
       },
       {
         name: "release_notes",
+        skillFile: "/skills/release-notes/SKILL.md",
         skillName: "release-notes",
         description: "Draft release notes",
       },
@@ -836,24 +838,109 @@ describe("handleInlineActions", () => {
     if (result.kind !== "continue") {
       throw new Error("expected referenced skills to continue to the model");
     }
-    expect(result.cleanedBody).toBe(
-      [
-        "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-        "- office-hours",
-        "- release-notes",
-        "",
-        "User request:",
-        original,
-      ].join("\n"),
-    );
-    expect(ctx.Body).toBe(result.cleanedBody);
+    expect(result.cleanedBody).toBe(original);
+    expect(ctx.Body).toBe(original);
+    expect(result.explicitSkillSelections).toEqual([
+      { mention: "office_hours", name: "office-hours", path: "/skills/office-hours/SKILL.md" },
+      {
+        mention: "release_notes",
+        name: "release-notes",
+        path: "/skills/release-notes/SKILL.md",
+      },
+    ]);
     expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve skill references that appear only in prompt-facing context", async () => {
+    const typing = createTypingController();
+    const rawCurrent = "diagnose the unrelated request";
+    const cleanedBody = `Historical assistant: did not invoke $example_manual\n\n${rawCurrent}`;
+    const ctx = buildTestCtx({
+      Body: cleanedBody,
+      CommandBody: rawCurrent,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: rawCurrent,
+        commandBodyNormalized: rawCurrent,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [
+          {
+            name: "example_manual",
+            skillFile: "/skills/example-manual/SKILL.md",
+            skillName: "example-manual",
+            description: "Manual workflow",
+            modelVisible: false,
+          },
+        ],
+      },
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected historical reference to remain ordinary context");
+    }
+    expect(result.cleanedBody).toBe(cleanedBody);
+    expect(result.explicitSkillSelections).toBeUndefined();
+  });
+
+  it("allows an explicit current reference to a manual-only skill", async () => {
+    const typing = createTypingController();
+    const original = "Run $example_manual now";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [
+          {
+            name: "example_manual",
+            skillFile: "/skills/example-manual/SKILL.md",
+            skillName: "example-manual",
+            description: "Manual workflow",
+            modelVisible: false,
+          },
+        ],
+      },
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected manual skill reference to continue");
+    }
+    expect(result.explicitSkillSelections).toEqual([
+      {
+        mention: "example_manual",
+        name: "example-manual",
+        path: "/skills/example-manual/SKILL.md",
+      },
+    ]);
   });
 
   it("returns a visible error instead of silently dropping excess skill references", async () => {
     const typing = createTypingController();
     const skillCommands: SkillCommandSpec[] = Array.from({ length: 9 }, (_, index) => ({
       name: `skill_${index + 1}`,
+      skillFile: `/skills/skill-${index + 1}/SKILL.md`,
       skillName: `skill-${index + 1}`,
       description: `Skill ${index + 1}`,
     }));
@@ -889,7 +976,7 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("keeps $ skill references literal on message channels", async () => {
+  it("resolves $ skill references consistently on message channels", async () => {
     const typing = createTypingController();
     const original = "Review with $office_hours.";
     const ctx = buildTestCtx({ Body: original, CommandBody: original });
@@ -909,6 +996,7 @@ describe("handleInlineActions", () => {
         skillCommands: [
           {
             name: "office_hours",
+            skillFile: "/skills/office-hours/SKILL.md",
             skillName: "office-hours",
             description: "Engineering office hours",
             modelVisible: true,
@@ -923,6 +1011,9 @@ describe("handleInlineActions", () => {
     }
     expect(result.cleanedBody).toBe(original);
     expect(ctx.Body).toBe(original);
+    expect(result.explicitSkillSelections).toEqual([
+      { mention: "office_hours", name: "office-hours", path: "/skills/office-hours/SKILL.md" },
+    ]);
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

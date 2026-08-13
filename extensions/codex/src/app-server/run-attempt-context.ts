@@ -18,7 +18,6 @@ import {
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
-  type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -166,7 +165,7 @@ export async function prepareCodexAttemptContext(
   });
   const promptState = {
     promptText: params.prompt,
-    promptContextRange: undefined as CodexProjectedContextRange | undefined,
+    additionalContext: undefined as string | undefined,
     developerInstructions: baseDeveloperInstructions,
     prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,

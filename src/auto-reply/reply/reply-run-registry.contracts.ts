@@ -2,6 +2,7 @@ import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type { ExplicitSkillSelection } from "../../skills/types.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -25,6 +26,7 @@ export type ReplyBackendQueueMessageOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in this steering prompt. */
   media?: MediaFact[];
+  explicitSkillSelections?: ExplicitSkillSelection[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   /** Stable source identity for exact queued-message commit/cancellation matching. */

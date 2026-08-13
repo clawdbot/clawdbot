@@ -75,6 +75,24 @@ function isShellVariableReference(name: string): boolean {
   return !/[a-z]/u.test(name);
 }
 
+function isLinkedNonSkillReference(text: string, index: number, matchLength: number): boolean {
+  if (text[index - 1] !== "[" || text[index + matchLength] !== "]") {
+    return false;
+  }
+  let cursor = index + matchLength + 1;
+  while (/\s/u.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (text[cursor] !== "(") {
+    return false;
+  }
+  const end = text.indexOf(")", cursor + 1);
+  if (end < 0) {
+    return false;
+  }
+  return /^(?:app|mcp|plugin):\/\//u.test(text.slice(cursor + 1, end).trim());
+}
+
 /** Returns true when text may contain an explicit `$skill-name` reference. */
 export function hasSkillReferenceCandidate(text: string): boolean {
   for (const match of skillReferenceMatches(text)) {
@@ -84,6 +102,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
       name &&
       index !== undefined &&
       !isEscapedReference(text, index) &&
+      !isLinkedNonSkillReference(text, index, match[0].length) &&
       !isShellVariableReference(name)
     ) {
       return true;
@@ -106,12 +125,13 @@ export function resolveSkillReferenceInvocations(params: {
       !name ||
       index === undefined ||
       isEscapedReference(params.text, index) ||
+      isLinkedNonSkillReference(params.text, index, match[0].length) ||
       isShellVariableReference(name)
     ) {
       continue;
     }
     const command = findSkillCommand(params.skillCommands, name);
-    if (!command || command.modelVisible === false || seen.has(command.name)) {
+    if (!command?.skillFile || seen.has(command.name)) {
       continue;
     }
     seen.add(command.name);

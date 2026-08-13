@@ -60,6 +60,13 @@ export type SkillUsagePath = {
   skillSource: SkillTelemetrySource;
 };
 
+/** Canonical explicit skill selection carried from inbound parsing to a harness turn. */
+export type ExplicitSkillSelection = {
+  mention?: string;
+  name: string;
+  path: string;
+};
+
 export type SkillCommandSpec = {
   name: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */

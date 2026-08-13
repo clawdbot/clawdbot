@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -20,6 +22,65 @@ import {
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
+const CODEX_OPENCLAW_TURN_CONTEXT_KEY = "openclaw_turn_context";
+const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_UTF8_BYTES = 1_000;
+
+function splitTextToUtf8ByteLimit(text: string, maxBytes: number): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let low = cursor + 1;
+    let high = Math.min(text.length, cursor + maxBytes);
+    let best = cursor;
+    while (low <= high) {
+      const midpoint = Math.floor((low + high) / 2);
+      if (Buffer.byteLength(text.slice(cursor, midpoint), "utf8") <= maxBytes) {
+        best = midpoint;
+        low = midpoint + 1;
+      } else {
+        high = midpoint - 1;
+      }
+    }
+    if (
+      best < text.length &&
+      best > cursor &&
+      text.charCodeAt(best - 1) >= 0xd800 &&
+      text.charCodeAt(best - 1) <= 0xdbff &&
+      text.charCodeAt(best) >= 0xdc00 &&
+      text.charCodeAt(best) <= 0xdfff
+    ) {
+      best -= 1;
+    }
+    if (best <= cursor) {
+      best = Math.min(text.length, cursor + 1);
+    }
+    chunks.push(text.slice(cursor, best));
+    cursor = best;
+  }
+  return chunks;
+}
+
+function buildCodexOpenClawTurnContext(
+  contextText: string | undefined,
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  if (!contextText) {
+    return {};
+  }
+  const chunks = splitTextToUtf8ByteLimit(
+    contextText,
+    CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_UTF8_BYTES,
+  );
+  const identity = createHash("sha256").update(contextText).digest("hex").slice(0, 16);
+  return Object.fromEntries(
+    chunks.map((value, index) => [
+      `${CODEX_OPENCLAW_TURN_CONTEXT_KEY}_${String(index).padStart(6, "0")}_${identity}`,
+      { kind: "untrusted" as const, value },
+    ]),
+  );
+}
 
 function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
   const metadata = asOptionalRecord(
@@ -57,6 +118,9 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    additionalContextText?: string;
+    explicitSkillSelections?: EmbeddedRunAttemptParams["explicitSkillSelections"];
+    suppressedSkillNames?: string[];
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
@@ -82,13 +146,22 @@ export function buildTurnStartParams(
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
-    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
-    : undefined;
+  const additionalContext: NonNullable<CodexTurnStartParams["additionalContext"]> = {
+    ...buildCodexOpenClawTurnContext(options.additionalContextText),
+    ...(currentSenderContext
+      ? { openclaw_current_sender: { kind: "untrusted" as const, value: currentSenderContext } }
+      : {}),
+  };
   return {
     threadId: options.threadId,
-    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
-    ...(additionalContext ? { additionalContext } : {}),
+    input: buildCodexUserInput(
+      options.promptText ?? params.prompt,
+      params.images,
+      options.explicitSkillSelections ?? params.explicitSkillSelections,
+      options.preserveNativeTurnSettings !== true,
+      options.suppressedSkillNames,
+    ),
+    ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,

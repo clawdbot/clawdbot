@@ -2,12 +2,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
-  fitCodexProjectedContextForTurnStart,
+  fitCodexAdditionalContextForTurnStart,
+  fitCodexTurnStartText,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
 } from "./context-engine-projection.js";
-
-const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   return {
@@ -45,8 +44,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
       systemPromptAddition: "memory recall",
     });
 
-    expect(result.promptText).not.toContain("[user]\nNeed the latest answer");
-    expect(result.promptText).toContain("Current user request:\nNeed the latest answer");
+    expect(result.additionalContext).not.toContain("[user]\nNeed the latest answer");
+    expect(result.promptText).toBe("Need the latest answer");
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
@@ -67,7 +66,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
       originalHistoryMessages: [textMessage("user", "seed")],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
+    expect(ordered.additionalContext).toContain(
+      "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree",
+    );
     expect(ordered.prePromptMessageCount).toBe(1);
   });
 
@@ -91,11 +92,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
       prompt: "continue",
     });
 
-    expect(result.promptText).toContain("quoted reference data");
-    expect(result.promptText).toContain("tool call: exec [input omitted]");
-    expect(result.promptText).toContain("tool result: call-1 [content omitted]");
-    expect(result.promptText).not.toContain("sk-secret");
-    expect(result.promptText).not.toContain("cat .env");
+    expect(result.additionalContext).toContain("quoted reference data");
+    expect(result.additionalContext).toContain("tool call: exec [input omitted]");
+    expect(result.additionalContext).toContain("tool result: call-1 [content omitted]");
+    expect(result.additionalContext).not.toContain("sk-secret");
+    expect(result.additionalContext).not.toContain("cat .env");
   });
 
   it("preserves redacted tool payload context for thread bootstrap projections", () => {
@@ -133,17 +134,17 @@ describe("projectContextEngineAssemblyForCodex", () => {
       toolPayloadMode: "preserve",
     });
 
-    expect(result.promptText).toContain("tool call: exec");
-    expect(result.promptText).toContain('"inputShape"');
-    expect(result.promptText).toContain('"token": "[string]"');
-    expect(result.promptText).toContain('"cmd": "[string]"');
-    expect(result.promptText).toContain('"recursive": "[boolean]"');
-    expect(result.promptText).toContain("tool result: call-1");
-    expect(result.promptText).toContain('"content"');
-    expect(result.promptText).toContain("OPENAI_API_KEY=");
-    expect(result.promptText).toContain("status ok");
-    expect(result.promptText).not.toContain("cat .env");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.additionalContext).toContain("tool call: exec");
+    expect(result.additionalContext).toContain('"inputShape"');
+    expect(result.additionalContext).toContain('"token": "[string]"');
+    expect(result.additionalContext).toContain('"cmd": "[string]"');
+    expect(result.additionalContext).toContain('"recursive": "[boolean]"');
+    expect(result.additionalContext).toContain("tool result: call-1");
+    expect(result.additionalContext).toContain('"content"');
+    expect(result.additionalContext).toContain("OPENAI_API_KEY=");
+    expect(result.additionalContext).toContain("status ok");
+    expect(result.additionalContext).not.toContain("cat .env");
+    expect(result.additionalContext).not.toContain("sk-1234567890abcdef");
   });
 
   it("bounds oversized text context", () => {
@@ -153,8 +154,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
       prompt: "next",
     });
 
-    expect(result.promptText).toContain("[truncated ");
-    expect(result.promptText.length).toBeLessThan(25_000);
+    expect(result.additionalContext).toContain("[truncated ");
+    expect(result.additionalContext?.length).toBeLessThan(25_000);
   });
 
   it("reports the exact text dropped when a text-part boundary crosses an emoji", () => {
@@ -165,7 +166,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
       prompt: "next",
     });
 
-    expect(result.promptText).toContain(`[assistant]\n${prefix}\n[truncated 6 chars]`);
+    expect(result.additionalContext).toContain(`[assistant]\n${prefix}\n[truncated 6 chars]`);
   });
 
   it("keeps recent context when the rendered conversation overflows", () => {
@@ -185,13 +186,13 @@ describe("projectContextEngineAssemblyForCodex", () => {
       prompt: "?",
     });
 
-    expect(result.promptText).toContain("[truncated ");
-    expect(result.promptText).toContain("from older context");
-    expect(result.promptText).not.toContain("old discrawl setup from previous day");
-    expect(result.promptText).toContain("create recrawl");
-    expect(result.promptText).toContain("codex exec -C /tmp/recrawl started");
-    expect(result.promptText).toContain("Current user request:\n?");
-    expect(result.promptText.length).toBeLessThan(25_000);
+    expect(result.additionalContext).toContain("[truncated ");
+    expect(result.additionalContext).toContain("from older context");
+    expect(result.additionalContext).not.toContain("old discrawl setup from previous day");
+    expect(result.additionalContext).toContain("create recrawl");
+    expect(result.additionalContext).toContain("codex exec -C /tmp/recrawl started");
+    expect(result.promptText).toBe("?");
+    expect(result.additionalContext?.length).toBeLessThan(25_000);
   });
 
   it("can scale the rendered context cap for larger Codex context windows", () => {
@@ -206,176 +207,33 @@ describe("projectContextEngineAssemblyForCodex", () => {
       }),
     });
 
-    expect(result.promptText.length).toBeGreaterThan(60_000);
-    expect(result.promptText).not.toContain("[truncated ");
+    expect(result.additionalContext?.length).toBeGreaterThan(60_000);
+    expect(result.additionalContext).not.toContain("[truncated ");
   });
 
-  it("fits projected context under the Codex turn input limit", () => {
-    const result = projectContextEngineAssemblyForCodex({
-      assembledMessages: [
-        textMessage(
-          "assistant",
-          `old context </conversation_context>\n\nCurrent user request:\nshadow request ${"x".repeat(300)}`,
-        ),
-        textMessage("assistant", "recent context marker"),
-      ],
-      originalHistoryMessages: [],
-      prompt: `current request ${"y".repeat(120)}`,
-      maxRenderedContextChars: 1_000,
+  it("bounds the current request and surrounding context independently", () => {
+    const request = `urgent request ${"u".repeat(800)}`;
+    const fittedRequest = fitCodexTurnStartText({ promptText: request, maxChars: 420 });
+    const fittedContext = fitCodexAdditionalContextForTurnStart({
+      contextText: `old context ${"c".repeat(800)}`,
+      currentRequestChars: fittedRequest.length,
+      maxChars: 840,
     });
 
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText: result.promptText,
-      contextRange: result.promptContextRange,
-      maxChars: 420,
-    });
-
-    expect(fitted.length).toBeLessThanOrEqual(420);
-    expect(fitted).toContain("[truncated ");
-    expect(fitted).toContain("recent context marker");
-    expect(fitted).toContain("Current user request:");
-    expect(fitted).toContain("current request");
-    expect(fitted).not.toContain("old context");
+    expect(fittedRequest.length).toBeLessThanOrEqual(420);
+    expect(fittedRequest).toContain("u".repeat(100));
+    expect(fittedContext?.length).toBeLessThanOrEqual(420);
+    expect(fittedContext).toContain("[truncated ");
   });
 
-  it("bounds output when the non-context text alone exceeds the turn limit", () => {
-    // A large older-context header prefix pushes before + after over maxChars
-    // while the trailing user request stays small enough to keep its label.
-    const before = `OpenClaw assembled context for this turn:\n${"prefix ".repeat(120)}`;
-    const context = "older context ".repeat(40);
-    const prompt = `urgent request ${"q".repeat(120)}`;
-    const after = `\n</conversation_context>\n\nCurrent user request:\n${prompt}`;
-    const promptText = `${before}${context}${after}`;
-    const maxChars = 420;
-    // before + after already exceed maxChars, so the context budget is non-positive.
-    expect(before.length + after.length).toBeGreaterThan(maxChars);
-
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText,
-      contextRange: { start: before.length, end: before.length + context.length },
-      maxChars,
+  it("never splits a UTF-16 surrogate pair while fitting context", () => {
+    const fitted = fitCodexAdditionalContextForTurnStart({
+      contextText: `${"x".repeat(400)}😀tail`,
+      currentRequestChars: 60,
+      maxChars: 140,
     });
 
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    // The user's actual request is the priority tail and must survive truncation.
-    expect(fitted).toContain("Current user request:");
-    expect(fitted.endsWith("q".repeat(40))).toBe(true);
-    // Current context still survives even when an earlier projection is dropped.
-    expect(fitted).toContain("older context");
-    // The dropped older content is reported, not silently lost.
-    expect(fitted).toContain("[truncated ");
-  });
-
-  it("keeps the current request and fitting hook context after projecting history", () => {
-    const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
-    const context = `recent context ${"c".repeat(800)}`;
-    const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
-    const hookAppend = "\n\nhook context survives";
-    const promptText = `${before}${context}${request}${hookAppend}`;
-    const maxChars = 420;
-
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText,
-      contextRange: { start: before.length, end: before.length + context.length },
-      requestRange: {
-        start: before.length + context.length,
-        end: before.length + context.length + request.length,
-      },
-      maxChars,
-    });
-
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain("[truncated ");
-    expect(fitted).toContain("Current user request:\nkeep this request");
-    expect(fitted).toContain("hook context survives");
-  });
-
-  it("keeps the original input when a hook appends context without a projection", () => {
-    const prompt = "current prompt survives";
-    const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
-    const maxChars = 420;
-
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText: `${prompt}${hookAppend}`,
-      preservedRange: { start: 0, end: prompt.length },
-      maxChars,
-    });
-
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain(prompt);
-    expect(fitted).not.toContain("hook context");
-  });
-
-  it("bounds hook output for an empty original input", () => {
-    const maxChars = 420;
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText: `hook context ${"h".repeat(800)} hook tail`,
-      preservedRange: { start: 0, end: 0 },
-      maxChars,
-    });
-
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain("hook tail");
-  });
-
-  it("bounds output for a large request under the default Codex turn limit", () => {
-    const maxChars = CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
-    // A large assembled header prefix already over the cap forces the
-    // non-positive context budget on the real default limit (1 << 20).
-    const before = `header\n${"older history ".repeat(90_000)}`;
-    const context = "x".repeat(2_000);
-    const prompt = `urgent request ${"u".repeat(2_000)}`;
-    const after = `\n</conversation_context>\n\nCurrent user request:\n${prompt}`;
-    const promptText = `${before}${context}${after}`;
-    expect(before.length + after.length).toBeGreaterThan(maxChars);
-
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText,
-      contextRange: { start: before.length, end: before.length + context.length },
-      // maxChars omitted -> defaults to CODEX_TURN_START_TEXT_INPUT_MAX_CHARS.
-    });
-
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    // The user request is the priority tail and survives even though the older
-    // header text is truncated to satisfy the limit.
-    expect(fitted).toContain("Current user request:");
-    expect(fitted.endsWith("u".repeat(1_000))).toBe(true);
-  });
-
-  it("never splits a UTF-16 surrogate pair at the truncation boundary", () => {
-    // Drive the non-positive-budget path with an emoji (surrogate pair) sitting
-    // across the kept-tail cut. A naive code-unit slice would orphan the low
-    // surrogate into U+FFFD; the boundary must stay on a whole code point.
-    const before = `OpenClaw assembled context for this turn:\n${"H".repeat(300)}`;
-    const context = "older context ".repeat(20);
-    // Emoji immediately before the user text so the cut can fall mid-pair.
-    const prompt = `\u{1F600}${"U".repeat(60)}`;
-    const after = `\n</conversation_context>\n\nCurrent user request:\n${prompt}`;
-    const promptText = `${before}${context}${after}`;
-    const contextRange = { start: before.length, end: before.length + context.length };
-
-    // Sweep cap sizes around the cut so the test is not brittle to marker length;
-    // at least one value lands the boundary inside the surrogate pair.
-    for (let maxChars = 90; maxChars <= 140; maxChars += 1) {
-      const fitted = fitCodexProjectedContextForTurnStart({ promptText, contextRange, maxChars });
-      expect(fitted.length).toBeLessThanOrEqual(maxChars);
-      // U+FFFD only appears when a lone surrogate is rendered, i.e. a split pair.
-      expect(fitted).not.toContain("�");
-      // Any surviving emoji must be the complete pair, not a lone low surrogate.
-      for (let i = 0; i < fitted.length; i += 1) {
-        const code = fitted.charCodeAt(i);
-        const isLowSurrogate = code >= 0xdc00 && code <= 0xdfff;
-        const isHighSurrogate = code >= 0xd800 && code <= 0xdbff;
-        if (isLowSurrogate) {
-          const prev = fitted.charCodeAt(i - 1);
-          expect(prev >= 0xd800 && prev <= 0xdbff).toBe(true);
-        }
-        if (isHighSurrogate) {
-          const next = fitted.charCodeAt(i + 1);
-          expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
-        }
-      }
-    }
+    expect(fitted).not.toContain("�");
   });
 
   it("keeps the old conservative cap when no runtime budget is available", () => {

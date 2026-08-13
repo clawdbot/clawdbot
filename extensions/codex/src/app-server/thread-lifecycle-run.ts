@@ -243,6 +243,7 @@ export async function startOrResumeThread(
     };
     if (
       binding?.threadId &&
+      binding.connectionScope !== "supervision" &&
       binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
     ) {
       embeddedAgentLog.debug(

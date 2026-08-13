@@ -19,8 +19,7 @@ import {
   resolveSkillCommandInvocation,
   resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -123,23 +122,13 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
 }
 
 function applyExplicitSkillReferences(
-  body: string,
   skillCommands: SkillCommandSpec[],
-): { body: string; overflow: boolean; skills: SkillCommandSpec[] } {
-  const resolved = resolveSkillReferenceInvocations({ text: body, skillCommands });
+  referenceText: string,
+): { overflow: boolean; skills: SkillCommandSpec[] } {
+  const resolved = resolveSkillReferenceInvocations({ text: referenceText, skillCommands });
   const overflow = resolved.length > MAX_EXPLICIT_SKILL_REFERENCES;
   const skills = resolved.slice(0, MAX_EXPLICIT_SKILL_REFERENCES);
-  if (skills.length === 0) {
-    return { body, overflow, skills };
-  }
-  const instruction = [
-    "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-    ...skills.map((skill) => `- ${skill.skillName}`),
-    "",
-    "User request:",
-    body,
-  ].join("\n");
-  return { body: instruction, overflow, skills };
+  return { overflow, skills };
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
@@ -172,6 +161,7 @@ type InlineActionResult =
       directives: InlineDirectives;
       abortedLastRun: boolean;
       cleanedBody: string;
+      explicitSkillSelections?: ExplicitSkillSelection[];
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
@@ -305,6 +295,7 @@ export async function handleInlineActions(params: {
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+  let explicitSkillSelections: ExplicitSkillSelection[] = [];
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
@@ -352,9 +343,7 @@ export async function handleInlineActions(params: {
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const hasSkillReferences =
-    command.isAuthorizedSender &&
-    ctx.Surface === INTERNAL_MESSAGE_CHANNEL &&
-    hasSkillReferenceCandidate(initialCleanedBody);
+    command.isAuthorizedSender && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const shouldLoadSkillCommands =
     allowTextCommands &&
     (hasSkillReferences ||
@@ -536,7 +525,7 @@ export async function handleInlineActions(params: {
     resolveSlashCommandName(cleanedBody) === null &&
     skillCommands.length > 0
   ) {
-    const referenced = applyExplicitSkillReferences(cleanedBody, skillCommands);
+    const referenced = applyExplicitSkillReferences(skillCommands, command.commandBodyNormalized);
     if (referenced.overflow) {
       typing.cleanup();
       return {
@@ -547,14 +536,11 @@ export async function handleInlineActions(params: {
       };
     }
     if (referenced.skills.length > 0) {
-      cleanedBody = referenced.body;
-      ctx.Body = cleanedBody;
-      ctx.agentText = cleanedBody;
-      ctx.BodyForAgent = cleanedBody;
-      sessionCtx.Body = cleanedBody;
-      sessionCtx.agentText = cleanedBody;
-      sessionCtx.BodyForAgent = cleanedBody;
-      sessionCtx.BodyStripped = cleanedBody;
+      explicitSkillSelections = referenced.skills.flatMap((skill) =>
+        skill.skillFile
+          ? [{ mention: skill.name, name: skill.skillName, path: skill.skillFile }]
+          : [],
+      );
     }
   }
 
@@ -679,6 +665,7 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
       cleanedBody,
+      ...(explicitSkillSelections.length > 0 ? { explicitSkillSelections } : {}),
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -719,5 +706,6 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
     cleanedBody,
+    ...(explicitSkillSelections.length > 0 ? { explicitSkillSelections } : {}),
   };
 }

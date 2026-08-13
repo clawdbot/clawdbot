@@ -22,10 +22,10 @@ describe("Codex transcript projection runtime contract", () => {
       ],
     });
 
-    expect(result.promptText).toContain("Current user request:\nnewest inbound message");
-    expect(result.promptText).toContain("[user]\nolder structured context\n[image omitted]");
-    expect(result.promptText).toContain("[assistant]\nack");
-    expect(result.promptText).not.toContain("[user]\nnewest inbound message");
+    expect(result.promptText).toBe("newest inbound message");
+    expect(result.additionalContext).toContain("[user]\nolder structured context\n[image omitted]");
+    expect(result.additionalContext).toContain("[assistant]\nack");
+    expect(result.additionalContext).not.toContain("[user]\nnewest inbound message");
   });
 
   it("keeps media-only user history visible as omitted media instead of dropping the turn", () => {
@@ -38,8 +38,8 @@ describe("Codex transcript projection runtime contract", () => {
       ],
     });
 
-    expect(result.promptText).toContain("[user]\n[image omitted]");
-    expect(result.promptText).not.toContain("data:image/png");
-    expect(result.promptText).not.toContain("bbbb");
+    expect(result.additionalContext).toContain("[user]\n[image omitted]");
+    expect(result.additionalContext).not.toContain("data:image/png");
+    expect(result.additionalContext).not.toContain("bbbb");
   });
 });

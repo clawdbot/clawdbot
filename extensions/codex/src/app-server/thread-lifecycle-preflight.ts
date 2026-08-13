@@ -86,12 +86,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
       userProfile: params.appServer.start.env?.USERPROFILE,
     }),
   );
-  const nativeSkillIsolationFingerprint = nativeSkillIsolation
-    ? fingerprintJsonObject({
-        version: 1,
-        disabledUserSkillPaths: nativeSkillIsolation.disabledUserSkillPaths,
-      })
-    : undefined;
+  const nativeSkillIsolationFingerprint = fingerprintJsonObject({
+    // Version 2 marks the OpenClaw-owned structured skill-input contract.
+    version: 2,
+    disabledUserSkillPaths: nativeSkillIsolation?.disabledUserSkillPaths ?? [],
+  });
   const legacyUserMcpServersFingerprint =
     legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);

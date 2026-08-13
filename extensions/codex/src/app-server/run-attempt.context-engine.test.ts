@@ -37,6 +37,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
@@ -131,6 +132,10 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
     sessionFile,
     {
       webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      nativeSkillIsolationFingerprint: fingerprintJsonObject({
+        version: 2,
+        disabledUserSkillPaths: [],
+      }),
       ...binding,
     },
     lookup,
@@ -250,13 +255,24 @@ function getRequestInputTextAt(
 ): string {
   const request = harness.requests.filter((entry) => entry.method === "turn/start").at(index);
   const params = requireRecord(request?.params, "turn/start params");
+  const additionalContext = requireRecord(
+    params.additionalContext ?? {},
+    "turn/start additional context",
+  );
+  const contextText = Object.entries(additionalContext)
+    .filter(([key]) => key.startsWith("openclaw_turn_context_"))
+    .map(
+      ([, entry]) => readStringValue(requireRecord(entry, "additional context entry").value) ?? "",
+    )
+    .join("");
   const input = requireArray(params.input, "turn/start input");
-  return input
+  const inputText = input
     .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
       return item.type === "text" ? (readStringValue(item.text) ?? "") : "";
     })
     .join("\n");
+  return `${contextText}${inputText}`;
 }
 
 setupRunAttemptTestHooks();
@@ -271,6 +287,27 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(supportsModelTools(params.model)).toBe(false);
     expect(params.config?.tools?.web?.search?.enabled).toBe(false);
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+  });
+
+  it("rotates an ordinary binding that predates the structured skill-input contract", async () => {
+    const sessionFile = path.join(tempDir, "session-legacy-skill-contract.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-legacy-skill-contract");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      nativeSkillIsolationFingerprint: undefined,
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    await harness.completeTurn();
+    await run;
   });
 
   it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
@@ -473,7 +510,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     const inputText = getRequestInputText(harness);
-    expect(inputText.length).toBe(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("recent anchor");
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
@@ -530,7 +567,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const inputText = getRequestInputText(harness);
     expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
-    expect(inputText).toContain("Current user request:\ncurrent prompt survives");
+    expect(inputText).toContain("current prompt survives");
     expect(inputText).not.toContain("hook context");
 
     await harness.completeTurn();
@@ -949,7 +986,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain("previous per-turn request");
     expect(inputText).toContain("previous per-turn answer");
-    expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("hello");
 
     await harness.completeTurn("completed", "thread-fresh");
@@ -1793,7 +1829,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const inputText = getRequestInputText(harness);
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("Current user request:\nhello");
+    expect(inputText).toContain("hello");
     expect(inputText).toContain("[reply target] OpenClaw: anchor REPLYCTX");
     expect(inputText.trim().startsWith("Conversation context (chronological")).toBe(true);
 

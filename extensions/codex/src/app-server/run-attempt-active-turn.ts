@@ -55,6 +55,7 @@ export async function activateCodexAttemptTurn(
     sessionAgentId,
     sandboxSessionKey,
     effectiveCwd,
+    usesSupervisionConnection,
   } = connection;
   const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
   const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
@@ -168,13 +169,19 @@ export async function activateCodexAttemptTurn(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
+    cwd: resourceState.codexExecutionCwd,
+    preserveNativeSkillMentions: usesSupervisionConnection,
     claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
     const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
-    if (isInboundUserMessage && !optionsLocal?.images?.length) {
+    if (
+      isInboundUserMessage &&
+      !optionsLocal?.images?.length &&
+      !optionsLocal?.explicitSkillSelections?.length
+    ) {
       const claimed = await claimPendingAgentQuestionAnswer({
         sessionKey: params.sessionKey ?? params.sessionId,
         text,
