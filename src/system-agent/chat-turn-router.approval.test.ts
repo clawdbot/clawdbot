@@ -659,6 +659,7 @@ describe("SystemAgentChatEngine approval", () => {
     "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",
     "plugins.entries.codex.config.appServer.headers.Authorization",
+    "channels.synology-chat",
   ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
@@ -670,9 +671,11 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
 
-    const proposed = await engine.handle(
-      `config set ${path} https://gateway.example/webhook/synology?access_token=very-secret`,
-    );
+    const value =
+      path === "channels.synology-chat"
+        ? '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }'
+        : "https://gateway.example/webhook/synology?access_token=very-secret";
+    const proposed = await engine.handle(`config set ${path} ${value}`);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
     expect(planner).not.toHaveBeenCalled();
@@ -693,6 +696,7 @@ describe("SystemAgentChatEngine approval", () => {
     "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",
     "plugins.entries.codex.config.appServer.headers.Authorization",
+    "channels.synology-chat",
   ])("redacts config-set value at %s from the AI-visible history", async (path) => {
     const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
       reply: "noted",
@@ -704,7 +708,11 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await engine.handle(`config set ${path} 123:very-secret`);
+    const value =
+      path === "channels.synology-chat"
+        ? '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }'
+        : "123:very-secret";
+    await engine.handle(`config set ${path} ${value}`);
     await engine.handle("did that work?");
 
     const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];

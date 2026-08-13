@@ -47,11 +47,12 @@ export function schemaHasChildren(schema: ConfigJsonSchemaObject): boolean {
 export function findWildcardHintMatch<T>(params: {
   uiHints: Record<string, T>;
   path: string;
+  targetParts?: readonly string[];
   splitPath: (path: string) => string[];
   includeAncestors?: boolean;
   acceptHint?: (hint: T) => boolean;
 }): { path: string; hint: T } | null {
-  const targetParts = params.splitPath(params.path);
+  const targetParts = params.targetParts ?? params.splitPath(params.path);
   let bestMatch:
     | {
         path: string;

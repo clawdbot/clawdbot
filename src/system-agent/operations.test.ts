@@ -445,6 +445,13 @@ describe("parseSystemAgentOperation", () => {
         value: callbackUrl,
       }),
     ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
+    expect(
+      describeSystemAgentPersistentOperation({
+        kind: "config-set",
+        path: "channels.synology-chat",
+        value: `{ webhookUrl: "${callbackUrl}" }`,
+      }),
+    ).toBe("set config channels.synology-chat to <redacted>");
   });
 
   it("parses agent creation requests", () => {

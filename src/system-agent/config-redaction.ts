@@ -4,7 +4,7 @@ import {
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
 } from "@openclaw/net-policy/redact-sensitive-url";
-import { parseConfigSetPath } from "../cli/config-cli-path.js";
+import { parseConfigSetPath, parseConfigSetValue } from "../cli/config-cli-path.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../config/runtime-schema.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
@@ -33,14 +33,18 @@ function splitConfigHintPath(path: string): string[] {
 }
 
 function resolveConfigUiHint(
-  path: string,
+  path: readonly string[],
+  uiHints: ConfigUiHints,
   includeAncestors = false,
   acceptHint?: (hint: ConfigUiHint) => boolean,
 ): ConfigUiHint | undefined {
   return (
     findWildcardHintMatch({
-      uiHints: loadSystemAgentConfigUiHints(),
-      path,
+      uiHints,
+      path: path.join("."),
+      // Config path segments can themselves contain dots. Preserve the
+      // writer-parsed boundaries instead of reparsing a lossy joined path.
+      targetParts: path,
       splitPath: splitConfigHintPath,
       includeAncestors,
       acceptHint,
@@ -48,31 +52,51 @@ function resolveConfigUiHint(
   );
 }
 
-/** Return whether a config value must stay out of model-visible command text. */
-export function isSystemAgentSensitiveConfigValue(path: string, value: unknown): boolean {
-  let canonicalPath: string;
-  try {
-    canonicalPath = parseConfigSetPath(path).join(".");
-  } catch {
-    // The command parser accepts a broader path surface than config writes do.
-    // Keep malformed paths out of model-visible text instead of guessing how a
-    // future writer or normalizer might interpret them.
-    return true;
-  }
+function hasSensitiveConfigValue(path: string[], value: unknown, uiHints: ConfigUiHints): boolean {
+  const canonicalPath = path.join(".");
   const sensitiveHint = resolveConfigUiHint(
     path,
+    uiHints,
     true,
     (candidate) => candidate.sensitive !== undefined,
   );
   if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
     return true;
   }
-  const hint = resolveConfigUiHint(path);
-  return (
+  const hint = resolveConfigUiHint(path, uiHints);
+  if (
     typeof value === "string" &&
     (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)) &&
     redactSensitiveUrlLikeString(value) !== value
-  );
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry, index) =>
+      hasSensitiveConfigValue([...path, String(index)], entry, uiHints),
+    );
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).some(([key, entry]) =>
+      hasSensitiveConfigValue([...path, key], entry, uiHints),
+    );
+  }
+  return false;
+}
+
+/** Return whether a config value must stay out of model-visible command text. */
+export function isSystemAgentSensitiveConfigValue(path: string, value: unknown): boolean {
+  let parsedPath: string[];
+  try {
+    parsedPath = parseConfigSetPath(path);
+  } catch {
+    // The command parser accepts a broader path surface than config writes do.
+    // Keep malformed paths out of model-visible text instead of guessing how a
+    // future writer or normalizer might interpret them.
+    return true;
+  }
+  const parsedValue = typeof value === "string" ? parseConfigSetValue(value, false) : value;
+  return hasSensitiveConfigValue(parsedPath, parsedValue, loadSystemAgentConfigUiHints());
 }
 
 function replaceRedactionSentinels(value: unknown): unknown {
