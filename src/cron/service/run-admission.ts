@@ -5,6 +5,7 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
+  releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -327,6 +328,8 @@ export async function activateQueuedCronRun(params: {
   } catch (error) {
     await params.onUnavailableRollbackError?.();
     throw error;
+  } finally {
+    releaseLocalCronRunReceiptOwnership(runReceipt);
   }
   releaseQueuedCronRun(state, job.id, reservationIdentity);
   return {

@@ -2,7 +2,11 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import { CronRunReceiptRevisionError, finishCronRunReceipt } from "../store/run-receipt-store.js";
+import {
+  CronRunReceiptRevisionError,
+  finishCronRunReceipt,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -371,16 +375,31 @@ async function finishPreparedManualRun(
     }
     emitMissingQueuedTerminal();
   } finally {
-    if (!finalized) {
-      finishCronRunReceipt({
-        handle: prepared.runReceipt,
-        status: "superseded",
-        finishedAtMs: state.deps.nowMs(),
-        error: "cron run result was not applied to the current job revision",
-      });
+    // Terminal receipt persistence is fallible; local liveness and admission
+    // ownership must still retire or this process permanently self-fences the job.
+    let receiptFailure: { error: unknown } | undefined;
+    try {
+      if (!finalized) {
+        finishCronRunReceipt({
+          handle: prepared.runReceipt,
+          status: "superseded",
+          finishedAtMs: state.deps.nowMs(),
+          error: "cron run result was not applied to the current job revision",
+        });
+      }
+    } catch (error) {
+      receiptFailure = { error };
+    } finally {
+      releaseLocalCronRunReceiptOwnership(prepared.runReceipt);
+      try {
+        releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      } finally {
+        clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
+      }
     }
-    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
-    clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
+    if (receiptFailure) {
+      throw receiptFailure.error;
+    }
   }
 }
 

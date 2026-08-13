@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
+import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -161,7 +162,8 @@ function makeParentService(storePath: string, runCommandJob = vi.fn()) {
 function receipts(storePath: string, jobId: string) {
   return openOpenClawStateDatabase()
     .db.prepare(
-      `SELECT receipt_id AS receiptId, status, agent_id AS agentId
+      `SELECT receipt_id AS receiptId, status, agent_id AS agentId,
+              started_at_ms AS startedAtMs
          FROM cron_run_receipts
         WHERE store_key = ? AND job_id = ?
         ORDER BY started_at_ms DESC, receipt_id DESC`,
@@ -170,7 +172,18 @@ function receipts(storePath: string, jobId: string) {
     receiptId: string;
     status: string;
     agentId: string;
+    startedAtMs: number;
   }>;
+}
+
+function databaseUpdateReceiptToRunning(receiptId: string): void {
+  openOpenClawStateDatabase()
+    .db.prepare(
+      `UPDATE cron_run_receipts
+          SET status = 'running', finished_at_ms = NULL, error_text = NULL
+        WHERE receipt_id = ?`,
+    )
+    .run(receiptId);
 }
 
 describe("cron durable run ownership", () => {
@@ -202,6 +215,84 @@ describe("cron durable run ownership", () => {
     } finally {
       cron.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt");
+    }
+  });
+
+  it("releases manual run ownership when receipt finalization throws", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("receipt-finalization-failure", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    reconcileCronRunReceiptForStartup({
+      storePath,
+      jobId: job.id,
+      startedAtMs: 0,
+      nowMs: now,
+    });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TRIGGER reject_cron_run_receipt_finish
+      BEFORE UPDATE OF status ON cron_run_receipts
+      WHEN OLD.status = 'running' AND NEW.status != 'running'
+      BEGIN
+        SELECT RAISE(ABORT, 'receipt finalization unavailable');
+      END;
+    `);
+    const cron = makeParentService(
+      storePath,
+      vi.fn(async () => {
+        advanceCronActiveJobGeneration();
+        return { status: "ok" as const };
+      }),
+    );
+    try {
+      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt finalization unavailable");
+    } finally {
+      cron.stop();
+      database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt_finish");
+    }
+    expect(isCronJobActive(job.id)).toBe(false);
+
+    const replacement = makeParentService(
+      storePath,
+      vi.fn(async () => ({ status: "ok" as const })),
+    );
+    try {
+      await replacement.start();
+      await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    } finally {
+      replacement.stop();
+    }
+  });
+
+  it("releases process-local receipt ownership after a successful manual run", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("successful-manual-release", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const cron = makeParentService(
+      storePath,
+      vi.fn(async () => ({ status: "ok" as const })),
+    );
+    try {
+      await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      const receipt = receipts(storePath, job.id)[0];
+      expect(receipt).toMatchObject({ status: "ok" });
+      databaseUpdateReceiptToRunning(receipt!.receiptId);
+
+      expect(
+        reconcileCronRunReceiptForStartup({
+          storePath,
+          jobId: job.id,
+          startedAtMs: receipt!.startedAtMs,
+          nowMs: now + 1,
+        }),
+      ).toBeUndefined();
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+    } finally {
+      cron.stop();
     }
   });
 

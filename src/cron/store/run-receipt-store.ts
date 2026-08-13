@@ -61,6 +61,8 @@ type ResolveReceiptAgentId = (job: CronJob) => string;
 const CRON_RUN_RECEIPT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS cron_run_receipts (";
 const CRON_RUN_RECEIPT_SCHEMA_END =
   "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);";
+const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
+const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const locallyOwnedReceipts = new Set<string>();
 
@@ -225,6 +227,35 @@ function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
   };
 }
 
+function pruneTerminalReceipts(database: DatabaseSync, storeKey: string, jobId: string): void {
+  const terminalIds = executeSqliteQuerySync(
+    database,
+    query(database)
+      .selectFrom("cron_run_receipts")
+      .select("receipt_id")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId)
+      .where("status", "!=", "running")
+      .orderBy("finished_at_ms", "desc")
+      .orderBy("started_at_ms", "desc")
+      .orderBy("receipt_id", "desc"),
+  ).rows.slice(CRON_RUN_RECEIPT_TERMINAL_RETENTION);
+  for (let index = 0; index < terminalIds.length; index += CRON_RUN_RECEIPT_DELETE_BATCH_SIZE) {
+    const receiptIds = terminalIds
+      .slice(index, index + CRON_RUN_RECEIPT_DELETE_BATCH_SIZE)
+      .map((row) => row.receipt_id);
+    executeSqliteQuerySync(
+      database,
+      query(database)
+        .deleteFrom("cron_run_receipts")
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", jobId)
+        .where("status", "!=", "running")
+        .where("receipt_id", "in", receiptIds),
+    );
+  }
+}
+
 /** Atomically records a run start and acquires the one-active-run durable fence. */
 export function claimCronRunReceipt(params: {
   storePath: string;
@@ -273,6 +304,7 @@ export function claimCronRunReceipt(params: {
         throw new CronRunReceiptConflictError(receiptFromRow(current));
       }
     }
+    pruneTerminalReceipts(database, storeKey, params.job.id);
     validateCurrentJob({ database, handle, resolveAgentId: params.resolveAgentId });
     executeSqliteQuerySync(
       database,
@@ -355,13 +387,15 @@ export function finishCronRunReceipt(params: {
   error?: string;
   env?: NodeJS.ProcessEnv;
 }): CronRunReceipt | undefined {
-  const finished = withReceiptWrite(
-    "cron.run-receipt.finish",
-    params.env ? { env: params.env } : {},
-    (database) => finishCronRunReceiptInDatabase({ database, ...params }),
-  );
-  locallyOwnedReceipts.delete(params.handle.receiptId);
-  return finished;
+  try {
+    return withReceiptWrite(
+      "cron.run-receipt.finish",
+      params.env ? { env: params.env } : {},
+      (database) => finishCronRunReceiptInDatabase({ database, ...params }),
+    );
+  } finally {
+    locallyOwnedReceipts.delete(params.handle.receiptId);
+  }
 }
 
 /** Releases only this process's liveness proof after terminal persistence fails. */
@@ -390,6 +424,7 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("status", "=", "running")
       .where("owner_pid", "=", params.handle.ownerPid),
   );
+  pruneTerminalReceipts(params.database, params.handle.storeKey, params.handle.jobId);
   const row = executeSqliteQueryTakeFirstSync(
     params.database,
     query(params.database)
@@ -437,6 +472,7 @@ export function reconcileCronRunReceiptForStartup(params: {
         .where("receipt_id", "=", current.receipt_id)
         .where("status", "=", "running"),
     );
+    pruneTerminalReceipts(database, storeKey, params.jobId);
     return undefined;
   });
 }

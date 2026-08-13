@@ -96,6 +96,41 @@ describe("cron run receipt store", () => {
     ]);
   });
 
+  it("prunes old terminal receipts while preserving the active and 64 newest rows", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("retention");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const finishedReceiptIds: string[] = [];
+    for (let index = 0; index < 70; index += 1) {
+      const handle = claim(storePath, job, 1_000 + index * 2);
+      finishedReceiptIds.push(handle.receiptId);
+      finishCronRunReceipt({
+        handle,
+        status: "ok",
+        finishedAtMs: 1_001 + index * 2,
+      });
+    }
+    const active = claim(storePath, job, 2_000);
+
+    const retained = receipts(storePath, job.id);
+    const retainedIds = new Set(retained.map((receipt) => receipt.receiptId));
+    expect(retained).toHaveLength(65);
+    expect(retained).toContainEqual(
+      expect.objectContaining({
+        receiptId: active.receiptId,
+        status: "running",
+      }),
+    );
+    for (const receiptId of finishedReceiptIds.slice(0, 6)) {
+      expect(retainedIds.has(receiptId)).toBe(false);
+    }
+    for (const receiptId of finishedReceiptIds.slice(-64)) {
+      expect(retainedIds.has(receiptId)).toBe(true);
+    }
+
+    finishCronRunReceipt({ handle: active, status: "skipped", finishedAtMs: 2_001 });
+  });
+
   it("rejects a live run after its durable owner revision changes", async () => {
     const { storePath } = await makeStorePath();
     const admitted = makeJob("owner-change", "alpha");
