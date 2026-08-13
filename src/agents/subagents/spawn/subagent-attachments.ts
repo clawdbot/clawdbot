@@ -18,6 +18,8 @@ import {
 // Keep exact tool arguments even though repeated directory prefixes cost up to
 // ~2.5K tokens at maxFiles=50. Making the child reconstruct paths caused the bug.
 const SUBAGENT_ATTACHMENT_PATH_BLOCK_MAX_CHARS = 4096;
+const SUBAGENT_ATTACHMENT_CLEANUP_MAX_DEPTH = 8;
+const SUBAGENT_ATTACHMENT_CLEANUP_MAX_ENTRIES = 128;
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
@@ -80,6 +82,7 @@ type MaterializeSubagentAttachmentsResult =
       receipt: SubagentAttachmentReceipt;
       absDir: string;
       rootDir: string;
+      workspaceDir: string;
       retainOnSessionKeep: boolean;
       systemPromptSuffix: string;
     }
@@ -102,6 +105,37 @@ type SubagentAttachmentRequest =
   | { status: "none" }
   | { status: "forbidden"; error: string }
   | { status: "error"; error: string };
+
+export async function cleanupMaterializedSubagentAttachments(params: {
+  workspaceDir: string;
+  relDir: string;
+}): Promise<void> {
+  const root = await privateFileStore(await fs.realpath(params.workspaceDir)).root();
+  let entriesRemaining = SUBAGENT_ATTACHMENT_CLEANUP_MAX_ENTRIES;
+
+  const removeTree = async (relativeDir: string, depth: number): Promise<void> => {
+    if (depth > SUBAGENT_ATTACHMENT_CLEANUP_MAX_DEPTH) {
+      throw new Error("attachment cleanup directory depth exceeded");
+    }
+    const entries = await root.list(relativeDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entriesRemaining-- <= 0) {
+        throw new Error("attachment cleanup entry count exceeded");
+      }
+      const child = path.posix.join(relativeDir, entry.name);
+      if (entry.isDirectory && !entry.isSymbolicLink) {
+        await removeTree(child, depth + 1);
+      } else {
+        await root.remove(child);
+      }
+    }
+    await root.remove(relativeDir);
+  };
+
+  // Each operation is workspace-root-relative. Do not replace this with fs.rm:
+  // a sandbox-controlled attachment parent can be a symlink outside the workspace.
+  await removeTree(params.relDir, 0);
+}
 
 function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
   const attachmentsCfg = config.tools?.sessions_spawn?.attachments;
@@ -335,6 +369,7 @@ export async function materializeSubagentAttachments(params: {
   const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
+  let store: ReturnType<typeof privateFileStore> | undefined;
 
   try {
     const prepared = prepareSubagentAttachments({
@@ -346,18 +381,21 @@ export async function materializeSubagentAttachments(params: {
       relDir,
       prepared.attachments.map((attachment) => attachment.name),
     );
-    await fs.mkdir(absDir, { recursive: true, mode: 0o700 });
-    const store = privateFileStore(absDir);
+    // The configured workspace may itself be a symlink, but attachment descendants must
+    // stay under its real root so a sandbox cannot redirect writes through .openclaw.
+    await fs.mkdir(childWorkspaceDir, { recursive: true, mode: 0o700 });
+    const workspaceStore = privateFileStore(await fs.realpath(childWorkspaceDir));
+    store = workspaceStore;
 
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];
     for (const { name, buf, bytes } of prepared.attachments) {
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-      writeJobs.push({ outPath: name, buf });
+      writeJobs.push({ outPath: path.posix.join(relDir, name), buf });
       files.push({ name, bytes, sha256 });
     }
 
-    await Promise.all(writeJobs.map(({ outPath, buf }) => store.writeText(outPath, buf)));
+    await Promise.all(writeJobs.map(({ outPath, buf }) => workspaceStore.writeText(outPath, buf)));
 
     const manifest = {
       relDir,
@@ -365,7 +403,9 @@ export async function materializeSubagentAttachments(params: {
       totalBytes: prepared.totalBytes,
       files,
     };
-    await store.writeJson(".manifest.json", manifest, { trailingNewline: true });
+    await workspaceStore.writeJson(path.posix.join(relDir, ".manifest.json"), manifest, {
+      trailingNewline: true,
+    });
 
     return {
       status: "ok",
@@ -377,6 +417,7 @@ export async function materializeSubagentAttachments(params: {
       },
       absDir,
       rootDir: absRootDir,
+      workspaceDir: childWorkspaceDir,
       retainOnSessionKeep: request.limits.retainOnSessionKeep,
       // File-consuming tools reject directories. List each already-validated
       // workspace-relative path so the child does not pass `${relDir}` to image/media loaders.
@@ -386,10 +427,12 @@ export async function materializeSubagentAttachments(params: {
         (params.mountPathHint ? `\nRequested mountPath hint: ${params.mountPathHint}.\n` : ""),
     };
   } catch (err) {
-    try {
-      await fs.rm(absDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup only.
+    if (store) {
+      try {
+        await store.remove(relDir);
+      } catch {
+        // Best-effort cleanup only.
+      }
     }
     return {
       status: "error",
