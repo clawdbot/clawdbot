@@ -366,7 +366,15 @@ export function createSubagentRegistrySweeper(params: {
         if (typeof entry.execution.endedAt !== "number") {
           const hasLiveRunContext = Boolean(getAgentRunContext(runId));
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
-          if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
+          // Queued collectors have no gateway run context until the swarm FIFO
+          // dispatches them; their liveness is owned by the scheduler, kill
+          // intents, and restore settlement — never this stale-context reap.
+          const queuedForDispatch = entry.execution.status === "queued";
+          if (
+            !queuedForDispatch &&
+            !hasLiveRunContext &&
+            activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS
+          ) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
             if (orphanReason) {
               if (
