@@ -250,6 +250,17 @@ suite.define(() => {
           path: path.join(railFlowDir, "04-list-remains-with-detail-open.png"),
           fullPage: true,
         });
+
+        // Region close leaves sidebarContent set; the rail highlight must
+        // follow panel visibility, not retained content.
+        await page.getByRole("button", { name: "Close Details" }).click();
+        await detailPanel.waitFor({ state: "detached" });
+        expect(await completedRow.getAttribute("aria-current")).toBe(null);
+        expect(
+          await completedRow.evaluate((element) =>
+            element.classList.contains("chat-tasks-rail__task--open"),
+          ),
+        ).toBe(false);
       },
     );
   });

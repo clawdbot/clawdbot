@@ -10,6 +10,13 @@ import { resetTaskDetail } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
+// Region close collapses the detail slot but leaves sidebarContent set, so
+// "task content exists" is not "panel visible"; consumers (panel render, rail
+// open-row highlight) must gate on the layout, not the content.
+export function detailSlotOpen(layout: SidebarLayout): boolean {
+  return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
+}
+
 export function renderChatDetailSlot(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
@@ -21,10 +28,7 @@ export function renderChatDetailSlot(params: {
 }): TemplateResult {
   const { content, host } = params;
   if (content.kind === "task") {
-    const detailOpen = params.layout.columns.some((column) =>
-      column.panels.some((panel) => panel.slot === "detail"),
-    );
-    if (!detailOpen) {
+    if (!detailSlotOpen(params.layout)) {
       resetTaskDetail(host);
       return html``;
     }
