@@ -407,13 +407,13 @@ export function buildProviderReplayFamilyHooks(
     }
     case "anthropic-by-model":
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId),
+        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
+          buildAnthropicReplayPolicyForModel(modelId, model),
       };
     case "native-anthropic-by-model":
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId),
+        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
+          buildNativeAnthropicReplayPolicyForModel(modelId, model),
       };
     case "google-gemini":
       return {
