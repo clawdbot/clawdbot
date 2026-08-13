@@ -631,6 +631,6 @@ enum class GatewayEvent(
   OpenclawApprovalResolved("openclaw.approval.resolved"),
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
-  PortalChanged("portal.changed"),
   UpdateAvailable("update.available"),
+  PortalChanged("portal.changed"),
 }

@@ -37,7 +37,6 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [READ_SCOPE],
   "board.changed": [READ_SCOPE],
   "board.command": [READ_SCOPE],
-  "portal.changed": [READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
@@ -86,6 +85,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],
   "terminal.exit": [ADMIN_SCOPE],
+  "portal.changed": [READ_SCOPE],
 };
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an

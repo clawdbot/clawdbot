@@ -82,6 +82,6 @@ export const GATEWAY_EVENTS = [
   "openclaw.approval.resolved",
   "terminal.data",
   "terminal.exit",
-  "portal.changed",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  "portal.changed",
 ];
