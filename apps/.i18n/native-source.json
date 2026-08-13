@@ -36347,7 +36347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 102,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/PairingPromptSupport.swift",
       "source": "Device",
       "surface": "apple",
@@ -36355,7 +36355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 102,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/PairingPromptSupport.swift",
       "source": "Node",
       "surface": "apple",
