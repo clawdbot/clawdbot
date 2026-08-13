@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
@@ -10,10 +9,10 @@ import {
   fetchGitHubApi,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  githubApiToken,
   isRecord,
   readOptionalGitHubString,
   readGitHubJsonResponse,
+  resolveGitHubApiCredentialScope,
   requiredString,
 } from "./control-ui-github-api.js";
 
@@ -171,9 +170,9 @@ export function searchRemoteProjects(
   options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<ProjectsSearchRemoteResult> {
   const normalizedQuery = query.trim().toLowerCase();
-  const token = githubApiToken(options.env);
+  const { token, cacheScope } = resolveGitHubApiCredentialScope(options.env);
   // Gateway reloads run in-process, so cache results must stay credential-scoped.
-  const cacheKey = `${normalizedQuery}\0${token ? createHash("sha256").update(token).digest("hex") : "anonymous"}`;
+  const cacheKey = `${normalizedQuery}\0${cacheScope}`;
   const now = options.now ?? Date.now();
   const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
