@@ -852,6 +852,21 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("parses a stringified components param from MCP transports (#121778)", async () => {
+    const components = { blocks: [{ type: "text", text: "Pick one" }] };
+    // MCP transports deliver undeclared object params as JSON strings; the
+    // parsed spec must reach the action payload, not be silently dropped.
+    await handleDiscordMessageAction({
+      action: "send",
+      params: { message: "hello", components: JSON.stringify(components) },
+      cfg: discordConfig(),
+      toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+    });
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const [payload] = handleDiscordActionMock.mock.calls[0]!;
+    expect(payload).toMatchObject({ action: "sendMessage", components });
+  });
+
   it("downgrades chart-only presentations to Discord component text", async () => {
     const cfg = discordConfig();
 

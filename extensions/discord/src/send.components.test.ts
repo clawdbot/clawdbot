@@ -443,6 +443,41 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     }
   });
 
+  it("retains components parsed from a stringified MCP param through a real REST request (#121778)", async () => {
+    // MCP transports deliver undeclared object params as JSON strings. The
+    // production gate coerces the string back into a spec (coerceDiscordComponentsParam
+    // -> readDiscordComponentSpec) before sendDiscordComponentMessage emits the
+    // real Discord request; this traces that chain against a real HTTP loopback.
+    const { coerceDiscordComponentsParam, readDiscordComponentSpec } =
+      await import("./components.parse.js");
+    const spec = {
+      text: "Choose",
+      blocks: [{ type: "actions", buttons: [{ label: "Yes", callbackData: "yes" }] }],
+    };
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const componentSpec = readDiscordComponentSpec(
+        coerceDiscordComponentsParam(JSON.stringify(spec)),
+      );
+      await sendDiscordComponentMessage("channel:789", componentSpec!, {
+        cfg: DISCORD_TEST_CFG,
+        rest: loopback.rest,
+        token: "test-token",
+      });
+
+      const post = loopback.requests.find((request) => request.method === "POST");
+      expect(post?.path).toContain("/channels/789/messages");
+      // The Components V2 payload (flags 32768) reached the real Discord request
+      // body with the button label and text content, instead of being silently
+      // dropped as it was before the coercion fix.
+      expect(post?.body).toContain('"flags":32768');
+      expect(post?.body).toContain('"content":"Choose"');
+      expect(post?.body).toContain('"label":"Yes"');
+    } finally {
+      await loopback.close();
+    }
+  });
+
   it("treats bare numeric component send targets as channels", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({

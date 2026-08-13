@@ -20,6 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
+import { coerceDiscordComponentsParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
@@ -212,9 +213,10 @@ export async function handleDiscordMessageAction(
     const presentationFellBack = Boolean(
       generatedPresentationComponents && !presentationComponents,
     );
+    const componentsParam = coerceDiscordComponentsParam(params.components);
     const rawComponents = presentationFellBack
       ? undefined
-      : (params.components ??
+      : (componentsParam ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =

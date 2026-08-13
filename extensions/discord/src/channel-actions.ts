@@ -11,7 +11,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
-import { readDiscordComponentSpec } from "./components.js";
+import { coerceDiscordComponentsParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
@@ -201,7 +201,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       sessionKey: ctx.sessionKey,
       inboundEventKind: ctx.inboundEventKind,
     });
-    const rawComponents = ctx.params.components;
+    const rawComponents = coerceDiscordComponentsParam(ctx.params.components);
     if (typeof rawComponents === "function") {
       return null;
     }

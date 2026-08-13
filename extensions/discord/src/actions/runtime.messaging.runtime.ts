@@ -1,5 +1,5 @@
 // Discord plugin module implements runtime.messaging behavior.
-import { readDiscordComponentSpec } from "../components.js";
+import { coerceDiscordComponentsParam, readDiscordComponentSpec } from "../components.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import {
@@ -43,6 +43,7 @@ export const discordMessagingActionRuntime = {
   listThreadsDiscord,
   pinMessageDiscord,
   reactMessageDiscord,
+  coerceDiscordComponentsParam,
   readDiscordComponentSpec,
   readMessagesDiscord,
   removeOwnReactionsDiscord,

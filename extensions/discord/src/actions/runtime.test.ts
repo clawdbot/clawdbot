@@ -2246,6 +2246,34 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
+  it("parses a stringified components param from MCP transports (#121778)", async () => {
+    sendMessageDiscord.mockClear();
+    sendDiscordComponentMessage.mockClear();
+    const components = {
+      text: "Choose",
+      blocks: [{ type: "actions", buttons: [{ label: "Yes", callbackData: "yes" }] }],
+    };
+
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        // MCP transports that stringify undeclared object params deliver
+        // `components` as a JSON string rather than a parsed object.
+        components: JSON.stringify(components),
+      },
+      enableAllActions,
+    );
+
+    // The stringified spec is parsed back into an object so the component-send
+    // path runs instead of degrading to a bare-caption text message.
+    expect(sendDiscordComponentMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+    const payload = mockCall(sendDiscordComponentMessage, "sendDiscordComponentMessage", 0)[1];
+    expect(payload).toMatchObject(components);
+  });
+
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
     await handleMessagingAction(

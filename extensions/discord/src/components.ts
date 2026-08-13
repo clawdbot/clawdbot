@@ -15,6 +15,7 @@ export {
 } from "./components.builders.js";
 export {
   DISCORD_COMPONENT_ATTACHMENT_PREFIX,
+  coerceDiscordComponentsParam,
   readDiscordComponentSpec,
   resolveDiscordComponentAttachmentName,
 } from "./components.parse.js";

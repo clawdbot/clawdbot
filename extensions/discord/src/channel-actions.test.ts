@@ -493,6 +493,57 @@ describe("discordMessageActions", () => {
     expect(prepared).toBeNull();
   });
 
+  it("parses a stringified components param from MCP transports (#121778)", async () => {
+    // MCP transports that stringify undeclared object parameters deliver
+    // `components` as a JSON string. The send path must coerce it back to an
+    // object so the component spec is recognized instead of silently dropped.
+    const components = {
+      text: "Choose",
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Yes", callbackData: "yes" }],
+        },
+      ],
+    };
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          components: JSON.stringify(components),
+          embeds: undefined,
+        },
+      },
+      to: "channel:123",
+      payload: { text: "hello" },
+    });
+
+    expect(prepared).toEqual({
+      text: "hello",
+      channelData: { discord: { components } },
+    });
+  });
+
+  it("drops an unparseable stringified components param without throwing (#121778)", async () => {
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          components: "not-json",
+          embeds: undefined,
+        },
+      },
+      to: "channel:123",
+      payload: { text: "hello" },
+    });
+
+    expect(prepared).toEqual({ text: "hello" });
+  });
+
   it("delegates action handling to the Discord action handler", async () => {
     const cfg = {
       channels: {

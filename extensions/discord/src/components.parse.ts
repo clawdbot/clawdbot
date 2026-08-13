@@ -21,6 +21,24 @@ import type {
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
+/**
+ * Parses a stringified `components` param back into an object/array so the
+ * gate checks recognize it. MCP transports deliver undeclared object params as
+ * JSON strings; without this, a valid spec fails every gate and is silently
+ * dropped (#121778). Non-string and unparseable values pass through unchanged.
+ */
+export function coerceDiscordComponentsParam(raw: unknown): unknown {
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
 type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
