@@ -233,8 +233,7 @@ async function runOllamaWebSearch(params: {
         // text must be sanitized independently of the operator's log-redaction
         // setting.
         const safeDetail = redactToolPayloadText(detail.text || "");
-        const message =
-          `Ollama web search failed (${response.status}): ${safeDetail}`.trim();
+        const message = `Ollama web search failed (${response.status}): ${safeDetail}`.trim();
         if (response.status === 404) {
           lastError = new Error(message);
           continue;
