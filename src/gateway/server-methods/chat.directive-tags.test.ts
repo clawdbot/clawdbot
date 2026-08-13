@@ -673,7 +673,13 @@ function createFixturePaths(prefix: string): { dir: string; transcriptPath: stri
   return { dir, transcriptPath };
 }
 
-async function createTranscriptFixture(prefix: string) {
+async function createTranscriptFixture(
+  prefix: string,
+  owner: Pick<SessionAccessScope, "agentId" | "sessionKey"> = {
+    agentId: "main",
+    sessionKey: "main",
+  },
+) {
   const { dir, transcriptPath } = createFixturePaths(prefix);
   fs.writeFileSync(
     transcriptPath,
@@ -688,11 +694,14 @@ async function createTranscriptFixture(prefix: string) {
   );
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
-  await replaceSessionEntry(sessionEntryScope(), {
-    sessionId: mockState.sessionId,
-    sessionFile: transcriptPath,
-    updatedAt: Date.now(),
-  });
+  await replaceSessionEntry(
+    { ...owner, storePath: mockState.storePath },
+    {
+      sessionId: mockState.sessionId,
+      sessionFile: transcriptPath,
+      updatedAt: Date.now(),
+    },
+  );
   return dir;
 }
 
@@ -5040,7 +5049,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("chat.inject scopes selected-agent global sessions before appending", async () => {
-    await createTranscriptFixture("openclaw-chat-inject-selected-global-");
+    await createTranscriptFixture("openclaw-chat-inject-selected-global-", {
+      agentId: "work",
+      sessionKey: "agent:work:global",
+    });
     mockState.config = {
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       session: { scope: "global" },
@@ -7077,6 +7089,58 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
     expect(getTotalPendingReplies()).toBe(0);
+  });
+
+  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
+    createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
+    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
+    const staleSessionKey = "agent:main:stale-transcript-owner";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: canonicalSessionKey,
+        storePath: mockState.storePath,
+      },
+      { sessionId: mockState.sessionId, updatedAt: 1 },
+    );
+    mockState.finalText = "ok";
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-transcript-owner",
+      message: "keep this Gateway turn",
+      sessionKey: staleSessionKey,
+      expectBroadcast: false,
+    });
+
+    const persistedEvents = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: canonicalSessionKey,
+      storePath: mockState.storePath,
+    });
+    expect(persistedEvents).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "keep this Gateway turn",
+        }),
+      }),
+    );
+    expect(
+      loadSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: staleSessionKey,
+        storePath: mockState.storePath,
+      }),
+    ).toBeUndefined();
+    expect(findUserUpdate()?.target).toEqual({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: staleSessionKey,
+      storePath: mockState.storePath,
+    });
   });
 
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
