@@ -2783,8 +2783,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   white-space: nowrap;
 }
 
-/* Keycap hint, not content: fixed-width so letters and digits share one rail. */
-.session-menu__shortcut {
+/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
+   .chat-question-panel__option kbd), fixed-width so letters and digits share
+   one rail beside the labels. */
+.session-menu__shortcut,
+.chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
   color: var(--muted);
