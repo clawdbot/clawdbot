@@ -60,7 +60,8 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     expect(await pathExists(syncedSkillMd ?? "")).toBe(true);
     expect(syncedStat.isSymbolicLink()).toBe(false);
     expect(prompt).toContain("Wiki maintenance skill for sandboxed agents");
-    expect(prompt).toContain("wiki-maintainer/SKILL.md");
+    expect(prompt).toContain(`${path.basename(syncedSkillDir)}/SKILL.md`);
+    expect(path.basename(syncedSkillDir).startsWith("wiki-maintainer-")).toBe(true);
     expect(prompt).not.toContain(realPluginSkillDir.replaceAll("\\", "/"));
     expect(prompt).not.toContain(pluginSkillsDir.replaceAll("\\", "/"));
     expect(prompt).not.toContain(symlinkPath.replaceAll("\\", "/"));
@@ -157,7 +158,9 @@ describe("syncWorkspaceSkills for plugin skills", () => {
 
     expect(publishedSkillFilePath(targetWorkspace, "escaped-skill")).toBeUndefined();
     expect(
-      await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md")),
+      (await fs.readdir(path.join(targetWorkspace, "skills"))).some((child) =>
+        child.startsWith("escaped-skill-"),
+      ),
     ).toBe(false);
   });
 });

@@ -152,7 +152,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       const remappedDemo = resolved.skillsSnapshot?.resolvedSkills?.find(
         (skill) => skill.name === "demo",
       );
-      const containerSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+      const publishedDirName = path.basename(
+        path.dirname(
+          synced.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "demo")?.filePath ??
+            "",
+        ),
+      );
+      const containerSkillPath = `/workspace/.openclaw/sandbox-skills/skills/${publishedDirName}/SKILL.md`;
       expect(resolved.skillsSnapshot?.skills.map((skill) => skill.name)).toContain("demo");
       expect(remappedDemo?.filePath).toBe(containerSkillPath);
       expect(resolved.skillsSnapshot?.prompt).toContain(
@@ -206,11 +212,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
 
     const remappedSkill = resolved.skillsSnapshot?.resolvedSkills?.find((skill) =>
-      skill.filePath.includes(`/${skillDirName}/SKILL.md`),
+      skill.filePath.includes(`/${skillDirName}-`),
     );
     const containerFilePath = remappedSkill?.filePath ?? "";
 
-    expect(containerFilePath).toContain(`/${skillDirName}/SKILL.md`);
+    expect(containerFilePath).toContain(`/${skillDirName}-`);
+    expect(containerFilePath).toContain("/SKILL.md");
     expect(resolved.skillsSnapshot?.prompt).toContain(
       `<location>${escapeSkillXml(containerFilePath)}</location>`,
     );

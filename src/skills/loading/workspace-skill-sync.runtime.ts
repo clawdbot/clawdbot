@@ -274,17 +274,16 @@ function resolveSyncedSkillDestinationPath(params: {
   targetSkillsDir: string;
   baseName: string;
   identity: string;
-  claimedBaseNames: ReadonlySet<string>;
 }): string {
-  // A basename another skill already holds — in this catalog, or in the previous
-  // one whose files are still retained — gets a suffix derived from this skill's
-  // identity. An order-based suffix would let a survivor inherit a departed
-  // sibling's directory and serve its content at a location that run advertised.
-  const dirName = params.claimedBaseNames.has(params.baseName)
-    ? `${params.baseName}-${createHash("sha256").update(params.identity).digest("hex").slice(0, 16)}`
-    : params.baseName;
+  // Every skill gets an identity-derived directory, so the published location is
+  // a pure function of the skill. Suffixing only on collision made the name
+  // depend on which other skills happened to be eligible, which let a surviving
+  // or newly eligible skill land on a departed skill's advertised location and
+  // serve foreign content, and let a skill directory literally named like
+  // another skill's suffixed form take that skill's place.
+  const suffix = createHash("sha256").update(params.identity).digest("hex").slice(0, 16);
   return resolveSandboxPath({
-    filePath: dirName,
+    filePath: `${params.baseName}-${suffix}`,
     cwd: params.targetSkillsDir,
     root: params.targetSkillsDir,
   }).resolved;
@@ -378,12 +377,12 @@ async function publishSyncedSkillTree(source: string, destination: string): Prom
   }
 }
 
-/** Child directory each previously published skill occupied, keyed by directory name. */
+/** Child directories the previous catalog published, for one-refresh retention. */
 function resolvePublishedSyncedSkillDirNames(
   targetSkillsDir: string,
   skillUsagePaths: readonly SkillUsagePath[],
-): Map<string, string> {
-  const dirNames = new Map<string, string>();
+): Set<string> {
+  const dirNames = new Set<string>();
   for (const usage of skillUsagePaths) {
     const relative = path.relative(targetSkillsDir, usage.readPath);
     if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
@@ -394,7 +393,7 @@ function resolvePublishedSyncedSkillDirNames(
     }
     const [child] = relative.split(path.sep);
     if (child) {
-      dirNames.set(child, usage.skillName);
+      dirNames.add(child);
     }
   }
   return dirNames;
@@ -567,24 +566,6 @@ export async function syncWorkspaceSkills(params: {
       targetSkillsDir,
       manifest?.skillUsagePaths ?? [],
     );
-    const currentSkillNames = new Set(entries.map((entry) => entry.skill.name));
-    const baseNameCounts = new Map<string, number>();
-    for (const entry of entries) {
-      const baseName = resolveSyncedSkillDirBaseName(entry);
-      if (baseName) {
-        baseNameCounts.set(baseName, (baseNameCounts.get(baseName) ?? 0) + 1);
-      }
-    }
-    // Claimed = colliding within this catalog, plus directories the previous
-    // catalog gave to skills this run dropped; those files are retained one more
-    // refresh for in-flight readers, so a different skill must not take the name.
-    const claimedBaseNames = new Set([
-      ...[...baseNameCounts].flatMap(([baseName, count]) => (count > 1 ? [baseName] : [])),
-      ...[...publishedDirNames].flatMap(([dirName, skillName]) =>
-        currentSkillNames.has(skillName) ? [] : [dirName],
-      ),
-    ]);
-
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
@@ -608,7 +589,6 @@ export async function syncWorkspaceSkills(params: {
           targetSkillsDir,
           baseName,
           identity,
-          claimedBaseNames,
         });
         usedDirNames.add(path.basename(destinationPath));
         plans.push({ destinationPath, entry, identity });
@@ -693,7 +673,7 @@ export async function syncWorkspaceSkills(params: {
         // run that built its prompt from that catalog is still reading those
         // <location> paths. Retention spans one published generation, not one
         // wall-clock interval, so an unchanged catalog keeps them until it moves.
-        retainDirNames: new Set([...usedDirNames, ...publishedDirNames.keys()]),
+        retainDirNames: new Set([...usedDirNames, ...publishedDirNames]),
       });
     } catch (error) {
       // The manifest is already committed. Prune is cleanup; failing it must not

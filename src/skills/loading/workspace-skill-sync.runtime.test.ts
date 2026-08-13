@@ -52,7 +52,8 @@ async function expectSyncedSkillConfinement(params: {
   await syncSourceSkillsToTarget(params.sourceWorkspace, params.targetWorkspace);
   expect(
     peekPublishedSyncedSkillsSnapshot(params.targetWorkspace)?.resolvedSkills?.some((skill) =>
-      skill.filePath.includes(`${path.sep}${params.safeSkillDirName}${path.sep}`),
+      // Published directories carry an identity suffix, so match the safe prefix.
+      path.basename(path.dirname(skill.filePath)).startsWith(`${params.safeSkillDirName}-`),
     ),
   ).toBe(true);
   expect(await pathExists(params.escapedDest)).toBe(false);
@@ -121,7 +122,7 @@ describe("syncWorkspaceSkills", () => {
     });
 
     const publishedFilePath = skillsSnapshot.resolvedSkills?.[0]?.filePath;
-    expect(publishedFilePath).toContain(`${path.sep}demo-skill${path.sep}SKILL.md`);
+    expect(path.basename(path.dirname(publishedFilePath ?? ""))).toMatch(/^demo-skill-[0-9a-f]+$/);
     expect(skillUsagePaths).toEqual([
       {
         readPath: publishedFilePath,
@@ -139,8 +140,10 @@ describe("syncWorkspaceSkills", () => {
     expect(skillsSnapshot.prompt).not.toContain("Managed version");
     expect(skillsSnapshot.prompt).not.toContain("Bundled version");
     expect(skillsSnapshot.prompt).not.toContain("Extra version");
-    expect(skillsSnapshot.prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
     const publishedDir = path.dirname(publishedFilePath ?? "");
+    expect(skillsSnapshot.prompt.replaceAll("\\", "/")).toContain(
+      `${path.basename(publishedDir)}/SKILL.md`,
+    );
     expect(await pathExists(path.join(publishedDir, ".git"))).toBe(false);
     expect(await pathExists(path.join(publishedDir, "node_modules"))).toBe(false);
   });
@@ -750,7 +753,8 @@ describe("syncWorkspaceSkills", () => {
     expect(synced.skillsSnapshot.prompt).toBe("");
     expect(peekPublishedSyncedSkillsSnapshot(targetWorkspace)).toBeUndefined();
     // Nothing was ever published, so no child is advertised.
-    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(false);
+    // The directory is created before the copy fails, but nothing is published in it.
+    expect(publishedSkillFilePath(targetWorkspace, "alpha")).toBeUndefined();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -838,7 +842,9 @@ describe("syncWorkspaceSkills", () => {
 
       expect(prompt).not.toContain("escaped-skill");
       expect(
-        await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md")),
+        (await fs.readdir(path.join(targetWorkspace, "skills"))).some((child) =>
+          child.startsWith("escaped-skill-"),
+        ),
       ).toBe(false);
     },
   );

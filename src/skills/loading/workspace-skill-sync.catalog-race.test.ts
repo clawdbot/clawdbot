@@ -164,7 +164,11 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       expect(
         sortedSkillNames(skillsSnapshotForRun?.skills.map((skill) => skill.name) ?? []),
       ).toEqual(oldCatalog);
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/skill-01/SKILL.md");
+      const firstAdvertised = skillsSnapshotForRun?.resolvedSkills?.find(
+        (skill) => skill.name === "skill-01",
+      )?.filePath;
+      expect(firstAdvertised).toContain("/workspace/.openclaw/sandbox-skills/skills/skill-01-");
+      expect(prompt).toContain(`<location>${firstAdvertised}</location>`);
 
       // Incremental publish never wipes a live child, so every advertised
       // <location> stays readable through the sandbox bridge mid-refresh.
@@ -218,7 +222,10 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       }
       // skill-08 left the catalog but survives this refresh: reader A built its
       // prompt from the previous catalog and still advertises that location.
-      const departedSkillPath = path.join(targetWorkspace, "skills", "skill-08", "SKILL.md");
+      const departedSkillPath =
+        first.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "skill-08")?.filePath ??
+        "";
+      expect(departedSkillPath).toBeTruthy();
       expect(await pathExists(departedSkillPath)).toBe(true);
       expect(second.skillsSnapshot.prompt).not.toContain("skill-08");
 
@@ -346,9 +353,11 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     await fs.writeFile(path.join(sourceSkillDir, "notes", "detail.md"), "detail\n");
     await fs.writeFile(path.join(sourceSkillDir, "AGENTS.md"), "guide v2\n");
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-    await publish();
+    const second = await publish();
 
-    const publishedDir = path.join(targetWorkspace, "skills", "demo");
+    const publishedDir = path.dirname(
+      second.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "demo")?.filePath ?? "",
+    );
     expect(await fs.readFile(path.join(publishedDir, "AGENTS.md"), "utf8")).toBe("guide v2\n");
     expect((await fs.lstat(path.join(publishedDir, "CLAUDE.md"))).isSymbolicLink()).toBe(true);
     expect((await fs.lstat(path.join(publishedDir, "notes"))).isDirectory()).toBe(true);
@@ -527,8 +536,11 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
         targetWorkspace,
       });
       expect(resolved.skillsSnapshot?.prompt).toContain(nodeLocation);
+      const publishedDemo = synced.skillsSnapshot.resolvedSkills?.find(
+        (skill) => skill.name === "demo",
+      )?.filePath;
       expect(resolved.skillsSnapshot?.prompt).toContain(
-        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        `/workspace/.openclaw/sandbox-skills/skills/${path.basename(path.dirname(publishedDemo ?? ""))}/SKILL.md`,
       );
       expect(
         resolved.skillsSnapshot?.resolvedSkills?.some((skill) => skill.filePath === nodeLocation),
@@ -625,7 +637,12 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
         "demo",
         "release-helper",
       ]);
-      expect(await pathExists(path.join(targetWorkspace, "skills", "demo", "SKILL.md"))).toBe(true);
+      expect(
+        await pathExists(
+          recovered.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "demo")
+            ?.filePath ?? "",
+        ),
+      ).toBe(true);
     } finally {
       resetRemoteNodeSkillsForTests();
     }
@@ -690,7 +707,12 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
         "aaa",
         "bbb",
       ]);
-      expect(await pathExists(path.join(targetWorkspace, "skills", "bbb", "SKILL.md"))).toBe(true);
+      expect(
+        await pathExists(
+          second.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "bbb")?.filePath ??
+            "",
+        ),
+      ).toBe(true);
     } finally {
       cpSpy.mockRestore();
     }
