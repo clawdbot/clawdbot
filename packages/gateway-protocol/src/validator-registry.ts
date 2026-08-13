@@ -92,6 +92,7 @@ export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
@@ -110,6 +111,8 @@ export const validateWakeParams = compile(S.WakeParamsSchema);
 export const validateAgentsListParams = compile(S.AgentsListParamsSchema);
 export const validateProjectsListParams = compile(S.ProjectsListParamsSchema);
 export const validateProjectsRegisterParams = compile(S.ProjectsRegisterParamsSchema);
+export const validateProjectsAddParams = compile(S.ProjectsAddParamsSchema);
+export const validateProjectsSearchRemoteParams = compile(S.ProjectsSearchRemoteParamsSchema);
 export const validateProjectsRemoveParams = compile(S.ProjectsRemoveParamsSchema);
 export const validateWorktreesListParams = compile(S.WorktreesListParamsSchema);
 export const validateBoardGetParams = compile(S.BoardGetParamsSchema);
@@ -156,6 +159,9 @@ export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserve
 export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
 export const validateWorkerDesktopLaunchResult = compile(S.WorkerDesktopLaunchResultSchema);
+export const validateDesktopObserveParams = compile(S.DesktopObserveParamsSchema);
+export const validateDesktopObserveResult = compile(S.DesktopObserveResultSchema);
+export const validateDesktopLaunchParams = compile(S.DesktopLaunchParamsSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -220,6 +226,7 @@ export const validateSessionSuggestionsResolveParams = compile(
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
+export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);
 export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);

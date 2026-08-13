@@ -27,7 +27,6 @@ import {
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
@@ -658,10 +657,17 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   it.each(["\n", "\r\n"])(
     "strips trailing notify=false with suffix %j without rerunning a heartbeat",
-    (suffix) => {
-      expect(
-        stripTrailingHeartbeatNotifyFalse(`No interruption needed.\n\nnotify=false${suffix}`),
-      ).toEqual({ text: "No interruption needed.", silent: true });
+    async (suffix) => {
+      const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+        `No interruption needed.\n\nnotify=false${suffix}`,
+      );
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: "No interruption needed.",
+        cfg,
+        silent: true,
+      });
     },
   );
 

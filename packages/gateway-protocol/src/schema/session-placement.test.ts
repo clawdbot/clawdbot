@@ -42,7 +42,7 @@ const workerOwnedFields = {
 };
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts only the dedicated dispatch selector and configured profile", () => {
+  it("accepts exactly one profile or device dispatch target", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -50,7 +50,20 @@ describe("session dispatch protocol schemas", () => {
         profileId: "development",
       }),
     ).toBe(true);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        deviceId: "device-1",
+      }),
+    ).toBe(true);
     expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        deviceId: "device-1",
+      }),
+    ).toBe(false);
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",

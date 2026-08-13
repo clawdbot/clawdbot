@@ -23,6 +23,7 @@ describe("status-overview-rows", () => {
       "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
+    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
       "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
@@ -38,6 +39,28 @@ describe("status-overview-rows", () => {
 
     expect(findRowValue(rows, "Memory")).toBe(
       "muted(enabled (plugin memory-lancedb-pro) · not checked)",
+    );
+  });
+
+  it("shows managed host desktop coordinates", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows({
+      ...params,
+      summary: {
+        ...params.summary,
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "running",
+          display: 99,
+          port: 46_001,
+          security: "VncAuth",
+        },
+      },
+    });
+
+    expect(findRowValue(rows, "Host desktop")).toBe(
+      "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
     );
   });
 

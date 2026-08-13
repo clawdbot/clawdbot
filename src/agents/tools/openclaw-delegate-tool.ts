@@ -28,9 +28,12 @@ type OpenClawDelegateResult = {
   proposalId?: string;
 };
 
-function stableDelegationSessionId(sessionKey: string | undefined): string {
+function stableDelegationSessionId(sessionKey: string | undefined, agentId?: string): string {
   return sessionKey?.trim()
-    ? `delegate-${createHash("sha256").update(sessionKey.trim()).digest("hex").slice(0, 32)}`
+    ? `delegate-${createHash("sha256")
+        .update(`${agentId?.trim() ?? "unknown"}\0${sessionKey.trim()}`)
+        .digest("hex")
+        .slice(0, 32)}`
     : `delegate-${randomUUID()}`;
 }
 
@@ -43,7 +46,10 @@ function createOpenClawDelegateTool(options?: {
   turnSourceThreadId?: string | number;
   callGateway?: InProcessGatewayCaller;
 }): AnyAgentTool {
-  const defaultSessionId = stableDelegationSessionId(options?.agentSessionKey);
+  const defaultSessionId = stableDelegationSessionId(
+    options?.agentSessionKey,
+    options?.requesterAgentId,
+  );
   return {
     name: "openclaw",
     label: "OpenClaw",

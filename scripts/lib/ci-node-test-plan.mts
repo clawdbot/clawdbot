@@ -165,140 +165,175 @@ const COMPACT_NODE_TEST_JOB_SECONDS = 310;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
+// Route measured queue-tail bins to existing 8-vCPU capacity after packing so
+// the planner keeps the same groups, coverage, and runner-registration count.
+const COMPACT_8VCPU_CHECK_NAMES = new Set([
+  "checks-node-compact-small-2",
+  "checks-node-compact-small-5",
+  "checks-node-compact-small-8",
+]);
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
 const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
-// Advisory runtime estimates (seconds) per split shard: [shard:*] begin->end
-// wall clock across seven green Blacksmith compact PR runs after the
-// cli-runner reliability whale fix (29605136624, 29605203485, 29605983019,
-// 29606701461, 29611308972, 29611457693, 29611500865), averaged after
-// dropping cache-warm/contention outliers outside [median/1.5, median*1.5].
-// Packing only: a stale entry skews job balance but never correctness.
+// Advisory runtime estimates (seconds) per split shard: median [shard:*]
+// begin->end wall across nine successful hosted compact runs (31568650453,
+// 31569157374, 31569912984, 31570693513, 31571644856, 31572044913,
+// 31572489294, 31574210928, 31574367637). Admission and 4-vCPU striping
+// retain these weights so the bounded job count and runner advisory stay fixed.
 // Unknown shards fall back to a per-file estimate.
-// Outlier hints were refreshed from child-process walls in runs 31453973052
-// and 31455822921.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
-  ["agentic-agents-core-auth", 27],
-  ["agentic-agents-core-isolated", 9],
-  // Model catalog and full UI both cold-load broad graphs; preserve their
-  // measured separation when striping the expanded groups.
-  ["agentic-agents-core-models", 37],
-  // Reliability's runtime-free provider check dropped its wall time from
-  // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
-  // full-barrel evaluation for the remaining facade importers (spawn).
-  // The live-session extraction rebalanced these stripes without changing the
-  // fleet-scale import wall that dominates each compact group.
-  ["agentic-agents-core-runner-cli-1", 8],
-  ["agentic-agents-core-runner-cli-2", 8],
-  ["agentic-agents-core-runner-cli-3", 8],
+  ["agentic-agents-core-auth", 28],
+  ["agentic-agents-core-isolated", 16],
+  ["agentic-agents-core-models", 39],
+  ["agentic-agents-core-runner-cli-1", 7],
+  ["agentic-agents-core-runner-cli-2", 17],
+  ["agentic-agents-core-runner-cli-3", 13],
   ["agentic-agents-core-runner-commands", 27],
   ["agentic-agents-core-runner-embedded", 20],
-  ["agentic-agents-core-runner-sessions", 13],
-  ["agentic-agents-core-runtime", 104],
-  ["agentic-agents-core-subagents", 10],
-  ["agentic-agents-core-tools", 52],
+  ["agentic-agents-core-runner-sessions", 18],
+  ["agentic-agents-core-runtime", 113],
+  ["agentic-agents-core-subagents", 17],
+  ["agentic-agents-core-tools", 45],
   // The composite hint sets the job count before its independent configs are
-  // striped across those jobs. Split hints use the same loaded-fleet run as
-  // the rest of this map rather than older 2-core measurements.
-  ["agentic-agents-embedded", 150],
-  ["agentic-agents-embedded-base", 88],
-  ["agentic-agents-embedded-incomplete-turn", 14],
-  ["agentic-agents-embedded-overflow-compaction", 12],
-  ["agentic-agents-embedded-run", 30],
-  ["agentic-agents-support", 201],
-  ["agentic-agents-tools", 42],
-  ["agentic-cli", 145],
-  ["agentic-command-support", 65],
-  ["agentic-commands-agent-channel", 74],
-  ["agentic-commands-doctor", 19],
-  ["agentic-commands-doctor-auth", 11],
-  ["agentic-commands-doctor-config-state", 112],
-  ["agentic-commands-doctor-device", 2],
-  ["agentic-commands-doctor-gateway", 4],
-  ["agentic-commands-doctor-platform", 3],
-  ["agentic-commands-doctor-plugins-tools", 11],
-  ["agentic-commands-doctor-sessions-cron", 24],
-  ["agentic-commands-doctor-shared", 16],
+  // striped across those jobs; its estimate is the sum of the split medians.
+  ["agentic-agents-embedded", 162],
+  ["agentic-agents-embedded-base", 90],
+  ["agentic-agents-embedded-incomplete-turn", 17],
+  ["agentic-agents-embedded-overflow-compaction", 18],
+  ["agentic-agents-embedded-run", 37],
+  ["agentic-agents-support", 144],
+  ["agentic-agents-tools", 76],
+  ["agentic-cli", 111],
+  ["agentic-command-support", 61],
+  ["agentic-commands-agent-channel", 71],
+  ["agentic-commands-doctor", 23],
+  ["agentic-commands-doctor-auth", 19],
+  ["agentic-commands-doctor-config-state", 69],
+  ["agentic-commands-doctor-device", 3],
+  ["agentic-commands-doctor-gateway", 3],
+  ["agentic-commands-doctor-platform", 4],
+  ["agentic-commands-doctor-plugins-tools", 27],
+  ["agentic-commands-doctor-sessions-cron", 21],
+  ["agentic-commands-doctor-shared", 27],
   ["agentic-commands-doctor-whatsapp", 1],
   ["agentic-commands-doctor-workspace", 1],
-  ["agentic-commands-models", 16],
-  ["agentic-commands-onboard-config", 11],
-  ["agentic-commands-status-tools", 21],
-  ["agentic-control-plane-agent-chat", 123],
-  ["agentic-control-plane-auth-node", 128],
-  ["agentic-control-plane-http-models", 33],
-  ["agentic-control-plane-http-plugin-ws", 39],
-  ["agentic-control-plane-runtime-config", 14],
-  ["agentic-control-plane-runtime-cron", 15],
+  ["agentic-commands-models", 24],
+  ["agentic-commands-onboard-config", 26],
+  ["agentic-commands-status-tools", 28],
+  ["agentic-control-plane-agent-chat", 140],
+  ["agentic-control-plane-auth-node", 153],
+  ["agentic-control-plane-http-models", 25],
+  ["agentic-control-plane-http-plugin-ws", 49],
+  ["agentic-control-plane-runtime", 20],
+  ["agentic-control-plane-runtime-config", 8],
+  ["agentic-control-plane-runtime-cron", 31],
   ["agentic-control-plane-runtime-network", 1],
-  ["agentic-control-plane-runtime-server", 29],
-  ["agentic-control-plane-runtime-shared-token", 22],
-  ["agentic-control-plane-runtime-state", 13],
-  ["agentic-control-plane-runtime-ui-tools", 11],
-  ["agentic-control-plane-startup-core", 28],
-  ["agentic-control-plane-startup-health-runtime", 22],
-  ["agentic-control-plane-startup-restart-close", 8],
-  ["agentic-gateway-core", 197],
-  ["agentic-gateway-methods", 136],
-  ["agentic-plugin-sdk", 47],
-  ["auto-reply-core-top-level", 30],
-  ["auto-reply-reply-agent-runner", 40],
-  ["auto-reply-reply-commands-1", 44],
-  ["auto-reply-reply-commands-2", 18],
-  ["auto-reply-reply-commands-3", 36],
-  ["auto-reply-reply-dispatch", 64],
-  ["auto-reply-reply-session", 19],
-  ["auto-reply-reply-state-routing", 54],
-  ["core-runtime-cron-core", 16],
-  ["core-runtime-cron-isolated-agent", 94],
-  ["core-runtime-cron-service", 49],
-  ["core-runtime-hooks", 9],
-  ["core-runtime-infra-approval-exec", 30],
-  ["core-runtime-infra-channel-plugin", 17],
-  ["core-runtime-infra-cli-ui", 1],
-  ["core-runtime-infra-core-utils", 3],
-  ["core-runtime-infra-diagnostics-state", 19],
-  ["core-runtime-infra-events-runtime", 4],
+  ["agentic-control-plane-runtime-server", 25],
+  ["agentic-control-plane-runtime-shared-token", 8],
+  ["agentic-control-plane-runtime-state", 34],
+  ["agentic-control-plane-runtime-ui-tools", 9],
+  ["agentic-control-plane-startup-config", 5],
+  ["agentic-control-plane-startup-core", 27],
+  ["agentic-control-plane-startup-health-runtime", 11],
+  ["agentic-control-plane-startup-restart-close", 16],
+  ["agentic-gateway-core", 214],
+  ["agentic-gateway-methods", 119],
+  ["agentic-plugin-sdk", 44],
+  ["auto-reply-core-top-level", 27],
+  ["auto-reply-reply-agent-runner", 68],
+  ["auto-reply-reply-commands-1", 27],
+  ["auto-reply-reply-commands-2", 16],
+  ["auto-reply-reply-commands-3", 27],
+  ["auto-reply-reply-dispatch", 65],
+  ["auto-reply-reply-session", 40],
+  ["auto-reply-reply-state-routing", 48],
+  ["core-runtime-cron-core", 24],
+  ["core-runtime-cron-isolated-agent", 110],
+  ["core-runtime-cron-service", 51],
+  ["core-runtime-hooks", 18],
+  ["core-runtime-infra-approval-exec", 23],
+  ["core-runtime-infra-channel-plugin", 7],
+  ["core-runtime-infra-cli-ui", 2],
+  ["core-runtime-infra-core-utils", 4],
+  ["core-runtime-infra-device", 8],
+  ["core-runtime-infra-diagnostics-state", 12],
+  ["core-runtime-infra-env-auth", 5],
+  ["core-runtime-infra-events-runtime", 7],
   ["core-runtime-infra-file-safety", 2],
-  ["core-runtime-infra-files-commands", 5],
+  ["core-runtime-infra-files-commands", 4],
   ["core-runtime-infra-gateway-lock-argv", 2],
   ["core-runtime-infra-gateway-processes", 1],
   ["core-runtime-infra-gateway-watch", 1],
-  ["core-runtime-infra-heartbeat-core", 4],
-  ["core-runtime-infra-heartbeat-runner", 123],
-  ["core-runtime-infra-misc", 9],
+  ["core-runtime-infra-heartbeat-core", 6],
+  ["core-runtime-infra-heartbeat-runner", 54],
+  ["core-runtime-infra-misc", 12],
   ["core-runtime-infra-misc-dedupe-disk", 1],
   ["core-runtime-infra-misc-os", 1],
   ["core-runtime-infra-misc-values", 1],
-  ["core-runtime-infra-net-install", 13],
-  ["core-runtime-infra-network-node", 2],
+  ["core-runtime-infra-net-install", 9],
+  ["core-runtime-infra-network-node", 4],
   ["core-runtime-infra-network-platform", 4],
-  ["core-runtime-infra-outbound-actions", 19],
-  ["core-runtime-infra-outbound-core", 45],
-  ["core-runtime-infra-process", 118],
-  ["core-runtime-infra-provider-push", 17],
+  ["core-runtime-infra-outbound-actions", 31],
+  ["core-runtime-infra-outbound-core", 57],
+  ["core-runtime-infra-process", 134],
+  ["core-runtime-infra-provider-push", 15],
   ["core-runtime-infra-repo-tooling", 4],
-  ["core-runtime-infra-storage-state", 96],
-  ["core-runtime-infra-system-runtime", 40],
-  ["core-runtime-media-ui", 174],
-  ["core-runtime-secrets", 37],
-  ["core-runtime-shared", 48],
-  // PTY timing suites still need a lightly packed lane; the exclusive-bin cap
-  // leaves only trivial co-groups next to this measured runtime.
+  ["core-runtime-infra-storage-state", 86],
+  ["core-runtime-infra-system-runtime", 35],
+  ["core-runtime-media-ui", 196],
+  ["core-runtime-secrets", 58],
+  ["core-runtime-shared", 52],
+  // This dist-only group is outside the sampled nondist logs and retains its
+  // prior measured hint. The exclusive-bin cap keeps its lane lightly packed.
   ["core-runtime-tui-pty", 116],
-  ["core-tooling-1", 94],
-  ["core-tooling-2", 95],
-  ["core-tooling-3", 108],
-  ["core-tooling-4", 125],
-  ["core-tooling-isolated", 49],
-  ["core-unit-fast-1", 89],
-  ["core-unit-fast-2", 92],
-  // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
-  // 8 vCPU class, where it still runs a measured ~90s under fleet load.
-  ["core-unit-fast-isolated", 90],
-  ["core-unit-src-security", 205],
-  ["core-unit-support", 17],
+  ["core-tooling-1", 112],
+  ["core-tooling-2", 128],
+  ["core-tooling-3", 163],
+  ["core-tooling-4", 123],
+  ["core-tooling-isolated", 34],
+  ["core-unit-fast-1", 54],
+  ["core-unit-fast-2", 60],
+  ["core-unit-fast-isolated", 79],
+  ["core-unit-src-security", 252],
+  ["core-unit-support", 18],
 ]);
+
+// Rounded mean of the same 8-vCPU groups across successful canonical-main
+// compact runs 31624370014, 31625101669, 31625905392, 31629769941,
+// 31632097578, 31632768372, 31634233096, 31635221353, and 31636058167.
+// Means expose recurrent slow tails hidden by medians without moving the
+// post-pack 4-vCPU runner advisory.
+const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
+  ["agentic-agents-core-auth", 35],
+  ["agentic-agents-core-models", 47],
+  ["agentic-agents-core-runner-cli-1", 21],
+  ["agentic-agents-core-runner-cli-2", 9],
+  ["agentic-agents-core-runner-cli-3", 21],
+  ["agentic-agents-core-runner-commands", 33],
+  ["agentic-agents-core-runner-embedded", 11],
+  ["agentic-agents-core-runner-sessions", 12],
+  ["agentic-agents-core-runtime", 128],
+  ["agentic-agents-core-subagents", 31],
+  ["agentic-agents-core-tools", 61],
+  ["agentic-agents-embedded-base", 106],
+  ["agentic-agents-embedded-incomplete-turn", 24],
+  ["agentic-agents-embedded-overflow-compaction", 24],
+  ["agentic-agents-embedded-run", 46],
+  ["agentic-agents-support", 175],
+  ["agentic-control-plane-startup-core", 39],
+  ["agentic-gateway-core", 244],
+  ["agentic-gateway-methods", 154],
+  ["auto-reply-reply-commands-1", 40],
+  ["auto-reply-reply-commands-2", 20],
+  ["auto-reply-reply-commands-3", 32],
+  ["auto-reply-reply-dispatch", 82],
+  ["core-runtime-media-ui", 249],
+  ["core-unit-fast-1", 72],
+  ["core-unit-fast-2", 64],
+  ["core-unit-fast-isolated", 107],
+  ["core-unit-src-security", 266],
+]);
+
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
 // from single-file local runs (M4 Max) and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
@@ -318,7 +353,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
   ["src/scripts/test-projects.test.ts", 21],
-  ["test/scripts/bench-sqlite-reliability.test.ts", 9],
+  // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
+  ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   ["test/scripts/ci-workflow-guards.test.ts", 12],
@@ -373,6 +409,13 @@ function estimateCompactGroupSeconds(group: NodeTestShardGroup): number {
     return Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE));
   }
   return DEFAULT_WHOLE_GROUP_SECONDS;
+}
+
+function estimateCompactStripeSeconds(group: NodeTestShardGroup): number {
+  return (
+    COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
+    estimateCompactGroupSeconds(group)
+  );
 }
 
 function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
@@ -1055,7 +1098,6 @@ function resolveInfraShardName(file: string): string {
     name.startsWith("fixed-window") ||
     name.startsWith("format-time/") ||
     name.startsWith("http-body") ||
-    name.startsWith("parse-finite-number") ||
     name.startsWith("plain-object") ||
     name.startsWith("prototype-keys") ||
     name.startsWith("retry") ||
@@ -1739,20 +1781,29 @@ function createCompactNodeTestShardBundles(
       }
     }
 
-    // First-fit above determines the bounded worker count. Stripe every regular
-    // group across those workers afterward; only re-striping the expanded
-    // embedded group left the 4-vCPU matrix with full early bins and nearly
-    // empty tail bins despite accurate timing hints.
+    // First-fit above determines the bounded worker count. Keep the
+    // high-variance source/security group isolated, then stripe every other
+    // regular group across the remaining workers. Re-striping the expanded
+    // embedded group avoids full early bins and nearly empty tail bins.
     const expandedGroups = groups.flatMap(expandCompactGroup);
     const regularGroups = expandedGroups
       .filter((group) => !isExclusiveCompactGroup(group))
       .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
     const regularBinCount = bins.filter((bin) => !bin.exclusive).length;
-    const regularBatches = createStripedBatches(
-      regularGroups,
-      regularBinCount,
-      estimateCompactGroupSeconds,
+    const isolatedGroups = regularGroups.filter(
+      (group) => group.shard_name === "core-unit-src-security",
     );
+    const stripedGroups = regularGroups.filter(
+      (group) => group.shard_name !== "core-unit-src-security",
+    );
+    const regularBatches = [
+      ...isolatedGroups.map((group) => [group]),
+      ...createStripedBatches(
+        stripedGroups,
+        regularBinCount - isolatedGroups.length,
+        estimateCompactStripeSeconds,
+      ),
+    ];
     if (regularBatches.some((batch) => batch.length > COMPACT_NODE_TEST_JOB_GROUPS)) {
       throw new Error("striped compact job exceeds its group capacity");
     }
@@ -1760,7 +1811,7 @@ function createCompactNodeTestShardBundles(
       exclusive: false,
       groups: batch,
       hasWholeConfigGroup: batch.some((group) => !group.includePatterns),
-      weight: batch.reduce((sum, group) => sum + estimateCompactGroupSeconds(group), 0),
+      weight: batch.reduce((sum, group) => sum + estimateCompactStripeSeconds(group), 0),
     }));
     const exclusiveBins = bins.filter((bin) => bin.exclusive);
     bins.splice(0, bins.length, ...regularBins, ...exclusiveBins);
@@ -1772,11 +1823,18 @@ function createCompactNodeTestShardBundles(
       }
       const runnerClass = firstGroup.runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = firstGroup.requiresDist ? "-dist" : "";
+      const checkName = `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`;
+      const runner = COMPACT_8VCPU_CHECK_NAMES.has(checkName)
+        ? DEFAULT_NODE_TEST_RUNNER
+        : firstGroup.runner;
+      for (const group of bin.groups) {
+        group.runner = runner;
+      }
       compactJobs.push({
-        checkName: `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`,
+        checkName,
         groups: bin.groups,
         requiresDist: firstGroup.requiresDist,
-        runner: firstGroup.runner,
+        runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
         ...(bin.hasWholeConfigGroup

@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -486,8 +487,7 @@ export function extractImages(message: unknown): ImageBlock[] {
 }
 
 function readPairingQrExpiresAtMs(block: Record<string, unknown>): number | undefined {
-  const expiresAtMs = block.expiresAtMs;
-  return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) ? expiresAtMs : undefined;
+  return asFiniteNumber(block.expiresAtMs);
 }
 
 function isExpiredPairingQrBlock(block: Record<string, unknown>, nowMs = Date.now()): boolean {

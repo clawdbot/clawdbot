@@ -107,7 +107,7 @@ function expectChangedBroadcast(
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
   expect(options).toEqual({
-    ...(typeof expected.agentId === "string" ? { agentId: expected.agentId } : {}),
+    agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
     dropIfSlow: true,
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });

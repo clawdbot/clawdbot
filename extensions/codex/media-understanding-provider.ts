@@ -2,10 +2,7 @@
  * Codex-backed media understanding provider for bounded image description and
  * structured extraction turns.
  */
-import {
-  type JsonSchemaObject,
-  validateJsonSchemaValue,
-} from "openclaw/plugin-sdk/json-schema-runtime";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
@@ -13,6 +10,7 @@ import type {
   StructuredExtractionRequest,
   StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
@@ -179,10 +177,6 @@ function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): stri
     .join("\n\n");
 }
 
-function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeStructuredExtractionResult(params: {
   text: string;
   model: string;
@@ -201,7 +195,7 @@ function normalizeStructuredExtractionResult(params: {
     } catch {
       throw new Error("Codex structured extraction returned invalid JSON.");
     }
-    if (isJsonSchemaObject(params.req.jsonSchema)) {
+    if (isRecord(params.req.jsonSchema)) {
       const validation = validateJsonSchemaValue({
         schema: params.req.jsonSchema,
         cacheKey: "codex.media-understanding.extractStructured",

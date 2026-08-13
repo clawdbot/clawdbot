@@ -176,6 +176,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       if (!agentSessionKey) {
         throw new ToolInputError("agent session required");
       }
+      const agentId = opts.agentId?.trim() || resolveAgentIdFromSessionKey(agentSessionKey);
       const context = getContext();
       const manager = context?.terminalSessions;
       if (!context || !manager) {
@@ -183,7 +184,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       }
 
       if (action === "list") {
-        return jsonResult({ sessions: manager.listAgent(agentSessionKey) });
+        return jsonResult({ sessions: manager.listAgent(agentSessionKey, agentId) });
       }
 
       if (action === "open") {
@@ -195,7 +196,6 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         if (!context.isTerminalEnabled()) {
           throw new ToolInputError("terminal disabled");
         }
-        const agentId = opts.agentId?.trim() || resolveAgentIdFromSessionKey(agentSessionKey);
         const launch = context.resolveTerminalLaunchPolicy(agentId);
         if (!launch.ok) {
           throw new ToolInputError(launchBlockMessage(launch.block));
@@ -213,7 +213,12 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           throw new ToolInputError("terminal task already ended");
         }
         const taskId = task?.taskId;
-        const owner = { kind: "agent", agentSessionKey, ...(taskId ? { taskId } : {}) } as const;
+        const owner = {
+          kind: "agent",
+          agentSessionKey,
+          agentId,
+          ...(taskId ? { taskId } : {}),
+        } as const;
         const deadline = createTerminalOpenDeadline();
         const cancelOpen = () => {
           if (!deadline.controller.signal.aborted) {
@@ -247,7 +252,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
             void openingTerminal.then(
               (lateOutcome) => {
                 if (lateOutcome.ok) {
-                  manager.closeAgent(agentSessionKey, lateOutcome.sessionId);
+                  manager.closeAgent(agentSessionKey, lateOutcome.sessionId, agentId);
                 }
               },
               () => undefined,
@@ -265,9 +270,9 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         }
         if (
           command !== undefined &&
-          !manager.writeAgent(agentSessionKey, outcome.sessionId, `${command}\r`)
+          !manager.writeAgent(agentSessionKey, outcome.sessionId, `${command}\r`, agentId)
         ) {
-          manager.closeAgent(agentSessionKey, outcome.sessionId);
+          manager.closeAgent(agentSessionKey, outcome.sessionId, agentId);
           throw new ToolInputError("terminal command failed");
         }
         if (show) {
@@ -279,6 +284,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
               terminalSessionId: outcome.sessionId,
             },
             sessionKey: agentSessionKey,
+            agentId,
           };
           try {
             await gatewayCall("ui.command", uiCommand);
@@ -291,7 +297,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
 
       const sessionId = requireSessionId(params);
       if (action === "read") {
-        const raw = manager.snapshotAgent(agentSessionKey, sessionId);
+        const raw = manager.snapshotAgent(agentSessionKey, sessionId, agentId);
         if (raw === undefined) {
           throw new ToolInputError("terminal not owned by this agent session");
         }
@@ -303,7 +309,9 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           trim: false,
           allowEmpty: true,
         });
-        return jsonResult({ ok: manager.writeAgent(agentSessionKey, sessionId, data) });
+        return jsonResult({
+          ok: manager.writeAgent(agentSessionKey, sessionId, data, agentId),
+        });
       }
       if (action === "resize") {
         return jsonResult({
@@ -312,11 +320,12 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
             sessionId,
             readDimension(params, "cols"),
             readDimension(params, "rows"),
+            agentId,
           ),
         });
       }
       if (action === "close") {
-        return jsonResult({ ok: manager.closeAgent(agentSessionKey, sessionId) });
+        return jsonResult({ ok: manager.closeAgent(agentSessionKey, sessionId, agentId) });
       }
       throw new ToolInputError(`Unknown action: ${action}`);
     },

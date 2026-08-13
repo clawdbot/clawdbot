@@ -756,6 +756,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       type: "local",
       label: "Gateway local",
       status: "available",
+      platform: process.platform,
+      sessionHost: true,
+      trust: "persistent",
       capabilities: ["agent.run", "sessions", "tools", "workspace"],
     });
     const gatewayEnvironment = await oc.environments.status("gateway");

@@ -167,6 +167,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
+  agentId?: string;
   agentChannel?: string;
   agentAccountId?: string;
   currentChannelId?: string;
@@ -178,6 +179,7 @@ export function createNodesTool(options?: {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
+    agentId: options?.agentId,
   });
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {

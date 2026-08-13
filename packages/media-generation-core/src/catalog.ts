@@ -1,5 +1,5 @@
 // Media Generation Core module implements catalog behavior.
-import { uniqueTrimmedStrings } from "./string.js";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 // Shared media-generation catalog contracts and static entry synthesis.
 
@@ -49,7 +49,7 @@ export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
 
 /** Return unique configured models with default model first when present. */
 function uniqueModels(provider: { defaultModel?: string; models?: readonly string[] }): string[] {
-  return uniqueTrimmedStrings([provider.defaultModel, ...(provider.models ?? [])]);
+  return normalizeUniqueTrimmedStringList([provider.defaultModel, ...(provider.models ?? [])]);
 }
 
 /** Synthesize static catalog entries from provider metadata. */
@@ -58,7 +58,7 @@ export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   provider: MediaGenerationCatalogProvider<TCapabilities>;
   modes?: readonly string[];
 }): Array<MediaGenerationCatalogEntry<TCapabilities>> {
-  const defaultModel = uniqueTrimmedStrings([params.provider.defaultModel])[0];
+  const defaultModel = normalizeUniqueTrimmedStringList([params.provider.defaultModel])[0];
   return uniqueModels(params.provider).map((model) => {
     const modelCatalogEntry = params.provider.catalogByModel?.[model];
     const entry: MediaGenerationCatalogEntry<TCapabilities> = {

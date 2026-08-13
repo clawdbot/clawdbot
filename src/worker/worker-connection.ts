@@ -42,6 +42,7 @@ import {
   type WorkerConnectionState,
   type WorkerFencedReason,
 } from "./worker-connection-contract.js";
+import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
 export {
@@ -285,6 +286,10 @@ export class WorkerConnection {
             continue;
           }
           this.handleAdmissionFailure(error);
+          throw error;
+        }
+        if (error instanceof WorkerConnectionEndpointError) {
+          this.finishFailed(error);
           throw error;
         }
         if (this.isTerminal()) {

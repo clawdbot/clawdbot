@@ -44,6 +44,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { navigateWithRouteTransition } from "./route-transition.ts";
 import {
   loadSettings,
   patchSettings,
@@ -76,6 +77,13 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
+  const background = getComputedStyle(root).getPropertyValue("--bg").trim();
+  if (background) {
+    for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+      meta.content = background;
+      meta.removeAttribute("media");
+    }
+  }
 }
 
 function createApplicationTheme(
@@ -443,6 +451,26 @@ export function bootstrapApplication(
   const cancelPendingGatewayConnection = () => {
     pendingGatewayConnection = null;
   };
+  const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+    const location = routeLocation(routeId, options);
+    // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
+    if (!routerStarted) {
+      pendingRouterStartNavigation = { routeId, location, mode: "push" };
+    }
+    // New-session submission awaits this promise so its live progress remains
+    // visible until the destination route has completed the UI handoff.
+    return navigateWithRouteTransition({
+      document,
+      from: router.getState().matches[0]?.routeId,
+      to: routeId,
+      prefersReducedMotion:
+        globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+      prepare: () => router.preloadLocation(location, context),
+      navigate: () => router.navigate(routeId, context, { history: "push" }, location),
+    }).catch((error: unknown) => {
+      console.error("[openclaw] route navigation failed", error);
+    });
+  };
   const context: ApplicationContext<RouteId> = {
     basePath,
     gateway,
@@ -465,16 +493,9 @@ export function bootstrapApplication(
     initialUserMessage,
     chatAttachmentHandoff,
     navigate: (routeId, options) => {
-      const location = routeLocation(routeId, options);
-      if (!routerStarted) {
-        pendingRouterStartNavigation = { routeId, location, mode: "push" };
-      }
-      void router
-        .navigate(routeId, context, { history: "push" }, location)
-        .catch((error: unknown) => {
-          console.error("[openclaw] route navigation failed", error);
-        });
+      void navigateAndWait(routeId, options);
     },
+    navigateAndWait,
     replace: (routeId, options) => {
       const location = routeLocation(routeId, options);
       if (!routerStarted) {

@@ -55,6 +55,9 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("hook:")) {
     return "hook";
   }
+  if (normalized.startsWith("node-") || normalized.startsWith("node:")) {
+    return "node";
+  }
   if (normalized.startsWith("harness:")) {
     return "harness";
   }

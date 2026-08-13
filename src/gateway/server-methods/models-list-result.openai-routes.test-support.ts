@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,17 +31,14 @@ export async function listModels(params: {
   const config = params.cfg ?? ({} as OpenClawConfig);
   const context = {
     getRuntimeConfig: () => config,
-    loadGatewayModelCatalog: vi.fn(() => Promise.resolve(params.catalog)),
-    loadGatewayModelCatalogSnapshot: vi.fn(() =>
-      Promise.resolve({
-        agentId: "main",
-        agentDir: "/tmp/models-list-openai-agent",
-        config,
-        entries: params.catalog,
-        routeVariants: params.catalog,
-      }),
-    ),
-    logGateway: { debug: vi.fn() },
+    loadGatewayModelCatalogSnapshot: async () => ({
+      agentId: "main",
+      agentDir: "/tmp/models-list-openai-agent",
+      config,
+      entries: params.catalog,
+      routeVariants: params.catalog,
+    }),
+    logGateway: { debug: () => {} },
   } as unknown as GatewayRequestContext;
   return await buildModelsListResult({
     context,

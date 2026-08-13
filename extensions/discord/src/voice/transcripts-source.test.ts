@@ -1,10 +1,10 @@
 // Discord tests cover transcripts source plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DiscordVoiceManager } from "./manager.js";
 import {
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,
 } from "./transcripts-source.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 describe("discordVoiceTranscriptsSourceProvider", () => {
   afterEach(() => {

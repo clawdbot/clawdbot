@@ -38,9 +38,7 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
     opts: {
       agentId,
       configuredAgentsOnly: true,
-      // Transcript title probes can touch multi-gigabyte agent databases. Keep that optional
-      // decoration request-driven so an idle gateway does not spend minutes warming it.
-      includeDerivedTitles: false,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: SIDEBAR_SESSION_LIST_LIMIT,

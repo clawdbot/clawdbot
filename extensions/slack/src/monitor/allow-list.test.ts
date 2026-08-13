@@ -63,4 +63,65 @@ describe("slack/allow-list", () => {
       false,
     );
   });
+
+  it("matches a workspace-qualified user only in that workspace", () => {
+    const allowList = ["team:t11111111:user:u01234567"];
+
+    expect(
+      resolveSlackAllowListMatch({
+        allowList,
+        teamId: "T11111111",
+        id: "U01234567",
+      }),
+    ).toEqual({
+      allowed: true,
+      matchKey: "team:t11111111:user:u01234567",
+      matchSource: "workspace-id",
+    });
+    expect(
+      resolveSlackAllowListMatch({
+        allowList,
+        teamId: "T22222222",
+        id: "U01234567",
+      }),
+    ).toEqual({ allowed: false });
+    expect(
+      resolveSlackAllowListMatch({
+        allowList: ["u01234567"],
+        teamId: "T22222222",
+        id: "U01234567",
+      }),
+    ).toEqual({ allowed: false });
+    expect(
+      resolveSlackAllowListMatch({
+        allowList: ["u01234567"],
+        teamId: "T22222222",
+        id: "U01234567",
+        allowUnscoped: true,
+      }),
+    ).toEqual({ allowed: true, matchKey: "u01234567", matchSource: "id" });
+  });
+
+  it("matches a workspace-qualified bot only in that workspace", () => {
+    const allowList = ["team:t11111111:user:b01234567"];
+
+    expect(
+      resolveSlackAllowListMatch({
+        allowList,
+        teamId: "T11111111",
+        id: "B01234567",
+      }),
+    ).toEqual({
+      allowed: true,
+      matchKey: "team:t11111111:user:b01234567",
+      matchSource: "workspace-id",
+    });
+    expect(
+      resolveSlackAllowListMatch({
+        allowList,
+        teamId: "T22222222",
+        id: "B01234567",
+      }),
+    ).toEqual({ allowed: false });
+  });
 });

@@ -1,3 +1,4 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -22,6 +23,7 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -48,9 +50,33 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
 
   override disconnectedCallback() {
+    this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     super.disconnectedCallback();
+  }
+
+  protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const onReclaimingChange = (reclaimingKey: string | null) => {
+      // A later reclaim may take ownership before this request settles. Only
+      // the request that still owns the row may clear the pane's progress key.
+      if (reclaimingKey !== null || this.headerPlacementReclaimingKey === row.key) {
+        this.headerPlacementReclaimingKey = reclaimingKey;
+      }
+    };
+    await reclaimChatPanePlacement({
+      client: this.connectedClient,
+      connectionGeneration: this.connectionGeneration,
+      gatewaySnapshot: this.context.gateway.snapshot,
+      reclaimingKey: this.headerPlacementReclaimingKey,
+      row,
+      isCurrent: (client, generation) =>
+        this.connectedClient === client && this.connectionGeneration === generation,
+      onReclaimingChange,
+      publishError: (error) => this.publishHeaderError(error),
+      refreshReplacement: (agentId) => this.context.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    });
   }
 
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -180,6 +206,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
       cancelChatScroll(state);
       releaseChatMediaResourceSubscriber(state.requestUpdate);

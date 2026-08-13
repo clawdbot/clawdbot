@@ -1,12 +1,12 @@
 // Devices page owns these pure view helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, type TemplateResult } from "lit";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { icons } from "../../components/icons.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type NodeTargetOption = {
   id: string;

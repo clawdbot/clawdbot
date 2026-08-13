@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
@@ -15,12 +15,12 @@ import {
   buildSessionCompanionRunConfig,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
-import { notifySessionCompanionPrepared } from "./session-companion-progress.js";
 import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
@@ -52,7 +52,10 @@ type SessionCompanionRunParams = {
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
   sessionObserver: {
-    getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
+    getCompanionSnapshot: (
+      sessionKey: string,
+      agentId?: string,
+    ) => SessionObserverCompanionSnapshot;
   };
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
@@ -72,6 +75,7 @@ type SessionCompanionCancellationKind =
   | "backing-session-revoked"
   | "disposed"
   | "explicit-reset"
+  | "request-aborted"
   | "timeout";
 
 type SessionCompanionActiveAsk = {
@@ -264,12 +268,7 @@ function buildReferenceContext(params: {
         : "No bounded user/assistant transcript text was available; use the permitted session tools when needed."
       : params.thread.context.messages
           .map((message) => {
-            const label =
-              message.role === "summary"
-                ? "Compaction summary"
-                : message.role === "assistant"
-                  ? "Assistant"
-                  : "Operator";
+            const label = message.role === "assistant" ? "Assistant" : "Operator";
             return `${label}: ${escapeReferenceText(message.text)}`;
           })
           .join("\n");
@@ -336,30 +335,13 @@ function composePromptMessages(params: {
   return messages;
 }
 
-function isPrivateEnvelopeEcho(value: string): boolean {
-  if (value.includes(PRIVATE_REFERENCE_BEGIN) || value.includes(PRIVATE_REFERENCE_END)) {
-    return true;
-  }
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const keys = Object.keys(parsed);
-    return (
-      keys.length > 0 &&
-      keys.every((key) =>
-        ["inheritedSessionMessages", "observerDigestJson", "observerNotes", "question"].includes(
-          key,
-        ),
-      ) &&
-      (keys.includes("inheritedSessionMessages") || keys.includes("observerNotes"))
-    );
-  } catch {
-    return false;
-  }
+function isPrivateReferenceEcho(value: string): boolean {
+  return value.includes(PRIVATE_REFERENCE_BEGIN) || value.includes(PRIVATE_REFERENCE_END);
 }
 
 function sanitizeAnswer(value: string): string {
   const redacted = redactToolPayloadText(value).trim();
-  if (isPrivateEnvelopeEcho(redacted)) {
+  if (isPrivateReferenceEcho(redacted)) {
     return "";
   }
   return truncateUtf16Safe(redacted, ANSWER_MAX_CHARS);
@@ -379,13 +361,11 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
-  const preparations = new Map<string, Promise<SessionCompanionThread>>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
-  const resolveTarget = (sessionKey: string) => {
+  const resolveTarget = (sessionKey: string, agentId: string) => {
     const cfg = params.getConfig();
-    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
-    const agentId = observerSnapshot.agentId || resolveSessionAgentId({ sessionKey, config: cfg });
+    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
     return { agentId, cfg, observerSnapshot };
   };
 
@@ -394,77 +374,68 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
 
   const prepareThread = async (
     sessionKey: string,
+    agentId: string,
     signal: AbortSignal,
   ): Promise<SessionCompanionThread> => {
-    const existing = params.threads.get(sessionKey);
-    const { agentId, observerSnapshot } = resolveTarget(sessionKey);
-    if (
-      existing &&
-      currentSessionId(sessionKey, agentId) === existing.context.sessionId &&
-      !signal.aborted
-    ) {
+    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const existing = params.threads.get(threadKey);
+    const { observerSnapshot } = resolveTarget(sessionKey, agentId);
+    if (signal.aborted) {
+      throw new Error("session companion preparation was cancelled");
+    }
+    if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
       return existing;
     }
     if (existing) {
-      params.threads.delete(sessionKey);
+      params.threads.delete(threadKey);
     }
-    const activePreparation = preparations.get(sessionKey);
-    if (activePreparation) {
-      return await activePreparation;
+    const result = await contextReader.read({ agentId, sessionKey, signal });
+    if (signal.aborted || params.isDisposed()) {
+      throw new Error("session companion preparation was cancelled");
     }
-    const preparation = (async () => {
-      const result = await contextReader.read({ agentId, sessionKey, signal });
-      if (signal.aborted || params.isDisposed()) {
-        throw new Error("session companion preparation was cancelled");
-      }
-      if (result.kind === "missing") {
-        throw contextError("session-missing", "The selected session is no longer available.");
-      }
-      if (result.kind === "unavailable") {
-        throw contextError(
-          "context-unavailable",
-          "The selected session history could not be loaded.",
-        );
-      }
-      if (currentSessionId(sessionKey, agentId) !== result.context.sessionId) {
-        throw contextError(
-          "context-unavailable",
-          "The selected session changed before its history was ready.",
-        );
-      }
-      const thread: SessionCompanionThread = {
-        context: result.context,
-        digestText: formatObserverDigest(observerSnapshot),
-        exchanges: [],
-        lastNoteSequence: 0,
-        busy: false,
-        lastUsedAt: params.now(),
-      };
-      params.threads.set(sessionKey, thread);
-      return thread;
-    })();
-    preparations.set(sessionKey, preparation);
-    try {
-      return await preparation;
-    } finally {
-      if (preparations.get(sessionKey) === preparation) {
-        preparations.delete(sessionKey);
-      }
+    if (result.kind === "missing") {
+      throw contextError("session-missing", "The selected session is no longer available.");
     }
+    if (result.kind === "unavailable") {
+      throw contextError(
+        "context-unavailable",
+        "The selected session history could not be loaded.",
+      );
+    }
+    if (currentSessionId(sessionKey, agentId) !== result.context.sessionId) {
+      throw contextError(
+        "context-unavailable",
+        "The selected session changed before its history was ready.",
+      );
+    }
+    const thread: SessionCompanionThread = {
+      context: result.context,
+      digestText: formatObserverDigest(observerSnapshot),
+      exchanges: [],
+      lastNoteSequence: 0,
+      busy: false,
+      lastUsedAt: params.now(),
+    };
+    params.threads.set(threadKey, thread);
+    return thread;
   };
 
   const ask = async (request: {
+    agentId: string;
     sessionKey: string;
     question: string;
     connId: string;
+    signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
+    const agentId = request.agentId.trim();
     const question = request.question.trim();
-    if (!sessionKey || !question || params.isDisposed()) {
+    if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Session companion is unavailable.");
     }
-    const existing = params.threads.get(sessionKey);
-    if (existing?.busy || activeAsks.has(sessionKey)) {
+    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const existing = params.threads.get(threadKey);
+    if (existing?.busy || activeAsks.has(threadKey)) {
       throw new SessionCompanionAskError(
         "busy",
         "The session companion is answering another question.",
@@ -508,14 +479,20 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     admissions.push({ connId: request.connId, admittedAt });
     const controller = new AbortController();
     const activeAsk: SessionCompanionActiveAsk = { controller };
-    activeAsks.set(sessionKey, activeAsk);
+    activeAsks.set(threadKey, activeAsk);
     const abort = (cancellation: SessionCompanionCancellationKind) => {
-      if (activeAsks.get(sessionKey) !== activeAsk || activeAsk.cancellation) {
+      if (activeAsks.get(threadKey) !== activeAsk || activeAsk.cancellation) {
         return;
       }
       activeAsk.cancellation = cancellation;
       controller.abort();
     };
+    const abortRequest = () => abort("request-aborted");
+    if (request.signal?.aborted) {
+      abortRequest();
+    } else {
+      request.signal?.addEventListener("abort", abortRequest, { once: true });
+    }
     const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
     const aborted = new Promise<never>((_resolve, reject) => {
       controller.signal.addEventListener(
@@ -524,21 +501,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         { once: true },
       );
     });
-    let ownedAgentId: string | undefined;
     let ownedThread: SessionCompanionThread | undefined;
     const discardOwnedThread = () => {
-      if (ownedThread && params.threads.get(sessionKey) === ownedThread) {
-        params.threads.delete(sessionKey);
+      if (ownedThread && params.threads.get(threadKey) === ownedThread) {
+        params.threads.delete(threadKey);
       }
     };
     try {
-      const thread = await prepareThread(sessionKey, controller.signal);
+      const thread = await prepareThread(sessionKey, agentId, controller.signal);
       ownedThread = thread;
-      notifySessionCompanionPrepared({
-        connId: request.connId,
-        empty: thread.context.empty,
-        sessionKey,
-      });
       if (thread.busy) {
         throw new SessionCompanionAskError(
           "busy",
@@ -547,10 +518,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      const { agentId, cfg } = resolveTarget(sessionKey);
-      ownedAgentId = agentId;
+      const { cfg } = resolveTarget(sessionKey, agentId);
       if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        params.threads.delete(sessionKey);
+        params.threads.delete(threadKey);
         throw contextError(
           "context-unavailable",
           "The selected session changed before the companion could answer.",
@@ -564,7 +534,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         );
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
+      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const referenceContext = buildReferenceContext({
@@ -601,7 +571,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         throw new Error("session companion ask was cancelled");
       }
       if (
-        params.threads.get(sessionKey) !== thread ||
+        params.threads.get(threadKey) !== thread ||
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId
       ) {
         discardOwnedThread();
@@ -632,19 +602,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before the companion could answer.",
         );
       }
-      if (!activeAsk.cancellation && ownedThread) {
-        if (
-          params.threads.get(sessionKey) !== ownedThread ||
-          (ownedAgentId &&
-            currentSessionId(sessionKey, ownedAgentId) !== ownedThread.context.sessionId)
-        ) {
-          discardOwnedThread();
-          throw contextError(
-            "context-unavailable",
-            "The selected session changed before the companion could answer.",
-          );
-        }
-      }
       companionLog.warn("session companion ask failed", { sessionKey, error });
       throw new SessionCompanionAskError(
         "unavailable",
@@ -656,10 +613,11 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       );
     } finally {
       clearTimeoutFn(timeout);
-      if (activeAsks.get(sessionKey) === activeAsk) {
-        activeAsks.delete(sessionKey);
+      request.signal?.removeEventListener("abort", abortRequest);
+      if (activeAsks.get(threadKey) === activeAsk) {
+        activeAsks.delete(threadKey);
       }
-      if (ownedThread && params.threads.get(sessionKey) === ownedThread) {
+      if (ownedThread && params.threads.get(threadKey) === ownedThread) {
         ownedThread.busy = false;
       }
     }
@@ -669,12 +627,13 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     ask,
     cancel(
       sessionKey: string,
+      agentId: string,
       cancellation: Extract<
         SessionCompanionCancellationKind,
         "backing-session-revoked" | "explicit-reset"
       >,
     ) {
-      const activeAsk = activeAsks.get(sessionKey);
+      const activeAsk = activeAsks.get(sessionObserverScopeKey(sessionKey, agentId));
       if (!activeAsk || activeAsk.cancellation) {
         return;
       }
@@ -687,7 +646,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         activeAsk.controller.abort();
       }
       activeAsks.clear();
-      preparations.clear();
       admissions.length = 0;
     },
   };

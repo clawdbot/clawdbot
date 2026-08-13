@@ -4,6 +4,55 @@ private func defaultGatewayPort(tls: Bool) -> Int {
     tls ? 443 : 18789
 }
 
+private func normalizeGatewayContextPath(_ value: String?) -> String? {
+    guard let value, !value.isEmpty else { return nil }
+    let path = value.hasPrefix("/") ? value : "/\(value)"
+    guard path != "/" else { return nil }
+    // Keep valid escapes such as %2F and %FF intact because decoding them can
+    // change segment boundaries or reject valid non-UTF-8 path octets.
+    let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "%?#"))
+    var encoded = ""
+    var index = path.startIndex
+    while index < path.endIndex {
+        if path[index] == "%" {
+            let first = path.index(after: index)
+            if first < path.endIndex {
+                let second = path.index(after: first)
+                if second < path.endIndex,
+                   path[first].isHexDigit,
+                   path[second].isHexDigit
+                {
+                    let end = path.index(after: second)
+                    encoded.append(contentsOf: path[index..<end])
+                    index = end
+                    continue
+                }
+            }
+            encoded.append("%25")
+            index = path.index(after: index)
+            continue
+        }
+        let nextPercent = path[index...].firstIndex(of: "%") ?? path.endIndex
+        guard let segment = String(path[index..<nextPercent])
+            .addingPercentEncoding(withAllowedCharacters: allowed)
+        else { return nil }
+        encoded.append(segment)
+        index = nextPercent
+    }
+    return encoded
+}
+
+extension Character {
+    fileprivate var isHexDigit: Bool {
+        guard self.unicodeScalars.count == 1, let value = self.unicodeScalars.first?.value else {
+            return false
+        }
+        return (48...57).contains(value) ||
+            (65...70).contains(value) ||
+            (97...102).contains(value)
+    }
+}
+
 public enum DeepLinkRoute: Sendable, Equatable {
     case agent(AgentDeepLink)
     case gateway(GatewayConnectDeepLink)
@@ -12,11 +61,13 @@ public enum DeepLinkRoute: Sendable, Equatable {
 
 public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     private static let maximumSetupEndpoints = 8
+    private static let pairingSetupURLPrefix = "oc-pair://"
 
     private enum CodingKeys: String, CodingKey {
         case host
         case port
         case tls
+        case contextPath
         case bootstrapToken
         case token
         case password
@@ -37,6 +88,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     public let host: String
     public let port: Int
     public let tls: Bool
+    public let contextPath: String?
     public let bootstrapToken: String?
     public let token: String?
     public let password: String?
@@ -46,6 +98,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         host: String,
         port: Int,
         tls: Bool,
+        contextPath: String? = nil,
         bootstrapToken: String?,
         token: String?,
         password: String?,
@@ -54,6 +107,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         self.host = host
         self.port = port
         self.tls = tls
+        self.contextPath = normalizeGatewayContextPath(contextPath)
         self.bootstrapToken = bootstrapToken
         self.token = token
         self.password = password
@@ -65,6 +119,8 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         self.host = try container.decode(String.self, forKey: .host)
         self.port = try container.decode(Int.self, forKey: .port)
         self.tls = try container.decode(Bool.self, forKey: .tls)
+        self.contextPath = try normalizeGatewayContextPath(
+            container.decodeIfPresent(String.self, forKey: .contextPath))
         self.bootstrapToken = try container.decodeIfPresent(String.self, forKey: .bootstrapToken)
         self.token = try container.decodeIfPresent(String.self, forKey: .token)
         self.password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -74,12 +130,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     }
 
     public var websocketURL: URL? {
-        guard (1...65535).contains(self.port) else { return nil }
-        var components = URLComponents()
-        components.scheme = self.tls ? "wss" : "ws"
-        components.host = self.host
-        components.port = self.port
-        return components.url
+        self.connectionEndpoints.first?.websocketURL
     }
 
     public var isValidEndpoint: Bool {
@@ -88,7 +139,8 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     }
 
     public var connectionEndpoints: [GatewayConnectEndpoint] {
-        [.init(host: self.host, port: self.port, tls: self.tls)] + self.fallbackEndpoints
+        [.init(host: self.host, port: self.port, tls: self.tls, contextPath: self.contextPath)] +
+            self.fallbackEndpoints
     }
 
     public func selectingEndpoint(_ endpoint: GatewayConnectEndpoint) -> GatewayConnectDeepLink {
@@ -96,6 +148,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             host: endpoint.host,
             port: endpoint.port,
             tls: endpoint.tls,
+            contextPath: endpoint.contextPath,
             bootstrapToken: self.bootstrapToken,
             token: self.token,
             password: self.password)
@@ -144,8 +197,14 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     /// and `tls`. In both cases, the optional `bootstrapToken`, `token`, and `password` fields
     /// are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        if trimmed.range(
+            of: self.pairingSetupURLPrefix,
+            options: [.anchored, .caseInsensitive]) != nil
+        {
+            trimmed = String(trimmed.dropFirst(self.pairingSetupURLPrefix.count))
+        }
         if let link = decodeSetupPayload(from: Data(trimmed.utf8)) {
             return link
         }
@@ -185,12 +244,17 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         }
         if let primary = links.first {
             let fallbacks = links.dropFirst().map {
-                GatewayConnectEndpoint(host: $0.host, port: $0.port, tls: $0.tls)
+                GatewayConnectEndpoint(
+                    host: $0.host,
+                    port: $0.port,
+                    tls: $0.tls,
+                    contextPath: $0.contextPath)
             }
             return GatewayConnectDeepLink(
                 host: primary.host,
                 port: primary.port,
                 tls: primary.tls,
+                contextPath: primary.contextPath,
                 bootstrapToken: primary.bootstrapToken,
                 token: primary.token,
                 password: primary.password,
@@ -221,7 +285,11 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         password: String?) -> GatewayConnectDeepLink?
     {
         guard let parsed = URLComponents(string: urlString),
-              let hostname = parsed.host, !hostname.isEmpty
+              let hostname = parsed.host, !hostname.isEmpty,
+              parsed.user == nil,
+              parsed.password == nil,
+              parsed.query == nil,
+              parsed.fragment == nil
         else { return nil }
 
         let scheme = (parsed.scheme ?? "ws").lowercased()
@@ -236,6 +304,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             host: hostname,
             port: parsed.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
+            contextPath: parsed.percentEncodedPath,
             bootstrapToken: bootstrapToken,
             token: token,
             password: password)
@@ -245,6 +314,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         host: String,
         port: Int,
         tls: Bool,
+        contextPath: String? = nil,
         bootstrapToken: String?,
         token: String?,
         password: String?) -> GatewayConnectDeepLink?
@@ -253,6 +323,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             host: host,
             port: port,
             tls: tls,
+            contextPath: contextPath,
             bootstrapToken: bootstrapToken,
             token: token,
             password: password)
@@ -285,14 +356,42 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
 }
 
 public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case host
+        case port
+        case tls
+        case contextPath
+    }
+
     public let host: String
     public let port: Int
     public let tls: Bool
+    public let contextPath: String?
 
-    public init(host: String, port: Int, tls: Bool) {
+    public init(host: String, port: Int, tls: Bool, contextPath: String? = nil) {
         self.host = host
         self.port = port
         self.tls = tls
+        self.contextPath = normalizeGatewayContextPath(contextPath)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.host = try container.decode(String.self, forKey: .host)
+        self.port = try container.decode(Int.self, forKey: .port)
+        self.tls = try container.decode(Bool.self, forKey: .tls)
+        self.contextPath = try normalizeGatewayContextPath(
+            container.decodeIfPresent(String.self, forKey: .contextPath))
+    }
+
+    public var websocketURL: URL? {
+        guard (1...65535).contains(self.port) else { return nil }
+        var components = URLComponents()
+        components.scheme = self.tls ? "wss" : "ws"
+        components.host = self.host
+        components.port = self.port
+        components.percentEncodedPath = self.contextPath ?? ""
+        return components.url
     }
 }
 

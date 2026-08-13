@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -220,6 +221,10 @@ export function registerQrCli(program: Command) {
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
             }),
+          loadLocalTlsFingerprint: async () => {
+            const tls = await loadGatewayTlsRuntime(cfg.gateway?.tls);
+            return tls.enabled ? tls.fingerprintSha256 : undefined;
+          },
         });
 
         if (!resolved.ok) {

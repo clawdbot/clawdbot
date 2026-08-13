@@ -2499,10 +2499,15 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
-    expect(duplicateRespond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
-      cached: true,
-      runId,
-    });
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", agentId: "main" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
 
     finishRun({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
   });
@@ -2580,7 +2585,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(duplicateRespond).toHaveBeenCalledWith(
       true,
-      { runId, status: "in_flight", sessionKey: "agent:main:main" },
+      { runId, status: "in_flight", sessionKey: "agent:main:main", agentId: "main" },
       undefined,
       {
         cached: true,

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   listSessionEntries,
   loadTranscriptEventsSync,
@@ -44,6 +45,7 @@ type QaSessionTranscriptSeedParams = {
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
+const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
@@ -61,11 +63,14 @@ type QaSessionTranscriptSummary = {
   lastAssistantStopReason?: string;
   lastAssistantToolNames?: string[];
   lastMessageRole?: string;
+  resetRecallCutoffLine?: number;
+  probeTextEndLine?: number;
 };
 
 type QaSessionTranscriptSummaryOptions = {
   afterEventCursor?: number;
   allowEmpty?: boolean;
+  probeText?: string;
 };
 
 function isSessionStoreFtsSettleRace(error: unknown) {
@@ -427,7 +432,34 @@ async function readSessionTranscriptSummary(
   if (selectedEvents.length === 0 && options.allowEmpty === true) {
     return emptySessionTranscriptSummary(events.length);
   }
-  return summarizeSessionTranscriptEvents(selectedEvents, normalizedSessionKey, events.length);
+  const summary = summarizeSessionTranscriptEvents(
+    selectedEvents,
+    normalizedSessionKey,
+    events.length,
+  );
+  const probeText = options.probeText?.trim();
+  let cutoff: unknown;
+  if (probeText) {
+    const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+    const storePath = resolveStorePath(undefined, { agentId: "qa", env: runtimeEnv });
+    const transcriptEntry = await buildSessionEntry(
+      path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions", `${sessionId}.jsonl`),
+      { agentId: "qa", sessionId, sessionKey: normalizedSessionKey, storePath },
+    );
+    cutoff = transcriptEntry
+      ? (transcriptEntry as unknown as Record<PropertyKey, unknown>)[SESSION_RESET_RECALL_CUTOFF]
+      : undefined;
+  }
+  const probeTextEndLine = probeText
+    ? events.findLastIndex((event) => JSON.stringify(event).includes(probeText)) + 1
+    : 0;
+  return {
+    ...summary,
+    ...(isRecord(cutoff) && cutoff.state === "valid" && typeof cutoff.cutoffLine === "number"
+      ? { resetRecallCutoffLine: cutoff.cutoffLine }
+      : {}),
+    ...(probeTextEndLine > 0 ? { probeTextEndLine } : {}),
+  };
 }
 
 export {

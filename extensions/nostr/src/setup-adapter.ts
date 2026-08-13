@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_RELAYS } from "./default-relays.js";
+import { NOSTR_PRIVATE_KEY_ENV_VAR } from "./private-key.js";
 
 const channel = "nostr" as const;
 
@@ -106,6 +107,7 @@ export function createNostrSetupContract(adapter: ChannelSetupAdapter<NostrSetup
       useEnv: {
         kind: "boolean",
         cli: { flags: "--use-env", description: "Use NOSTR_PRIVATE_KEY" },
+        envVars: [NOSTR_PRIVATE_KEY_ENV_VAR],
       },
     },
     adapter,

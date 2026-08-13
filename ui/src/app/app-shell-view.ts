@@ -12,11 +12,9 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -54,6 +52,7 @@ export interface ShellViewHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
+  readonly devicePairSetupElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -152,8 +151,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     context.config.current.terminalEnabled ?? false,
   );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
-  const activeSessionRow = findUiSessionRow(context, host.activeSessionKey);
-  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot, activeSessionRow);
+  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
@@ -544,25 +542,32 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${renderDevicePairSetup({
-        open: overlaySnapshot.devicePairSetupOpen,
-        loading: overlaySnapshot.devicePairSetupLoading,
-        error: overlaySnapshot.devicePairSetupError,
-        setup: overlaySnapshot.devicePairSetup,
-        access: overlaySnapshot.devicePairSetupAccess,
-        pendingCount: overlaySnapshot.devicePairPendingCount,
-        onRefresh: () => void context.overlays.refreshDevicePairSetup(),
-        onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
-        onClose: () => context.overlays.closeDevicePairSetup(),
-        onManageDevices: () => {
-          context.overlays.closeDevicePairSetup();
-          host.navigate("devices");
-        },
-        onGetApps: () => {
-          context.overlays.closeDevicePairSetup();
-          host.navigate("apps");
-        },
-      })}
+      ${isOptionalElementDefined(host.devicePairSetupElement)
+        ? html`<openclaw-device-pair-setup
+            .props=${{
+              open: overlaySnapshot.devicePairSetupOpen,
+              loading: overlaySnapshot.devicePairSetupLoading,
+              error: overlaySnapshot.devicePairSetupError,
+              setup: overlaySnapshot.devicePairSetup,
+              access: overlaySnapshot.devicePairSetupAccess,
+              nowMs: Date.now(),
+              pendingCount: overlaySnapshot.devicePairPendingCount,
+              onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+              onAccessChange: (
+                access: Parameters<typeof context.overlays.setDevicePairSetupAccess>[0],
+              ) => void context.overlays.setDevicePairSetupAccess(access),
+              onClose: () => context.overlays.closeDevicePairSetup(),
+              onManageDevices: () => {
+                context.overlays.closeDevicePairSetup();
+                host.navigate("devices");
+              },
+              onGetApps: () => {
+                context.overlays.closeDevicePairSetup();
+                host.navigate("apps");
+              },
+            }}
+          ></openclaw-device-pair-setup>`
+        : nothing}
       ${onboarding && activeRoute !== "custodian"
         ? html`<openclaw-onboarding-memory-import
             .active=${true}

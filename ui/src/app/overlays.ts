@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
+import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
 import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -13,8 +13,7 @@ import {
   readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
-  type DevicePairSetup,
-  type DevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
 import {
   createDeviceAuthMigrationLoader,
@@ -28,12 +27,12 @@ import {
   parseApprovalRequestedEvent,
   parseExecApprovalResolved,
   resolveApprovalRequest,
-  type ExecApprovalDecision,
   type ExecApprovalPromptState,
-  type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
+import type { ApplicationOverlays, ApplicationOverlaySnapshot } from "./overlays-types.ts";
+export type { ApplicationOverlays } from "./overlays-types.ts";
 import {
   createOverlayApprovalRefresher,
   createOverlayPairingPendingCount,
@@ -64,42 +63,6 @@ import {
   announceRecordedUpdateSuccess,
   announceVerifiedUpdateInstall,
 } from "./update-success-notice.ts";
-
-type ApplicationOverlaySnapshot = {
-  updateAvailable: UpdateAvailable | null;
-  updateSchedule: UpdateScheduleState | null;
-  heldUpdateCampaignId: string | null;
-  updateRunning: boolean;
-  updateReconciliationPending: boolean;
-  updateStatusBanner: ApplicationStatusBanner | null;
-  controlUiRefreshRequired: boolean;
-  approvalQueue: readonly ExecApprovalRequest[];
-  approvalBusy: boolean;
-  approvalErrors: ReadonlyMap<string, string>;
-  approvalNowMs: number;
-  devicePairSetupOpen: boolean;
-  devicePairSetupLoading: boolean;
-  devicePairSetupError: string | null;
-  devicePairSetup: DevicePairSetup | null;
-  devicePairSetupAccess: DevicePairSetupAccess;
-  devicePairPendingCount: number;
-  deviceAuthMigration: import("./device-auth-migration.ts").DeviceAuthMigrationSnapshot;
-};
-
-export type ApplicationOverlays = {
-  readonly snapshot: ApplicationOverlaySnapshot;
-  subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
-  refreshUpdateStatus: () => Promise<void>;
-  runUpdate: () => Promise<void>;
-  holdUpdate: () => Promise<boolean>;
-  decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
-  openDevicePairSetup: () => Promise<void>;
-  refreshDevicePairSetup: () => Promise<void>;
-  setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
-  closeDevicePairSetup: () => void;
-  secureThisBrowser: () => Promise<void>;
-  dispose: () => void;
-};
 
 function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
@@ -192,6 +155,7 @@ export function createApplicationOverlays(
     publish();
     await operation;
     if (!disposed) {
+      syncDevicePairSetupCountdown(devicePairSetupState, publish);
       publish();
     }
   };

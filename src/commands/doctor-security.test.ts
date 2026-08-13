@@ -523,27 +523,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await expectAgentExecHostPolicyWarning("*");
   });
 
-  it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        agents: {},
-      },
-      async () => {
-        await noteSecurityWarnings({
-          tools: {
-            exec: {
-              mode: "ask",
-            },
-          },
-        } as OpenClawConfig);
-      },
-    );
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
+  it("does not invent host policy defaults when exec-approvals defaults are unset", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
