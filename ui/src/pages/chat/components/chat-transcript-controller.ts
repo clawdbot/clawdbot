@@ -450,7 +450,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return false;
     }
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
-    void this.scrollToMessageElement(messageId).then((bubble) => {
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      const bubble = this.findMessageElement(messageId, ".chat-bubble");
       if (bubble) {
         this.threadInnerElement
           ?.querySelector(".chat-bubble--reply-target")
@@ -498,9 +500,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private async scrollToMessageElement(messageId: string): Promise<HTMLElement | undefined> {
     this.host.requestUpdate();
     await this.host.updateComplete;
-    return [
-      ...(this.threadInnerElement?.querySelectorAll<HTMLElement>("[data-entry-id]") ?? []),
-    ].find((candidate) => candidate.dataset.entryId === messageId);
+    return this.findMessageElement(messageId, "[data-entry-id]");
+  }
+
+  private findMessageElement(messageId: string, selector: string): HTMLElement | undefined {
+    return [...(this.threadInnerElement?.querySelectorAll<HTMLElement>(selector) ?? [])].find(
+      (candidate) => candidate.dataset.entryId === messageId,
+    );
   }
 
   getScrollOffset(): number | null {
