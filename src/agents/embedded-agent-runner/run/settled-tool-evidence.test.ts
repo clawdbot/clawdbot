@@ -1,18 +1,46 @@
 // Focused incomplete-turn behavior coverage.
 import { describe, expect, it } from "vitest";
 import {
-  SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-  makeLastAssistant,
-  makeSettledContinuationParams,
-} from "./run.incomplete-turn.test-helpers.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
-import { isIncompleteTerminalAssistantTurn } from "./run/incomplete-turn-classification.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "./run/incomplete-turn-recovery.js";
-import {
-  resolveReplayInvalidFlag,
-  resolveRunLivenessState,
-} from "./run/incomplete-turn-resolution.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { isIncompleteTerminalAssistantTurn } from "./incomplete-turn-classification.js";
+import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-turn-resolution.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
+
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+
+type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+
+function makeLastAssistant(overrides: Partial<LastAssistant> = {}): LastAssistant {
+  return { ...buildEmbeddedRunnerAssistant({}), ...overrides } as LastAssistant;
+}
+
+function makeAttemptResult(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
+  return makeEmbeddedRunnerAttempt(overrides);
+}
+
+function makeSettledContinuationParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof resolveSettledToolTerminalContinuationInstruction>[0], "attempt">
+  > = {},
+): Parameters<typeof resolveSettledToolTerminalContinuationInstruction>[0] {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    modelApi: "openai-responses",
+    payloadCount: 0,
+    aborted: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+    ...overrides,
+  };
+}
 
 function makeSettledIdleWriteAttempt(options?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
