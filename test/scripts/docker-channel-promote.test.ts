@@ -97,6 +97,12 @@ function runWorkflowStep(step: WorkflowStep, env: NodeJS.ProcessEnv) {
   });
 }
 
+// Workflow steps use bash 4+ builtins (mapfile); CI truth is Linux bash 5,
+// while stock macOS ships bash 3.2. Skip execution-backed cases there.
+const bashRunsWorkflowSteps =
+  process.platform !== "win32" &&
+  spawnSync("bash", ["-c", "type mapfile"], { encoding: "utf8" }).status === 0;
+
 describe("Docker channel promotion", () => {
   it("plans every extended-stable image variant in both registries", () => {
     expect(createDockerChannelPromotionPlan({ version: "2026.6.33", images })).toEqual({
@@ -575,7 +581,7 @@ describe("Docker channel promotion", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
+  it.runIf(bashRunsWorkflowSteps)(
     "uses suffixed per-arch sources for Docker Hub manifests and VCR verification",
     () => {
       const workflow = readWorkflow(".github/workflows/docker-release.yml");
