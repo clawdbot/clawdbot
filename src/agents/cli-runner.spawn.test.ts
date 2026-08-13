@@ -1327,16 +1327,25 @@ describe("runCliAgent spawn path", () => {
   });
 
   it.each([
-    { version: "0.40.0-preview.2", admitted: false },
+    {
+      version: "0.40.0-preview.2",
+      admitted: false,
+      expectedError: "requires >=0.40.0-preview.3; found 0.40.0-preview.2",
+    },
     {
       version: "0.41.0-nightly.20260427.g42587de73",
       admitted: true,
       stableMinimum: "99.0.0",
+      expectedError: undefined,
     },
-    { version: "0.53.0-beta.0", admitted: false },
+    {
+      version: "0.53.0-beta.0",
+      admitted: false,
+      expectedError: "unsupported release line; found 0.53.0-beta.0",
+    },
   ])(
     "applies the exact tool-availability policy to $version",
-    async ({ version, admitted, stableMinimum = "0.39.1" }) => {
+    async ({ version, admitted, stableMinimum = "0.39.1", expectedError }) => {
       const fixture = await createCliPackageFixture(version);
       const run = () =>
         executePreparedCliRun(
@@ -1365,7 +1374,9 @@ describe("runCliAgent spawn path", () => {
           await expect(run()).resolves.toBeDefined();
           expect(supervisorSpawnMock).toHaveBeenCalledOnce();
         } else {
-          await expect(run()).rejects.toThrow("requires a supported package version");
+          await expect(run()).rejects.toThrow(
+            expectDefined(expectedError, "rejected version error"),
+          );
           expect(supervisorSpawnMock).not.toHaveBeenCalled();
         }
       } finally {
