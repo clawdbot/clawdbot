@@ -77,8 +77,16 @@ function waitForChannelStartupHandoff(): Promise<void> {
   });
 }
 
+function isStopAccountTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`
+  );
+}
+
 type StopAccountFence = {
   settled: Promise<void>;
+  timeoutError: Error;
   getLateError: () => unknown;
 };
 
@@ -705,13 +713,34 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (store.stopAccountFences.get(id) === stopAccountFence) {
             store.stopAccountFences.delete(id);
           }
+          const currentStopAfterFence = store.stops.get(id);
+          if (
+            currentStopAfterFence?.status === "rejected" &&
+            currentStopAfterFence.error === stopAccountFence.timeoutError
+          ) {
+            store.stops.delete(id);
+          }
         }
         const existingTask = store.tasks.get(id);
         const existingAbort = store.aborts.get(id);
         const abortedTask = existingAbort?.signal.aborted === true;
-        const hasCallerDeferredStop = includeKnownAccounts && restartDeferredToCaller.has(rKey);
-        const shouldRetryAfterCallerDeferredTask = hasCallerDeferredStop && abortedTask;
-        if (currentStop?.status === "rejected" && !hasCallerDeferredStop) {
+        const hasCallerDeferredStop = restartDeferredToCaller.has(rKey);
+        const hasPairedKnownAccountDeferredStop = includeKnownAccounts && hasCallerDeferredStop;
+        const currentStopIsDeferredTimeout =
+          currentStop?.status === "rejected" && isStopAccountTimeoutError(currentStop.error);
+        const hasSettledDeferredTimeout = currentStopIsDeferredTimeout && hasCallerDeferredStop;
+        const hasClearedDeferredStop =
+          currentStop === undefined && hasCallerDeferredStop && !store.stopAccountFences.has(id);
+        const shouldRetryAfterCallerDeferredTask =
+          (hasPairedKnownAccountDeferredStop ||
+            hasSettledDeferredTimeout ||
+            hasClearedDeferredStop) &&
+          abortedTask;
+        if (
+          currentStop?.status === "rejected" &&
+          !hasPairedKnownAccountDeferredStop &&
+          !hasSettledDeferredTimeout
+        ) {
           return;
         }
         if (existingTask) {
@@ -778,7 +807,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
           }
         }
-        if (currentStop?.status === "rejected" && hasCallerDeferredStop) {
+        if (
+          currentStop?.status === "rejected" &&
+          (hasPairedKnownAccountDeferredStop || hasSettledDeferredTimeout)
+        ) {
           store.stops.delete(id);
           recoveryStopTimedOut.delete(rKey);
           recoveryStartRequested.delete(rKey);
@@ -1424,6 +1456,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
               } else if (store.stopAccountFences.get(id) === existingStopAccountFence) {
                 store.stopAccountFences.delete(id);
+                const currentStopAfterFence = store.stops.get(id);
+                if (
+                  currentStopAfterFence?.status === "rejected" &&
+                  currentStopAfterFence.error === existingStopAccountFence.timeoutError
+                ) {
+                  store.stops.delete(id);
+                }
               }
             } else {
               outcome = {
@@ -1479,8 +1518,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               );
               if (!stopAccountSettled) {
                 stopAttemptAbandoned = true;
+                const stopAccountTimeoutError = new Error(
+                  `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+                );
                 const stopAccountFence: StopAccountFence = {
                   settled: stopAccountAttempt,
+                  timeoutError: stopAccountTimeoutError,
                   getLateError: () => lateStopAccountError,
                 };
                 void stopAccountFence.settled.finally(() => {
@@ -1489,14 +1532,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                     store.stopAccountFences.get(id) === stopAccountFence
                   ) {
                     store.stopAccountFences.delete(id);
+                    const currentStopAfterFence = store.stops.get(id);
+                    if (
+                      currentStopAfterFence?.status === "rejected" &&
+                      currentStopAfterFence.error === stopAccountFence.timeoutError
+                    ) {
+                      store.stops.delete(id);
+                    }
                   }
                 });
                 store.stopAccountFences.set(id, stopAccountFence);
                 outcome = {
                   status: "rejected",
-                  error: new Error(
-                    `stopAccount timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
-                  ),
+                  error: stopAccountTimeoutError,
                 };
                 log.warn?.(
                   `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; deferring replacement`,
