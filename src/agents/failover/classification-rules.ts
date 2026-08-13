@@ -22,6 +22,13 @@ const TIMEOUT_ERROR_CODES = new Set([
   "EPIPE",
   "EAI_AGAIN",
   "ERR_STREAM_PREMATURE_CLOSE",
+  // Keep these aligned with src/infra/retryable-network-errors.ts.
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;

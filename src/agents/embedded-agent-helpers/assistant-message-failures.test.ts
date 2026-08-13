@@ -25,6 +25,24 @@ describe("classifyAssistantFailoverReason", () => {
     expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
   });
 
+  it.each([
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_DNS_RESOLVE_FAILED",
+    "UND_ERR_CONNECT",
+    "UND_ERR_SOCKET",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_BODY_TIMEOUT",
+  ])("classifies structured %s assistant errors as timeouts", (errorCode) => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        provider: "demo-provider",
+        errorCode,
+        errorMessage: "provider connection closed",
+      }),
+    ).toBe("timeout");
+  });
+
   it("does not classify caller-aborted assistant messages as provider failover", () => {
     expect(
       classifyAssistantFailoverReason({
