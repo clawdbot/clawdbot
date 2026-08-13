@@ -290,7 +290,7 @@ describe("ACP translator permission relay", () => {
     const recoveryRunId = "restart-recovery-run";
 
     harness.agent.handleGatewayDisconnect("1006: connection lost");
-    harness.agent.handleGatewayReconnect();
+    void harness.agent.handleGatewayReconnect();
     await harness.agent.handleGatewayEvent(
       createApprovalRequestEvent({
         approvalId: "approval-recovery",

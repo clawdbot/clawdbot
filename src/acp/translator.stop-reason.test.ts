@@ -215,7 +215,7 @@ describe("acp translator stop reason mapping", () => {
 
     expect(settleSpy).not.toHaveBeenCalled();
 
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
     await agent.handleGatewayEvent(
       createChatEvent({
         runId,
@@ -274,7 +274,7 @@ describe("acp translator stop reason mapping", () => {
     const recoveryRunId = "restart-recovery-run";
 
     agent.handleGatewayDisconnect("1006: connection lost");
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
     await agent.handleGatewayEvent(
       createChatEvent({
         runId: recoveryRunId,
@@ -303,7 +303,7 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(7_000);
       expect(settleSpy).not.toHaveBeenCalled();
 
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await agent.handleGatewayEvent(
         createChatEvent({
           runId: "restart-recovery-run",
@@ -328,7 +328,7 @@ describe("acp translator stop reason mapping", () => {
     const recoveryRunId = "restart-recovery-run";
 
     agent.handleGatewayDisconnect("1006: connection lost");
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
     await agent.handleGatewayEvent({
       type: "event",
       event: "agent",
@@ -362,7 +362,7 @@ describe("acp translator stop reason mapping", () => {
       const settleSpy = observeSettlement(promptPromise);
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await agent.handleGatewayEvent(
         createChatEvent({
           runId: recoveryRunId,
@@ -411,7 +411,7 @@ describe("acp translator stop reason mapping", () => {
 
     await vi.waitFor(() => expect(runId).toBeTypeOf("string"));
     agent.handleGatewayDisconnect("1006: connection lost");
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("agent.wait", expect.anything(), {
         timeoutMs: null,
@@ -575,7 +575,7 @@ describe("acp translator stop reason mapping", () => {
     const capturedRunId = requireValue(runId, "chat.send run id");
 
     agent.handleGatewayDisconnect("1006: connection lost");
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
     expect(request).toHaveBeenCalledWith(
@@ -616,7 +616,7 @@ describe("acp translator stop reason mapping", () => {
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await Promise.resolve();
 
       await vi.advanceTimersByTimeAsync(4_999);
@@ -656,7 +656,7 @@ describe("acp translator stop reason mapping", () => {
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(5_000);
 
@@ -694,7 +694,7 @@ describe("acp translator stop reason mapping", () => {
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await vi.waitFor(() => {
         if (resolveAgentWait === undefined) {
           throw new Error("expected agent.wait resolver");
@@ -734,7 +734,7 @@ describe("acp translator stop reason mapping", () => {
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await Promise.resolve();
 
       await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
@@ -807,7 +807,7 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(secondPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
@@ -871,7 +871,7 @@ describe("acp translator stop reason mapping", () => {
       })?.[1]?.idempotencyKey as string | undefined;
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(5_000);
 
@@ -898,7 +898,7 @@ describe("acp translator stop reason mapping", () => {
     const promptPromise = promptAgent(agent, sessionId);
     const settleSpy = observeSettlement(promptPromise);
     await Promise.resolve();
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
     expect(settleSpy).toHaveBeenCalledWith({
@@ -948,7 +948,7 @@ describe("acp translator stop reason mapping", () => {
     agent.handleGatewayDisconnect("1006: connection lost");
     const promptPromise = promptAgent(agent, sessionId);
     await Promise.resolve();
-    agent.handleGatewayReconnect();
+    void agent.handleGatewayReconnect();
 
     await vi.waitFor(() => {
       expect(sessionUpdate).toHaveBeenCalled();
@@ -1056,7 +1056,7 @@ describe("acp translator stop reason mapping", () => {
       const firstRunId = requireFirstRequestIdempotencyKey(requestMock);
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      void agent.handleGatewayReconnect();
       await Promise.resolve();
 
       const secondPrompt = promptAgent(agent, sessionId, "second");

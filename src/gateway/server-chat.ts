@@ -1111,14 +1111,12 @@ export function createAgentEventHandler({
     payload: unknown,
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
-    const payloadRecord = payload && typeof payload === "object"
-      ? payload as Record<string, unknown>
-      : undefined;
+    const payloadRecord =
+      payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
     const runId = typeof payloadRecord?.runId === "string" ? payloadRecord.runId : undefined;
     const resumedFromRunId = runId ? getAgentRunContext(runId)?.resumedFromRunId : undefined;
-    const projectedPayload = resumedFromRunId && payloadRecord
-      ? { ...payloadRecord, resumedFromRunId }
-      : payload;
+    const projectedPayload =
+      resumedFromRunId && payloadRecord ? { ...payloadRecord, resumedFromRunId } : payload;
     const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
       broadcast("chat", projectedPayload, {

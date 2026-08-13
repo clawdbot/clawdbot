@@ -394,9 +394,7 @@ describe("agent request restart recovery preflight", () => {
         ...(internalExecutionIdentityRecoveryAttempt !== undefined
           ? { internalExecutionIdentityRecoveryAttempt }
           : {}),
-        ...(internalRestartRecoverySourceRunId
-          ? { internalRestartRecoverySourceRunId }
-          : {}),
+        ...(internalRestartRecoverySourceRunId ? { internalRestartRecoverySourceRunId } : {}),
         inputProvenance: {
           kind: "internal_system",
           sourceSessionKey: "agent:main:main",

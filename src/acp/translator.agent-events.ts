@@ -252,11 +252,7 @@ export class AcpTranslatorAgentEvents {
     approvalEvent: GatewayExecApprovalEvent;
   }): AcpPendingPrompt | undefined {
     if (params.runId) {
-      return this.findPendingBySessionKey(
-        params.sessionKey,
-        params.runId,
-        params.resumedFromRunId,
-      );
+      return this.findPendingBySessionKey(params.sessionKey, params.runId, params.resumedFromRunId);
     }
     const toolCallId = params.approvalEvent.toolCallId;
     if (!toolCallId) {

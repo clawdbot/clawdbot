@@ -134,7 +134,9 @@ export class AcpTranslatorPromptStream {
         this.gateway
           .request("sessions.messages.subscribe", { key: pending.sessionKey })
           .catch((err: unknown) => {
-            this.log(`session message subscription failed for ${pending.sessionKey}: ${String(err)}`);
+            this.log(
+              `session message subscription failed for ${pending.sessionKey}: ${String(err)}`,
+            );
           }),
       ),
     );

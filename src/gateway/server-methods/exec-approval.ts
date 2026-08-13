@@ -9,6 +9,7 @@ import {
   validateExecApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
@@ -24,7 +25,6 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
