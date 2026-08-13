@@ -35,6 +35,7 @@ import {
   resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
+import { isCodexNativeStructuredOutputAttempt } from "./native-structured-output.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
@@ -384,7 +385,15 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
   toolBuildStages.mark("vision-filtering");
-  const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
+  // Native Codex collectors return their schema-constrained result in the
+  // final assistant message. Exposing the synthetic result tool as well would
+  // create two independent writers for the same immutable collector result.
+  const collectorFilteredTools = isCodexNativeStructuredOutputAttempt(params)
+    ? visionFilteredTools.filter(
+        (tool) => normalizeCodexDynamicToolName(tool.name) !== "structured_output",
+      )
+    : visionFilteredTools;
+  const webSearchPresent = collectorFilteredTools.some((tool) => tool.name === "web_search");
   const persistentCodexWebSearchSurface =
     params.config?.tools?.web?.search?.enabled !== false &&
     !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
@@ -427,7 +436,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         webSearchPolicy.persistentAllowed),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(collectorFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -492,9 +501,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   return exposedTools;
 }
-/** True when this attempt is a Swarm collector that must expose structured_output. */
+/** True when this attempt needs OpenClaw's synthetic structured_output tool. */
 function isSwarmCollectorStructuredOutputAttempt(params: EmbeddedRunAttemptParams): boolean {
-  return params.swarmCollector === true && params.swarmOutputSchema !== undefined;
+  return (
+    params.swarmCollector === true &&
+    params.swarmOutputSchema !== undefined &&
+    !isCodexNativeStructuredOutputAttempt(params)
+  );
 }
 
 /** Fails closed when a collector child never received its required structured_output tool. */

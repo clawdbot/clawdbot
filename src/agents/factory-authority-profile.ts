@@ -25,7 +25,7 @@ export const FACTORY_NATIVE_BASE_PATH_ENTRIES = [
 
 export const FACTORY_NATIVE_FIXED_PATH = FACTORY_NATIVE_BASE_PATH_ENTRIES.join(":");
 
-export const FACTORY_NATIVE_DYNAMIC_TOOLS = ["structured_output"] as const;
+export const FACTORY_NATIVE_DYNAMIC_TOOLS = [] as const;
 
 export const FACTORY_NATIVE_DISABLED_CAPABILITIES = [
   "openclaw-exec",

@@ -464,7 +464,8 @@ Only approved non-secret environment variables cross the boundary.
 
 Network is disabled. Inherited MCP servers, apps, plugins, hooks, web search,
 delegation, and other OpenClaw capability surfaces are disabled. The only
-OpenClaw dynamic tool is `structured_output`; Codex native code mode supplies
+Factory-native Codex uses the native final-output schema and exposes no
+OpenClaw dynamic result tool; Codex native code mode supplies
 shell/file execution inside the named macOS Seatbelt profile. Generic Swarm
 collectors do not receive that native surface.
 

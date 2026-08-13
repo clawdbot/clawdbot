@@ -1779,6 +1779,28 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["structured_output"]);
   });
 
+  it("removes structured_output when native final-schema capture owns the result", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("structured_output"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.provider = "openai";
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["structured_output"];
+    params.swarmCollector = true;
+    params.swarmOutputSchema = { type: "object" };
+    params.onSwarmStructuredOutputState = async () => {};
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: true,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual([]);
+  });
+
   it("fails closed when a swarm collector omits structured_output from dynamic tools", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
     const workspaceDir = path.join(tempDir, "workspace");

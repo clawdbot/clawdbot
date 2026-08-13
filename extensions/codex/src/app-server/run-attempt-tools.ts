@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import { isCodexNativeStructuredOutputAttempt } from "./native-structured-output.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
 
@@ -87,9 +88,14 @@ export function resolveCodexDynamicToolDirectNames(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
   }
-  // Swarm collectors must always see structured_output even when Codex tool
-  // search is the default loading mode or the private table is empty.
-  if (params.swarmCollector === true && params.swarmOutputSchema !== undefined) {
+  // Tool-backed Swarm collectors must always see structured_output even when
+  // Codex tool search is the default loading mode or the private table is
+  // empty. Native final-schema collectors deliberately have no result tool.
+  if (
+    params.swarmCollector === true &&
+    params.swarmOutputSchema !== undefined &&
+    !isCodexNativeStructuredOutputAttempt(params)
+  ) {
     names.push("structured_output");
   }
   return names;

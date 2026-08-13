@@ -174,7 +174,7 @@ export type SwarmLaunchAuthority = {
   };
   toolSurface: {
     codexNativeCodeMode: true;
-    openClawDynamicTools: ["structured_output"];
+    openClawDynamicTools: [];
     disabledCapabilities: [
       "openclaw-exec",
       "openclaw-process",

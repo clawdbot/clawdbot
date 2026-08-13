@@ -436,10 +436,12 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams).not.toHaveProperty("to");
     expect(agentParams).not.toHaveProperty("accountId");
     expect(agentParams).not.toHaveProperty("threadId");
-    expect(agentParams.extraSystemPrompt).toContain("available structured-output result tool");
-    expect(agentParams.extraSystemPrompt).not.toContain("Call structured_output");
-    expect(agentParams.extraSystemPrompt).toContain("until one payload is accepted");
-    expect(agentParams.extraSystemPrompt).toContain("at most one retry");
+    expect(agentParams.extraSystemPrompt).toContain(
+      "completion mechanism named by the active runtime",
+    );
+    expect(agentParams.extraSystemPrompt).not.toContain("structured-output result tool");
+    expect(agentParams.extraSystemPrompt).toContain("submit exactly one result");
+    expect(agentParams.extraSystemPrompt).toContain("retry at most once");
     await vi.waitFor(() =>
       expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
     );
