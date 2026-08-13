@@ -18743,6 +18743,7 @@ public struct CronJob: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
+    public let precheck: [String: AnyCodable]?
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
@@ -18779,6 +18780,7 @@ public struct CronJob: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
+        precheck: [String: AnyCodable]? = nil,
         delivery: AnyCodable? = nil,
         failurealert: AnyCodable? = nil,
         state: [String: AnyCodable],
@@ -18814,6 +18816,7 @@ public struct CronJob: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
+        self.precheck = precheck
         self.delivery = delivery
         self.failurealert = failurealert
         self.state = state
@@ -18851,6 +18854,7 @@ public struct CronJob: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
+        case precheck
         case delivery
         case failurealert = "failureAlert"
         case state

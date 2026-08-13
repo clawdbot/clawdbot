@@ -65,6 +65,16 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
       "Use lightweight bootstrap context for agent jobs",
       create ? false : undefined,
     )
+    .option(
+      "--precheck-command <shell>",
+      "Zero-token shell gate before the payload (exit 0=work, 2=skip; see #112371)",
+    )
+    .option(
+      "--precheck-timeout-ms <n>",
+      "Timeout for --precheck-command in milliseconds (default 30000)",
+    )
+    .option("--precheck-cwd <path>", "Working directory for --precheck-command")
+    .option("--clear-precheck", "Remove the precheck gate", false)
     .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
     .option("--announce", "Fallback-deliver final text to a chat", create ? false : undefined)
     .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")

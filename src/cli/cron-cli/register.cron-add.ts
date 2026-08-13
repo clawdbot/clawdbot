@@ -425,6 +425,26 @@ export function registerCronAddCommand(cron: Command) {
               sessionTarget,
               wakeMode,
               payload: resolvedPayload,
+              ...(() => {
+                const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+                if (!precheckCommand) {
+                  return {};
+                }
+                const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+                const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+                return {
+                  precheck: {
+                    kind: "exec" as const,
+                    command: precheckCommand,
+                    ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
+                      ? { timeoutMs: Math.floor(timeoutMs) }
+                      : {}),
+                    ...(normalizeOptionalString(opts.precheckCwd)
+                      ? { cwd: normalizeOptionalString(opts.precheckCwd) }
+                      : {}),
+                  },
+                };
+              })(),
               delivery: deliveryMode
                 ? {
                     mode: deliveryMode,

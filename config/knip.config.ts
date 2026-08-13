@@ -502,6 +502,11 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // The no-work reason constant and pure output interpreter are exercised by
+    // the focused job-precheck unit tests; production wiring consumes
+    // runCronJobPrecheck/cronRunOutcomeFromPrecheck and normalizeCronJobPrecheck
+    // rather than these test-facing helpers.
+    "src/cron/job-precheck.ts": ["exports"],
   },
   workspaces: {
     ".": {

@@ -289,6 +289,27 @@ export function registerCronEditCommand(cron: Command) {
               ...(pacingMax ? { max: pacingMax } : {}),
             };
           }
+
+          const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+          if (opts.clearPrecheck && precheckCommand) {
+            throw new Error("Use --clear-precheck or --precheck-command, not both");
+          }
+          if (opts.clearPrecheck) {
+            patch.precheck = null;
+          } else if (precheckCommand) {
+            const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+            const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+            patch.precheck = {
+              kind: "exec",
+              command: precheckCommand,
+              ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
+                ? { timeoutMs: Math.floor(timeoutMs) }
+                : {}),
+              ...(normalizeOptionalString(opts.precheckCwd)
+                ? { cwd: normalizeOptionalString(opts.precheckCwd) }
+                : {}),
+            };
+          }
           if (opts.clearTrigger) {
             patch.trigger = null;
           } else if (triggerScript !== undefined) {

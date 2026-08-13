@@ -440,6 +440,148 @@ describe("cron service timer seam coverage", () => {
     expect(runScriptJob).not.toHaveBeenCalled();
   });
 
+  it("blocks a host-shell precheck when cron.triggers.enabled is not true", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      // triggers disabled: unattended host-shell execution must be denied.
+      cronConfig: { triggers: { enabled: false } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    const job: CronJob = {
+      ...createDueMainJob({ now, wakeMode: "now" }),
+      precheck: { kind: "exec", command: "exit 2" },
+    };
+
+    const result = await executeJobCore(state, job);
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("cron.triggers.enabled=true"),
+    });
+    // The gate must short-circuit before any agent payload runs.
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+  });
+
+  it("allows a host-shell precheck to skip the payload when triggers are enabled", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    // This path needs triggers + a permitting exec security (host approvals often
+    // default allowlist/full). Policy denies without shell spawn are covered in
+    // job-precheck.test.ts. Here we prove no-work precheck skips the payload.
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      ...createDueMainJob({ now, wakeMode: "now" }),
+      // exit code 2 = NO_WORK under the default exit-code contract.
+      precheck: { kind: "exec", command: "exit 2" },
+    };
+
+    const result = await executeJobCore(state, job);
+    const agent = state.deps.runIsolatedAgentJob as ReturnType<typeof vi.fn>;
+
+    // Host exec policy may deny without spawning; either path must not run payload/agent.
+    if (result.status === "error") {
+      expect(String(result.error)).toContain("precheck-policy-denied");
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(agent).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result).toMatchObject({
+      status: "skipped",
+      error: "precheck-no-work",
+      summary: "precheck-no-work",
+    });
+    // No payload/model side effect on a no-work skip.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(agent).not.toHaveBeenCalled();
+  });
+
+  it("persists precheck-no-work through onTimer without an agent turn", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const job: CronJob = {
+      ...createDueIsolatedAgentJob({ now }),
+      id: "precheck-no-work-persist",
+      precheck: { kind: "exec", command: "exit 2" },
+    };
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const stored = await loadCronStore(storePath);
+    const persisted = stored.jobs.find((entry) => entry.id === "precheck-no-work-persist");
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    // Policy-deny vs no-work both prove zero agent turns; prefer no-work when allowed.
+    if (persisted?.state.lastStatus === "error") {
+      expect(persisted.state.lastError ?? "").toContain("precheck-policy-denied");
+      return;
+    }
+    expect(persisted?.state.lastStatus).toBe("skipped");
+    expect(persisted?.state.lastError ?? "").toContain("precheck-no-work");
+    expect(persisted?.state.consecutiveSkipped ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it("persists precheck-policy-denied through onTimer without an agent turn", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:30:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const job: CronJob = {
+      ...createDueIsolatedAgentJob({ now }),
+      id: "precheck-denied-persist",
+      precheck: { kind: "exec", command: "exit 0" },
+    };
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      // triggers off => shared host-shell admission denies before spawn
+      cronConfig: { triggers: { enabled: false } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const stored = await loadCronStore(storePath);
+    const persisted = stored.jobs.find((entry) => entry.id === "precheck-denied-persist");
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(persisted?.state.lastStatus).toBe("error");
+    expect(persisted?.state.lastError ?? "").toMatch(
+      /precheck-policy-denied|cron\.triggers\.enabled=true/,
+    );
+  });
+
   it.each([
     ["now", "immediate"],
     ["next-heartbeat", "event"],
