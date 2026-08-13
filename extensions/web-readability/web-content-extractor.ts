@@ -172,11 +172,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       pendingOpenTag = undefined;
     },
     onselfclosingtag() {
-      if (
-        foreignContext[0] &&
-        pendingOpenTag &&
-        openTags[openTags.length - 1] === pendingOpenTag
-      ) {
+      if (foreignContext[0] && pendingOpenTag && openTags[openTags.length - 1] === pendingOpenTag) {
         popOpenTag();
       }
       pendingOpenTag = undefined;
@@ -216,10 +212,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
 
   // Reuse linkedom's exact lexer so malformed tag names, attributes, raw-text
   // bodies, and self-closing syntax cannot diverge from the guarded parser.
-  const tokenizer = new Tokenizer(
-    { xmlMode: false, decodeEntities: true },
-    callbacks,
-  );
+  const tokenizer = new Tokenizer({ xmlMode: false, decodeEntities: true }, callbacks);
   tokenizer.write(html);
   tokenizer.end();
   return exceeded;
