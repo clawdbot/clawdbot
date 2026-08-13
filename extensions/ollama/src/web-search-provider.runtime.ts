@@ -5,6 +5,7 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   enablePluginInConfig,
@@ -228,8 +229,12 @@ async function runOllamaWebSearch(params: {
       }
       if (!response.ok) {
         const detail = await readResponseText(response, { maxBytes: 64_000 });
+        // Ollama Cloud requests carry a bearer API key; reflected upstream
+        // text must be sanitized independently of the operator's log-redaction
+        // setting.
+        const safeDetail = redactToolPayloadText(detail.text || "");
         const message =
-          `Ollama web search failed (${response.status}): ${detail.text || ""}`.trim();
+          `Ollama web search failed (${response.status}): ${safeDetail}`.trim();
         if (response.status === 404) {
           lastError = new Error(message);
           continue;
