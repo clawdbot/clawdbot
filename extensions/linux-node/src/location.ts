@@ -31,6 +31,14 @@ function isLocationDisabledOutput(output: string): boolean {
   return /Geolocation disabled|disallowed, no agent|AccessDenied|not authorized/iu.test(output);
 }
 
+function parseOptionalFiniteNumber(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function parseLocationOutput(
   output: string,
   now: () => Date,
@@ -68,12 +76,16 @@ function parseLocationOutput(
       continue;
     }
     const epochSeconds = /\((\d+)\s+seconds since the Epoch\)/u.exec(block)?.[1];
-    const altitude = /Altitude:\s*([-+\d.]+)/u.exec(block)?.[1];
-    const speed = /Speed:\s*([-+\d.]+)/u.exec(block)?.[1];
-    const heading = /Heading:\s*([-+\d.]+)/u.exec(block)?.[1];
-    const timestamp = epochSeconds
-      ? new Date(Number(epochSeconds) * 1000).toISOString()
-      : now().toISOString();
+    const altitudeMeters = parseOptionalFiniteNumber(/Altitude:\s*([-+\d.]+)/u.exec(block)?.[1]);
+    const speedMps = parseOptionalFiniteNumber(/Speed:\s*([-+\d.]+)/u.exec(block)?.[1]);
+    const headingDeg = parseOptionalFiniteNumber(/Heading:\s*([-+\d.]+)/u.exec(block)?.[1]);
+    const epochMs = epochSeconds === undefined ? Number.NaN : Number(epochSeconds) * 1000;
+    // GeoClue epochs can exceed Date's valid range (±8.64e15 ms); fall back to
+    // the local clock instead of letting toISOString() throw a RangeError.
+    const timestamp =
+      Number.isFinite(epochMs) && Math.abs(epochMs) <= 8.64e15
+        ? new Date(epochMs).toISOString()
+        : now().toISOString();
     if (
       maxAgeMs !== undefined &&
       now().getTime() - Date.parse(timestamp) >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS
@@ -84,9 +96,9 @@ function parseLocationOutput(
       lat,
       lon,
       accuracyMeters,
-      ...(altitude !== undefined ? { altitudeMeters: Number(altitude) } : {}),
-      ...(speed !== undefined ? { speedMps: Number(speed) } : {}),
-      ...(heading !== undefined ? { headingDeg: Number(heading) } : {}),
+      ...(altitudeMeters !== undefined ? { altitudeMeters } : {}),
+      ...(speedMps !== undefined ? { speedMps } : {}),
+      ...(headingDeg !== undefined ? { headingDeg } : {}),
       timestamp,
     };
   }

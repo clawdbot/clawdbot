@@ -302,6 +302,36 @@ describe("linux-node commands", () => {
     ).resolves.toContain('"timestamp":"2026-07-13T12:00:10.000Z"');
   });
 
+  it("falls back to the local clock when the GeoClue epoch exceeds the Date range", async () => {
+    const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (99999999999999999 seconds since the Epoch)\n`;
+    const harness = createHarness({
+      runCommand: async () => success(output),
+    });
+
+    const payload = JSON.parse(await harness.command("location.get").handle()) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload.timestamp).toBe("2026-07-13T12:00:10.000Z");
+  });
+
+  it("omits non-finite altitude, speed, and heading fields from the location payload", async () => {
+    const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nAltitude: 1.2.3 meters\nSpeed: -. meters/second\nHeading: 270°\nTimestamp: now (1783944000 seconds since the Epoch)\n`;
+    const harness = createHarness({
+      runCommand: async () => success(output),
+    });
+
+    const payload = JSON.parse(await harness.command("location.get").handle()) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).not.toHaveProperty("altitudeMeters");
+    expect(payload).not.toHaveProperty("speedMps");
+    expect(payload.headingDeg).toBe(270);
+  });
+
   it("returns stable location timeout and unavailable errors", async () => {
     const timeout = createHarness({ runCommand: async () => success("") });
     await expect(timeout.command("location.get").handle()).rejects.toThrow(
