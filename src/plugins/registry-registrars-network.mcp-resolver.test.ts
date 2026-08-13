@@ -1,6 +1,9 @@
 /** Verifies MCP connection resolver registration ownership is fail-closed. */
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnv } from "../test-utils/env.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
@@ -72,5 +75,83 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     expect(
       pluginRegistry.registry.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
     ).toEqual([]);
+  });
+});
+
+describe("registerSessionCatalog ownership", () => {
+  it("keeps providers registered for isolated profiles", () => {
+    const { pluginRegistry, apiFor } = createRegistryHarness();
+    const home = os.userInfo().homedir;
+    const stateDir = path.join(home, ".openclaw-dev");
+
+    withEnv(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () =>
+        apiFor("catalog").registerSessionCatalog({
+          id: "catalog",
+          label: "Catalog",
+          supportsProcessHomeIsolation: true as const,
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+        } as never),
+    );
+
+    expect(pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
+  });
+
+  it("suppresses legacy providers only for isolated profiles", () => {
+    const home = os.userInfo().homedir;
+    const legacyProvider = {
+      id: "legacy",
+      label: "Legacy",
+      list: async () => [],
+      read: async ({ hostId, threadId }: { hostId: string; threadId: string }) => ({
+        hostId,
+        threadId,
+        items: [],
+      }),
+    };
+    const isolated = createRegistryHarness();
+    const stateDir = path.join(home, ".openclaw-dev");
+    withEnv(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () => isolated.apiFor("legacy").registerSessionCatalog(legacyProvider),
+    );
+    expect(isolated.pluginRegistry.registry.sessionCatalogs).toEqual([]);
+    expect(isolated.pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("supportsProcessHomeIsolation"),
+      }),
+    );
+
+    const defaultIdentity = createRegistryHarness();
+    const defaultStateDir = path.join(home, ".openclaw");
+    withEnv(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_STATE_DIR: defaultStateDir,
+        OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
+      },
+      () => defaultIdentity.apiFor("legacy").registerSessionCatalog(legacyProvider),
+    );
+    expect(defaultIdentity.pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
   });
 });

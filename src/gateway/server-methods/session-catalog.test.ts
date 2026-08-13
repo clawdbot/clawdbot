@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -5,6 +7,7 @@ import { bindPluginRegistryRuntime } from "../../plugins/registry-runtime-bindin
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{
@@ -105,6 +108,22 @@ function startCall(
   return { completion, respond };
 }
 
+function withNamedProfile<T>(run: () => Promise<T>): Promise<T> {
+  const home = os.userInfo().homedir;
+  const stateDir = path.join(home, ".openclaw-dev");
+  return withEnvAsync(
+    {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_PROFILE: "dev",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    },
+    run,
+  );
+}
+
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
@@ -113,6 +132,118 @@ describe("session catalog Gateway methods", () => {
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
+  });
+
+  it("suppresses only process-HOME local hosts for a named profile", async () => {
+    const localHost = {
+      hostId: "gateway:local",
+      label: "Local",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [],
+    };
+    const nodeHost = {
+      hostId: "node:devbox",
+      label: "Devbox",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "devbox",
+      sessions: [],
+    };
+    const list = vi.fn(async (query: Parameters<SessionCatalogProvider["list"]>[0]) => {
+      const allowProcessHomeFallback = (query as { allowProcessHomeFallback?: boolean })
+        .allowProcessHomeFallback;
+      return [...(allowProcessHomeFallback === false ? [] : [localHost]), nodeHost];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("claude", { list }) }];
+    const home = os.userInfo().homedir;
+    const defaultStateDir = path.join(home, ".openclaw");
+    const logGateway = { warn: vi.fn() };
+
+    const defaultRespond = await withEnvAsync(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_STATE_DIR: defaultStateDir,
+        OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
+      },
+      async () => await call("sessions.catalog.list", {}, {}, undefined, { logGateway }),
+    );
+    expect(defaultRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "claude", hosts: [localHost, nodeHost] })],
+    });
+
+    const respond = await withNamedProfile(async () =>
+      call("sessions.catalog.list", {}, {}, undefined, { logGateway }),
+    );
+    await withNamedProfile(async () =>
+      call("sessions.catalog.list", { search: "second request" }, {}, undefined, { logGateway }),
+    );
+
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "claude", hosts: [nodeHost] })],
+    });
+    expect(logGateway.warn).toHaveBeenCalledOnce();
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable",
+      { reason: "isolated_state" },
+    );
+  });
+
+  it("rejects a known local continue for a named profile", async () => {
+    const continueSession = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+      if (request.allowProcessHomeFallback === false) {
+        throw new Error("local Test sessions are unavailable in isolated state");
+      }
+      return { sessionKey: "agent:main:known" };
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("test", { continueSession: continueSession as never }) },
+    ];
+
+    const respond = await withNamedProfile(async () =>
+      call("sessions.catalog.continue", {
+        catalogId: "test",
+        hostId: "gateway:local",
+        threadId: "known-thread",
+      }),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "local Test sessions are unavailable in isolated state" }),
+    );
+  });
+
+  it("rejects a known local archive for a named profile", async () => {
+    const archive = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+      if (request.allowProcessHomeFallback === false) {
+        throw new Error("local Test sessions are unavailable in isolated state");
+      }
+      return { ok: true as const };
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("test", { archive: archive as never }) },
+    ];
+
+    const respond = await withNamedProfile(async () =>
+      call("sessions.catalog.archive", {
+        catalogId: "test",
+        hostId: "gateway:local",
+        threadId: "known-thread",
+        confirmNoOtherRunner: true,
+      }),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "local Test sessions are unavailable in isolated state" }),
+    );
   });
 
   it("sorts catalogs and isolates provider failures", async () => {
@@ -814,6 +945,7 @@ describe("session catalog Gateway methods", () => {
       { connect: { scopes: ["operator.write", "operator.admin"] } },
     );
     expect(continueSession).toHaveBeenCalledWith({
+      allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",
       clientScopes: ["operator.write", "operator.admin"],
@@ -830,6 +962,7 @@ describe("session catalog Gateway methods", () => {
       threadId: "thread-1",
     });
     expect(continueSession).toHaveBeenCalledWith({
+      allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread-1",
       clientScopes: [],
