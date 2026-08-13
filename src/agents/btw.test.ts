@@ -837,6 +837,108 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
+  it("delivers a paragraph separator between forced BTW blocks", async () => {
+    const onBlockReply = vi.fn().mockResolvedValue(undefined);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "text_delta",
+          delta: "abcdefghij\n\n",
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "text_end",
+          content: "abcdefghij\n\n",
+          contentIndex: 0,
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "text_delta",
+          delta: "Next paragraph.",
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "text_end",
+          content: "Next paragraph.",
+          contentIndex: 0,
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "abcdefghij\n\nNext paragraph." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: { agents: { entries: { main: { default: true } } } } as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      sessionStore: {},
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
+      resolvedThinkLevel: "low",
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 10,
+        breakPreference: "paragraph",
+        flushOnParagraph: true,
+      },
+      resolvedBlockStreamingBreak: "text_end",
+      opts: { onBlockReply },
+      isNewSession: false,
+    });
+
+    expect(result).toBeUndefined();
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "abcdefghij",
+      "\n\n",
+      "Next",
+      "paragraph.",
+    ]);
+  });
+
   it("returns a final payload when block streaming is unavailable", async () => {
     mockDoneAnswer("Final answer.");
 

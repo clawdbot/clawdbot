@@ -174,10 +174,15 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     if (!hasText) {
-      if (bufferText && leadingParagraphSeparatorPattern.test(text)) {
-        // Preserve a forced paragraph tail inside the renderable payload; ordinary
-        // whitespace-only payloads remain suppressed before outbound delivery.
-        bufferText = joinBufferedText(text);
+      if (leadingParagraphSeparatorPattern.test(text)) {
+        // Preserve a forced paragraph tail even when the preceding max-sized block
+        // already flushed; dropping it collapses the next delivered paragraph.
+        if (!bufferText) {
+          startBufferFromPayload(payload);
+          bufferText = text;
+        } else {
+          bufferText = joinBufferedText(text);
+        }
       }
       return;
     }

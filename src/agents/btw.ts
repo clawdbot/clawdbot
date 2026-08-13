@@ -1289,7 +1289,8 @@ export async function runBtwSideQuestion(
 
   const emitBlockChunk = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || !params.opts?.onBlockReply) {
+    const isParagraphSeparator = /^\n[\t ]*\n+$/.test(text);
+    if ((!trimmed && !isParagraphSeparator) || !params.opts?.onBlockReply) {
       return;
     }
     emittedBlocks += 1;
