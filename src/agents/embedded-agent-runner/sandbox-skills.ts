@@ -120,6 +120,30 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   }));
 }
 
+function replaceSerializedSkillLocation(params: {
+  prompt: string;
+  hostPath: string;
+  mappedPath: string;
+}): string {
+  // The catalog renderer serializes arbitrary description and location-note
+  // prose next to <location>. Substitute only that element so a skill that
+  // documents its host path keeps the rest of the prompt byte-for-byte.
+  const pathPairs: Array<[string, string]> = [[params.hostPath, params.mappedPath]];
+  const hostPosix = params.hostPath.replaceAll("\\", "/");
+  if (hostPosix !== params.hostPath) {
+    pathPairs.push([hostPosix, params.mappedPath.replaceAll("\\", "/")]);
+  }
+  let prompt = params.prompt;
+  for (const [fromPath, toPath] of pathPairs) {
+    const from = `<location>${escapeSkillXml(fromPath)}</location>`;
+    const to = `<location>${escapeSkillXml(toPath)}</location>`;
+    if (from !== to) {
+      prompt = prompt.replaceAll(from, to);
+    }
+  }
+  return prompt;
+}
+
 export function mapSandboxSkillUsagePaths(params: {
   paths?: SkillUsagePath[];
   skillsWorkspaceDir: string;
@@ -164,25 +188,7 @@ function remapMaterializedSkillsSnapshotForPrompt(params: {
     if (!hostPath || !mappedPath || hostPath === mappedPath) {
       continue;
     }
-    // Available-skills catalogs XML-escape <location> values, so remap must
-    // substitute the escaped host path with the escaped container path.
-    const replacements: Array<[string, string]> = [
-      [escapeSkillXml(hostPath), escapeSkillXml(mappedPath)],
-      [hostPath, mappedPath],
-    ];
-    const hostPosix = hostPath.replaceAll("\\", "/");
-    const mappedPosix = mappedPath.replaceAll("\\", "/");
-    if (hostPosix !== hostPath) {
-      replacements.push(
-        [escapeSkillXml(hostPosix), escapeSkillXml(mappedPosix)],
-        [hostPosix, mappedPosix],
-      );
-    }
-    for (const [from, to] of replacements) {
-      if (from && from !== to) {
-        prompt = prompt.replaceAll(from, to);
-      }
-    }
+    prompt = replaceSerializedSkillLocation({ prompt, hostPath, mappedPath });
   }
   return {
     ...params.skillsSnapshot,

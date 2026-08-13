@@ -3,12 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createSyntheticSourceInfo, escapeSkillXml } from "../../skills/loading/skill-contract.js";
+import {
+  createSyntheticSourceInfo,
+  escapeSkillXml,
+  formatSkillsForPromptCore,
+} from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import {
+  resolveSyncedSkillsCacheKey,
+  writeSyncedSkillsUsageCache,
+} from "../../skills/loading/workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.runtime.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -189,6 +197,54 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not rewrite description or location-note text that mentions the host skill path", () => {
+    const targetWorkspace = "/state/sandbox-skills-prose-remap";
+    const hostFilePath = `${targetWorkspace}/skills/demo/SKILL.md`;
+    const containerFilePath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+    const description = `Host copy lives at ${hostFilePath}`;
+    const locationNote = `Also documented at ${hostFilePath}`;
+    const skill = {
+      name: "demo",
+      description,
+      locationNote,
+      filePath: hostFilePath,
+      baseDir: `${targetWorkspace}/skills/demo`,
+      source: "openclaw-workspace",
+      sourceInfo: createSyntheticSourceInfo(hostFilePath, {
+        source: "openclaw-workspace",
+        baseDir: `${targetWorkspace}/skills/demo`,
+      }),
+      disableModelInvocation: false,
+    };
+    writeSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspace), {
+      destinations: new Map(),
+      manifestKey: "prose-remap",
+      skillUsagePaths: [],
+      skillsSnapshot: {
+        prompt: formatSkillsForPromptCore([skill]),
+        skills: [{ name: "demo" }],
+        resolvedSkills: [skill],
+        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+      },
+    });
+
+    const resolved = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: targetWorkspace,
+        workspaceAccess: "rw",
+      },
+      effectiveWorkspace: "/workspace",
+    });
+    const prompt = resolved.skillsSnapshot?.prompt ?? "";
+
+    expect(prompt).toContain(`<location>${escapeSkillXml(containerFilePath)}</location>`);
+    expect(prompt).toContain(`<description>${escapeSkillXml(description)}</description>`);
+    expect(prompt).toContain(`<location_note>${escapeSkillXml(locationNote)}</location_note>`);
+    expect(prompt).not.toContain(`<location>${escapeSkillXml(hostFilePath)}</location>`);
   });
 
   it("falls back to the effective workspace for older sandbox contexts", () => {
