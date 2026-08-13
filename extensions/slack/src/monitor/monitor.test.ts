@@ -223,7 +223,7 @@ describe("resolveSlackChannelConfig", () => {
     );
   });
 
-  it("matches per-channel users only in their selected workspace", () => {
+  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
     const channels = {
       "team:T11111111:channel:C01234567": {
         users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
@@ -239,14 +239,14 @@ describe("resolveSlackChannelConfig", () => {
         channelId: "C01234567",
         channels,
       })?.users,
-    ).toEqual(["u01234567", "team:t22222222:user:u12345678", "u23456789"]);
+    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
     expect(
       resolveSlackChannelConfig({
         teamId: "T22222222",
         channelId: "C01234567",
         channels,
       })?.users,
-    ).toEqual(["team:t11111111:user:u01234567", "u12345678", "u23456789"]);
+    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
   });
 
   it("blocks channel-name route matches by default", () => {

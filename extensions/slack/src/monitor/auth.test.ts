@@ -195,13 +195,13 @@ describe("resolveSlackEffectiveAllowFrom", () => {
         includePairingStore: true,
         eventScope: { teamId: "T11111111", client: {} as never },
       }),
-    ).resolves.toEqual(["uconfig123", "ulegacy123", "u11111111"]);
+    ).resolves.toEqual(["uconfig123", "ulegacy123", "team:t11111111:user:u11111111"]);
     await expect(
       resolveSlackEffectiveAllowFrom(ctx, {
         includePairingStore: true,
         eventScope: { teamId: "T22222222", client: {} as never },
       }),
-    ).resolves.toEqual(["uconfig123", "ulegacy123", "u22222222"]);
+    ).resolves.toEqual(["uconfig123", "ulegacy123", "team:t22222222:user:u22222222"]);
     await expect(
       resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true }),
     ).resolves.toEqual(["uconfig123", "ulegacy123"]);
@@ -215,7 +215,7 @@ describe("resolveSlackEffectiveAllowFrom", () => {
       resolveSlackEffectiveAllowFrom(ctx, {
         eventScope: { teamId: "T11111111", client: {} as never },
       }),
-    ).resolves.toEqual(["u01234567"]);
+    ).resolves.toEqual(["team:t11111111:user:u01234567"]);
     await expect(
       resolveSlackEffectiveAllowFrom(ctx, {
         eventScope: { teamId: "T22222222", client: {} as never },
