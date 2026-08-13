@@ -3880,6 +3880,14 @@ describe("update-cli", () => {
       expectedPersistedChannel: undefined,
     },
     {
+      name: "keeps a stored-dev package install on the package path for a one-off --tag",
+      installKind: "package" as const,
+      options: { tag: "latest", yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: undefined,
+      expectedPersistedChannel: undefined,
+    },
+    {
       name: "switches git installs to package mode for explicit beta and persists it",
       installKind: "git" as const,
       options: { channel: "beta" },

@@ -267,9 +267,14 @@ async function updateCommandInternal(
     });
     return;
   }
-  // The effective dev channel (stored or explicit) must select the git flow:
-  // the documented dev-channel contract is a git checkout, not a package update.
-  const switchToGit = channel === "dev" && installKind !== "git";
+  // An effective dev channel (stored or explicit) selects the git flow — the
+  // documented dev contract is a git checkout. Exception: --tag is a one-run
+  // package-target override, so it keeps a stored-dev package install on the
+  // package path; only an explicitly requested dev channel outranks it.
+  const explicitTag = normalizeTag(opts.tag);
+  const switchToGit =
+    installKind !== "git" &&
+    (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
@@ -281,7 +286,6 @@ async function updateCommandInternal(
     devTarget = resolvedDevTarget.target;
   }
 
-  const explicitTag = normalizeTag(opts.tag);
   const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
   if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
