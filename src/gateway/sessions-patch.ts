@@ -180,6 +180,14 @@ export async function projectSessionsPatchEntry(params: {
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
+  if (typeof patch.archived === "boolean") {
+    if (!params.existingEntry?.sessionId) {
+      return invalid(`session not found: ${storeKey}`);
+    }
+    if (patch.expectedSessionId === undefined) {
+      return invalid(`expectedSessionId required for session lifecycle patch: ${storeKey}`);
+    }
+  }
   if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
   }
@@ -199,7 +207,11 @@ export async function projectSessionsPatchEntry(params: {
   ): string => {
     // ACP metadata can own canonical agent keys (for example agent:main:main),
     // so key shape alone cannot identify the runtime that validates thinking.
-    const acpMeta = readAcpSessionMetaForEntry({ sessionKey: storeKey, entry });
+    const acpMeta = readAcpSessionMetaForEntry({
+      sessionKey: storeKey,
+      agentId: sessionAgentId,
+      entry,
+    });
     return (
       acpMeta?.backend ??
       resolveEffectiveAgentRuntime({

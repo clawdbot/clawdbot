@@ -30,6 +30,7 @@ function sessionRow(index: number): SidebarRecentSession {
   return {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
+    sessionId: `session-${index}`,
     pinned: index === 0 || index === 100,
   } as SidebarRecentSession;
 }
@@ -131,6 +132,22 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it("preflights every lifecycle identity before dispatching the first chunk", async () => {
+    const harness = createHarness();
+    const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
+    rows[100] = { ...rows[100]!, sessionId: undefined };
+
+    await expect(
+      patchSessionRows(harness.host, rows, { archived: false }, harness.scope),
+    ).resolves.toBeNull();
+
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "Session lifecycle action requires a durable session identity.",
+    );
+  });
+
   it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
     const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
     const harness = createHarness();
@@ -149,11 +166,21 @@ describe("patchSessionRows", () => {
     ]);
     expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
       {
-        targets: rows.slice(0, 100).map((row) => ({ key: row.key, agentId: "main" })),
+        targets: rows.slice(0, 100).map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
         patch: { archived: true, unread: false },
       },
       {
-        targets: [{ key: rows[100]!.key, agentId: "main" }],
+        targets: [
+          {
+            key: rows[100]!.key,
+            agentId: "main",
+            expectedSessionId: rows[100]!.sessionId,
+          },
+        ],
         patch: { archived: true, unread: false },
       },
     ]);
@@ -245,7 +272,13 @@ describe("patchSessionRows", () => {
       expect(requestCall.slice(0, 2)).toEqual([
         "sessions.patchMany",
         {
-          targets: [{ key: rows[0]!.key, agentId: "main" }],
+          targets: [
+            {
+              key: rows[0]!.key,
+              agentId: "main",
+              expectedSessionId: rows[0]!.sessionId,
+            },
+          ],
           patch: { archived },
         },
       ]);

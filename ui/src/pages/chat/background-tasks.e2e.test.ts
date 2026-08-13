@@ -343,7 +343,29 @@ suite.define(() => {
               timestamp: Date.now(),
             },
           ],
-          methodResponses: { "tasks.list": { tasks: [] } },
+          methodResponses: {
+            "chat.history": {
+              cases: [
+                {
+                  match: { sessionKey: "agent:main:subagent:parallel-one" },
+                  response: {
+                    messages: [
+                      {
+                        content: [
+                          { type: "text", text: "Inspecting session ownership boundaries." },
+                        ],
+                        role: "assistant",
+                        timestamp: Date.now(),
+                      },
+                    ],
+                    sessionId: "parallel-one-child",
+                    thinkingLevel: null,
+                  },
+                },
+              ],
+            },
+            "tasks.list": { tasks: [] },
+          },
         });
 
         const response = await page.goto(`${suite.server.baseUrl}chat`);
@@ -384,6 +406,27 @@ suite.define(() => {
           fullPage: true,
         });
 
+        await firstRow.click();
+        const detailPanel = page.locator("[data-subagent-detail-panel]");
+        await detailPanel.waitFor({ state: "visible" });
+        await detailPanel.getByText("Inspecting session ownership boundaries.").waitFor();
+        expect(await detailPanel.textContent()).toContain("Review session ownership");
+        expect(await detailPanel.textContent()).toContain("Running");
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("chat.history")).some(
+              (request) => requestSessionKey(request) === first.childSessionKey,
+            ),
+          )
+          .toBe(true);
+        const childHistoryRequest = (await gateway.getRequests("chat.history")).find(
+          (request) => requestSessionKey(request) === first.childSessionKey,
+        );
+        expect(childHistoryRequest?.params).toEqual({
+          sessionKey: first.childSessionKey,
+          limit: 100,
+        });
+
         await gateway.emitGatewayEvent("task", {
           action: "upserted",
           task: {
@@ -416,6 +459,7 @@ suite.define(() => {
         });
 
         await firstRow.getByText("Subagent finished").waitFor();
+        await detailPanel.getByText("Completed").waitFor();
         expect(await firstRow.textContent()).toContain("Ownership review complete");
         expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
         expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
@@ -425,6 +469,8 @@ suite.define(() => {
           path: path.join(activityDir, "02-one-subagent-finished.png"),
           fullPage: true,
         });
+        await page.getByRole("button", { name: "Close Details" }).click();
+        await detailPanel.waitFor({ state: "detached" });
       },
     );
   });

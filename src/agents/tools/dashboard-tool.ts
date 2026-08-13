@@ -84,7 +84,11 @@ const DashboardToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type DashboardCommandEmitter = (params: { sessionKey: string; command: BoardCommand }) => number;
+type DashboardCommandEmitter = (params: {
+  sessionKey: string;
+  agentId?: string;
+  command: BoardCommand;
+}) => number;
 
 type DashboardGatewayContext = {
   getClientConnIds?: (
@@ -95,6 +99,7 @@ type DashboardGatewayContext = {
 
 type DashboardToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   callGateway?: InProcessGatewayCaller;
   emitCommand?: DashboardCommandEmitter;
 };
@@ -220,7 +225,11 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
   }
 }
 
-function emitBoardCommand(params: { sessionKey: string; command: BoardCommand }): number {
+function emitBoardCommand(params: {
+  sessionKey: string;
+  agentId?: string;
+  command: BoardCommand;
+}): number {
   const context = getInProcessGatewayToolContext() as DashboardGatewayContext | undefined;
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
@@ -254,11 +263,17 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       const action = readToolStringParam(params, "action", { required: true });
       const sessionKey = requireSessionKey(opts.agentSessionKey);
       if (action === "read") {
-        return snapshotResult(await gatewayCall<BoardSnapshot>("board.get", { sessionKey }));
+        return snapshotResult(
+          await gatewayCall<BoardSnapshot>("board.get", {
+            sessionKey,
+            agentId: opts.agentId,
+          }),
+        );
       }
       if (action === "focus_tab") {
         const delivered = emitCommand({
           sessionKey,
+          agentId: opts.agentId,
           command: {
             kind: "focus_tab",
             tabId: readTabId(params),
@@ -274,7 +289,11 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         if (!dock) {
           throw new ToolInputError("dock required");
         }
-        const delivered = emitCommand({ sessionKey, command: { kind: "set_chat_dock", dock } });
+        const delivered = emitCommand({
+          sessionKey,
+          agentId: opts.agentId,
+          command: { kind: "set_chat_dock", dock },
+        });
         return textResult(`Dashboard command sent to ${delivered} client(s)`, {
           ok: true,
           delivered,
@@ -293,6 +312,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         return snapshotResult(
           await gatewayCall<BoardSnapshot>("board.widget.put", {
             sessionKey,
+            agentId: opts.agentId,
             name: readToolStringParam(params, "name", { required: true }),
             ...(title !== undefined ? { title } : {}),
             content: {
@@ -315,6 +335,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       return snapshotResult(
         await gatewayCall<BoardSnapshot>("board.update", {
           sessionKey,
+          agentId: opts.agentId,
           ops: [opForAction(action, params)],
         }),
       );

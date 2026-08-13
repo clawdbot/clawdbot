@@ -4,6 +4,7 @@ import {
   asNonArrayRecord,
   asNullableRecord,
   asOptionalRecord,
+  filterStringRecord,
   isStringRecord,
 } from "./record-coerce.js";
 
@@ -53,5 +54,33 @@ describe("record-coerce", () => {
     { value: null, expected: false },
   ])("validates all-or-nothing string records", ({ value, expected }) => {
     expect(isStringRecord(value)).toBe(expected);
+  });
+
+  const inheritedAndHidden = Object.create({ inherited: "skip" }) as Record<string, unknown>;
+  Object.defineProperty(inheritedAndHidden, "hidden", { value: "skip", enumerable: false });
+  Object.assign(inheritedAndHidden, {
+    blank: "",
+    ignored: 1,
+    whitespace: "  ",
+    first: "same",
+    second: "same",
+  });
+
+  it.each([
+    { value: null, expected: undefined },
+    { value: ["value"], expected: undefined },
+    { value: {}, expected: undefined },
+    { value: { count: 1, enabled: true }, expected: undefined },
+    {
+      value: inheritedAndHidden,
+      expected: { blank: "", whitespace: "  ", first: "same", second: "same" },
+    },
+  ])("filters string-valued record entries from $value", ({ value, expected }) => {
+    const result = filterStringRecord(value);
+
+    expect(result).toEqual(expected);
+    expect(result ? Object.keys(result) : undefined).toEqual(
+      expected ? Object.keys(expected) : undefined,
+    );
   });
 });

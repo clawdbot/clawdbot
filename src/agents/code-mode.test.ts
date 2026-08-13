@@ -265,6 +265,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.restartSafe?.description).toContain(
       "Leave unset for ordinary calls",
     );
+    expect(parameters.properties?.restartSafe?.description).toContain("not proven replay-safe");
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
@@ -291,6 +292,8 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(execTool.description.length).toBeLessThan(2_400);
     expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description).toContain("65536 bytes");
+    expect(execTool.description).toContain("rerun with narrower args");
     expect(codeDescription).toEqual(expect.any(String));
     expect(String(codeDescription).length).toBeLessThan(620);
     expect(codeDescription).not.toContain("MCP namespace globals");

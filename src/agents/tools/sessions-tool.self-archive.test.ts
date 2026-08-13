@@ -23,6 +23,7 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -79,6 +80,7 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -141,6 +143,7 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -198,6 +201,7 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -268,6 +272,7 @@ describe("sessions tool self-archive", () => {
       });
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -336,6 +341,7 @@ describe("sessions tool self-archive", () => {
       });
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -386,6 +392,7 @@ describe("sessions tool self-archive", () => {
         .mockResolvedValue({ ok: true });
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config: { session: { store: storePath } },
         callGateway: callGateway as never,
       });
@@ -445,6 +452,7 @@ describe("sessions tool self-archive", () => {
         });
         const tool = createSessionsTool({
           agentSessionKey: sessionKey,
+          agentSessionId: sessionId,
           config,
           callGateway: callGateway as never,
         });
@@ -495,6 +503,7 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config,
         callGateway: callGateway as never,
       });
@@ -511,6 +520,7 @@ describe("sessions tool self-archive", () => {
             method: "sessions.patch",
             params: {
               key: sessionKey,
+              expectedSessionId: sessionId,
               archived: true,
             },
           });

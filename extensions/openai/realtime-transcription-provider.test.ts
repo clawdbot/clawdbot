@@ -1060,41 +1060,4 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     ]);
     session.close();
   });
-
-  it("fails before retaining an oversized completed transcript", async () => {
-    const onError = vi.fn();
-    const onTranscript = vi.fn();
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onTranscript,
-    });
-    const socket = await connectFakeSession(session);
-
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-1",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "x".repeat(256 * 1024 + 1),
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "late transcript",
-    });
-
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit",
-      }),
-    );
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(false);
-    session.close();
-  });
 });

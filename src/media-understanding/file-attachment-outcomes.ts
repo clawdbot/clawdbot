@@ -39,7 +39,9 @@ export type FileAttachmentOutcome =
   | { kind: "extracted"; text: string; images: DocumentExtractedImage[] }
   | { kind: "rendered-to-images"; images: DocumentExtractedImage[] }
   | { kind: "no-extractable-text" }
-  | { kind: "unsupported-format"; mime?: string }
+  // localPath is set only after a root-approved cache read. The reply runtime
+  // separately decides whether its final tool surface can reveal that path.
+  | { kind: "unsupported-format"; mime?: string; localPath?: string }
   // Operator-pinned allowlist rejection: policy, not capability — the marker
   // must not claim PDF/text support the active configuration disables.
   | { kind: "policy-rejected"; mime?: string }
@@ -53,6 +55,30 @@ function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
 }
 
+// Absolute host paths from the managed media store only; bounded to a positive
+// alphabet that cannot carry prompt markup or executable shell syntax. Letters
+// and digits of any script pass so ordinary non-Latin filenames keep working.
+const MARKER_LOCAL_PATH_MAX_CHARS = 300;
+const POSIX_ABSOLUTE_PATH = /^\//;
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:\\/;
+const MARKER_PATH_SAFE = /^[\p{L}\p{M}\p{N} /\\:._-]+$/u;
+
+function markerSafeLocalPath(value?: string, allowWorkspaceRelative = false): string | undefined {
+  if (!value || value.length > MARKER_LOCAL_PATH_MAX_CHARS) {
+    return undefined;
+  }
+  const isAbsolute = POSIX_ABSOLUTE_PATH.test(value) || WINDOWS_ABSOLUTE_PATH.test(value);
+  if (
+    !isAbsolute &&
+    (!allowWorkspaceRelative ||
+      value.includes("\\") ||
+      value.split("/").some((segment) => !segment || segment === "." || segment === ".."))
+  ) {
+    return undefined;
+  }
+  return MARKER_PATH_SAFE.test(value) ? value : undefined;
+}
+
 const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([
   "unsupported-format",
   "policy-rejected",
@@ -64,7 +90,10 @@ export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
   return SKIPPED_FILE_OUTCOME_KINDS.has(outcome.kind);
 }
 
-export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): string | null {
+export function renderFileAttachmentOutcome(
+  outcome: FileAttachmentOutcome,
+  options?: { selfServeLocalPath?: string | false },
+): string | null {
   switch (outcome.kind) {
     case "extracted":
       return wrapUntrustedAttachmentContent(outcome.text);
@@ -74,9 +103,28 @@ export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): str
       return "[No extractable text]";
     case "unsupported-format": {
       const mime = markerSafeMime(outcome.mime);
-      return mime
-        ? `[Unsupported document format: ${mime}. PDF and plain-text attachments can be read.]`
-        : "[Unsupported document format. PDF and plain-text attachments can be read.]";
+      const formatClause = mime
+        ? `Unsupported document format: ${mime}.`
+        : "Unsupported document format.";
+      const localPath = markerSafeLocalPath(
+        options?.selfServeLocalPath === false
+          ? undefined
+          : (options?.selfServeLocalPath ?? outcome.localPath),
+        typeof options?.selfServeLocalPath === "string",
+      );
+      // Modern OOXML files unzip to XML; legacy OLE formats (msword, x-cfb) do
+      // not, and a wrong hint sends the agent down a dead extraction path.
+      const formatHint = outcome.mime?.startsWith("application/vnd.openxmlformats-officedocument")
+        ? " (this Office file is a zip archive containing XML)"
+        : "";
+      // Wording is deliberate: without the explicit "read it yourself, don't
+      // ask the user" directive, models punt back to the sender.
+      return localPath
+        ? [
+            `[${formatClause} The approved local file path follows as external attachment metadata. Its text is not extracted automatically. Read the file yourself with your tools before answering${formatHint}; do not ask the user to paste the contents.]`,
+            wrapUntrustedAttachmentContent(localPath),
+          ].join("")
+        : `[${formatClause} PDF and plain-text attachments can be read.]`;
     }
     case "policy-rejected": {
       const mime = markerSafeMime(outcome.mime);

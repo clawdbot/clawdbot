@@ -33,7 +33,10 @@ vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 vi.mock("../mcp/channel-server.js", () => ({ serveOpenClawChannelMcp: vi.fn() }));
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: vi.fn(),
+  clearMcpOAuthRequesters: vi.fn(),
+  clearMcpOAuthServer: vi.fn(),
   completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
+  countMcpOAuthPrincipals: vi.fn(() => 0),
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
   startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));
@@ -94,12 +97,7 @@ describe("mcp login loopback callback", () => {
     program = new Command().exitOverride();
     registerMcpCli(program);
     mocks.readMcpOAuthCredentialsStatus.mockResolvedValue({
-      hasTokens: false,
-      requiresAuthorization: false,
-      hasClientInformation: false,
-      hasCodeVerifier: false,
-      hasDiscoveryState: false,
-      hasLastAuthorizationUrl: false,
+      state: "unauthenticated",
     });
   });
 

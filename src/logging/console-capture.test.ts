@@ -14,7 +14,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { testApi } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,

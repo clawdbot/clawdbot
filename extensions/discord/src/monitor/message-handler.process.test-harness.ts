@@ -4,6 +4,7 @@ import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testi
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
@@ -235,6 +236,7 @@ const dispatchInboundMessage = vi.hoisted(() =>
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
+const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
 const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
@@ -270,11 +272,11 @@ export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
 export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
+export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
@@ -403,6 +405,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
   return {
     ...actual,
+    readAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
@@ -567,8 +570,7 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ testing: threadBindingTesting, createThreadBindingManager } =
-      await import("./thread-bindings.js"));
+    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage, formatDiscordReplySkip } =
       await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
@@ -585,6 +587,7 @@ export function registerDiscordProcessTestLifecycle() {
     deliverDiscordReply.mockClear();
     createDiscordDraftStream.mockClear();
     dispatchInboundMessage.mockClear();
+    readAgentRunTerminalOutcome.mockReset().mockReturnValue(undefined);
     recordInboundSession.mockClear();
     readSessionUpdatedAt.mockClear();
     getSessionEntry.mockClear();
@@ -599,7 +602,7 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    threadBindingTesting.resetThreadBindingsForTests();
+    resetThreadBindingsForTests();
   });
 
   afterEach(() => {

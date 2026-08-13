@@ -15,7 +15,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { ApplicationOverlays } from "../app/overlays.ts";
+import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
@@ -186,6 +186,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     },
     sessions: keys.map((key, index) => ({
       key,
+      sessionId: `session:${key}`,
       kind: "direct" as const,
       updatedAt: index + 1,
     })),

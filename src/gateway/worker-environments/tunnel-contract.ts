@@ -1,4 +1,6 @@
 import type { SpawnResult } from "../../process/exec.js";
+import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import type { WorkerConnectionEndpoint } from "../../worker/worker-connection-endpoint.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -72,10 +74,17 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
+type WorkerTurnLaunchRequest = {
+  descriptor: WorkerLaunchDescriptor;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
 export type WorkerTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
-  remoteSocketPath: string;
+  connectionEndpoint: WorkerConnectionEndpoint;
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;

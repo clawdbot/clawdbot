@@ -1,5 +1,9 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
@@ -18,11 +22,12 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
+  name?: string;
+  identity?: { name?: string };
 };
 
 /** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
@@ -319,13 +324,16 @@ type ConfigSnapshot = {
   };
 };
 
-export function normalizeAgentLabel(agent: {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-}) {
+export function normalizeAgentLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { name?: string } | null,
+) {
+  // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
-    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    normalizeOptionalString(hydratedIdentity?.name) ??
+    agent.id
   );
 }
 
@@ -525,13 +533,6 @@ export function resolveEffectiveModelFallbacks(
   // An agent-owned primary is strict; only an inherited primary can use
   // the global fallback chain, matching the Gateway's model routing.
   return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
-}
-
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 type ConfiguredModelOption = {

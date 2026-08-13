@@ -13,6 +13,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeTrimmedStringList,
   readStringField as readString,
@@ -231,7 +232,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: cancelled
         ? "Codex app-server approval cancelled because the run stopped."
         : `Codex app-server approval route failed: ${formatCodexDisplayText(
-            formatErrorMessage(error),
+            coerceErrorMessage(error),
           )}`,
     });
     return buildApprovalResponse(
@@ -584,7 +585,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       handled: true,
       blocked: true,
       reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
-        formatErrorMessage(error),
+        coerceErrorMessage(error),
       )}`,
       failureDisposition: "failed",
     };
@@ -1332,7 +1333,4 @@ function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): st
   return description;
 }
 
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

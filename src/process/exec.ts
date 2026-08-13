@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Exec helpers run subprocesses with normalized output, timeout, and abort handling.
 import { danger, shouldLogVerbose } from "../globals.js";
 import {
@@ -5,7 +6,6 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { runCommandWithTimeout } from "./exec-runner.js";

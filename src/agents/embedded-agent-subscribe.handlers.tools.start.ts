@@ -9,6 +9,7 @@ import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
+import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
   isMessagingToolSendAction,
@@ -23,11 +24,8 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import {
-  collectMessagingMediaUrlsFromRecord,
-  extractMessagingToolSend,
-  sanitizeToolArgs,
-} from "./embedded-agent-subscribe.tools.js";
+import { collectMessagingMediaUrlsFromRecord } from "./embedded-agent-tool-media.js";
+import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
@@ -52,6 +50,7 @@ function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
+  agentId: string | undefined,
   args: unknown,
 ) {
   try {
@@ -60,6 +59,7 @@ function buildAskUserPromptPayload(
       toolCallId,
       sessionKey,
       runId,
+      agentId,
       questions,
       timeoutSeconds,
     });
@@ -326,11 +326,22 @@ export function handleToolExecutionStart(
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      ? buildAskUserPromptPayload(
+          evt.toolCallId,
+          ctx.params.sessionKey,
+          ctx.params.runId,
+          ctx.params.agentId,
+          evt.args,
+        )
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
+      cancelAskUserPromptDelivery(
+        evt.toolCallId,
+        ctx.params.sessionKey,
+        ctx.params.runId,
+        ctx.params.agentId,
+      );
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {

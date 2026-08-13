@@ -79,6 +79,24 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     });
   });
 
+  it("strips inherited runtime loader injection before spawn", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            NODE_PATH: "/configured/node_modules",
+            DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
+          },
+        },
+        {
+          NODE_PATH: "/ambient/node_modules",
+          LD_PRELOAD: "/ambient/inject.so",
+          KEEP: "safe",
+        },
+      ),
+    }).toEqual({ KEEP: "safe" });
+  });
+
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
     const overrides = Object.create(null) as Record<string, string | undefined>;
     Object.defineProperty(overrides, "__proto__", {

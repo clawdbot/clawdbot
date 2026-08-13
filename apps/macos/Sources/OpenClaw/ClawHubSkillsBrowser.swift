@@ -66,13 +66,13 @@ struct ClawHubSkillsBrowser: View {
                                 installed: skill.version.map {
                                     SkillManagementContract.installed(
                                         self.installedSkills,
-                                        slug: skill.slug,
+                                        slug: skill.reference,
                                         version: $0)
                                 } ?? SkillManagementContract.installed(
                                     self.installedSkills,
-                                    slug: skill.slug),
-                                isBusy: self.model.reviewingSlug == skill.slug || self.model.installingSlug.map {
-                                    SkillManagementContract.sameClawHubSkill($0, skill.slug)
+                                    slug: skill.reference),
+                                isBusy: self.model.reviewingSlug == skill.reference || self.model.installingSlug.map {
+                                    SkillManagementContract.sameClawHubSkill($0, skill.reference)
                                 } == true,
                                 showsDivider: index != self.model.results.count - 1)
                             {
@@ -124,10 +124,17 @@ private struct ClawHubSkillResultRow: View {
     let showsDivider: Bool
     let onReview: () -> Void
 
+    /// Same-slug rows share a display name and often a summary, so the reference always shows:
+    /// it is the only thing that tells them apart and what review and install send back.
+    private var subtitle: String {
+        guard let summary = self.skill.summary else { return self.skill.reference }
+        return "\(summary) · \(self.skill.reference)"
+    }
+
     var body: some View {
         SettingsCardRow(
             title: .verbatim(self.skill.displayName),
-            subtitle: .verbatim(self.skill.summary ?? self.skill.slug),
+            subtitle: .verbatim(self.subtitle),
             showsDivider: self.showsDivider)
         {
             if let version = self.skill.version {
@@ -288,14 +295,14 @@ private final class ClawHubSkillsBrowserModel {
 
     func review(_ skill: ClawHubSkillSummary) async {
         guard self.reviewingSlug == nil else { return }
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.reference
         self.notice = nil
         defer { self.reviewingSlug = nil }
         do {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.slug, on: route)
+            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.reference, on: route)
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }

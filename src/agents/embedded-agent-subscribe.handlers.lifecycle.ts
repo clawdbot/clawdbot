@@ -23,7 +23,7 @@ import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";

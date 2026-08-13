@@ -1,7 +1,7 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseInboundMediaUri } from "../media/media-reference.js";
+import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -100,7 +100,11 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
       if (!Object.hasOwn(record, field)) {
         continue;
       }
-      const projected = projectChatHistoryMediaReference(record[field]);
+      // Managed inbound file paths persisted on media facts are host-local absolute
+      // paths; rewrite them to canonical `media://inbound/<id>` URIs the UI loads through
+      // the authenticated assistant-media route, instead of redacting the reference entirely.
+      const inboundUri = fact ? buildInboundMediaUriFromPath(String(record[field])) : undefined;
+      const projected = inboundUri ?? projectChatHistoryMediaReference(record[field]);
       record[field] = projected;
       if (projected === undefined) {
         delete record[field];
@@ -278,10 +282,6 @@ function projectAssistantMixedToolContent(
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
-function toFiniteNumber(x: unknown): number | undefined {
-  return asFiniteNumber(x);
-}
-
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -289,7 +289,7 @@ function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   const c = raw as Record<string, unknown>;
   const out: Record<string, number> = {};
   for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
-    const value = toFiniteNumber(c[key]);
+    const value = asFiniteNumber(c[key]);
     if (value !== undefined) {
       out[key] = value;
     }
@@ -324,7 +324,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   ];
 
   for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
+    const n = asFiniteNumber(u[k]);
     if (n !== undefined) {
       out[k] = n;
     }

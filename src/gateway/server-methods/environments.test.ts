@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -71,6 +72,14 @@ function mockContext(
       ],
     },
     workerEnvironmentService,
+    getRuntimeConfig: () => ({
+      cloudWorkers: {
+        profiles: {
+          zeta: { provider: "static-ssh", settings: {} },
+          aws: { provider: "crabbox", settings: {} },
+        },
+      },
+    }),
     ...(workerEnvironmentService
       ? {
           workerPlacementDispatchService: {
@@ -78,14 +87,6 @@ function mockContext(
             forceDestroyEnvironment,
             reconcileActive,
           },
-          getRuntimeConfig: () => ({
-            cloudWorkers: {
-              profiles: {
-                zeta: { provider: "static-ssh", settings: {} },
-                aws: { provider: "crabbox", settings: {} },
-              },
-            },
-          }),
         }
       : {}),
   };
@@ -99,6 +100,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:worker-1",
     leaseId: "lease-1",
+    sharedHost: false,
     desktop: null,
     sshEndpoint: {
       host: "worker.example.test",
@@ -130,7 +132,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
     observeDesktop: vi.fn(async ({ control }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     })),
@@ -208,6 +210,9 @@ describe("environment gateway methods", () => {
           type: "local",
           label: "Gateway local",
           status: "available",
+          platform: process.platform,
+          sessionHost: true,
+          trust: "persistent",
           capabilities: ["agent.run", "sessions", "tools", "workspace"],
         },
         {
@@ -215,6 +220,9 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Live Node",
           status: "available",
+          platform: "ios",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
         {
@@ -222,10 +230,58 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Offline Node",
           status: "unavailable",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera.snap", "screen"],
         },
       ],
     });
+  });
+
+  it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
+    const context = mockContext();
+    context.getRuntimeConfig = () =>
+      ({
+        gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+      }) as never;
+    context.nodeRegistry.listConnectedForPairingStates = () =>
+      [
+        {
+          nodeId: "node-desktop",
+          connId: "conn-desktop",
+          displayName: "Desktop Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [NODE_DESKTOP_STREAM_COMMAND],
+          connectedAtMs: 123,
+        },
+        {
+          nodeId: "node-without-command",
+          connId: "conn-plain",
+          displayName: "Plain Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [],
+          connectedAtMs: 123,
+        },
+      ] as never;
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: {},
+      respond,
+      context,
+    } as never);
+    const environments = respond.mock.calls[0]?.[1].environments as Array<{
+      id: string;
+      desktop?: boolean;
+    }>;
+    expect(environments.find((entry) => entry.id === "node:node-desktop")?.desktop).toBe(true);
+    expect(
+      environments.find((entry) => entry.id === "node:node-without-command")?.desktop,
+    ).toBeUndefined();
+    expect(environments.find((entry) => entry.id === "node:node-offline")?.desktop).toBeUndefined();
   });
 
   it("appends worker metadata with stable sessions and elapsed times", async () => {
@@ -254,6 +310,7 @@ describe("environment gateway methods", () => {
           id: "worker-1",
           type: "worker",
           status: "available",
+          trust: "disposable",
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
@@ -283,6 +340,18 @@ describe("environment gateway methods", () => {
     ["orphaned", "error"],
   ] as const)("maps worker state %s to %s", (state, status) => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
+  });
+
+  it("projects trust from recorded worker isolation without guessing unknown leases", () => {
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
+      "persistent",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: false }), NOW).trust).toBe(
+      "disposable",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: null }), NOW)).not.toHaveProperty(
+      "trust",
+    );
   });
 
   it("projects recorded errors only for terminal error states", () => {
@@ -324,6 +393,9 @@ describe("environment gateway methods", () => {
       type: "node",
       label: "Live Node",
       status: "available",
+      platform: "ios",
+      sessionHost: false,
+      trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
   });
@@ -341,6 +413,7 @@ describe("environment gateway methods", () => {
     expect(payload).toMatchObject({
       id: "worker-1",
       status: "available",
+      trust: "disposable",
       worker: { state: "attached", ageMs: 9_000 },
     });
     expect(get).toHaveBeenCalledWith("worker-1");
@@ -474,7 +547,7 @@ describe("environment gateway methods", () => {
   it("starts desktop observation with explicit and default control modes", async () => {
     const observeDesktop = vi.fn(async ({ control }: { control: boolean }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     }));
@@ -493,7 +566,7 @@ describe("environment gateway methods", () => {
       true,
       {
         transport: "rfb",
-        wsPath: "/worker-desktop/observe?token=abc",
+        wsPath: "/desktop/observe?token=abc",
         expiresAtMs: 70_000,
         control: true,
       },

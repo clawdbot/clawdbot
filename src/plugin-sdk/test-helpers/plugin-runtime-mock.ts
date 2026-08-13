@@ -1,4 +1,5 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
@@ -56,10 +57,6 @@ type ChannelStructuredContextResolution =
   | { kind: "absent" }
   | { kind: "present"; entries: ChannelStructuredContextEntries };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const [key, overrideValue] of Object.entries(overrides as Record<string, unknown>)) {
@@ -67,7 +64,7 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
       continue;
     }
     const baseValue = result[key];
-    if (isObject(baseValue) && isObject(overrideValue)) {
+    if (isRecord(baseValue) && isRecord(overrideValue)) {
       result[key] = mergeDeep(baseValue, overrideValue);
       continue;
     }

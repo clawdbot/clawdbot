@@ -102,6 +102,37 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
   </Step>
 </Steps>
 
+### Headless bootstrap
+
+For an unattended container host, put provider, Gateway, and channel credentials in the Compose `.env` file so both the one-shot bootstrap container and the long-running Gateway receive the same values:
+
+```bash
+OPENAI_API_KEY=<provider-key>
+OPENCLAW_GATEWAY_TOKEN=<gateway-token>
+TELEGRAM_BOT_TOKEN=<bot-token>
+```
+
+Run onboarding and channel provisioning without a pseudo-TTY, then start the Gateway:
+
+```bash
+docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js onboard --non-interactive --accept-risk --skip-health \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --gateway-auth token \
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+  --skip-channels \
+  --no-install-daemon
+docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js channels add --channel telegram --use-env
+docker compose up -d openclaw-gateway
+```
+
+The channel command fails before changing config if a plugin-declared environment variable is missing. Keep `TELEGRAM_BOT_TOKEN` in `.env` after bootstrap: `--use-env` leaves credential lookup to the environment without copying the token into `openclaw.json`, and the running Gateway needs the same variable. When channel config changes after startup, the Gateway's config watcher hot-reloads the affected channel automatically.
+
+See [`openclaw channels`](/cli/channels) for credential-flag alternatives and other channel plugins.
+
 ### Manual flow
 
 ```bash
@@ -280,10 +311,12 @@ Container probe endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
-curl -fsS http://127.0.0.1:18789/readyz     # readiness
+curl -fsS http://127.0.0.1:18789/startupz  # startup and traffic admission
+curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
+Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

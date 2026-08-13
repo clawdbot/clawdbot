@@ -1,12 +1,19 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeEnvState,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { NodeRegistry } from "./node-registry.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
+import {
+  createDeviceWorkerProvider,
+  DEVICE_WORKER_PROVIDER_ID,
+} from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
@@ -36,6 +43,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
+  bindDeviceNodeRegistry?: (nodeRegistry: Pick<NodeRegistry, "listCurrentConnected">) => void;
 };
 
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
@@ -58,11 +66,18 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
     records.flatMap((record) =>
       record.state === "destroyed" || record.state === "failed" || record.state === "orphaned"
         ? []
-        : [record.providerId],
+        : record.providerId === DEVICE_WORKER_PROVIDER_ID
+          ? []
+          : [record.providerId],
     ),
   );
   const listDurableProviderIds = () =>
-    uniqueStrings(store.listForReconcile().map((record) => record.providerId));
+    uniqueStrings(
+      store
+        .listForReconcile()
+        .filter((record) => record.providerId !== DEVICE_WORKER_PROVIDER_ID)
+        .map((record) => record.providerId),
+    );
   return {
     durableProviderIds,
     listDurableProviderIds,
@@ -77,9 +92,15 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
   resolveWorkerGateway: () => WorkerGatewayEndpoint;
+  desktopSessionRegistry: DesktopSessionRegistry;
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
 }): Promise<GatewayWorkerEnvironmentRuntime> {
+  let deviceNodeRegistry: Pick<NodeRegistry, "listCurrentConnected"> | undefined;
+  const deviceProvider = createDeviceWorkerProvider({
+    getPairedDevice,
+    listConnectedNodes: async () => (await deviceNodeRegistry?.listCurrentConnected()) ?? [],
+  });
   const [
     { createWorkerEnvironmentService },
     { createWorkerLiveEventReceiver },
@@ -144,7 +165,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
     ),
   });
-  const workerTunnelManager = createWorkerTunnelManager();
+  const workerTunnelManager = createWorkerTunnelManager({
+    desktopSessionRegistry: params.desktopSessionRegistry,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
@@ -155,7 +178,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     // Plugin reload replaces the registry object; resolve against the live binding.
-    resolveProvider: (providerId) => resolveWorkerProvider(params.getPluginRegistry(), providerId),
+    resolveProvider: (providerId) =>
+      providerId === DEVICE_WORKER_PROVIDER_ID
+        ? deviceProvider
+        : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
     tunnelManager: workerTunnelManager,
     resolveWorkerGateway: params.resolveWorkerGateway,
@@ -216,6 +242,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerTunnelManager,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
+    },
+    bindDeviceNodeRegistry: (nodeRegistry) => {
+      deviceNodeRegistry = nodeRegistry;
     },
   };
 }

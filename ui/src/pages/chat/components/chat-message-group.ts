@@ -8,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -55,6 +55,8 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
+type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
+
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -94,6 +96,10 @@ type RenderMessageGroupOptions = {
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
+  resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+  onResolveReply?: (replyToId: string) => void;
+  onOpenReply?: (replyToId: string) => void;
+  replyNavigationId?: string | null;
   onRewind?: () => void;
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
@@ -119,11 +125,8 @@ function buildGroupedMessageRenderOptions(
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
     assistantMessageDisclosure = {
-      expanded: expansion?.status === "loaded" && expansion.expanded,
+      expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
-      loading: expansion?.status === "loading",
-      error: expansion?.status === "error",
-      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
     };
   }
   return {
@@ -140,7 +143,6 @@ function buildGroupedMessageRenderOptions(
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
     runActive: opts.runActive,
-    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
@@ -161,6 +163,10 @@ function buildGroupedMessageRenderOptions(
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    resolveReplyPreview: opts.resolveReplyPreview,
+    onResolveReply: opts.onResolveReply,
+    onOpenReply: opts.onOpenReply,
+    replyNavigationId: opts.replyNavigationId,
   };
 }
 
@@ -224,11 +230,6 @@ export function renderActivityGroup(
   const latestCards = latestGroup.messages.flatMap((item) =>
     extractToolCardsCached(item.message, item.key),
   );
-  const toolCount =
-    cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  // Aggregate chrome follows the latest group; older failures stay visible
-  // in the settled summary and expanded child rows.
-  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -236,16 +237,10 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(
-        cards.map((card) => ({
-          name: card.name,
-          args: card.args,
-          isError: isToolCardError(card),
-        })),
-      );
+    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const showAvatarGutter = opts.showAvatarGutter !== false;
   const assistantName = opts.assistantName ?? "Assistant";
 
@@ -275,27 +270,17 @@ export function renderActivityGroup(
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-activity-group__summary"
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
-            aria-label=${hasError
-              ? t(
-                  toolCount === 1
-                    ? "chat.toolCards.group.activityErrorOne"
-                    : "chat.toolCards.group.activityErrorMany",
-                  { count: String(toolCount) },
-                )
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
               }
             }}
           >
-            <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
+            <span class="chat-activity-group__icon">${icons.activity}</span>
             <span class="chat-activity-group__label" title=${groupSummaryLabel}
               >${groupSummaryLabel}</span
             >
@@ -329,11 +314,11 @@ export function renderActivityGroup(
   `;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+export function resolveMessageGroupSenderLabel(
+  group: MessageGroup,
+  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
+): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -342,20 +327,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const userLabel = group.senderLabel?.trim();
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
   const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
-  const who =
-    normalizedRole === "user"
-      ? isCurrentUser
-        ? resolvedUserName
-        : (userLabel ?? resolvedUserName)
-      : normalizedRole === "assistant"
-        ? (userLabel ?? assistantName)
-        : normalizedRole === "tool"
-          ? "Tool"
-          : isWorkspaceConflict
-            ? t("chat.workspaceConflict.eventSender")
-            : normalizedRole;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+  return normalizedRole === "user"
+    ? isCurrentUser
+      ? resolvedUserName
+      : (userLabel ?? resolvedUserName)
+    : normalizedRole === "assistant"
+      ? (userLabel ?? assistantName)
+      : normalizedRole === "tool"
+        ? "Tool"
+        : group.messages.every((item) =>
+              Boolean(workspaceResultConflictFromTranscript(item.message)),
+            )
+          ? t("chat.workspaceConflict.eventSender")
+          : normalizedRole;
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const isWorkspaceConflict = group.messages.every((item) =>
+    Boolean(workspaceResultConflictFromTranscript(item.message)),
+  );
+  const assistantName = opts.assistantName ?? "Assistant";
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -366,6 +360,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? "workspace-conflict"
             : "other";
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -393,6 +389,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       senderLabel: who,
     }),
   );
+  for (const details of messageActionDetails) {
+    if (
+      details?.shouldFetchFullMessage &&
+      details.messageId &&
+      !opts.getAssistantMessageExpansion?.(details.messageId)
+    ) {
+      opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    }
+  }
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
   const hasUserFooterActions =

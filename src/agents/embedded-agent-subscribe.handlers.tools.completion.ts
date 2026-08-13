@@ -27,6 +27,11 @@ import {
   resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging-extraction.js";
+import {
   isMessagingTool,
   isMessagingToolSendAction,
   isMessagingToolTargetEvidenceAction,
@@ -73,17 +78,16 @@ import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.typ
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+} from "./embedded-agent-tool-media.js";
+import {
   capLiveExecResult,
-  extractMessagingToolSourceReplyPayload,
   extractToolErrorCode,
-  extractMessagingToolSend,
-  extractMessagingToolSendResult,
   extractToolErrorMessage,
-  isToolResultError,
   isToolResultTimedOut,
   sanitizeToolResult,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -92,6 +96,7 @@ import {
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -123,6 +128,10 @@ export async function handleToolExecutionEnd(
     if (channelView) {
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
+    }
+    const connectAction = readMcpConnectAction(result);
+    if (connectAction) {
+      ctx.state.latestMcpConnectAction = connectAction;
     }
   }
   try {

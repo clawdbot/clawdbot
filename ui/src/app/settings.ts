@@ -1,5 +1,6 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
   normalizeSidebarEntries,
@@ -8,7 +9,6 @@ import {
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import {
   normalizeSidebarSessionActivePanels,

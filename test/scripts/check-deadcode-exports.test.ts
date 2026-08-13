@@ -256,7 +256,6 @@ describe("check-deadcode-exports", () => {
         "browser-control-auth.ts!",
         "browser-config.ts!",
         "browser-doctor.ts!",
-        "browser-host-inspection.ts!",
         "browser-maintenance.ts!",
         "browser-profiles.ts!",
       ]),

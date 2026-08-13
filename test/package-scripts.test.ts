@@ -152,6 +152,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs dead-code reports fail-fast", () => {
+    expect(readPackageJson().scripts["deadcode:report"]).toBe(
+      "pnpm deadcode:full && pnpm deadcode:exports",
+    );
+  });
+
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
       "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
@@ -215,6 +221,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs shared-state ownership coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/state/openclaw-state-ownership.test.ts",
+    );
+  });
+
   it("runs mixed-case local media file URL coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/media/local-media-path.windows.test.ts",
@@ -235,6 +247,12 @@ describe("package scripts", () => {
 
   it("runs native port diagnostics coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain("src/infra/ports.test.ts");
+  });
+
+  it("runs native LAN advertisement coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/advertised-lan-host.windows.test.ts",
+    );
   });
 
   it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
@@ -315,6 +333,14 @@ describe("package scripts", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/executable-path.test.ts",
     );
+  });
+
+  it("runs node-host npm shim and PTY launcher coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/plugin-sdk/node-host.test.ts");
+    expect(script).toContain("src/process/terminal-pty.test.ts");
+    expect(script).toContain("src/tui/tui.resolve-codex-bin.test.ts");
   });
 
   it("runs Windows-only safe removal coverage in Windows CI", () => {

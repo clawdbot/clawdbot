@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeResult, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceDescriptor,
@@ -16,8 +16,7 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceOutputLimit,
-  enforceResultLimit,
+  boundOutputToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
   readPositiveInteger,
@@ -253,10 +252,19 @@ export async function runCodeModeScriptHeadless(params: {
 
     while (true) {
       output.push(...result.output);
-      enforceOutputLimit(output, config);
+      boundOutputToLimit(output, config);
       if (result.status === "completed") {
-        enforceResultLimit({ output, value: result.value, config });
-        return { status: "completed", value: result.value, output, toolCallCount };
+        const bounded = boundCodeModeResult({
+          output,
+          value: result.value,
+          maxOutputBytes: config.maxOutputBytes,
+        });
+        return {
+          status: "completed",
+          value: bounded.value,
+          output: bounded.output,
+          toolCallCount,
+        };
       }
       if (result.status === "failed") {
         return headlessFailure({
@@ -267,7 +275,7 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
 
-      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
+      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
       // Node discovery invokes the generic nodes tool for live status too;
@@ -292,6 +300,7 @@ export async function runCodeModeScriptHeadless(params: {
       pending.push(
         ...createPendingBridgeStates({
           pendingRequests: newRequests,
+          config,
           runtime,
           namespaceRuntime,
           parentToolCallId,

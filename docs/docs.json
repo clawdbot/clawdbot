@@ -1115,6 +1115,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
@@ -1857,6 +1858,7 @@
                       "cli/browser",
                       "cli/cron",
                       "cli/flows",
+                      "cli/connect",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",

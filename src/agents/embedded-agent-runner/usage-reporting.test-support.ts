@@ -87,7 +87,7 @@ describe("runEmbeddedAgent usage reporting", () => {
           expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
         ]),
       }),
-      expect.anything(),
+      expect.objectContaining({ catalogMode: "static" }),
     );
   });
 

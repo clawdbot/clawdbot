@@ -67,7 +67,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
@@ -949,6 +949,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
     expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {

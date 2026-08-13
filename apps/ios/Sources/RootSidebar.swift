@@ -807,6 +807,7 @@ struct RootSidebar: View {
             do {
                 try await self.appModel.makeChatTransport().patchSession(
                     key: session.key,
+                    expectedSessionID: archived == nil ? nil : session.sessionId,
                     label: label,
                     category: category,
                     pinned: pinned,

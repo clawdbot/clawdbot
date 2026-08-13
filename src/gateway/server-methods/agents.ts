@@ -34,11 +34,11 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveSoleAgentId,
 } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -47,6 +47,7 @@ import {
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -1028,13 +1029,25 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
-    if (agentId === resolveDefaultAgentId(cfg)) {
+    if (agentId === tryResolveSoleAgentId(cfg)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+        ),
+      );
+      return;
+    }
+    if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
+      // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
         ),
       );
       return;
@@ -1049,9 +1062,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
-        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+        if (agentId === tryResolveSoleAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" is the only configured agent`);
+        }
+        if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(lockedConfig))) {
           throw new AgentConfigPreconditionError(
-            `agent "${agentId}" is the default; reassign default first`,
+            `agent "${agentId}" owns agents.defaults.authInheritance.agentId; relocate credentials and re-point it first`,
           );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
@@ -1593,5 +1609,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

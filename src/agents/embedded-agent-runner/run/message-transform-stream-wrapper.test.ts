@@ -32,29 +32,40 @@ describe("direct provider context handoff", () => {
     );
   });
 
-  it("keeps canonical omissions while materializing only exact current runtime facts", async () => {
+  it("keeps canonical omissions while materializing persisted and current facts in order", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-video-"));
     tempDirs.push(stateDir);
     const env = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const inbound = path.join(stateDir, "media", "inbound");
     await fs.mkdir(inbound, { recursive: true });
+    await fs.writeFile(path.join(inbound, "old.mp4"), MP4);
     await fs.writeFile(path.join(inbound, "recent.mp4"), MP4);
     await fs.writeFile(path.join(inbound, "steer.mp4"), MP4);
 
     try {
       const historical = {
         role: "user" as const,
-        content: "historical",
+        content: [{ type: "text" as const, text: "historical" }, PNG, { ...PNG }],
         timestamp: 1,
         __openclaw: {
+          mediaImageBlockFactIndexes: [0, 2],
+          mediaImageLayout: {
+            slots: [
+              { kind: "inline" as const, factIndex: 0 },
+              { kind: "inline" as const, factIndex: 2 },
+            ],
+          },
           media: [
+            { kind: "image", contentType: "image/png" },
             {
               kind: "video",
-              contentType: "video/mp4",
+              contentType: "application/octet-stream",
+              sizeBytes: MP4.length,
               url: "media://inbound/old.mp4",
               hydrationSuppressed: true,
             },
+            { kind: "image", contentType: "image/png" },
           ],
         },
       };
@@ -102,10 +113,27 @@ describe("direct provider context handoff", () => {
           { kind: "image", contentType: "image/png" },
         ],
       );
-      const canonicalMessages = await hydratePromptMediaMessages([historical, recent, steer], {
-        workspaceDir: stateDir,
-        model: { input: ["text", "image"] },
-      });
+      const missingHistorical = {
+        role: "user" as const,
+        content: "missing historical",
+        timestamp: 2,
+        __openclaw: {
+          media: [
+            {
+              kind: "video",
+              contentType: "video/mp4",
+              url: "media://inbound/missing.mp4",
+            },
+          ],
+        },
+      };
+      const canonicalMessages = await hydratePromptMediaMessages(
+        [historical, missingHistorical, recent, steer],
+        {
+          workspaceDir: stateDir,
+          model: { input: ["text", "image"] },
+        },
+      );
       const context = {
         systemPrompt: "system",
         messages: canonicalMessages,
@@ -122,7 +150,7 @@ describe("direct provider context handoff", () => {
       const firstCandidate = vi.fn<StreamFn>((_model, firstContext, options) => {
         expect((options as ProviderStreamOptions)[PROVIDER_CONTEXT_HANDOFF]).toBeUndefined();
         expect(JSON.stringify(firstContext)).toContain("provider does not support native video");
-        expect(JSON.stringify(firstContext)).toContain("historical replay is not available yet");
+        expect(JSON.stringify(firstContext)).not.toContain("native historical replay");
         return createAssistantMessageEventStream();
       });
       void firstCandidate(model, context, {});
@@ -144,20 +172,26 @@ describe("direct provider context handoff", () => {
 
       expect(resolved?.messages[0]?.content).toEqual([
         { type: "text", text: "historical" },
-        { type: "text", text: "(video omitted: native historical replay is not available yet)" },
+        PNG,
+        { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
+        { ...PNG },
       ]);
       expect(resolved?.messages[1]?.content).toEqual([
+        { type: "text", text: "missing historical" },
+        { type: "text", text: "(video omitted: source unavailable)" },
+      ]);
+      expect(resolved?.messages[2]?.content).toEqual([
         { type: "text", text: "recent" },
         PNG,
         { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
         { ...PNG },
       ]);
-      expect(resolved?.messages[2]?.content).toEqual([
+      expect(resolved?.messages[3]?.content).toEqual([
         { type: "text", text: "steer" },
         { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
         { ...PNG },
       ]);
-      for (const message of resolved?.messages.slice(1) ?? []) {
+      for (const message of resolved?.messages.slice(2) ?? []) {
         expect(message).not.toHaveProperty("__openclaw");
         expect(Object.getOwnPropertySymbols(message)).toEqual([]);
       }
@@ -171,7 +205,7 @@ describe("direct provider context handoff", () => {
     }
   });
 
-  it("rejects abort after a bounded sandbox read instead of dispatching an omission", async () => {
+  it("rejects abort after a bounded sandbox read before later dispatch", async () => {
     let finishRead: ((value: Buffer) => void) | undefined;
     let markReadStarted: (() => void) | undefined;
     const readStarted = new Promise<void>((resolve) => {
@@ -190,24 +224,33 @@ describe("direct provider context handoff", () => {
       }),
     } as unknown as SandboxFsBridge;
     const controller = new AbortController();
-    const current = attachRuntimePromptMediaFacts(
-      { role: "user" as const, content: "inspect", timestamp: 1 },
-      [{ kind: "video", contentType: "video/mp4", path: "/workspace/clip.mp4" }],
-    );
+    const current = {
+      role: "user" as const,
+      content: "inspect",
+      timestamp: 1,
+      __openclaw: {
+        media: [{ kind: "video", contentType: "video/mp4", path: "/workspace/clip.mp4" }],
+      },
+    };
     const resolving = materializeProviderContext({
       context: { systemPrompt: "system", messages: [current], tools: [] },
       signal: controller.signal,
       workspaceDir: "/workspace",
       sandbox: { root: "/workspace", bridge },
     });
+    let dispatched = false;
+    const dispatching = resolving.then(() => {
+      dispatched = true;
+    });
     await readStarted;
     controller.abort(new Error("test abort"));
     finishRead?.(MP4);
-    await expect(resolving).rejects.toThrow("test abort");
+    await expect(dispatching).rejects.toThrow("test abort");
+    expect(dispatched).toBe(false);
   });
 
-  it("rejects a known over-budget current video before reading it", async () => {
-    const readFile = vi.fn();
+  it("applies one aggregate byte budget to persisted videos before reading", async () => {
+    const readFile = vi.fn(async () => MP4);
     const bridge = {
       resolvePath: ({ filePath }: { filePath: string }) => ({
         containerPath: filePath,
@@ -215,26 +258,87 @@ describe("direct provider context handoff", () => {
       }),
       readFile,
     } as unknown as SandboxFsBridge;
-    const current = attachRuntimePromptMediaFacts(
-      { role: "user" as const, content: "inspect", timestamp: 1 },
-      [
-        {
-          kind: "video",
-          contentType: "video/mp4",
-          path: "/workspace/clip.mp4",
-          sizeBytes: MAX_VIDEO_BYTES + 1,
-        },
-      ],
-    );
+    const current = {
+      role: "user" as const,
+      content: "inspect",
+      timestamp: 1,
+      __openclaw: {
+        media: [
+          {
+            kind: "video",
+            contentType: "video/mp4",
+            path: "/workspace/first.mp4",
+            sizeBytes: MP4.length,
+          },
+          {
+            kind: "video",
+            contentType: "video/mp4",
+            path: "/workspace/second.mp4",
+            sizeBytes: MAX_VIDEO_BYTES,
+          },
+        ],
+      },
+    };
     const resolved = await materializeProviderContext({
       context: { systemPrompt: "system", messages: [current], tools: [] },
       workspaceDir: "/workspace",
       sandbox: { root: "/workspace", bridge },
     });
-    expect(resolved.messages[0]?.content).toContainEqual({
-      type: "text",
-      text: "(video omitted: native video byte limit exceeded)",
-    });
+    expect(resolved.messages[0]?.content).toEqual([
+      { type: "text", text: "inspect" },
+      { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
+      { type: "text", text: "(video omitted: native video byte limit exceeded)" },
+    ]);
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("does no I/O for a nonconsumer and reloads each opted-in physical call", async () => {
+    const readFile = vi.fn(async () => MP4);
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        containerPath: filePath,
+        relativePath: filePath.replace(/^\//, ""),
+      }),
+      readFile,
+    } as unknown as SandboxFsBridge;
+    const historical = {
+      role: "user" as const,
+      content: "inspect",
+      timestamp: 1,
+      __openclaw: {
+        media: [{ kind: "video", contentType: "video/mp4", path: "/workspace/clip.mp4" }],
+      },
+    };
+    const context = { systemPrompt: "system", messages: [historical], tools: [] };
+    const model = { id: "test", provider: "test", api: "test", input: ["text", "image"] };
+    const nonconsumer = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    void wrapStreamFnWithMessageTransform(nonconsumer, (messages) => messages)(
+      model as Parameters<StreamFn>[0],
+      context,
+      {},
+    );
     expect(readFile).not.toHaveBeenCalled();
+
+    const consume = async () => {
+      let resolved: Promise<ProviderContext> | undefined;
+      const consumer = vi.fn<StreamFn>((_model, canonical, options) => {
+        resolved = resolveProviderContext(canonical, options);
+        return createAssistantMessageEventStream();
+      });
+      void wrapStreamFnWithMessageTransform(
+        consumer,
+        (messages) => messages,
+        (input) =>
+          materializeProviderContext({
+            ...input,
+            workspaceDir: "/workspace",
+            sandbox: { root: "/workspace", bridge },
+          }),
+      )(model as Parameters<StreamFn>[0], context, {});
+      await resolved;
+    };
+    await consume();
+    await consume();
+    expect(readFile).toHaveBeenCalledTimes(2);
   });
 });

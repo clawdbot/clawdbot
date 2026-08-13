@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
-import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
+import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,

@@ -20,6 +20,10 @@ import {
 } from "./chat-pane-shared.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import {
+  readSubagentTranscript,
+  type SubagentDetailHost,
+} from "./components/chat-subagent-detail-state.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
   it("expires abandoned eviction payload ownership", () => {
@@ -192,8 +196,14 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "markdown", content: "transient details" };
+    state.sidebarContent = { kind: "subagent", taskId: "task-live" };
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
+    const detailHost = state as unknown as SubagentDetailHost;
+    readSubagentTranscript(detailHost, {
+      taskId: "task-live",
+      sessionKey: "agent:main:subagent:task-live",
+    });
+    expect(detailHost.subagentDetailState).toBeDefined();
     pane.presentationId = "p1:visible";
     const announcement = document.createElement("span");
     announcement.className = "chat-transcript-announcement";
@@ -204,6 +214,9 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
+    // The wiped detail slot can no longer reset the loader itself; retirement
+    // must stop its timer/fetch loop so hidden panes stop reading history.
+    expect(detailHost.subagentDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 

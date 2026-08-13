@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 internal sealed class ChatTimelineItem {
@@ -49,7 +50,26 @@ internal sealed class ChatTimelineItem {
     val recap: TurnRecap,
   ) : ChatTimelineItem()
 
+  data class SystemNotice(
+    val key: String,
+    val label: String,
+    val body: String,
+  ) : ChatTimelineItem()
+
+  data class SystemDivider(
+    val key: String,
+    val kind: SystemDividerKind,
+    val label: String,
+    val metric: String? = null,
+    val secondary: String? = null,
+  ) : ChatTimelineItem()
+
   object Thinking : ChatTimelineItem()
+}
+
+internal enum class SystemDividerKind {
+  Compaction,
+  Reset,
 }
 
 internal data class ChatTimeline(
@@ -91,7 +111,9 @@ internal fun buildChatTimeline(
         )
       }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      messages.asReversed().forEach { message -> add(ChatTimelineItem.Message(message)) }
+      for (index in messages.indices.reversed()) {
+        classifyTranscriptMessage(messages[index], index)?.let(::add)
+      }
     }
   if (items.isEmpty()) {
     return ChatTimeline(
@@ -330,9 +352,76 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.SubagentActivity -> "subagent-activity"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
     is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
+    is ChatTimelineItem.SystemNotice -> item.key
+    is ChatTimelineItem.SystemDivider -> item.key
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }
+
+private fun classifyTranscriptMessage(
+  message: ChatMessage,
+  index: Int,
+): ChatTimelineItem? {
+  message.transcriptMarker?.let { marker ->
+    val keySuffix = marker.id ?: "${message.timestampMs ?: "missing"}:$index"
+    return when (marker.kind) {
+      "compaction" -> {
+        val before = marker.tokensBefore
+        val after = marker.tokensAfter
+        val saved =
+          if (before != null && before.isFinite() && after != null && after.isFinite() && before > after) {
+            (before - after).toLong()
+          } else {
+            null
+          }
+        ChatTimelineItem.SystemDivider(
+          key = "divider:compaction:$keySuffix",
+          kind = SystemDividerKind.Compaction,
+          label = nativeString("Compacted history"),
+          metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
+        )
+      }
+      "reset" ->
+        ChatTimelineItem.SystemDivider(
+          key = "divider:reset:$keySuffix",
+          kind = SystemDividerKind.Reset,
+          label = nativeString("Session reset"),
+          secondary = nativeString("The earlier conversation was cleared."),
+        )
+      else -> null
+    }
+  }
+
+  val provenance = message.provenance
+  if (message.role == "user" && provenance?.kind == "internal_system") {
+    val rawBody = chatMessagePlainText(message.content).removePrefix("[System] ")
+    val label: String
+    val body: String
+    when (provenance.sourceTool) {
+      "main_session_restart_recovery" -> {
+        label = nativeString("System · restart recovery")
+        body = nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
+      }
+      "restart-sentinel" -> {
+        label = nativeString("System · gateway restarted")
+        body = rawBody
+      }
+      else -> {
+        label = nativeString("System")
+        body = rawBody
+      }
+    }
+    if (body.isBlank()) return null
+    val keySuffix = message.entryId ?: message.idempotencyKey ?: "${message.timestampMs ?: "missing"}:$index"
+    return ChatTimelineItem.SystemNotice(
+      key = "system-notice:$keySuffix",
+      label = label,
+      body = body,
+    )
+  }
+
+  return ChatTimelineItem.Message(message)
+}
 
 internal data class VisibleSubagentActivities(
   val activities: List<ChatSubagentActivity>,

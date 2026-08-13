@@ -24,7 +24,7 @@ import {
   capLiveExecResult,
   sanitizeToolResult,
   truncateLiveExecOutput,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 

@@ -16,11 +16,12 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import {
   readUtilityModelSetting,
   resolveUtilityModelRefForAgent,
 } from "../../agents/utility-model.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
@@ -34,11 +35,13 @@ import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -62,17 +65,20 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const utilitySetting = readUtilityModelSetting(config, defaultAgentId);
-  const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: defaultAgentId });
-  const defaultAgentUtilityModel =
-    utilitySetting.kind === "disabled"
-      ? ({ status: "disabled" } as const)
-      : utilitySetting.kind === "explicit"
-        ? ({ status: "configured", model: utilitySetting.modelRef } as const)
-        : utilityModel
-          ? ({ status: "auto", model: utilityModel } as const)
-          : ({ status: "unavailable" } as const);
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const defaultAgentUtilityModel = soleAgentId
+    ? (() => {
+        const utilitySetting = readUtilityModelSetting(config, soleAgentId);
+        const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: soleAgentId });
+        return utilitySetting.kind === "disabled"
+          ? ({ status: "disabled" } as const)
+          : utilitySetting.kind === "explicit"
+            ? ({ status: "configured", model: utilitySetting.modelRef } as const)
+            : utilityModel
+              ? ({ status: "auto", model: utilityModel } as const)
+              : ({ status: "unavailable" } as const);
+      })()
+    : ({ status: "unavailable" } as const);
 
   return {
     machineName: await getMachineDisplayName(),
@@ -157,6 +163,14 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
+    const requestedOwner = requestedSessionKey
+      ? resolveRequestedSessionAgentId(cfg, requestedSessionKey)
+      : undefined;
+    if (requestedOwner && !requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
     const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
     const wake = params.wake === true;
     const isNodePresenceLine = text.startsWith("Node:");
@@ -169,8 +183,10 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     if (wake && requestedSessionKey) {
-      const targetAgentId = normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey));
-      const configuredAgentIds = listAgentIds(context.getRuntimeConfig()).map(normalizeAgentId);
+      const targetAgentId = normalizeAgentId(
+        requestedOwner?.agentId ?? resolveAgentIdFromSessionKey(requestedSessionKey),
+      );
+      const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
       if (!configuredAgentIds.includes(targetAgentId)) {
         respond(
           false,
@@ -278,14 +294,24 @@ export const systemHandlers: GatewayRequestHandlers = {
         }
         const deltaText = parts.join(" · ");
         if (deltaText) {
-          enqueueSystemEvent(deltaText, {
+          const eventOptions = {
             sessionKey,
             contextKey: presenceUpdate.key,
-          });
+          };
+          enqueueSystemEvent(
+            deltaText,
+            requestedOwner
+              ? withSystemEventOwner(eventOptions, requestedOwner.agentId)
+              : eventOptions,
+          );
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      const eventOptions = { sessionKey };
+      enqueueSystemEvent(
+        text,
+        requestedOwner ? withSystemEventOwner(eventOptions, requestedOwner.agentId) : eventOptions,
+      );
       if (wake) {
         // Targeted admin events may need a proactive response. Carry the exact
         // session through the wake so its delivery context, not main, wins.

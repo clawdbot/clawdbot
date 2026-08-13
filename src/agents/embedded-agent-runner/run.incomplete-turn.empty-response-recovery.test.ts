@@ -134,6 +134,48 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("empty response detected");
   });
 
+  it("continues after an OpenAI Responses compaction-only incomplete turn", async () => {
+    const checkpoint = makeLastAssistant({
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      stopReason: "length",
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        data: "opaque-checkpoint",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+      },
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        currentAttemptAssistant: checkpoint,
+        lastAssistant: checkpoint,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer after compaction."],
+        lastAssistant: makeLastAssistant({
+          content: [{ type: "text", text: "Visible answer after compaction." }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent(
+      makeRunParams("run-provider-compaction-continuation", {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    );
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectWarnMessageWith("compaction interrupted visible final answer");
+  });
+
   it("retries empty Anthropic-compatible stop turns even when the provider is not Kimi", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({

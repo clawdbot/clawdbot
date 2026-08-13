@@ -12,6 +12,10 @@ import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import type { RecordInboundSession } from "../session.types.js";
+import {
+  readAgentRunTerminalOutcome,
+  recordAgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
 import { hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
 import type { ChannelDeliveryInfo, ChannelTurnResult } from "./types.js";
@@ -495,7 +499,10 @@ describe("channel turn delivery", () => {
     dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
       await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
       await params.dispatcherOptions.deliver({ text: "cancel me" }, { kind: "final" });
-      return { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } };
+      return recordAgentRunTerminalOutcome(
+        { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } },
+        "failed",
+      );
     });
 
     const result = await dispatchRoutedChannelTurn({
@@ -515,6 +522,7 @@ describe("channel turn delivery", () => {
       counts: { tool: 0, block: 1, final: 0 },
     });
     expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(true);
+    expect(readAgentRunTerminalOutcome(result.dispatchResult)).toBe("failed");
   });
 
   it("delegates routed hybrid delivery to the provider message hook owner", async () => {

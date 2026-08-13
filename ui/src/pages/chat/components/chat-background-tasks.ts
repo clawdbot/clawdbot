@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { t } from "../../../i18n/index.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import {
   applyTaskEvent,
   isActiveTask,
@@ -27,6 +27,7 @@ import type {
   BackgroundTasksRailView,
 } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
+import { observeSubagentTaskEvent } from "./chat-subagent-detail-state.ts";
 
 type BackgroundTaskLoadEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
 
@@ -78,9 +79,9 @@ export type BackgroundTasksHost = {
   requestUpdate?: () => void;
 };
 
-// Bounded like the Tasks page: active tasks get their own query because the
-// ledger pages newest-first and long-running work can hide behind newer
-// terminal records on the first page.
+// The chat rail stays bounded to its session while the full Tasks page drains
+// every active page. A separate active query still keeps long-running work
+// from hiding behind newer terminal records here.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
@@ -255,10 +256,10 @@ function loadBackgroundTasks(
         }),
         client.request("tasks.list", { sessionKey, limit: RECENT_TASKS_LIMIT }),
       ]);
-      const active = normalizeTasksListResult(activePayload)?.map((task) =>
+      const active = normalizeTasksListResult(activePayload)?.tasks.map((task) =>
         prepareTaskSnapshot(state, task),
       );
-      const recent = normalizeTasksListResult(recentPayload)?.map((task) =>
+      const recent = normalizeTasksListResult(recentPayload)?.tasks.map((task) =>
         prepareTaskSnapshot(state, task),
       );
       if (!active || !recent) {
@@ -381,6 +382,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   ) {
     return;
   }
+  observeSubagentTaskEvent(host, normalizedEvent);
   const event =
     normalizedEvent.action === "upserted"
       ? {
@@ -680,7 +682,10 @@ function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { narrowLayout?: boolean } = {},
+  opts: {
+    narrowLayout?: boolean;
+    onOpenSubagentDetail?: (task: TaskSummary) => void;
+  } = {},
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -733,6 +738,8 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
+    onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
+    onOpenSubagentDetail: opts.onOpenSubagentDetail,
     onSelectTask: (task) => selectBackgroundTaskDetail(host, state, task),
     onBack: () => showPreviousBackgroundTaskView(host, state),
     onOpenTranscript: (task, returnTo) => openBackgroundTaskTranscript(host, state, task, returnTo),

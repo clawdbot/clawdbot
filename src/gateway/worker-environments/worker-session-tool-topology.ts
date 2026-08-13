@@ -1,4 +1,4 @@
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 
@@ -14,7 +14,7 @@ export type WorkerSessionToolSource = {
     ownerEpoch: number;
     runId: string;
   };
-  entry: NonNullable<ReturnType<typeof loadSessionEntryReadOnly>["entry"]>;
+  entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
 };
 
 export type WorkerSessionToolTarget = {
@@ -54,7 +54,9 @@ export function resolveWorkerSessionToolSource(params: {
   ) {
     throw new Error("Worker source session placement changed");
   }
-  const loaded = loadSessionEntryReadOnly(placement.sessionKey, { agentId: placement.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(placement.sessionKey, {
+    agentId: placement.agentId,
+  });
   if (
     loaded.canonicalKey !== placement.sessionKey ||
     loaded.entry?.sessionId !== identity.sessionId ||
@@ -83,7 +85,7 @@ export function resolveWorkerSessionToolTarget(params: {
   requestedSessionKey: string;
   placements: WorkerSessionPlacementStore;
 }): WorkerSessionToolTarget {
-  const loaded = loadSessionEntryReadOnly(params.requestedSessionKey);
+  const loaded = loadGatewaySessionEntryReadOnly(params.requestedSessionKey);
   const entry = loaded.entry;
   const targetSessionId = entry?.sessionId;
   if (
@@ -111,7 +113,7 @@ export function resolveWorkerSessionToolTarget(params: {
   );
   const parent =
     sharedParentIncarnation && sourceParent && sourceParentId
-      ? loadSessionEntryReadOnly(sourceParent)
+      ? loadGatewaySessionEntryReadOnly(sourceParent)
       : undefined;
   const siblingToSibling = Boolean(
     parent &&
@@ -147,7 +149,7 @@ export function assertWorkerSessionToolChild(params: {
   sourceSessionId: string;
   targetAgentId: string;
 }): void {
-  const loaded = loadSessionEntryReadOnly(params.childSessionKey, {
+  const loaded = loadGatewaySessionEntryReadOnly(params.childSessionKey, {
     agentId: params.targetAgentId,
   });
   const parent =

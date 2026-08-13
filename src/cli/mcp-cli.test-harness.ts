@@ -23,8 +23,11 @@ const mocks = vi.hoisted(() => {
     runtime,
     serveOpenClawChannelMcp: vi.fn(),
     clearMcpOAuthCredentials: vi.fn(),
+    clearMcpOAuthRequesters: vi.fn(),
+    clearMcpOAuthServer: vi.fn(),
     completeMcpOAuthAuthorization: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
+    countMcpOAuthPrincipals: vi.fn(),
     startMcpOAuthAuthorization: vi.fn(),
     createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
@@ -36,6 +39,7 @@ export const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 export const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
 export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization;
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
+export const countMcpOAuthPrincipals = mocks.countMcpOAuthPrincipals;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
@@ -47,8 +51,11 @@ vi.mock("../mcp/channel-server.js", () => ({
 
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: mocks.clearMcpOAuthCredentials,
+  clearMcpOAuthRequesters: mocks.clearMcpOAuthRequesters,
+  clearMcpOAuthServer: mocks.clearMcpOAuthServer,
   completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
+  countMcpOAuthPrincipals: mocks.countMcpOAuthPrincipals,
   startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));
 
@@ -100,13 +107,9 @@ export function resetMcpCliTestState(): void {
   vi.clearAllMocks();
   mocks.createSessionMcpRuntimeOverride = undefined;
   readMcpOAuthCredentialsStatus.mockResolvedValue({
-    hasTokens: false,
-    requiresAuthorization: false,
-    hasClientInformation: false,
-    hasCodeVerifier: false,
-    hasDiscoveryState: false,
-    hasLastAuthorizationUrl: false,
+    state: "unauthenticated",
   });
+  countMcpOAuthPrincipals.mockReturnValue(0);
 }
 
 export async function cleanupMcpCliTestState(): Promise<void> {

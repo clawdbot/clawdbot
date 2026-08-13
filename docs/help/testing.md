@@ -781,10 +781,10 @@ Native dependency policy:
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
   - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
-  - Uses adaptive workers (CI: up to 2, local: 1 by default).
+  - Uses one worker by default to keep non-isolated gateway state deterministic.
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
-  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `OPENCLAW_E2E_WORKERS=<n>` to opt into parallel workers (capped at 16).
   - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior

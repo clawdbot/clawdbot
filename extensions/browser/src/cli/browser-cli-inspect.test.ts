@@ -1,4 +1,8 @@
 // Browser tests cover browser cli inspect plugin behavior.
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -240,5 +244,34 @@ describe("browser cli snapshot defaults", () => {
     const body = (params as { body?: Record<string, unknown> } | undefined)?.body;
     expect(body?.targetId).toBe("tab-1");
     expect(body?.labels).toBe(true);
+  });
+
+  it.each([
+    { label: "AI", args: [] },
+    { label: "ARIA", args: ["--format", "aria"] },
+  ])("keeps an existing $label snapshot when publication fails", async ({ args }) => {
+    const tempDir = fsSync.mkdtempSync(path.join(tmpdir(), "openclaw-browser-snapshot-"));
+    try {
+      const outputPath = path.join(tempDir, "snapshot.txt");
+      fsSync.writeFileSync(outputPath, "previous snapshot\n");
+      const priorBytes = fsSync.readFileSync(outputPath);
+
+      const writeSpy = vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file) => {
+        expect(typeof file).toBe("string");
+        fsSync.writeFileSync(file as string, "partial replacement");
+        throw new Error("injected snapshot write failure");
+      });
+      try {
+        await expect(runSnapshot([...args, "--out", outputPath])).rejects.toThrow("__exit__:1");
+      } finally {
+        writeSpy.mockRestore();
+      }
+
+      expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("injected snapshot write failure");
+      expect(fsSync.readFileSync(outputPath)).toEqual(priorBytes);
+      expect(fsSync.readdirSync(tempDir)).toEqual(["snapshot.txt"]);
+    } finally {
+      fsSync.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

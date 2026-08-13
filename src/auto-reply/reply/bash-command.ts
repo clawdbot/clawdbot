@@ -192,6 +192,7 @@ export async function handleBashChatCommand(params: {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
       sessionKey: resolveRuntimePolicySessionKey({
+        agentId,
         cfg: params.cfg,
         ctx: params.ctx,
         sessionKey: params.sessionKey,

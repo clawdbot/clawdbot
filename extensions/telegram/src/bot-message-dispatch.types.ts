@@ -246,6 +246,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
     queuedFinal: boolean;
+    agentRunFailed?: boolean;
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;

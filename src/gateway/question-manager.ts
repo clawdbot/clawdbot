@@ -1,7 +1,10 @@
 // Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   Question,
   QuestionAnswers,
@@ -10,7 +13,6 @@ import type {
   QuestionResolveResult,
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;

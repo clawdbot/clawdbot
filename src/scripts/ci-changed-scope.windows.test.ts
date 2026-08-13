@@ -74,6 +74,19 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes LAN advertisement and its native PowerShell proof to Windows", () => {
+    for (const lanPath of [
+      "src/infra/advertised-lan-host.ts",
+      "src/infra/advertised-lan-host.test.ts",
+      "src/infra/advertised-lan-host.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([lanPath]), lanPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes MXC runtime changes and Windows-only suites to Windows", () => {
     for (const mxcPath of [
       "extensions/mxc/src/mxc-backend.ts",
@@ -243,6 +256,21 @@ describe("detectChangedScope Windows routing", () => {
       "src/infra/process-env.test.ts",
     ]) {
       expect(detectChangedScope([envPath]), envPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes node-host executable resolution and native coverage to Windows", () => {
+    for (const executablePath of [
+      "src/plugin-sdk/node-host.ts",
+      "src/plugin-sdk/node-host.test.ts",
+      "src/process/terminal-pty.test.ts",
+      "src/tui/tui.ts",
+      "src/tui/tui.resolve-codex-bin.test.ts",
+    ]) {
+      expect(detectChangedScope([executablePath]), executablePath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

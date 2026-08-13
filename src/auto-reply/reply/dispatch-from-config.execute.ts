@@ -622,7 +622,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
-    failDispatchReplyOperation(error);
+    failDispatchReplyOperation(error, "failed");
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,

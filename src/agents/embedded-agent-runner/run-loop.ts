@@ -17,7 +17,6 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -33,6 +32,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
+import { createMcpAttemptCarryover } from "./run/attempt-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -318,7 +318,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
-    let latestMcpAppChannelView: McpAppChannelView | undefined;
+    const mcpAttemptCarryover = createMcpAttemptCarryover();
     while (true) {
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
@@ -391,10 +391,7 @@ export async function runPreparedEmbeddedLoop(
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      // Preserve the newest launch target before normalization can request an early retry.
-      latestMcpAppChannelView =
-        dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
-      dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: admittedRunInput,
         preparedRuntime,

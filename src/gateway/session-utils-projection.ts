@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -8,6 +7,7 @@ import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessio
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
   SessionActorProfileIdentity,
@@ -87,14 +87,11 @@ export function resolveSessionSelectedModelRef(params: {
   agentId: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> | null {
+}): ReturnType<typeof resolveSessionModelRef> {
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,
   });
-  if (!override.modelOverride) {
-    return null;
-  }
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
@@ -103,7 +100,7 @@ export function resolveSessionSelectedModelRef(params: {
   const key = [
     normalizeAgentId(params.agentId),
     override.providerOverride ?? "",
-    override.modelOverride,
+    override.modelOverride ?? "",
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
@@ -171,7 +168,7 @@ export function resolveTranscriptUsageFallback(params: {
   const parsed = parseAgentSessionKey(params.key);
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
+    : normalizeAgentId(params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key));
   const storePath =
     resolveConcreteSessionStorePath(params.storePath) ??
     resolveSessionStorePathCore(params.cfg.session?.store, { agentId });

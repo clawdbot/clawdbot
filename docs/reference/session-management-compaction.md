@@ -51,7 +51,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `maxEntries`            | `500`                 | cap on session entries                                                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid      |
 
 Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
@@ -248,7 +248,7 @@ Plugins register a compaction provider via `registerCompactionProvider()` on the
 - `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization. Setting a `provider` forces `mode: "safeguard"`.
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
-- Safeguard mode enables summary quality audits by default; set `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
+- Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.

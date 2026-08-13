@@ -11,6 +11,11 @@ import type {
 import { runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { runCommandBuffered } from "../process/exec.js";
+import {
+  loadSessionDiffBranchMetadata,
+  resolveSessionDiffBase,
+  resolveSessionDiffEmptyTree,
+} from "./session-diff-revisions.js";
 
 const MAX_FILES = 500;
 const MAX_UNTRACKED_FILES = 100;
@@ -207,58 +212,6 @@ function takePatch(
   return { patch: chunk };
 }
 
-/**
- * Picks the ref the session diff is computed against: merge-base with the
- * remote default branch when on a feature branch, otherwise HEAD so sessions
- * on the default branch still surface uncommitted work.
- */
-async function resolveDiffBase(
-  root: string,
-  branch: string | undefined,
-): Promise<{ base: string; baseRef: string }> {
-  const defaultRef = await gitOut(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-  const remoteDefault = defaultRef?.trim() || null;
-  const defaultShort = remoteDefault?.replace(/^origin\//, "");
-  if (remoteDefault && defaultShort && branch && branch !== defaultShort) {
-    const mergeBase = await gitOut(root, ["merge-base", remoteDefault, "HEAD"]);
-    if (mergeBase?.trim()) {
-      return { base: mergeBase.trim(), baseRef: defaultShort };
-    }
-  }
-  // No usable remote default: try a local main/master so plain clones still
-  // get a branch-relative diff instead of only uncommitted changes.
-  if (branch && branch !== "main" && branch !== "master") {
-    for (const candidate of ["main", "master"]) {
-      const verified = await gitOut(root, ["rev-parse", "--verify", "--quiet", candidate]);
-      if (verified?.trim()) {
-        const mergeBase = await gitOut(root, ["merge-base", candidate, "HEAD"]);
-        if (mergeBase?.trim()) {
-          return { base: mergeBase.trim(), baseRef: candidate };
-        }
-      }
-    }
-  }
-  return { base: "HEAD", baseRef: "HEAD" };
-}
-
-/**
- * Diff base for a repo before its first commit: the empty-tree object id, so
- * `git diff <empty>` reports staged/index files as additions. `hash-object`
- * derives the id for the repo's object format (SHA-1 vs SHA-256) and does not
- * write to the object DB. baseRef stays undefined — there is no named base.
- */
-async function resolveUnbornDiffBase(
-  root: string,
-): Promise<{ base: string; baseRef?: string } | null> {
-  try {
-    const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
-    const emptyTree = result.code === 0 ? result.stdout.trim() : "";
-    return emptyTree ? { base: emptyTree } : null;
-  } catch {
-    return null;
-  }
-}
-
 async function collectUntrackedFiles(
   root: string,
   realRoot: string,
@@ -336,11 +289,11 @@ async function collectUntrackedFiles(
 async function collectTrackedFiles(
   root: string,
   realRoot: string,
-  base: string,
+  revisions: readonly [base: string] | readonly [base: string, target: string],
   budget: PatchBudget,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
-  const diffArgs = ["diff", "-M", base];
-  const nameStatus = await gitOut(root, [...diffArgs, "--name-status", "-z"]);
+  const diffArgs = (options: string[]) => ["diff", "-M", ...options, ...revisions, "--"];
+  const nameStatus = await gitOut(root, diffArgs(["--name-status", "-z"]));
   if (nameStatus === null) {
     return { files: [], truncated: false };
   }
@@ -348,7 +301,7 @@ async function collectTrackedFiles(
   if (entries.length === 0) {
     return { files: [], truncated: false };
   }
-  const numstatText = (await gitOut(root, [...diffArgs, "--numstat", "-z"])) ?? "";
+  const numstatText = (await gitOut(root, diffArgs(["--numstat", "-z"]))) ?? "";
   const numstat = parseNumstatZ(numstatText);
   const totalChangedLines = [...numstat.values()].reduce(
     (sum, entry) => sum + entry.additions + entry.deletions,
@@ -359,13 +312,7 @@ async function collectTrackedFiles(
   const patchText =
     totalChangedLines > MAX_TOTAL_CHANGED_LINES
       ? null
-      : await gitOut(root, [
-          ...diffArgs,
-          "--patch",
-          "--no-color",
-          "--no-ext-diff",
-          "--no-textconv",
-        ]);
+      : await gitOut(root, diffArgs(["--patch", "--no-color", "--no-ext-diff", "--no-textconv"]));
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
   const truncated = entries.length > MAX_FILES;
   const files: SessionDiffFile[] = [];
@@ -387,11 +334,12 @@ async function collectTrackedFiles(
       files.push(file);
       continue;
     }
-    // Deleted files diff against the object DB (no filesystem read); every
-    // other status reads the working-tree file, so hardlink-guard it before
-    // returning content the bulk diff already buffered server-side.
+    // Like the deleted-file exemption, two-revision commit diffs read every
+    // path from the object DB. Only working-tree content needs the hardlink guard.
     const safe =
-      entry.status === "deleted" || (await isPatchableWorkingTreePath(realRoot, entry.path));
+      revisions.length === 2 ||
+      entry.status === "deleted" ||
+      (await isPatchableWorkingTreePath(realRoot, entry.path));
     if (!safe) {
       file.truncated = true;
       files.push(file);
@@ -409,10 +357,12 @@ async function collectTrackedFiles(
   return { files, truncated };
 }
 
-export async function loadCheckoutDiff(params: {
-  cwd: string;
-  sessionKey: string;
-}): Promise<SessionsDiffResult> {
+type CheckoutDiffParams = { cwd: string; sessionKey: string } & (
+  | { scope?: "all" | "uncommitted"; commit?: never }
+  | { scope: "commit"; commit: string }
+);
+
+export async function loadCheckoutDiff(params: CheckoutDiffParams): Promise<SessionsDiffResult> {
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
   ): SessionsDiffResult => ({
@@ -431,19 +381,71 @@ export async function loadCheckoutDiff(params: {
   const realRoot = await fs.realpath(root).catch(() => root);
   const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
   const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
+  const head = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"]))?.trim();
+  const branchBase = head
+    ? await resolveSessionDiffBase({ branch, gitOut, root })
+    : await resolveSessionDiffEmptyTree(root);
+  const metadata =
+    head && branchBase
+      ? await loadSessionDiffBranchMetadata({ base: branchBase.base, gitOut, head, root })
+      : {};
+  const repositoryFields = {
+    sessionKey: params.sessionKey,
+    root,
+    ...(branch ? { branch } : {}),
+    ...(branchBase?.baseRef ? { baseRef: branchBase.baseRef } : {}),
+    ...metadata,
+  };
+  const unknownCommit = (): SessionsDiffResult => ({
+    ...repositoryFields,
+    files: [],
+    additions: 0,
+    deletions: 0,
+    unavailableReason: "unknown_commit",
+  });
+  const scope = params.scope ?? "all";
+  let revisions: readonly [string] | readonly [string, string] | undefined;
+  if (scope === "commit") {
+    if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
+      return unknownCommit();
+    }
+    const commit = (
+      await gitOut(root, [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        `${params.commit}^{commit}`,
+      ])
+    )?.trim();
+    if (!commit) {
+      return unknownCommit();
+    }
+    // Commit scope is fenced to the advertised merge-base..HEAD history so an
+    // operator.read client cannot read arbitrary commits from the object database.
+    const isCommitInHeadHistory =
+      (await gitOut(root, ["merge-base", "--is-ancestor", commit, "HEAD"], [0])) !== null;
+    const isCommitInBaseHistory =
+      (await gitOut(root, ["merge-base", "--is-ancestor", commit, branchBase.base], [0])) !== null;
+    if (!isCommitInHeadHistory || isCommitInBaseHistory) {
+      return unknownCommit();
+    }
+    const parent = (await gitOut(root, ["rev-parse", "--verify", "--quiet", `${commit}^`]))?.trim();
+    const commitBase = parent ? { base: parent } : await resolveSessionDiffEmptyTree(root);
+    revisions = commitBase ? [commitBase.base, commit] : undefined;
+  } else if (scope === "uncommitted") {
+    revisions = head ? ["HEAD"] : branchBase ? [branchBase.base] : undefined;
+  } else {
+    revisions = branchBase ? [branchBase.base] : undefined;
+  }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
-  // Repos before their first commit have no HEAD, so diff the index/worktree
-  // against the empty tree to surface staged files (the untracked scan below
-  // only covers files git does not track yet). hash-object derives the empty
-  // tree id for the repo's object format without writing to the object DB.
-  const hasHead = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
-  const baseInfo = hasHead
-    ? await resolveDiffBase(root, branch)
-    : await resolveUnbornDiffBase(root);
-  const tracked = baseInfo
-    ? await collectTrackedFiles(root, realRoot, baseInfo.base, budget)
+  const tracked = revisions
+    ? await collectTrackedFiles(root, realRoot, revisions, budget)
     : { files: [], truncated: false };
-  const untracked = await collectUntrackedFiles(root, realRoot, budget);
+  const untracked =
+    scope === "commit"
+      ? { files: [], truncated: false }
+      : await collectUntrackedFiles(root, realRoot, budget);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );
@@ -452,10 +454,7 @@ export async function loadCheckoutDiff(params: {
   const truncated =
     tracked.truncated || untracked.truncated || files.some((file) => file.truncated === true);
   return {
-    sessionKey: params.sessionKey,
-    root,
-    ...(branch ? { branch } : {}),
-    ...(baseInfo?.baseRef ? { baseRef: baseInfo.baseRef } : {}),
+    ...repositoryFields,
     files,
     additions,
     deletions,
@@ -611,8 +610,8 @@ async function collectBaselineCandidates(params: {
   const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
   const hasHead = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
   const baseInfo = hasHead
-    ? await resolveDiffBase(root, branch)
-    : await resolveUnbornDiffBase(root);
+    ? await resolveSessionDiffBase({ branch, gitOut, root })
+    : await resolveSessionDiffEmptyTree(root);
   const trackedText = baseInfo
     ? await gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
     : "";

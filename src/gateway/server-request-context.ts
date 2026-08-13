@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
+import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -31,6 +33,7 @@ type GatewayRequestContextParams = {
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
@@ -78,7 +81,9 @@ type GatewayRequestContextParams = {
     scopes: string[];
   }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
+  hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
@@ -162,6 +167,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -173,6 +179,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
@@ -183,6 +190,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
       : undefined,
@@ -362,9 +370,13 @@ export function createGatewayRequestContext(
     releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
     completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...(params.nodeDesktopService
+      ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
+      : {}),
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),
+    ...(params.hostDesktopService ? { hostDesktopService: params.hostDesktopService } : {}),
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
       : {}),

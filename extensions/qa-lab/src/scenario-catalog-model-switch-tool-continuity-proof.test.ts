@@ -1,7 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 
 function splitModelRef(raw: string) {
   const [provider, ...model] = raw.split("/");
@@ -23,6 +25,8 @@ function normalizeModelRef(raw: string) {
 async function runToolContinuity(
   alternateTools: string[],
   params?: {
+    catchFailureResult?: boolean;
+    primaryTools?: string[];
     primaryOutboundText?: string;
     primaryDelivery?: { status: string; resultCount: number } | null;
     alternateReplyText?: string;
@@ -84,7 +88,7 @@ async function runToolContinuity(
             turnId: `turn-${call}`,
             requested: { provider, model },
             effective: { provider, model, responseModel: model },
-            successfulToolNames: call === 1 ? ["read"] : alternateTools,
+            successfulToolNames: call === 1 ? (params?.primaryTools ?? ["read"]) : alternateTools,
             rerouted: false,
             terminalDisposition: "visible",
           },
@@ -103,10 +107,10 @@ async function runToolContinuity(
       },
       splitModelRef,
       normalizeModelRef,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
       hasModelSwitchContinuitySignal,
+      ...(params?.catchFailureResult ? { runScenario: runQaSuiteScenarioSteps } : {}),
       runAgentPrompt,
     },
   });
@@ -129,6 +133,7 @@ describe("model-switch tool continuity terminal evidence", () => {
     });
     expect(result.modelSwitchEvidence).toMatchObject({
       primary: { runId: "run-1", successfulToolNames: ["read"] },
+      primaryDelivery: { status: "sent", resultCount: 1 },
       alternate: { runId: "run-2", successfulToolNames: ["read"] },
       terminalReply: {
         disposition: "visible",
@@ -141,10 +146,45 @@ describe("model-switch tool continuity terminal evidence", () => {
     );
   });
 
+  it("accepts a logical read appended after the physical Code Mode exec", async () => {
+    const { result } = await runToolContinuity(["exec", "read"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      alternate: { runId: "run-2", successfulToolNames: ["exec", "read"] },
+    });
+  });
+
+  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
+    await expect(runToolContinuity(["exec"])).rejects.toThrow(
+      "alternate-model run did not return exact owned successful read evidence",
+    );
+  });
+
   it("does not let a successful prior-run read satisfy the alternate run", async () => {
     await expect(runToolContinuity([])).rejects.toThrow(
       "alternate-model run did not return exact owned successful read evidence",
     );
+  });
+
+  it("keeps primary evidence when the primary tool assertion fails", async () => {
+    const { result, runAgentPrompt } = await runToolContinuity(["read"], {
+      catchFailureResult: true,
+      primaryTools: [],
+    });
+
+    expect(result).toMatchObject({
+      status: "fail",
+      details: "default-model run did not return owned successful read evidence",
+      modelSwitchEvidence: {
+        primary: {
+          runId: "run-1",
+          successfulToolNames: [],
+        },
+        primaryDelivery: { status: "sent", resultCount: 1 },
+      },
+    });
+    expect(runAgentPrompt).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {

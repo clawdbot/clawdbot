@@ -3,6 +3,7 @@ import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-htt
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
 
 type ControlUiRequestClassification =
@@ -70,12 +71,20 @@ export function classifyControlUiRequest(params: {
     if (classifyMcpAppStandalonePath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
+    // Worker admission is upgrade-only; never let the root SPA turn a plain GET
+    // or a malformed descendant into an apparently successful HTML response.
+    if (classifyWorkerGatewayPath(pathname) !== "outside") {
+      return { kind: "not-control-ui" };
+    }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
     // fallback so untrusted plugins cannot claim arbitrary UI paths.
     if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
       return { kind: "not-control-ui" };
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return { kind: "not-control-ui" };
+    }
+    if (pathname === "/j" || pathname.startsWith("/j/")) {
       return { kind: "not-control-ui" };
     }
     // Disabled OpenAI-compatible endpoints must return 404, not the SPA HTML.

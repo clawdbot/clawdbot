@@ -79,8 +79,7 @@ conflict.
 schemaVersion: 1
 agent:
   tools:
-    profile: coding
-    alsoAllow: [cron]
+    allow: [read, write, cron]
     deny: [exec]
     fs:
       workspaceOnly: true
@@ -101,11 +100,18 @@ Grouped JSON discovers the same conventional profile rather than embedding a
 second copy of the OpenClaw settings. The remaining schema fragments on this
 page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
 
-The OpenClaw package profile may select any built-in tool profile registered by
-the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
-`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
-weaken host filesystem confinement. `tools.allow` remains available as an
-explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+The OpenClaw package profile may use an explicit `tools.allow` list or select
+any built-in tool profile registered by the running OpenClaw version. The
+`coding` and `messaging` profiles include the dynamic `bundle-mcp` selector, so
+a Claw that selects either profile must also provide a bounded `tools.allow`
+intersection. Name any MCP grants as concrete generated tool names such as
+`github__list_issues`; the package cannot freeze `bundle-mcp` itself.
+
+Profiles can otherwise be refined with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly: true`. `tools.allow` cannot be combined with
+`alsoAllow`; use a standalone allowlist, as above, when the package needs tools
+outside its selected profile. A Claw cannot set `workspaceOnly` to `false` and
+weaken host filesystem confinement. A Claw may also set
 `memory.search.enabled`, choose the portable `memory` and `sessions` sources,
 and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.

@@ -216,14 +216,18 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractToolErrorMessage,
+} from "../agents/embedded-agent-messaging-extraction.js";
+export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultError,
+} from "../agents/embedded-agent-tool-media.js";
+export {
+  extractToolErrorMessage,
   sanitizeToolResult,
-} from "../agents/embedded-agent-subscribe.tools.js";
+} from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
+  isToolResultError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
@@ -366,6 +370,7 @@ export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../age
  */
 export async function prepareHarnessNativeMcpAppPreview(params: {
   runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  agentId?: string;
   serverName: string;
   toolName: string;
   uiResourceUri: string;
@@ -382,6 +387,7 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
     await import("../agents/mcp-ui-resource.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
     uiResourceUri: params.uiResourceUri,

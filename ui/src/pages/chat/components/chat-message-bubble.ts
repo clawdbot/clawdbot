@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -112,18 +114,67 @@ function renderInlineToolCards(
  * Max characters for auto-detecting and pretty-printing JSON.
  * Prevents DoS from large JSON payloads in assistant/tool messages.
  */
-function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
+type ReplyPreview = {
+  sourceMessageId?: string;
+  senderLabel?: string | null;
+  text: string;
+};
+
+function renderReplyPreview(
+  replyTarget: NormalizedMessage["replyTarget"],
+  preview: ReplyPreview | undefined,
+  onOpenReply: ((replyToId: string) => void) | undefined,
+  onResolveReply: ((replyToId: string) => void) | undefined,
+  navigationLoading: boolean,
+) {
   if (!replyTarget) {
     return nothing;
   }
+  const replyToId = replyTarget.kind === "id" ? replyTarget.id : null;
+  const name = preview?.senderLabel?.trim()
+    ? preview.senderLabel
+    : replyTarget.kind === "current"
+      ? t("chat.messages.currentMessage")
+      : t("chat.messages.message");
+  const content = preview?.text.trim() ?? "";
+  const resolveMissingPreview = (element?: Element) => {
+    if (element && replyToId && !preview) {
+      onResolveReply?.(replyToId);
+    }
+  };
+  const body = html`
+    <span class="chat-reply-preview__icon"
+      >${navigationLoading
+        ? html`<span class="session-run-spinner" aria-hidden="true"></span>`
+        : icons.messageSquare}</span
+    >
+    <span class="chat-reply-preview__label"> ${t("chat.messages.replyingTo", { name })} </span>
+    ${content
+      ? html`<span class="chat-reply-preview__text"
+          >${truncateUtf16Safe(content, 120)}${content.length > 120 ? "..." : ""}</span
+        >`
+      : nothing}
+  `;
+  if (replyToId && onOpenReply) {
+    return html`
+      <button
+        ${ref(resolveMissingPreview)}
+        type="button"
+        class="chat-reply-preview chat-reply-preview--message"
+        ?disabled=${navigationLoading}
+        aria-busy=${navigationLoading ? "true" : "false"}
+        @click=${() => onOpenReply(replyToId)}
+      >
+        ${body}
+      </button>
+    `;
+  }
   return html`
-    <div class="chat-reply-pill">
-      <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
-      <span class="chat-reply-pill__label">
-        ${t("chat.messages.replyingTo", {
-          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
-        })}
-      </span>
+    <div
+      ${ref(resolveMissingPreview)}
+      class="chat-reply-preview chat-reply-preview--message chat-reply-preview--unavailable"
+    >
+      ${body}
     </div>
   `;
 }
@@ -166,7 +217,6 @@ export function renderGroupedMessage(
     showReasoning: boolean;
     showToolCalls?: boolean;
     runActive?: boolean;
-    turnSucceeded?: boolean;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -191,6 +241,10 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryAnimated?: boolean;
+    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    onResolveReply?: (replyToId: string) => void;
+    onOpenReply?: (replyToId: string) => void;
+    replyNavigationId?: string | null;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -273,7 +327,7 @@ export function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError) && opts.turnSucceeded !== true;
+  const toolMessageHasError = toolCards.some(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -282,28 +336,21 @@ export function renderGroupedMessage(
       })
     : null;
   const singleToolDisplayDetail =
-    !toolMessageHasError && singleToolCard && singleToolDisplay
+    singleToolCard && singleToolDisplay
       ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
       : undefined;
-  const toolSummaryLabelRaw = toolMessageHasError
-    ? singleToolDisplay
-      ? singleToolDisplay.label
-      : toolNames.length <= 3
-        ? toolNames.join(", ")
-        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
-    : singleToolDisplayDetail
-      ? !markdown && !hasImages
-        ? singleToolDisplayDetail
-        : singleToolCard?.outputText?.trim()
-          ? "output"
-          : undefined
-      : toolNames.length <= 3
-        ? toolNames.join(", ")
-        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+  const toolSummaryLabelRaw = singleToolDisplayDetail
+    ? !markdown && !hasImages
+      ? singleToolDisplayDetail
+      : singleToolCard?.outputText?.trim()
+        ? "output"
+        : undefined
+    : toolNames.length <= 3
+      ? toolNames.join(", ")
+      : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
-  const toolMessageLabelRaw = toolMessageHasError
-    ? t("chat.toolCards.toolError")
-    : singleToolDisplay && !markdown && !hasImages
+  const toolMessageLabelRaw =
+    singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
       : t("chat.toolCards.toolOutput");
   const toolMessageLabel =
@@ -350,7 +397,19 @@ export function renderGroupedMessage(
         data-entry-id=${opts.entryId || nothing}
         data-message-text=${actionText || nothing}
       >
-        ${renderReplyPill(normalizedMessage.replyTarget)}
+        ${renderReplyPreview(
+          normalizedMessage.replyTarget,
+          normalizedMessage.replyTarget?.kind === "id"
+            ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+                normalizedMessage.replyPreview)
+            : undefined,
+          opts.onOpenReply,
+          opts.onResolveReply,
+          opts.replyNavigationId ===
+            (normalizedMessage.replyTarget?.kind === "id"
+              ? normalizedMessage.replyTarget.id
+              : null),
+        )}
         ${renderInlineToolCards(toolCards, {
           messageKey,
           sessionKey: opts.sessionKey,
@@ -385,7 +444,17 @@ export function renderGroupedMessage(
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
     >
-      ${renderReplyPill(normalizedMessage.replyTarget)}
+      ${renderReplyPreview(
+        normalizedMessage.replyTarget,
+        normalizedMessage.replyTarget?.kind === "id"
+          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+              normalizedMessage.replyPreview)
+          : undefined,
+        opts.onOpenReply,
+        opts.onResolveReply,
+        opts.replyNavigationId ===
+          (normalizedMessage.replyTarget?.kind === "id" ? normalizedMessage.replyTarget.id : null),
+      )}
       ${isStandaloneToolMessage
         ? html`
             <div
@@ -394,9 +463,7 @@ export function renderGroupedMessage(
                 : ""}"
             >
               <button
-                class="chat-tool-msg-summary ${toolMessageHasError
-                  ? "chat-tool-msg-summary--error"
-                  : ""}"
+                class="chat-tool-msg-summary"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${(event: MouseEvent) => {
@@ -412,6 +479,9 @@ export function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
+                ${toolMessageHasError
+                  ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
+                  : nothing}
               </button>
               ${toolMessageExpanded
                 ? html`

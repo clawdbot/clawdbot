@@ -492,7 +492,6 @@ type PromptMediaOptions = {
 
 const VIDEO_OMISSION = {
   unsupported: "(video omitted: provider does not support native video)",
-  historical: "(video omitted: native historical replay is not available yet)",
   unavailable: "(video omitted: source unavailable)",
   invalid: "(video omitted: invalid video MIME type)",
   limit: "(video omitted: native video byte limit exceeded)",
@@ -537,7 +536,6 @@ async function projectOrderedPromptMedia(params: {
   media: MediaFact[];
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
-  runtime: boolean;
   options: PromptMediaOptions;
   budget: { remaining: number };
 }): Promise<ModelInputContent[]> {
@@ -560,11 +558,9 @@ async function projectOrderedPromptMedia(params: {
       projected.push(...(imagesByFact.get(factIndex) ?? []));
     } else if (isVideoMediaFact(fact)) {
       projected.push(
-        !params.runtime
-          ? { type: "text", text: VIDEO_OMISSION.historical }
-          : params.options.provider
-            ? await materializeVideoFact(fact, params.budget, params.options)
-            : { type: "text", text: VIDEO_OMISSION.unsupported },
+        params.options.provider
+          ? await materializeVideoFact(fact, params.budget, params.options)
+          : { type: "text", text: VIDEO_OMISSION.unsupported },
       );
     }
   }
@@ -602,7 +598,6 @@ async function materializePromptMediaMessages(
       model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
-      imageOrder: runtimeImageOrder,
       mediaImageLayout,
       maxBytes: options.maxBytes,
       maxDimensionPx: options.maxDimensionPx,
@@ -615,7 +610,6 @@ async function materializePromptMediaMessages(
       media: resolvedMedia,
       images: result.images,
       imageFactIndexes: result.imageFactIndexes,
-      runtime: runtimeMedia !== undefined,
       options,
       budget: videoBudget,
     });

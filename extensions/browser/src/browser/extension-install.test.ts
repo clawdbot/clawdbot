@@ -489,7 +489,7 @@ describe("native host registration", () => {
         v: 1,
         ok: true,
         nonce,
-        pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${token}`,
+        pairingString: `ws://127.0.0.1:18789/browser/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${token}`,
       });
     },
   );
