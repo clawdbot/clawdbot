@@ -3,6 +3,7 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -148,18 +149,20 @@ async function readMattermostSuccessText(res: Response, path: string): Promise<s
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
+  let detail: string;
   if (contentType.includes("application/json")) {
     try {
       const data = JSON.parse(text) as { message?: string } | undefined;
-      if (data?.message) {
-        return data.message;
-      }
-      return JSON.stringify(data);
+      detail = data?.message ?? JSON.stringify(data);
     } catch {
-      return text;
+      detail = text;
     }
+  } else {
+    detail = text;
   }
-  return text;
+  // Mattermost API requests carry a bearer token; reflected upstream text must
+  // be sanitized independently of the operator's log-redaction setting.
+  return redactToolPayloadText(detail);
 }
 
 export function createMattermostClient(params: {
