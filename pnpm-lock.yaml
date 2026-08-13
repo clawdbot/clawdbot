@@ -951,10 +951,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/github-copilot:
-    dependencies:
-      '@clack/prompts':
-        specifier: 1.7.0
-        version: 1.7.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
