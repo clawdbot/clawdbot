@@ -168,11 +168,10 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       throw new Error("missing Chromium fixture root");
     }
     await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
-    const userUid = 1000;
+    const userUid = process.getuid?.() ?? 1000;
     const packageRoot = path.join(value.root, "package");
     const canonicalNodePath = await fs.realpath(value.deps.nodePath);
     const realLstat = fs.lstat.bind(fs);
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(userUid);
     const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
       const info = await realLstat(target);
       const resolved = path.resolve(String(target));
@@ -201,7 +200,6 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       );
     } finally {
       lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
     }
   });
 });
