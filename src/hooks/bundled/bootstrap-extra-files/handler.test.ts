@@ -1,7 +1,7 @@
 // Bootstrap extra files hook tests cover extra file context injection.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import {
@@ -157,5 +157,98 @@ describe("bootstrap-extra-files hook", () => {
     await handler(event);
 
     expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  describe("diagnostic visibility", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("warns with io reason and drops the affected files when glob resolution fails", async () => {
+      loggerMocks.warn.mockClear();
+      loggerMocks.debug.mockClear();
+      const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-io-");
+      const extraDir = path.join(tempDir, "packages", "core");
+      await fs.mkdir(extraDir, { recursive: true });
+      await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+
+      // A non-ENOENT glob failure is a real fault: fs.glob walks past per-entry
+      // read errors, so a throw here means the whole pattern failed to resolve.
+      const globError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      vi.spyOn(fs, "glob").mockImplementation(() => {
+        throw globError;
+      });
+
+      const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+      const context = await createBootstrapContext({
+        workspaceDir: tempDir,
+        cfg,
+        sessionKey: "agent:main:main",
+        rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+      });
+
+      const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+      await handler(event);
+
+      expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+      const [message, fields] = loggerMocks.warn.mock.calls[0] as [string, Record<string, unknown>];
+      expect(message).toContain("resolution failed");
+      expect(fields.reasons).toEqual({ io: 1, security: 0 });
+      expect(fields.paths).toEqual([path.resolve(tempDir, "packages/*/AGENTS.md")]);
+      expect(fields.hint).toBeTruthy();
+
+      // The failed pattern's files must not leak into the bootstrap set.
+      const injected = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
+      expect(injected).toHaveLength(1);
+      expect(injected.map((f) => path.relative(tempDir, f.path))).not.toContain(
+        path.join("packages", "core", "AGENTS.md"),
+      );
+    });
+
+    it("warns with security reason when a pattern escapes the workspace", async () => {
+      loggerMocks.warn.mockClear();
+      const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-security-");
+
+      const cfg = createBootstrapExtraConfig(["../escape/AGENTS.md"]);
+      const context = await createBootstrapContext({
+        workspaceDir: tempDir,
+        cfg,
+        sessionKey: "agent:main:main",
+        rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+      });
+
+      const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+      await handler(event);
+
+      expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+      const [, fields] = loggerMocks.warn.mock.calls[0] as [string, Record<string, unknown>];
+      expect(fields.reasons).toEqual({ io: 0, security: 1 });
+      expect(context.bootstrapFiles.filter((f) => f.name === "AGENTS.md")).toHaveLength(1);
+    });
+
+    it("keeps benign missing diagnostics at debug and never warns", async () => {
+      loggerMocks.warn.mockClear();
+      loggerMocks.debug.mockClear();
+      const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-missing-");
+
+      // Optional literal path that is simply absent — normal noise, not a fault.
+      const cfg = createBootstrapExtraConfig(["does-not-exist/AGENTS.md"]);
+      const context = await createBootstrapContext({
+        workspaceDir: tempDir,
+        cfg,
+        sessionKey: "agent:main:main",
+        rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+      });
+
+      const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+      await handler(event);
+
+      // Discriminating control: the pre-fix handler logged everything at debug,
+      // so a benign-only run producing zero warns is exactly what proves the split.
+      expect(loggerMocks.warn).not.toHaveBeenCalled();
+      expect(loggerMocks.debug).toHaveBeenCalledTimes(1);
+      const [, fields] = loggerMocks.debug.mock.calls[0] as [string, Record<string, unknown>];
+      expect(fields.reasons).toEqual({ missing: 1 });
+    });
   });
 });
