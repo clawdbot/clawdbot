@@ -944,9 +944,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
+      const bodyBudget = Math.max(0, MAX_COMPACTION_SUMMARY_CHARS - suffix.length);
       return {
         summary: capCompactionSummaryPreservingSuffix(body, suffix),
-        bodyBudget: Math.max(0, MAX_COMPACTION_SUMMARY_CHARS - suffix.length),
+        structuralSummary:
+          suffix.length >= MAX_COMPACTION_SUMMARY_CHARS
+            ? ""
+            : capCompactionSummary(body, bodyBudget),
+        bodyBudget,
       };
     };
     const compactionResult = (summary: string) => ({
@@ -957,11 +962,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         details: { readFiles, modifiedFiles },
       },
     });
-    const finalizeSummary = async (
-      body: string,
-      sections: { splitTurnSection?: string; preservedTurnsSection?: string },
-    ) => compactionResult((await finalizeSummaryText(body, sections)).summary);
-
     if (providerId) {
       const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
       if (compactionProvider) {
@@ -979,12 +979,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            return await finalizeSummary(providerResult, {
+            const finalized = await finalizeSummaryText(providerResult, {
               splitTurnSection: preparation.isSplitTurn
                 ? formatSplitTurnContextSection(turnPrefixMessages)
                 : "",
               preservedTurnsSection: formatPreservedTurnsSection(preservedMessages),
             });
+            return compactionResult(finalized.summary);
           }
           log.warn(
             `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
@@ -1148,7 +1149,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
-      let lastAuditReasons: string[] = [];
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let splitTurnSectionLocal = "";
@@ -1179,7 +1179,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (signal?.aborted) {
             signal.throwIfAborted();
           }
-          if (lastAuditReasons.length > 0) {
+          if (attempt > 0) {
             log.warn(
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
@@ -1192,8 +1192,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
           throw attemptError;
         }
-        const finalized = await finalizeSummaryText(historySummary, {
-          splitTurnSection: splitTurnSectionLocal,
+        const structuralSummary = appendSummarySection(
+          historySummary,
+          splitTurnSectionLocal ? `\n\n${splitTurnSectionLocal}` : "",
+        );
+        const finalized = await finalizeSummaryText(structuralSummary, {
           preservedTurnsSection: preservedTurnsSectionLocal,
         });
 
@@ -1205,6 +1208,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
+          structuralSummary: finalized.structuralSummary,
           identifiers,
           latestAsk: latestUserAsk,
           identifierPolicy,
@@ -1212,7 +1216,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (quality.ok) {
           return compactionResult(finalized.summary);
         }
-        lastAuditReasons = quality.reasons;
         if (!canRegenerate || attempt >= totalAttempts - 1) {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),

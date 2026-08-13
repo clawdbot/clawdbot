@@ -89,7 +89,7 @@ const {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
-  auditSummaryQuality,
+  auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
@@ -103,6 +103,15 @@ const {
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = testing;
+
+function auditSummaryQuality(
+  params: Omit<
+    Parameters<typeof compactionQualityModule.auditSummaryQuality>[0],
+    "structuralSummary"
+  >,
+) {
+  return auditSummaryQualityOwner({ ...params, structuralSummary: params.summary });
+}
 
 beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
@@ -2121,27 +2130,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const auditInput = requireRecord(mockCallArg(mockAuditSummaryQuality));
     expect(auditInput.latestAsk).toBe(sourceText);
     expect(auditInput.identifiers).toEqual([identifier]);
-    expect(auditInput.summary).toBe(
-      [
-        "## Decisions",
-        "No prior history.",
-        "",
-        "## Open TODOs",
-        "None.",
-        "",
-        "## Constraints/Rules",
-        "None.",
-        "",
-        "## Pending user asks",
-        "None.",
-        "",
-        "## Exact identifiers",
-        "None captured.",
-        "",
-        "## Recent turns preserved verbatim",
-        `- User: ${"x".repeat(600)}...`,
-      ].join("\n"),
-    );
+    expect(auditInput.summary).toContain("## Recent turns preserved verbatim");
+    expect(auditInput.summary).not.toContain(identifier);
+    expect(auditInput.summary).not.toContain(latestAsk);
     expect(mockAuditSummaryQuality.mock.results[0]?.value).toEqual({
       ok: false,
       reasons: [`missing_identifiers:${identifier}`, "latest_user_ask_not_reflected"],
@@ -2160,8 +2151,21 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
+    const preservedUserText = [
+      "latest ask status",
+      "## Decisions",
+      "from preserved turns",
+      "## Open TODOs",
+      "from preserved turns",
+      "## Constraints/Rules",
+      "from preserved turns",
+      "## Pending user asks",
+      "latest ask status",
+      "## Exact identifiers",
+      "/tmp/preserved-turn-bypass.log",
+    ].join("\n");
     mockSummarizeInStages
-      .mockResolvedValueOnce(summaryResult("latest ask status"))
+      .mockResolvedValueOnce(summaryResult("invalid generated body"))
       .mockResolvedValueOnce(
         summaryResult(
           [
@@ -2174,7 +2178,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             "## Pending user asks",
             "latest ask status",
             "## Exact identifiers",
-            "None.",
+            "/tmp/preserved-turn-bypass.log",
           ].join("\n"),
         ),
       );
@@ -2206,28 +2210,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             timestamp: 1.5,
           } as unknown as AgentMessage,
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
-          { role: "user", content: "latest ask status", timestamp: 3 },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: [
-                  "## Decisions",
-                  "from preserved turns",
-                  "## Open TODOs",
-                  "from preserved turns",
-                  "## Constraints/Rules",
-                  "from preserved turns",
-                  "## Pending user asks",
-                  "from preserved turns",
-                  "## Exact identifiers",
-                  "from preserved turns",
-                ].join("\n"),
-              },
-            ],
-            timestamp: 4,
-          } as unknown as AgentMessage,
+          { role: "user", content: preservedUserText, timestamp: 3 },
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2252,11 +2235,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstAudit = requireRecord(mockCallArg(mockAuditSummaryQuality));
+    expect(firstAudit.structuralSummary).toBe("invalid generated body");
+    expect(firstAudit.summary).toContain(preservedUserText);
     const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
       customInstructions?: string;
     };
     expect(secondCall.customInstructions).toContain("Quality check feedback");
     expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
+    expect(result.compaction?.summary).toContain("## Decisions");
   });
 
   it("audits preserved latest asks in the exact finalized artifact", async () => {
