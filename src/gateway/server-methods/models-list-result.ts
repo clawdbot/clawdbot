@@ -56,7 +56,7 @@ import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
-import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
+import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -516,9 +516,7 @@ export async function buildModelsListResult(
     preparedModelRuntimeConfigsMatch(params.preloadedCatalog.config, initialConfig)
       ? params.preloadedCatalog
       : undefined;
-  let loadedSnapshot:
-    | Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
-    | undefined;
+  let loadedSnapshot: Awaited<ReturnType<typeof loadDeferredCatalog>> | undefined;
   let loadedReadOnly = true;
   let usedPreloadedCatalog = false;
   const handleCatalogTimeout = (timeoutMs: number) => {
@@ -598,9 +596,7 @@ export async function buildModelsListResult(
     loadedSnapshot ??
     (preloadedCatalog && params.catalogProjector
       ? undefined
-      : await params.context.readPreparedGatewayModelCatalogSnapshot?.({
-          agentId: initialAgentId,
-        }));
+      : await readPreparedCatalog(params.context, initialAgentId));
   const cfg = ownerSnapshot?.config ?? initialConfig;
   const agentId = ownerSnapshot?.agentId ?? initialAgentId;
   const workspaceDir =

@@ -1,16 +1,16 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
-import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
+import type {
+  PublishedModelCatalogOwnerCandidate,
+  ResolvedPublishedModelCatalogOwner,
+} from "../agents/prepared-model-catalog.types.js";
 import {
   getPreparedModelRuntimeAuthMaterializations,
   loadPreparedModelRuntimeAuth,
 } from "../agents/prepared-model-runtime-auth.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
-import { setPendingGatewayModelCatalogAuth } from "./server-model-catalog-auth.js";
-import type {
-  GatewayModelCatalogOwnerSnapshot,
-  GatewayModelCatalogSnapshot,
-} from "./server-model-catalog.types.js";
+import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
+import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -26,11 +26,13 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
 type LoadGatewayModelCatalogParams = {
   agentId?: string;
   agentDir?: string;
-  deferAuthRefresh?: boolean;
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
   workspaceDir?: string;
+};
+type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
+  refreshAuth?: boolean;
 };
 
 async function resolveLoader(
@@ -56,11 +58,11 @@ export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
 }
 
 async function loadGatewayModelCatalogOwnerSnapshot(
-  params?: LoadGatewayModelCatalogParams,
+  params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<{
   candidate: PublishedModelCatalogOwnerCandidate;
-  owner: GatewayModelCatalogOwnerSnapshot & {
-    authMaterializations: GatewayModelCatalogSnapshot["authMaterializations"];
+  owner: ResolvedPublishedModelCatalogOwner & {
+    authMaterializations: PreparedGatewayModelCatalogSnapshot["authMaterializations"];
   };
 }> {
   const loadOwner = await resolveLoader(params);
@@ -82,9 +84,10 @@ async function loadGatewayModelCatalogOwnerSnapshot(
 }
 
 function projectGatewayModelCatalogSnapshot(
-  owner: GatewayModelCatalogOwnerSnapshot & {
-    authMaterializations?: GatewayModelCatalogSnapshot["authMaterializations"];
-  },
+  owner: Pick<
+    ResolvedPublishedModelCatalogOwner,
+    "agentId" | "agentDir" | "workspaceDir" | "config" | "modelCatalog"
+  >,
 ): GatewayModelCatalogSnapshot {
   return {
     ...owner.modelCatalog,
@@ -92,8 +95,23 @@ function projectGatewayModelCatalogSnapshot(
     agentDir: owner.agentDir,
     workspaceDir: owner.workspaceDir,
     config: owner.config,
-    authModes: owner.authModes,
-    authStore: owner.authStore,
+  };
+}
+
+export async function loadPreparedGatewayModelCatalogSnapshot(
+  params?: LoadPreparedGatewayModelCatalogParams,
+): Promise<PreparedGatewayModelCatalogSnapshot> {
+  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+  const refreshedAuth = params?.refreshAuth
+    ? await loadPreparedModelRuntimeAuth(
+        candidate,
+        owner.modelCatalog.entries.map((entry) => entry.provider),
+      ).catch(() => undefined)
+    : undefined;
+  return {
+    ...projectGatewayModelCatalogSnapshot(owner),
+    authModes: refreshedAuth?.authModes ?? owner.authModes,
+    authStore: refreshedAuth?.authStore ?? owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: owner.authMaterializations,
   };
@@ -102,17 +120,14 @@ function projectGatewayModelCatalogSnapshot(
 export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogSnapshot> {
-  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
-  if (params?.deferAuthRefresh) {
-    const pendingAuth = loadPreparedModelRuntimeAuth(
-      candidate,
-      owner.modelCatalog.entries.map((entry) => entry.provider),
-    );
-    const snapshot = projectGatewayModelCatalogSnapshot(owner);
-    setPendingGatewayModelCatalogAuth(snapshot, pendingAuth);
-    return snapshot;
-  }
-  return projectGatewayModelCatalogSnapshot(owner);
+  const {
+    authModes: _authModes,
+    authStore: _authStore,
+    metadataSnapshot: _metadataSnapshot,
+    authMaterializations: _authMaterializations,
+    ...snapshot
+  } = await loadPreparedGatewayModelCatalogSnapshot(params);
+  return snapshot;
 }
 
 export async function loadGatewayModelCatalog(
@@ -137,9 +152,9 @@ export async function readPreparedGatewayModelCatalog(
 }
 
 /** Reads the published owner generation without activating full catalog discovery. */
-export async function readPreparedGatewayModelCatalogSnapshot(
+export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelCatalogSnapshot | undefined> {
+): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
   const { getPublishedPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
@@ -153,8 +168,11 @@ export async function readPreparedGatewayModelCatalogSnapshot(
     return undefined;
   }
   const owner = resolvePublishedModelCatalogOwner(candidate);
-  return projectGatewayModelCatalogSnapshot({
-    ...owner,
+  return {
+    ...projectGatewayModelCatalogSnapshot(owner),
+    authModes: owner.authModes,
+    authStore: owner.authStore,
+    metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
-  });
+  };
 }

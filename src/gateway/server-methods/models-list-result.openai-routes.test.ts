@@ -9,6 +9,7 @@ import {
   catalogEntry,
   listModels,
   providerCatalogEntry,
+  registerTestCatalogAccess,
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -21,6 +22,17 @@ function preparedOwnerFacts(config: OpenClawConfig) {
     authStore: { version: 1, profiles: {} },
     metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
   } as const;
+}
+
+function emptyPreparedOwner(config: OpenClawConfig) {
+  return {
+    agentId: "main",
+    agentDir: "/tmp/models-list-openai-agent",
+    config,
+    entries: [],
+    routeVariants: [],
+    ...preparedOwnerFacts(config),
+  } as never;
 }
 
 describe("models.list OpenAI routes", () => {
@@ -43,16 +55,9 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalogSnapshot: async () => ({
-        agentId: "main",
-        agentDir: "/tmp/models-list-openai-agent",
-        config,
-        entries: [],
-        routeVariants: [],
-        ...preparedOwnerFacts(config),
-      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
     const preloadedCatalog: ModelCatalogSnapshot = {
       entries: [catalogEntry("gpt-main", "openai-responses")],
       routeVariants: [],
@@ -87,6 +92,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -118,16 +124,9 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalogSnapshot: async () => ({
-        agentId: "main",
-        agentDir: "/tmp/models-list-openai-agent",
-        config,
-        entries: [],
-        routeVariants: [],
-        ...preparedOwnerFacts(config),
-      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
 
     await expect(
       buildModelsListResult({
@@ -153,16 +152,9 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalogSnapshot: async () => ({
-        agentId: "main",
-        agentDir: "/tmp/models-list-openai-agent",
-        config,
-        entries: [],
-        routeVariants: [],
-        ...preparedOwnerFacts(config),
-      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
 
     await expect(
       buildModelsListResult({
@@ -211,6 +203,7 @@ describe("models.list OpenAI routes", () => {
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     const result = await buildModelsListResult({
       context,
@@ -267,6 +260,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await buildModelsListResult({ context, params: { view: "configured" } });
 
@@ -312,6 +306,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({ context, params: { view: "configured" } }),
@@ -339,6 +334,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],
@@ -375,6 +371,7 @@ describe("models.list OpenAI routes", () => {
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -407,6 +404,7 @@ describe("models.list OpenAI routes", () => {
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -445,6 +443,7 @@ describe("models.list OpenAI routes", () => {
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({

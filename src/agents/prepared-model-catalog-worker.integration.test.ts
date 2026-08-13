@@ -5,7 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { loadGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
+import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+} from "../gateway/server-model-catalog.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -291,7 +295,7 @@ describe("prepared model catalog worker boundary", () => {
       if (!fullAuth) {
         throw new Error("full catalog omitted prepared auth");
       }
-      return await loadGatewayModelCatalogSnapshot({
+      return await loadPreparedGatewayModelCatalogSnapshot({
         getConfig: () => config,
         loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
           ...owner,
@@ -302,10 +306,14 @@ describe("prepared model catalog worker boundary", () => {
     };
     const projectModels = async () => {
       const projected = await project();
+      const loadProjectedCatalogSnapshot = async () => projected;
+      registerGatewayModelCatalogPrivateAccess(loadProjectedCatalogSnapshot, {
+        loadDeferred: async () => projected,
+        readPrepared: async () => projected,
+      });
       const context = {
         getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: async () => projected,
-        readPreparedGatewayModelCatalogSnapshot: async () => projected,
+        loadGatewayModelCatalogSnapshot: loadProjectedCatalogSnapshot,
         logGateway: { debug: () => undefined },
       } as unknown as GatewayRequestContext;
       return {
@@ -410,17 +418,27 @@ describe("prepared model catalog worker boundary", () => {
       return refreshed;
     });
     const listModels = async () => {
-      const context = {
-        getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: async (
-          loadParams: Parameters<typeof loadGatewayModelCatalogSnapshot>[0],
-        ) =>
-          await loadGatewayModelCatalogSnapshot({
+      const loadSnapshot = async (
+        loadParams: Parameters<typeof loadGatewayModelCatalogSnapshot>[0],
+      ) =>
+        await loadGatewayModelCatalogSnapshot({
+          ...loadParams,
+          getConfig: () => config,
+          loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+        });
+      registerGatewayModelCatalogPrivateAccess(loadSnapshot, {
+        loadDeferred: (loadParams) =>
+          loadPreparedGatewayModelCatalogSnapshot({
             ...loadParams,
             getConfig: () => config,
             loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+            refreshAuth: true,
           }),
-        readPreparedGatewayModelCatalogSnapshot: async () => undefined,
+        readPrepared: async () => undefined,
+      });
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: loadSnapshot,
         logGateway: { debug: () => undefined },
       } as unknown as GatewayRequestContext;
       return await buildModelsListResult({ context, params: { view: "all" } });

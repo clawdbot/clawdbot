@@ -3,6 +3,10 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  type PreparedGatewayModelCatalogSnapshot,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -23,6 +27,19 @@ export function providerCatalogEntry(provider: string, id: string): ModelCatalog
   return { ...catalogEntry(id, "openai-completions"), provider };
 }
 
+export function registerTestCatalogAccess(
+  context: GatewayRequestContext,
+  readPrepared?: () => Promise<PreparedGatewayModelCatalogSnapshot | undefined>,
+): void {
+  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+    loadDeferred: async (params) =>
+      (await context.loadGatewayModelCatalogSnapshot(
+        params,
+      )) as PreparedGatewayModelCatalogSnapshot,
+    readPrepared: readPrepared ?? (async () => undefined),
+  });
+}
+
 export async function listModels(params: {
   catalog: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
@@ -31,19 +48,28 @@ export async function listModels(params: {
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
   const config = params.cfg ?? ({} as OpenClawConfig);
-  const context = {
-    getRuntimeConfig: () => config,
-    loadGatewayModelCatalogSnapshot: async () => ({
+  const loadGatewayModelCatalogSnapshot = async () =>
+    ({
       agentId: "main",
       agentDir: "/tmp/models-list-openai-agent",
+      workspaceDir: "/tmp/models-list-openai-workspace",
       config,
+      authModes: {},
       authStore: loadAuthProfileStoreWithoutExternalProfiles("/tmp/models-list-openai-agent", {
         allowKeychainPrompt: false,
       }),
       metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
       entries: params.catalog,
       routeVariants: params.catalog,
-    }),
+      authMaterializations: [],
+    }) satisfies PreparedGatewayModelCatalogSnapshot;
+  registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+    loadDeferred: loadGatewayModelCatalogSnapshot,
+    readPrepared: loadGatewayModelCatalogSnapshot,
+  });
+  const context = {
+    getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot,
     logGateway: { debug: () => {} },
   } as unknown as GatewayRequestContext;
   return await buildModelsListResult({

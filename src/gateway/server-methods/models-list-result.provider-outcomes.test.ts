@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  type PreparedGatewayModelCatalogSnapshot,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
+import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
 } from "./models-list-result.js";
@@ -19,9 +23,12 @@ describe("models.list provider catalog outcomes", () => {
     const snapshot = {
       agentId: "main",
       agentDir: "/tmp/models-list-provider-outcomes-agent",
+      workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
       config,
+      authModes: {},
       authStore: emptyAuthStore,
       metadataSnapshot,
+      authMaterializations: [],
       entries: [],
       routeVariants: [],
       providerOutcomes: [
@@ -37,6 +44,10 @@ describe("models.list provider catalog outcomes", () => {
       loadGatewayModelCatalogSnapshot: vi.fn(() => Promise.resolve(snapshot)),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+      loadDeferred: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+      readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+    });
 
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],

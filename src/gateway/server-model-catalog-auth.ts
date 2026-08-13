@@ -1,41 +1,63 @@
-import type { PreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
+import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
-const pendingAuthBySnapshot = new WeakMap<object, Promise<PreparedModelRuntimeAuth | undefined>>();
+export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
+  Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
+    authMaterializations: readonly RuntimeAuthMaterialization[];
+  };
 
-export function setPendingGatewayModelCatalogAuth(
-  snapshot: object,
-  pending: Promise<PreparedModelRuntimeAuth | undefined>,
+type GatewayModelCatalogReadParams = {
+  agentId?: string;
+  agentDir?: string;
+  readOnly?: boolean;
+  workspaceDir?: string;
+};
+
+type GatewayModelCatalogPrivateAccess = {
+  loadDeferred: (
+    params?: GatewayModelCatalogReadParams,
+  ) => Promise<PreparedGatewayModelCatalogSnapshot>;
+  readPrepared: (
+    params?: Omit<GatewayModelCatalogReadParams, "readOnly">,
+  ) => Promise<PreparedGatewayModelCatalogSnapshot | undefined>;
+};
+
+const privateAccessByLoader = new WeakMap<
+  GatewayRequestContext["loadGatewayModelCatalogSnapshot"],
+  GatewayModelCatalogPrivateAccess
+>();
+
+/** Keeps prepared auth and metadata behind the Gateway-owned loader boundary. */
+export function registerGatewayModelCatalogPrivateAccess(
+  loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"],
+  access: GatewayModelCatalogPrivateAccess,
 ): void {
-  pendingAuthBySnapshot.set(snapshot, pending);
-  // A timed-out catalog read may abandon the snapshot before it reaches the auth projection.
-  // Observe rejection here while preserving it for a caller that does resolve this snapshot.
-  void pending.catch(() => undefined);
+  privateAccessByLoader.set(loader, access);
+}
+
+function requirePrivateAccess(
+  context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
+): GatewayModelCatalogPrivateAccess {
+  const access = privateAccessByLoader.get(context.loadGatewayModelCatalogSnapshot);
+  if (!access) {
+    throw new Error("Gateway model catalog loader omitted prepared owner access");
+  }
+  return access;
 }
 
 export async function loadDeferredCatalog(
   context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
   agentId: string,
   readOnly: boolean,
-) {
-  // This timing control is Gateway-private; exposing it on GatewayRequestContext would turn an
-  // implementation detail into a Plugin SDK contract.
-  const snapshot = await context.loadGatewayModelCatalogSnapshot({
-    agentId,
-    deferAuthRefresh: true,
-    readOnly,
-  } as NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> & {
-    deferAuthRefresh: true;
-  });
-  const pendingAuth = pendingAuthBySnapshot.get(snapshot);
-  if (!pendingAuth) {
-    return snapshot;
-  }
-  try {
-    return { ...snapshot, ...(await pendingAuth) };
-  } catch {
-    // Auth refresh is opportunistic browse data. Preserve the exact prepared generation when
-    // external credential discovery fails instead of failing the model catalog response.
-    return snapshot;
-  }
+): Promise<PreparedGatewayModelCatalogSnapshot> {
+  return await requirePrivateAccess(context).loadDeferred({ agentId, readOnly });
+}
+
+export async function readPreparedCatalog(
+  context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
+  agentId: string,
+): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
+  return await requirePrivateAccess(context).readPrepared({ agentId });
 }

@@ -22,7 +22,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
-import { setPendingGatewayModelCatalogAuth } from "../server-model-catalog-auth.js";
+import {
+  type PreparedGatewayModelCatalogSnapshot,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -237,6 +240,7 @@ function requestModelsList(params: {
     return {
       agentId,
       agentDir,
+      workspaceDir: agentDir,
       config,
       authModes: params.preparedAuthModes ?? {},
       authStore:
@@ -245,6 +249,40 @@ function requestModelsList(params: {
       metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
     };
   };
+  const loadSnapshot = async (loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0]) => {
+    const entries = await params.loadGatewayModelCatalog(loadParams);
+    const owner = resolveOwnerFacts();
+    return {
+      ...owner,
+      ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
+      entries,
+      routeVariants: entries,
+      authMaterializations: [],
+    } as unknown as PreparedGatewayModelCatalogSnapshot;
+  };
+  const loadGatewayModelCatalogSnapshot = async (
+    loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
+  ) => loadSnapshot(loadParams);
+  registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+    loadDeferred: async (loadParams) => {
+      const snapshot = await loadSnapshot(loadParams);
+      if (!params.deferredAuth) {
+        return snapshot;
+      }
+      try {
+        return { ...snapshot, ...(await params.deferredAuth) };
+      } catch {
+        return snapshot;
+      }
+    },
+    readPrepared: async () =>
+      ({
+        ...resolveOwnerFacts(),
+        entries: [],
+        routeVariants: [],
+        authMaterializations: [],
+      }) as PreparedGatewayModelCatalogSnapshot,
+  });
   const request = expectDefined(
     modelsHandlers["models.list"],
     'modelsHandlers["models.list"] test invariant',
@@ -270,27 +308,7 @@ function requestModelsList(params: {
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot: async (
-        loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
-      ) => {
-        const entries = await params.loadGatewayModelCatalog(loadParams);
-        const owner = resolveOwnerFacts();
-        const snapshot = {
-          ...owner,
-          ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
-          entries,
-          routeVariants: entries,
-        };
-        if (params.deferredAuth) {
-          setPendingGatewayModelCatalogAuth(snapshot, params.deferredAuth);
-        }
-        return snapshot;
-      },
-      readPreparedGatewayModelCatalogSnapshot: async () => ({
-        ...resolveOwnerFacts(),
-        entries: [],
-        routeVariants: [],
-      }),
+      loadGatewayModelCatalogSnapshot,
       logGateway: {
         debug: vi.fn(),
       },

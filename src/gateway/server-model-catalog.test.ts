@@ -3,10 +3,14 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadDeferredCatalog } from "./server-model-catalog-auth.js";
+import {
+  loadDeferredCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "./server-model-catalog-auth.js";
 import {
   loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
   type GatewayModelCatalogSnapshot,
 } from "./server-model-catalog.js";
 
@@ -72,20 +76,21 @@ describe("gateway prepared model catalog", () => {
       workspaceDir: "/tmp/gateway-workspace",
     }));
 
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        agentId: "worker",
-        agentDir: "/tmp/gateway-agent",
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-        workspaceDir: "/tmp/gateway-workspace",
-      }),
-    ).resolves.toMatchObject({
+    const projected = await loadGatewayModelCatalogSnapshot({
+      agentId: "worker",
+      agentDir: "/tmp/gateway-agent",
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot,
+      workspaceDir: "/tmp/gateway-workspace",
+    });
+    expect(projected).toMatchObject({
       agentId: "worker",
       agentDir: "/tmp/gateway-agent",
       config,
       workspaceDir: "/tmp/gateway-workspace",
     } satisfies Partial<GatewayModelCatalogSnapshot>);
+    expect(projected).not.toHaveProperty("authStore");
+    expect(projected).not.toHaveProperty("metadataSnapshot");
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
@@ -115,20 +120,30 @@ describe("gateway prepared model catalog", () => {
     setPreparedModelRuntimeAuthLoader(candidate, loadAuth);
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => candidate);
 
-    const prepared = await loadGatewayModelCatalogSnapshot({
+    const prepared = await loadPreparedGatewayModelCatalogSnapshot({
       getConfig: () => config,
       loadPublishedPreparedModelCatalogOwnerSnapshot,
     });
     expect(prepared.authStore).toEqual(candidate.authStore);
     expect(loadAuth).not.toHaveBeenCalled();
 
-    const deferred = await loadGatewayModelCatalogSnapshot({
-      deferAuthRefresh: true,
-      getConfig: () => config,
-      loadPublishedPreparedModelCatalogOwnerSnapshot,
+    const publicLoader = vi.fn(async () =>
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    );
+    registerGatewayModelCatalogPrivateAccess(publicLoader, {
+      loadDeferred: () =>
+        loadPreparedGatewayModelCatalogSnapshot({
+          getConfig: () => config,
+          loadPublishedPreparedModelCatalogOwnerSnapshot,
+          refreshAuth: true,
+        }),
+      readPrepared: async () => undefined,
     });
     const loaded = await loadDeferredCatalog(
-      { loadGatewayModelCatalogSnapshot: vi.fn(async () => deferred) } as never,
+      { loadGatewayModelCatalogSnapshot: publicLoader },
       "main",
       true,
     );
@@ -150,13 +165,23 @@ describe("gateway prepared model catalog", () => {
       authModes: {},
     }));
 
-    const deferred = await loadGatewayModelCatalogSnapshot({
-      deferAuthRefresh: true,
-      getConfig: () => config,
-      loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+    const publicLoader = vi.fn(async () =>
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+      }),
+    );
+    registerGatewayModelCatalogPrivateAccess(publicLoader, {
+      loadDeferred: () =>
+        loadPreparedGatewayModelCatalogSnapshot({
+          getConfig: () => config,
+          loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+          refreshAuth: true,
+        }),
+      readPrepared: async () => undefined,
     });
     const loaded = await loadDeferredCatalog(
-      { loadGatewayModelCatalogSnapshot: vi.fn(async () => deferred) } as never,
+      { loadGatewayModelCatalogSnapshot: publicLoader },
       "main",
       true,
     );
