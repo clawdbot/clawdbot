@@ -47,3 +47,33 @@ export function closeSessionMenus(root: ParentNode) {
     }
   }
 }
+
+export function handleSessionPickerEvent(root: ParentNode, event: Event) {
+  const pickers = root.querySelectorAll<HTMLDetailsElement>(".chat-controls__inline-select[open]");
+  if (pickers.length === 0) {
+    return;
+  }
+  if (event.type === "keydown") {
+    const keyEvent = event as KeyboardEvent;
+    if (keyEvent.key !== "Escape") {
+      return;
+    }
+    const picker =
+      [...pickers].find((candidate) => event.composedPath().includes(candidate)) ?? pickers[0];
+    if (!picker) {
+      return;
+    }
+    const restoreFocus = event.composedPath().includes(picker);
+    keyEvent.preventDefault();
+    picker.open = false;
+    if (restoreFocus) {
+      picker.querySelector<HTMLElement>("summary")?.focus();
+    }
+    return;
+  }
+  for (const picker of pickers) {
+    if (!event.composedPath().includes(picker)) {
+      picker.open = false;
+    }
+  }
+}

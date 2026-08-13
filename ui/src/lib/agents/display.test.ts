@@ -15,23 +15,30 @@ import {
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
+  normalizeAgentTargetLabel,
   resolveEffectiveModelFallbacks,
   resolveToolProfileOptions,
   resolveToolSections,
 } from "./display.ts";
 
-describe("normalizeAgentLabel", () => {
+describe("normalizeAgentTargetLabel", () => {
   it("uses resolved configured names but preserves ids for synthesized defaults", () => {
     expect(
-      normalizeAgentLabel({ id: "main" }, { name: "Pacino", nameSource: "workspace" }),
+      normalizeAgentTargetLabel({ id: "main" }, { name: "Pacino", nameSource: "workspace" }),
     ).toBe("Pacino");
     expect(
-      normalizeAgentLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
+      normalizeAgentTargetLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
     ).toBe("research");
   });
 
   it("preserves the id when an older Gateway omits name provenance", () => {
-    expect(normalizeAgentLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
+    expect(normalizeAgentTargetLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
+  });
+
+  it("keeps the shared hydrated-name fallback for existing callers", () => {
+    expect(normalizeAgentLabel({ id: "legacy" }, { name: "Workspace Molty" })).toBe(
+      "Workspace Molty",
+    );
   });
 });
 

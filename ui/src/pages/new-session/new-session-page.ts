@@ -8,7 +8,7 @@ import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -33,6 +33,7 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
+  handleSessionPickerEvent,
   presenceStateSignature,
   readPresenceEntries,
 } from "./new-session-runtime.ts";
@@ -207,35 +208,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   handleEvent(event: Event) {
-    const pickers = this.querySelectorAll<HTMLDetailsElement>(
-      ".chat-controls__inline-select[open]",
-    );
-    if (pickers.length === 0) {
-      return;
-    }
-    if (event.type === "keydown") {
-      const keyEvent = event as KeyboardEvent;
-      if (keyEvent.key !== "Escape") {
-        return;
-      }
-      const picker =
-        [...pickers].find((candidate) => event.composedPath().includes(candidate)) ?? pickers[0];
-      if (!picker) {
-        return;
-      }
-      const restoreFocus = event.composedPath().includes(picker);
-      keyEvent.preventDefault();
-      picker.open = false;
-      if (restoreFocus) {
-        picker.querySelector<HTMLElement>("summary")?.focus();
-      }
-      return;
-    }
-    pickers.forEach((picker) => {
-      if (!event.composedPath().includes(picker)) {
-        picker.open = false;
-      }
-    });
+    handleSessionPickerEvent(this, event);
   }
 
   override connectedCallback() {
@@ -264,9 +237,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.closeConnectMachine();
     }
     this.gateway.retryPendingCatalogTarget();
-    if (this.gateway.connected) {
-      void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
-    }
+    void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
     this.place.modelControl.loadCatalogTargets(
       this.context,
       this.place.agentId,
@@ -645,7 +616,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return renderWelcomeState({
-      assistantName: agent ? normalizeAgentLabel(agent, identity) : "",
+      assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: agent?.identity?.avatar ?? agent?.identity?.emoji ?? null,
       assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
