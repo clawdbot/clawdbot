@@ -187,17 +187,10 @@ function replaceManagedImageRecordsWithLegacyTable(
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
 const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
-function markStateDatabaseAsV5(database: DatabaseSync): void {
+function markStateDatabaseVersion(database: DatabaseSync, version: 5 | 6): void {
   database.exec(`
-    PRAGMA user_version = 5;
-    UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
-  `);
-}
-
-function markStateDatabaseAsV6(database: DatabaseSync): void {
-  database.exec(`
-    PRAGMA user_version = 6;
-    UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary';
+    PRAGMA user_version = ${version};
+    UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
   `);
 }
 
@@ -267,7 +260,7 @@ function seedV6CommitmentSchema(database: DatabaseSync): void {
       scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
     ) VALUES ('test', 'preserved-lease', 'migration-test', 100, 50, '{}', 1, 2);
   `);
-  markStateDatabaseAsV6(database);
+  markStateDatabaseVersion(database, 6);
 }
 
 function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
@@ -315,7 +308,7 @@ function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
     CREATE INDEX idx_commitments_agent_sent
       ON commitments(agent_id, status, sent_at_ms, session_key);
   `);
-  markStateDatabaseAsV6(database);
+  markStateDatabaseVersion(database, 6);
 }
 
 function seedPartiallyAdditiveV6CommitmentSchema(database: DatabaseSync): void {
@@ -339,15 +332,28 @@ function seedPartiallyAdditiveV6CommitmentSchema(database: DatabaseSync): void {
       ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
     CREATE INDEX idx_commitments_status_due
       ON commitments(status, due_earliest_ms, due_latest_ms);
-    INSERT INTO commitments (
-      id, agent_id, session_key, channel, account_id, kind, status, dedupe_key,
-      due_earliest_ms, due_latest_ms, updated_at_ms, last_attempt_at_ms, record_json
-    ) VALUES (
-      'partial-commitment', 'main', 'agent:main:main', 'telegram', 'default',
-      'followup', 'pending', 'partial-dedupe', 10, 20, 1, 1, '{}'
-    );
   `);
-  markStateDatabaseAsV6(database);
+  markStateDatabaseVersion(database, 6);
+}
+
+function seedEarlyCommitmentSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE commitments (
+      id TEXT NOT NULL PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      due_earliest_ms INTEGER NOT NULL,
+      due_latest_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      record_json TEXT NOT NULL
+    );
+    CREATE INDEX idx_commitments_scope_due
+      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX idx_commitments_status_due
+      ON commitments(status, due_earliest_ms, due_latest_ms);
+  `);
 }
 
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
@@ -1476,36 +1482,42 @@ describe("openclaw state database", () => {
     },
   );
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "retires a v6 commitments layout with missing canonical indexes through %s",
-    (migrationPath) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      const { DatabaseSync } = requireNodeSqlite();
-      const legacy = new DatabaseSync(databasePath);
-      seedV6CommitmentSchema(legacy);
-      legacy.exec(`
-        DROP INDEX idx_commitments_scope_dedupe;
-        DROP INDEX idx_commitments_agent_sent;
-      `);
-      legacy.close();
-
-      if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Retired shared state commitments table and indexes"],
-          warnings: [],
-        });
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      expect(
-        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
-      ).toBeUndefined();
+  // The canonical v6 case above proves both runtime and Doctor orchestration,
+  // reporting, and markers; these variants isolate historical layout recognition.
+  it.each([
+    {
+      label: "v6 commitments with missing canonical indexes",
+      seed: (database: DatabaseSync) => {
+        seedV6CommitmentSchema(database);
+        database.exec(`
+          DROP INDEX idx_commitments_scope_dedupe;
+          DROP INDEX idx_commitments_agent_sent;
+        `);
+      },
     },
-  );
+    {
+      label: "supported additive v6 commitments layout",
+      seed: seedAdditiveV6CommitmentSchema,
+    },
+    {
+      label: "partially additive v6 commitments layout",
+      seed: seedPartiallyAdditiveV6CommitmentSchema,
+    },
+  ])("retires the $label through runtime open", ({ seed }) => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    seed(legacy);
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(
+      migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+    ).toBeUndefined();
+  });
 
   it.each(["runtime open", "doctor repair"] as const)(
     "retires the supported early commitments layout through %s",
@@ -1516,89 +1528,13 @@ describe("openclaw state database", () => {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       const { DatabaseSync } = requireNodeSqlite();
       const early = new DatabaseSync(databasePath);
-      early.exec(`
-        CREATE TABLE commitments (
-          id TEXT NOT NULL PRIMARY KEY,
-          agent_id TEXT NOT NULL,
-          session_key TEXT NOT NULL,
-          channel TEXT NOT NULL,
-          status TEXT NOT NULL,
-          due_earliest_ms INTEGER NOT NULL,
-          due_latest_ms INTEGER NOT NULL,
-          updated_at_ms INTEGER NOT NULL,
-          record_json TEXT NOT NULL
-        );
-        CREATE INDEX idx_commitments_scope_due
-          ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-        CREATE INDEX idx_commitments_status_due
-          ON commitments(status, due_earliest_ms, due_latest_ms);
-        INSERT INTO commitments (
-          id, agent_id, session_key, channel, status, due_earliest_ms,
-          due_latest_ms, updated_at_ms, record_json
-        ) VALUES (
-          'early-commitment', 'main', 'agent:main:main', 'telegram', 'pending',
-          10, 20, 1, '{}'
-        );
-      `);
+      seedEarlyCommitmentSchema(early);
       early.close();
 
       if (migrationPath === "doctor repair") {
         const result = repairOpenClawStateDatabaseSchema(options);
         expect(result.warnings).toEqual([]);
         expect(result.changes).toContain("Retired shared state commitments table and indexes");
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      expect(
-        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["runtime open", "doctor repair"] as const)(
-    "retires the supported additive v6 commitments layout through %s",
-    (migrationPath) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      const { DatabaseSync } = requireNodeSqlite();
-      const additive = new DatabaseSync(databasePath);
-      seedAdditiveV6CommitmentSchema(additive);
-      additive.close();
-
-      if (migrationPath === "doctor repair") {
-        const result = repairOpenClawStateDatabaseSchema(options);
-        expect(result.warnings).toEqual([]);
-        expect(result.changes).toContain("Retired shared state commitments table and indexes");
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      expect(
-        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["runtime open", "doctor repair"] as const)(
-    "retires a partially additive v6 commitments layout through %s",
-    (migrationPath) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      const { DatabaseSync } = requireNodeSqlite();
-      const partial = new DatabaseSync(databasePath);
-      seedPartiallyAdditiveV6CommitmentSchema(partial);
-      partial.close();
-
-      if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Retired shared state commitments table and indexes"],
-          warnings: [],
-        });
       }
       const migrated = openOpenClawStateDatabase(options);
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
@@ -1635,7 +1571,7 @@ describe("openclaw state database", () => {
         CREATE INDEX idx_commitments_scope_due
           ON foreign_commitment_index_owner(marker);
       `);
-      markStateDatabaseAsV6(foreign);
+      markStateDatabaseVersion(foreign, 6);
       foreign.close();
 
       if (migrationPath === "doctor repair") {
@@ -2877,9 +2813,16 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "rejects a missing stable v5 table before the v7 migration through %s",
-    (migrationPath) => {
+  it.each(
+    ([5, 6] as const).flatMap((version) =>
+      (["runtime open", "doctor repair"] as const).map((migrationPath) => ({
+        migrationPath,
+        version,
+      })),
+    ),
+  )(
+    "rejects a missing stable v$version table before the v7 migration through $migrationPath",
+    ({ migrationPath, version }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -2887,7 +2830,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       const { DatabaseSync } = requireNodeSqlite();
       const damaged = new DatabaseSync(databasePath);
       damaged.exec("DROP TABLE auth_profile_stores;");
-      markStateDatabaseAsV5(damaged);
+      markStateDatabaseVersion(damaged, version);
       damaged.close();
 
       if (migrationPath === "runtime open") {
@@ -2910,7 +2853,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             )
             .get(),
         ).toBeUndefined();
-        expect(readSqliteNumberPragma(after, "user_version")).toBe(5);
+        expect(readSqliteNumberPragma(after, "user_version")).toBe(version);
       } finally {
         after.close();
       }
@@ -2928,7 +2871,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       DROP TABLE worker_session_tool_operations;
       DROP TABLE worker_turn_tool_authorities;
     `);
-    markStateDatabaseAsV5(legacy);
+    markStateDatabaseVersion(legacy, 5);
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
@@ -2945,46 +2888,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       { name: "worker_turn_tool_authorities" },
     ]);
   });
-
-  it.each(["runtime open", "doctor repair"] as const)(
-    "rejects a missing stable v6 table before the v7 migration through %s",
-    (migrationPath) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const damaged = new DatabaseSync(databasePath);
-      damaged.exec("DROP TABLE auth_profile_stores;");
-      markStateDatabaseAsV6(damaged);
-      damaged.close();
-
-      if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(
-          /missing table auth_profile_stores/iu,
-        );
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [],
-          warnings: [expect.stringContaining("missing table auth_profile_stores")],
-        });
-      }
-
-      const after = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(
-          after
-            .prepare(
-              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
-            )
-            .get(),
-        ).toBeUndefined();
-        expect(readSqliteNumberPragma(after, "user_version")).toBe(6);
-      } finally {
-        after.close();
-      }
-    },
-  );
 
   it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
     const stateDir = createTempStateDir();
@@ -3993,7 +3896,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason");
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4035,7 +3938,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         5678,
       );
     legacyDb.exec("ALTER TABLE claw_package_refs DROP COLUMN updated_at_ms");
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4062,7 +3965,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE claw_package_refs DROP COLUMN extension_unavailable_json;
       ALTER TABLE claw_package_refs DROP COLUMN extension_adapter_identity;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -4096,7 +3999,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4134,7 +4037,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_session_placements DROP COLUMN terminal_at_ms;
       ALTER TABLE worker_session_placements DROP COLUMN terminal_reason;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4187,7 +4090,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       DROP TABLE worker_transcript_commits;
       DROP TABLE worker_transcript_commit_heads;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4251,7 +4154,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       DROP INDEX idx_operator_approvals_resolution_ref;
       ALTER TABLE operator_approvals DROP COLUMN resolution_ref;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -4424,7 +4327,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ('alpha', 'tie-second', '{}', 10),
         ('beta', 'only', '{}', 30);
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -4464,7 +4367,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -4604,7 +4507,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         110,
         110,
       );
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4768,7 +4671,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
       ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
     `);
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4797,7 +4700,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE task_runs DROP COLUMN detail_json");
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -4856,7 +4759,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         100,
         100,
       );
-    markStateDatabaseAsV5(legacyDb);
+    markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
     expect(() =>
