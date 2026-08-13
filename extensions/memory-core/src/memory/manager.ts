@@ -20,7 +20,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderRequest,
+  EmbeddingProviderRuntime,
+} from "./embeddings.js";
 import { awaitPendingManagerWork } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { closeMemoryDatabase } from "./manager-db.js";
@@ -308,6 +312,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       allowEmbeddingBootstrapFallback?: boolean;
       queuedSessionOwner?: boolean;
       suppressFallbackActivation?: boolean;
+      providerGeneration?: {
+        provider: EmbeddingProvider;
+        runtime?: EmbeddingProviderRuntime;
+      };
     },
   ): Promise<void> {
     if (this.syncing) {
@@ -371,7 +379,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
 
       const runGeneration = async (keywordOnly: boolean) => {
-        this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        this.beginSyncProviderGeneration({
+          forceFtsOnly: keywordOnly,
+          providerGeneration: options?.providerGeneration,
+        });
         const previousSuppressFallbackActivation = this.suppressSyncFallbackActivation;
         if (options?.suppressFallbackActivation) {
           this.suppressSyncFallbackActivation = true;

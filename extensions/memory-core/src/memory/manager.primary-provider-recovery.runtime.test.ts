@@ -36,6 +36,7 @@ type EmbeddingServer = {
   close: () => Promise<void>;
   requests: CapturedEmbeddingRequest[];
   setPrimaryAvailable: (available: boolean) => void;
+  holdPrimaryBatches: () => { release: () => void };
 };
 
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -61,6 +62,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 
 async function startEmbeddingServer(): Promise<EmbeddingServer> {
   let primaryAvailable = false;
+  let primaryBatchGate: Promise<void> | null = null;
   const requests: CapturedEmbeddingRequest[] = [];
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -73,6 +75,9 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
           res.writeHead(503, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { message: "primary unavailable" } }));
           return;
+        }
+        if (provider === "primary" && Array.isArray(body.input) && primaryBatchGate) {
+          await primaryBatchGate;
         }
         const input = Array.isArray(body.input) ? body.input : [body.input];
         res.writeHead(200, { "content-type": "application/json" });
@@ -106,6 +111,18 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
     requests,
     setPrimaryAvailable: (available) => {
       primaryAvailable = available;
+    },
+    holdPrimaryBatches: () => {
+      let release: () => void = () => {};
+      primaryBatchGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return {
+        release: () => {
+          primaryBatchGate = null;
+          release();
+        },
+      };
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -260,5 +277,78 @@ describe("memory manager configured runtime primary provider recovery", () => {
     expect(
       server.requests.slice(requestsBeforeRecovery).map((request) => request.provider),
     ).toEqual(expect.arrayContaining(["primary"]));
+  });
+
+  it("keeps fallback searches live while the primary recovery reindex is held open", async () => {
+    if (!server) {
+      throw new Error("missing embedding server");
+    }
+    const cfg = createConfig({
+      baseUrl: server.baseUrl,
+      workspaceDir: path.join(fixtureRoot, "workspace"),
+    });
+    const manager = await withStepTimeout(
+      "manager creation",
+      MemoryIndexManager.get({ cfg, agentId: "main" }),
+    );
+    if (!manager) {
+      throw new Error("missing memory manager");
+    }
+    server.setPrimaryAvailable(true);
+    await withStepTimeout(
+      "initial primary sync",
+      expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined(),
+    );
+    server.setPrimaryAvailable(false);
+    await withStepTimeout(
+      "fallback activation search",
+      expect(manager.search("alpha runtime")).resolves.toEqual([]),
+    );
+    await withStepTimeout(
+      "fallback sync",
+      expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined(),
+    );
+    await withStepTimeout(
+      "fallback live search",
+      expect(manager.search("alpha runtime")).resolves.not.toStrictEqual([]),
+    );
+
+    // Hold only the primary's batch reindex; the recovery probe ping stays
+    // free so recovery reaches the shadow build and stalls there.
+    const heldBatches = server.holdPrimaryBatches();
+    const requestsBeforeRecovery = server.requests.length;
+    server.setPrimaryAvailable(true);
+    await withStepTimeout(
+      "search scheduling primary recovery",
+      expect(manager.search("alpha runtime")).resolves.not.toStrictEqual([]),
+    );
+    await withStepTimeout(
+      "recovery reindex start",
+      vi.waitFor(() => {
+        const heldRequest = server!.requests
+          .slice(requestsBeforeRecovery)
+          .find((request) => request.provider === "primary" && Array.isArray(request.body.input));
+        expect(heldRequest).toBeDefined();
+      }),
+    );
+
+    // The primary reindex is stalled on the held batch; a fallback search
+    // admitted now must still return fallback results without waiting.
+    await withStepTimeout(
+      "fallback search during held primary reindex",
+      expect(manager.search("alpha runtime")).resolves.not.toStrictEqual([]),
+    );
+    expect(manager.status().fallback).toBeDefined();
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    heldBatches.release();
+    await withStepTimeout(
+      "primary recovery wait",
+      vi.waitFor(() => {
+        expect(manager.status().model).toBe("primary-embed");
+        expect(manager.status().fallback).toBeUndefined();
+        expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      }),
+    );
   });
 });

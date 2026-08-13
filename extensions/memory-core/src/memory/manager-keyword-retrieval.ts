@@ -1,4 +1,5 @@
 // Memory Core plugin module owns keyword retrieval and ranking.
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
@@ -172,12 +173,15 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
     );
   }
 
-  protected attachRecallMetadata<T extends MemorySearchResult & { id: string }>(results: T[]): T[] {
+  protected attachRecallMetadata<T extends MemorySearchResult & { id: string }>(
+    results: T[],
+    db: DatabaseSync = this.db,
+  ): T[] {
     if (results.length === 0) {
       return results;
     }
     const metadataById = readMemoryRecallMetadata(
-      this.db,
+      db,
       results.map((entry) => entry.id),
     );
     return results.map((entry) => {
@@ -204,12 +208,14 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
       rankingQuery?: string;
     },
     sourceFilterList?: MemorySource[],
+    searchContext?: { db?: DatabaseSync; ftsAvailable?: boolean },
   ): Promise<KeywordSearchHit[]> {
-    if (!this.fts.enabled || !this.fts.available) {
+    if (!this.fts.enabled || !(searchContext?.ftsAvailable ?? this.fts.available)) {
       return [];
     }
+    const searchDb = searchContext?.db ?? this.db;
     const bodySearch = searchKeyword({
-      db: this.db,
+      db: searchDb,
       ftsTable: FTS_TABLE,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
@@ -226,7 +232,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
     });
     const exactPathQuery = options?.exactPathQuery ?? query;
     const pathSearch = searchPathKeyword({
-      db: this.db,
+      db: searchDb,
       pathFtsTable: PATH_FTS_TABLE,
       query,
       exactPathQuery,
@@ -254,7 +260,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
       ],
       exactPathQuery,
     );
-    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit));
+    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit), searchDb);
   }
 
   protected async searchKeywordWithFallback(
@@ -262,12 +268,14 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
     limit: number,
     options: { boostFallbackRanking?: boolean } | undefined,
     sourceFilterList: MemorySource[],
+    searchContext?: { db?: DatabaseSync; ftsAvailable?: boolean },
   ): Promise<KeywordSearchHit[]> {
     const fullQueryResults = await this.searchKeyword(
       query,
       limit,
       options,
       sourceFilterList,
+      searchContext,
     ).catch(() => []);
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
@@ -295,6 +303,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderRecovery {
           limit,
           { ...options, exactPathQuery: query, rankingQuery: query },
           sourceFilterList,
+          searchContext,
         ).catch(() => []),
       ),
     );

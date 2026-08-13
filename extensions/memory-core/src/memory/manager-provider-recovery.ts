@@ -1,4 +1,5 @@
 // Memory Core plugin module owns primary provider recovery after fallback activation.
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -7,6 +8,7 @@ import {
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
+  type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import {
@@ -16,58 +18,58 @@ import {
 import {
   clearMemoryEmbeddingProbeCacheEntry,
   MemoryProviderLifecycle,
-  type MemoryEmbeddingBootstrapDebug,
 } from "./manager-provider-lifecycle.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   shouldAttemptPrimaryProviderRecovery,
-  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
-import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import { resolveMemoryIndexProviderIdentities } from "./manager-reindex-state.js";
 
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
-type PrimaryProviderRecoveryFallbackState = {
+type PrimaryProviderRecoveryProbe = {
   provider: EmbeddingProvider;
-  providerRuntime?: EmbeddingProviderRuntime;
-  providerKey: string | null;
-  fallbackFrom?: string;
-  fallbackReason?: string;
-  providerUnavailableReason?: string;
-  providerLifecycle: MemoryProviderLifecycleState;
-  providerInitialized: boolean;
-  embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
+  runtime?: EmbeddingProviderRuntime;
+};
+
+// While the recovery shadow build runs, the manager's write state points at
+// the build's temp database. A search admitted during that window reads the
+// still-live fallback-owned index through this snapshot instead.
+export type PrimaryRecoverySearchSnapshot = {
+  db: DatabaseSync;
+  ftsAvailable: boolean;
+  vectorReady: Promise<boolean> | null;
 };
 
 export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
-  private primaryProviderRecoveryFallbackState: PrimaryProviderRecoveryFallbackState | null = null;
   // Throttles primary-provider recovery attempts so a latched fallback does
   // not bring the network path back online every search call. Without this,
   // a transient remote outage permanently downgrades the in-gateway tool even
   // after the primary is reachable again (only a full process restart clears
   // the latch).
   private lastPrimaryRecoveryAttemptMs = 0;
-  private primaryProviderRecoveryPromise: Promise<boolean> | null = null;
+  private primaryProviderRecoveryPromise: Promise<PrimaryProviderRecoveryProbe | null> | null =
+    null;
+  private pendingPrimaryRecoveryProbe: PrimaryProviderRecoveryProbe | null = null;
+  private primaryRecoveryBuildSnapshot: PrimaryRecoverySearchSnapshot | null = null;
   protected primaryProviderRecoveryBackgroundPromise: Promise<void> | null = null;
 
+  protected getActivePrimaryRecoveryBuildSnapshot(): PrimaryRecoverySearchSnapshot | null {
+    return this.primaryRecoveryBuildSnapshot;
+  }
+
   /**
-   * Attempts to restore the configured primary embedding provider after a
-   * fallback was activated. Returns true when the primary is reachable again
-   * and the manager has switched back.
-   *
-   * Without this, a single transient outage permanently latches the in-gateway
-   * memory tool onto the fallback provider. The index is keyed by the original
-   * model identity, so subsequent searches fail identity validation until the
-   * gateway process fully restarts. In-process restarts and config soft-reloads
-   * reuse the singleton manager instance and must recover explicitly.
+   * Probes the configured primary embedding provider without touching the
+   * manager's active provider or index state. Fallback searches keep running
+   * against the fallback-owned index while the probe is in flight; the
+   * recovered provider is applied later, only after the primary-owned shadow
+   * index is built and validated.
    */
   protected async attemptPrimaryProviderRecovery(params: {
     force?: boolean;
     signal?: AbortSignal;
-    admitted?: boolean;
-    transactional?: boolean;
-  }): Promise<boolean> {
+  }): Promise<PrimaryProviderRecoveryProbe | null> {
     if (params.signal?.aborted) {
       throw params.signal.reason instanceof Error
         ? params.signal.reason
@@ -87,22 +89,25 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
         force: params.force,
       })
     ) {
-      return false;
+      return null;
     }
     this.lastPrimaryRecoveryAttemptMs = nowMs;
-    const recovery = params.admitted
-      ? this.attemptPrimaryProviderRecoveryOnce({ transactional: params.transactional })
-      : this.withManagerOperation(
-          async () =>
-            await this.attemptPrimaryProviderRecoveryOnce({
-              transactional: params.transactional,
-            }),
-        );
+    const recovery = this.withManagerOperation(async () => await this.probePrimaryProvider());
     this.primaryProviderRecoveryPromise = recovery;
     void recovery.then(
-      () => {
+      (probe) => {
         if (this.primaryProviderRecoveryPromise === recovery) {
           this.primaryProviderRecoveryPromise = null;
+        }
+        // A caller that aborted its wait must not orphan the recovered
+        // provider: keep the completed probe manager-owned until the
+        // recovery transaction consumes it.
+        if (probe) {
+          const previous = this.pendingPrimaryRecoveryProbe;
+          this.pendingPrimaryRecoveryProbe = probe;
+          if (previous && previous !== probe) {
+            this.retireRecoveredProvider(previous.provider);
+          }
         }
       },
       () => {
@@ -115,9 +120,9 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
   }
 
   private async waitForPrimaryProviderRecovery(
-    recovery: Promise<boolean>,
+    recovery: Promise<PrimaryProviderRecoveryProbe | null>,
     signal?: AbortSignal,
-  ): Promise<boolean> {
+  ): Promise<PrimaryProviderRecoveryProbe | null> {
     if (!signal) {
       return await recovery;
     }
@@ -126,7 +131,7 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
     }
     return await Promise.race([
       recovery,
-      new Promise<boolean>((_resolve, reject) => {
+      new Promise<PrimaryProviderRecoveryProbe | null>((_resolve, reject) => {
         const abort = () => {
           reject(signal.reason instanceof Error ? signal.reason : new Error("search aborted"));
         };
@@ -139,9 +144,7 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
     ]);
   }
 
-  private async attemptPrimaryProviderRecoveryOnce(params?: {
-    transactional?: boolean;
-  }): Promise<boolean> {
+  private async probePrimaryProvider(): Promise<PrimaryProviderRecoveryProbe | null> {
     let pendingProvider: EmbeddingProvider | null = null;
     const discardPending = (label: string): void => {
       const provider = pendingProvider;
@@ -163,7 +166,7 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
       if (!providerResult.provider || providerResult.fallbackFrom) {
         pendingProvider = providerResult.provider;
         discardPending("discarded recovery probe");
-        return false;
+        return null;
       }
       pendingProvider = providerResult.provider;
       const pingProvider = providerResult.provider;
@@ -183,133 +186,130 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
         message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
         run: async (signal) => await pingProvider.embedQuery("ping", { signal }),
       });
-      const previousProvider = this.provider;
-      const previousFallbackState =
-        previousProvider && params?.transactional
-          ? {
-              provider: previousProvider,
-              providerKey: this.providerKey,
-              ...(this.providerRuntime ? { providerRuntime: this.providerRuntime } : {}),
-              ...(this.fallbackFrom ? { fallbackFrom: this.fallbackFrom } : {}),
-              ...(this.fallbackReason ? { fallbackReason: this.fallbackReason } : {}),
-              ...(this.providerUnavailableReason
-                ? { providerUnavailableReason: this.providerUnavailableReason }
-                : {}),
-              providerLifecycle: this.providerLifecycle,
-              providerInitialized: this.providerInitialized,
-              ...(this.embeddingBootstrapFailure
-                ? { embeddingBootstrapFailure: this.embeddingBootstrapFailure }
-                : {}),
-            }
-          : null;
-      this.applyProviderResult(providerResult);
-      this.providerKey = this.computeProviderKey();
-      this.batch = this.resolveBatchConfig();
       pendingProvider = null;
-      if (previousFallbackState) {
-        this.primaryProviderRecoveryFallbackState = previousFallbackState;
-      } else if (previousProvider && previousProvider !== this.provider) {
-        void this.retireProvider(previousProvider);
-      }
-      clearMemoryEmbeddingProbeCacheEntry(this.cacheKey);
-      log.info(
-        `memory embeddings: recovered primary provider (${providerResult.provider.id}) from fallback`,
-      );
-      return true;
+      return {
+        provider: providerResult.provider,
+        ...(providerResult.runtime ? { runtime: providerResult.runtime } : {}),
+      };
     } catch (err) {
       discardPending("failed recovery probe");
       log.debug(
         `memory embeddings: primary recovery attempted but failed: ${formatErrorMessage(err)}`,
       );
+      return null;
+    }
+  }
+
+  private recoveredProviderMetaMatches(probe: PrimaryProviderRecoveryProbe): boolean {
+    const meta = this.readMeta();
+    if (!meta || meta.provider !== probe.provider.id || meta.model !== probe.provider.model) {
       return false;
     }
+    const identities = resolveMemoryIndexProviderIdentities({
+      provider: probe.provider,
+      cacheKeyData: probe.runtime?.cacheKeyData,
+      aliases: probe.runtime?.indexIdentityAliases,
+    });
+    const providerKey = identities[0]?.providerKey;
+    return providerKey !== undefined && meta.providerKey === providerKey;
   }
 
-  private async reindexAfterPrimaryProviderRecovery(
-    recoveredProvider: EmbeddingProvider | null,
-  ): Promise<MemoryIndexIdentityState> {
-    let indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
-    // A forced sync may join a fallback-owned generation that was already active
-    // when recovery completed. Recheck after that join and admit one fresh primary
-    // generation so recovery cannot clear fallback state with a stale index.
-    for (let attempt = 0; indexIdentity.status !== "valid" && attempt < 2; attempt += 1) {
-      try {
-        await this.syncAdmitted(
-          { reason: "search", force: true },
-          { suppressFallbackActivation: true },
-        );
-      } catch (err) {
-        log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
+  private async buildPrimaryProviderShadowIndex(
+    probe: PrimaryProviderRecoveryProbe,
+  ): Promise<boolean> {
+    this.primaryRecoveryBuildSnapshot = {
+      db: this.db,
+      ftsAvailable: this.fts.available,
+      vectorReady: this.vectorReady,
+    };
+    try {
+      // A forced sync may join a fallback-owned sync that was already in
+      // flight when recovery completed. Recheck after that join and admit one
+      // fresh primary generation so recovery cannot cut over onto a stale
+      // fallback-owned index.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await this.syncAdmitted(
+            { reason: "search", force: true },
+            {
+              suppressFallbackActivation: true,
+              providerGeneration: {
+                provider: probe.provider,
+                ...(probe.runtime ? { runtime: probe.runtime } : {}),
+              },
+            },
+          );
+        } catch (err) {
+          log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
+        }
+        if (this.recoveredProviderMetaMatches(probe)) {
+          return true;
+        }
       }
-      indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
-    }
-    if (indexIdentity.status === "valid" && this.provider !== recoveredProvider) {
-      return {
-        status: "mismatched",
-        reason: "primary recovery reindex completed with a different active provider",
-      };
-    }
-    return indexIdentity;
-  }
-
-  private commitPrimaryProviderRecovery(): void {
-    const previous = this.primaryProviderRecoveryFallbackState;
-    this.primaryProviderRecoveryFallbackState = null;
-    this.lastPrimaryRecoveryAttemptMs = 0;
-    if (previous && previous.provider !== this.provider) {
-      void this.retireProvider(previous.provider).catch((err: unknown) => {
-        log.debug(`memory embeddings: failed to retire recovered fallback: ${String(err)}`);
-      });
+      return false;
+    } finally {
+      this.primaryRecoveryBuildSnapshot = null;
     }
   }
 
-  private async rollbackPrimaryProviderRecovery(): Promise<void> {
-    const previous = this.primaryProviderRecoveryFallbackState;
-    if (!previous) {
+  private retireRecoveredProvider(provider: EmbeddingProvider | null): void {
+    if (!provider || provider === this.provider) {
       return;
     }
-    const failedPrimary = this.provider;
-    this.provider = previous.provider;
-    this.providerRuntime = previous.providerRuntime;
-    this.providerKey = previous.providerKey;
-    this.fallbackFrom = previous.fallbackFrom;
-    this.fallbackReason = previous.fallbackReason;
-    this.providerUnavailableReason = previous.providerUnavailableReason;
-    this.providerLifecycle = previous.providerLifecycle;
-    this.providerInitialized = previous.providerInitialized;
-    this.embeddingBootstrapFailure = previous.embeddingBootstrapFailure;
-    this.batch = this.resolveBatchConfig();
-    this.primaryProviderRecoveryFallbackState = null;
-    this.refreshIndexIdentityDirty({ providerKeyKnown: true });
-    if (failedPrimary && failedPrimary !== previous.provider) {
-      await this.retireProvider(failedPrimary).catch((err: unknown) => {
-        log.debug(`memory embeddings: failed to retire failed primary recovery: ${String(err)}`);
-      });
-    }
+    void this.retireProvider(provider).catch((err: unknown) => {
+      log.debug(`memory embeddings: failed to retire failed primary recovery: ${String(err)}`);
+    });
+  }
+
+  private async commitPrimaryProviderRecovery(probe: PrimaryProviderRecoveryProbe): Promise<void> {
+    await this.withManagerExclusiveOperation(async () => {
+      if (!this.recoveredProviderMetaMatches(probe)) {
+        this.retireRecoveredProvider(probe.provider);
+        return;
+      }
+      const previousProvider = this.provider;
+      const providerResult: EmbeddingProviderResult = {
+        provider: probe.provider,
+        requestedProvider: this.requestedProvider ?? this.settings.provider,
+        ...(probe.runtime ? { runtime: probe.runtime } : {}),
+      };
+      this.applyProviderResult(providerResult);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      this.lastPrimaryRecoveryAttemptMs = 0;
+      clearMemoryEmbeddingProbeCacheEntry(this.cacheKey);
+      this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+      if (previousProvider && previousProvider !== this.provider) {
+        void this.retireProvider(previousProvider).catch((err: unknown) => {
+          log.debug(`memory embeddings: failed to retire recovered fallback: ${String(err)}`);
+        });
+      }
+      log.info(
+        `memory embeddings: recovered primary provider (${probe.provider.id}) from fallback`,
+      );
+    });
   }
 
   private async runPrimaryProviderRecoveryTransaction(): Promise<void> {
-    await this.withManagerExclusiveOperation(async () => {
-      const recovered = await this.attemptPrimaryProviderRecovery({
-        admitted: true,
-        transactional: true,
-      });
-      if (!recovered) {
-        return;
-      }
-      const recoveredProvider = this.provider;
-      try {
-        const identity = await this.reindexAfterPrimaryProviderRecovery(recoveredProvider);
-        if (identity.status === "valid") {
-          this.commitPrimaryProviderRecovery();
-        } else {
-          await this.rollbackPrimaryProviderRecovery();
-        }
-      } catch (err) {
-        await this.rollbackPrimaryProviderRecovery();
-        throw err;
-      }
-    });
+    const probe =
+      this.consumePendingPrimaryRecoveryProbe() ?? (await this.attemptPrimaryProviderRecovery({}));
+    if (!probe) {
+      return;
+    }
+    // The awaited attempt may have re-stored the probe for a caller that
+    // aborted; this transaction owns it from here on.
+    this.pendingPrimaryRecoveryProbe = null;
+    if (!(await this.buildPrimaryProviderShadowIndex(probe))) {
+      this.retireRecoveredProvider(probe.provider);
+      return;
+    }
+    await this.commitPrimaryProviderRecovery(probe);
+  }
+
+  private consumePendingPrimaryRecoveryProbe(): PrimaryProviderRecoveryProbe | null {
+    const probe = this.pendingPrimaryRecoveryProbe;
+    this.pendingPrimaryRecoveryProbe = null;
+    return probe;
   }
 
   protected schedulePrimaryProviderRecovery(): void {
@@ -321,8 +321,9 @@ export abstract class MemoryProviderRecovery extends MemoryProviderLifecycle {
     ) {
       return;
     }
-    // A stalled primary probe must not block a healthy fallback result or the
-    // caller's deadline; reindex only after the manager has recovered primary.
+    // The probe and shadow reindex both run outside the manager-exclusive
+    // gate, so healthy fallback searches keep serving results until the final
+    // provider/index cutover.
     const recovery = (async () => {
       if (!this.closing && !this.closed) {
         await this.runPrimaryProviderRecoveryTransaction();

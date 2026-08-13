@@ -1,4 +1,5 @@
 // Memory Core plugin module owns embedding provider lifecycle.
+import type { DatabaseSync } from "node:sqlite";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatErrorMessage,
@@ -25,6 +26,7 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderRequest,
   type EmbeddingProviderResult,
+  type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
@@ -133,6 +135,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       allowEmbeddingBootstrapFallback?: boolean;
       queuedSessionOwner?: boolean;
       suppressFallbackActivation?: boolean;
+      providerGeneration?: {
+        provider: EmbeddingProvider;
+        runtime?: EmbeddingProviderRuntime;
+      };
     },
   ): Promise<void>;
 
@@ -474,7 +480,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+  protected refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean; db?: DatabaseSync }) {
     const provider =
       this.settings.provider === "none"
         ? null
@@ -486,6 +492,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
+      ...(params?.db
+        ? {
+            meta: this.readMetaFrom(params.db),
+            hasIndexedChunks: this.hasIndexedChunksIn(params.db),
+          }
+        : {}),
     });
     this.indexIdentityState = state;
     this.indexIdentityDirty =
