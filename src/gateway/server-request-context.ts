@@ -12,6 +12,10 @@ import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import {
+  createNodeWorkerSupervisorClient,
+  NODE_WORKER_SUPERVISOR_CLIENT_CONTEXT,
+} from "./node-worker-supervisor-client.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -168,6 +172,9 @@ export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
+  const workerSupervisorContext = {
+    [NODE_WORKER_SUPERVISOR_CLIENT_CONTEXT]: createNodeWorkerSupervisorClient(params.nodeRegistry),
+  };
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -370,6 +377,7 @@ export function createGatewayRequestContext(
     releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
     completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...workerSupervisorContext,
     ...(params.nodeDesktopService
       ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
       : {}),

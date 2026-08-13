@@ -420,6 +420,7 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              workerSupervisor,
             });
           } finally {
             progress?.stop();

@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { stableStringify } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -34,6 +32,10 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import {
+  nodeWorkerPlanHash,
+  type NodeWorkerLaunchInput,
+} from "./node-worker-supervisor-contract.js";
 
 const STDOUT_MAX_BYTES = 64 * 1024;
 const STDERR_MAX_BYTES = 4 * 1024;
@@ -42,14 +44,6 @@ const FORCE_STOP_WAIT_MS = 4_000;
 const RECOVERY_POLL_MS = 25;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
-
-type NodeWorkerLaunchInput = {
-  launchId: string;
-  gatewayNamespace: string;
-  bundleHash: string;
-  placementGeneration: number;
-  descriptor: WorkerLaunchDescriptor;
-};
 
 type ChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>;
 type StopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
@@ -84,15 +78,6 @@ type ObservedTerminal = ActiveBase & {
   persistenceError?: unknown;
 };
 type ActiveOwnership = RunningChild | ObservedTerminal;
-
-function nodeWorkerPlanHash(params: {
-  bundleHash: string;
-  descriptor: WorkerLaunchDescriptor;
-  gatewayNamespace: string;
-  placementGeneration: number;
-}): string {
-  return createHash("sha256").update(stableStringify(params)).digest("hex");
-}
 
 function resolveWorkerEntry(params: {
   bundleRoot: string;
