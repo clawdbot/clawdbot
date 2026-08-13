@@ -276,6 +276,48 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it("filters factory-native OpenClaw dynamic tools to the exact attested authority surface", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.factoryNativeAuthority = {
+      authority: {
+        toolSurface: { openClawDynamicTools: [] },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("agents_wait"),
+      createRuntimeDynamicTool("image_generate"),
+      createRuntimeDynamicTool("pdf"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(tools).toEqual([]);
+  });
+
+  it("keeps only factory-native OpenClaw tools explicitly named by authority", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.factoryNativeAuthority = {
+      authority: {
+        toolSurface: { openClawDynamicTools: ["pdf"] },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("agents_wait"),
+      createRuntimeDynamicTool("pdf"),
+      createRuntimeDynamicTool("tts"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(tools.map((tool) => tool.name)).toEqual(["pdf"]);
+  });
+
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

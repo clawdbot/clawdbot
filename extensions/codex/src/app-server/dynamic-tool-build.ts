@@ -436,7 +436,19 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         webSearchPolicy.persistentAllowed),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(collectorFilteredTools, toolsAllow);
+  // Factory-native authority owns an exact OpenClaw dynamic-tool list. Codex
+  // native shell/file tools are configured separately by the app-server, so
+  // filtering this list to `[]` does not disable code mode; it prevents
+  // unrelated host tools from leaking into the isolated builder turn. The
+  // later attestation remains a second, fail-closed check that every requested
+  // dynamic tool existed and no extra one survived normalization.
+  const effectiveToolsAllow = params.factoryNativeAuthority
+    ? [...params.factoryNativeAuthority.authority.toolSurface.openClawDynamicTools]
+    : toolsAllow;
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    collectorFilteredTools,
+    effectiveToolsAllow,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
