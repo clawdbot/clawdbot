@@ -22,6 +22,9 @@ export function normalizeXaiModelId(id: string): string {
   if (id === "grok-4.5-latest") {
     return "grok-4.5";
   }
+  if (id === "grok-4.6-latest") {
+    return "grok-4.6";
+  }
   if (id === "grok-build-latest") {
     return "grok-4.5";
   }

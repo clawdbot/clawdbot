@@ -117,7 +117,12 @@ async function captureXaiResponsesPayloadWithThinking(
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    cost: {
+      input: 2,
+      output: 6,
+      cacheRead: modelId === "grok-4.6" ? 0.5 : 0.3,
+      cacheWrite: 0,
+    },
     contextWindow: 500_000,
     maxTokens: 64_000,
   } as Model<"openai-responses">);

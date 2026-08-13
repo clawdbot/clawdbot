@@ -8,6 +8,7 @@ describe("normalizeXaiModelId", () => {
     expect(normalizeXaiModelId("grok-4.3-latest")).toBe("grok-4.3");
     expect(normalizeXaiModelId("grok-latest")).toBe("grok-latest");
     expect(normalizeXaiModelId("grok-4.5-latest")).toBe("grok-4.5");
+    expect(normalizeXaiModelId("grok-4.6-latest")).toBe("grok-4.6");
   });
 
   it("normalizes the current Grok Build alias", () => {
@@ -44,7 +45,9 @@ describe("normalizeXaiModelId", () => {
 
   it("identifies current frontier model ids and aliases", () => {
     expect(isXaiGrok46ModelId("grok-4.6")).toBe(true);
+    expect(isXaiGrok46ModelId("grok-4.6-latest")).toBe(true);
     expect(isXaiFrontierModelId("grok-4.6")).toBe(true);
+    expect(isXaiFrontierModelId("grok-4.6-latest")).toBe(true);
     expect(isXaiFrontierModelId("grok-4.5-latest")).toBe(true);
     expect(isXaiFrontierModelId("grok-build-latest")).toBe(true);
     expect(isXaiFrontierModelId("grok-4.3")).toBe(false);

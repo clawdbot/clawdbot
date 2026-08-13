@@ -4,7 +4,7 @@ import {
   asOptionalRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, isXaiGrok46ModelId, normalizeXaiModelId } from "./model-id.js";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
@@ -54,7 +54,17 @@ const XAI_GROK_43_COST = {
   cacheWrite: 0,
 } satisfies XaiCost;
 
-const XAI_FRONTIER_COST = {
+// xAI publishes separate short-context cached-input rates for Grok 4.5 and 4.6.
+// The flat OpenClaw catalog stores short-context rates; xAI doubles input,
+// cached-input, and output pricing at its documented 200k-token long-context threshold.
+const XAI_GROK_45_COST = {
+  input: 2,
+  output: 6,
+  cacheRead: 0.3,
+  cacheWrite: 0,
+} satisfies XaiCost;
+
+const XAI_GROK_46_COST = {
   input: 2,
   output: 6,
   cacheRead: 0.5,
@@ -74,14 +84,14 @@ const XAI_MODEL_CATALOG_ROWS: readonly XaiCatalogModelRow[] = [
     "Grok 4.6",
     true,
     ["text", "image"],
-    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_FRONTIER_COST },
+    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_GROK_46_COST },
   ],
   [
     "grok-4.5",
     "Grok 4.5",
     true,
     ["text", "image"],
-    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_FRONTIER_COST },
+    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_GROK_45_COST },
   ],
   [
     "grok-build-0.1",
@@ -258,6 +268,10 @@ function toModelDefinition(entry: XaiCatalogEntry): ModelDefinitionConfig {
   };
 }
 
+function resolveXaiFrontierCost(modelId: string): XaiCost {
+  return isXaiGrok46ModelId(modelId) ? XAI_GROK_46_COST : XAI_GROK_45_COST;
+}
+
 export function buildXaiModelDefinition(): ModelDefinitionConfig {
   return toModelDefinition(
     XAI_MODEL_CATALOG.find((entry) => entry.id === XAI_DEFAULT_MODEL_ID) ?? {
@@ -339,7 +353,7 @@ export function resolveXaiCatalogEntry(modelId: string) {
             ? 30_000
             : XAI_DEFAULT_MAX_TOKENS,
       cost: isXaiFrontierModelId(lower)
-        ? XAI_FRONTIER_COST
+        ? resolveXaiFrontierCost(lower)
         : lower.startsWith("grok-4.3")
           ? XAI_GROK_43_COST
           : lower.startsWith("grok-4.20")

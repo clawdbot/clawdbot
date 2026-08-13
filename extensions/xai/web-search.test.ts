@@ -951,6 +951,17 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves the Grok 4.6 latest alias to Grok 4.6", () => {
+    expectCatalogEntry("grok-4.6-latest", {
+      id: "grok-4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 64_000,
       cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
     });
   });
@@ -962,7 +973,7 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     });
   });
 
