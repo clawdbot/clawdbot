@@ -178,6 +178,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
   try {
     support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.agentId,
       channel,
       requirements: requiredCapabilities,
     });

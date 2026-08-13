@@ -1,6 +1,7 @@
 // Covers lazy outbound channel bootstrap, retry guards, auto-enable config, and
 // send-capable active registry short-circuiting.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -24,7 +25,8 @@ vi.mock("../../plugins/loader.js", () => ({
 
 const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTests } =
   await import("./channel-bootstrap.runtime.js");
-const { resolveOutboundDurableFinalDeliverySupport } = await import("./deliver-channel.js");
+const { resolveChannelOutboundDirectiveOptions, resolveOutboundDurableFinalDeliverySupport } =
+  await import("./deliver-channel.js");
 
 const discordConfig = {
   channels: {
@@ -35,6 +37,19 @@ const discordConfig = {
 const updatedDiscordConfig = {
   channels: {
     discord: { enabled: true },
+  },
+} satisfies OpenClawConfig;
+
+const explicitFleetDiscordConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: {
+      ops: { workspace: "/tmp/openclaw-ops" },
+      research: { workspace: "/tmp/openclaw-research" },
+    },
+  },
+  channels: {
+    discord: {},
   },
 } satisfies OpenClawConfig;
 
@@ -67,6 +82,71 @@ describe("bootstrapOutboundChannelPlugin", () => {
     });
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the admitted agent workspace during outbound preparation", async () => {
+    installDiscordSetupShell();
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
+      {
+        pluginId: "discord",
+        plugin: {
+          id: "discord",
+          meta: {},
+          outbound: {
+            extractMarkdownImages: true,
+            sendText: async () => ({ messageId: "1" }),
+          },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+
+    await expect(
+      resolveChannelOutboundDirectiveOptions({
+        channel: "discord",
+        cfg: explicitFleetDiscordConfig,
+        agentId: "ops",
+      }),
+    ).resolves.toEqual({ extractMarkdownImages: true });
+
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+    );
+  });
+
+  it("still rejects ownerless bootstrap in an explicit multi-agent fleet", () => {
+    installDiscordSetupShell();
+
+    expect(() =>
+      bootstrapOutboundChannelPlugin({
+        channel: "discord",
+        cfg: explicitFleetDiscordConfig,
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
+  it("caches bootstrap outcomes per admitted agent", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+
+    bootstrapOutboundChannelPlugin({
+      channel: "discord",
+      cfg: explicitFleetDiscordConfig,
+      agentId: "ops",
+    });
+    bootstrapOutboundChannelPlugin({
+      channel: "discord",
+      cfg: explicitFleetDiscordConfig,
+      agentId: "research",
+    });
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-research" }),
+    );
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {

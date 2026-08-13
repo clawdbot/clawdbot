@@ -8,7 +8,12 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   registerSessionBindingAdapter,
@@ -71,6 +76,13 @@ function getState<TKind extends string>(
 
 function resolveBindingKey(accountId: string, conversationId: string): string {
   return `${accountId}:${conversationId}`;
+}
+
+function resolveBindingAgentId(cfg: OpenClawConfig, sessionKey: string): string {
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  return parsedAgentId
+    ? normalizeAgentId(parsedAgentId)
+    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
 }
 
 function toSessionBindingRecord<TKind extends string>(params: {
@@ -196,10 +208,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
             : (existingLocal?.agentId ??
-              resolveAgentIdFromSessionKey(
-                normalizedTargetSessionKey,
-                resolveDefaultAgentId(params.cfg),
-              )),
+              resolveBindingAgentId(params.cfg, normalizedTargetSessionKey)),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()

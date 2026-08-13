@@ -18,6 +18,7 @@ export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js"
 export async function resolveChannelTargetForDelivery(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  agentId: string;
   input: string;
   accountId?: string | null;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
@@ -26,6 +27,7 @@ export async function resolveChannelTargetForDelivery(params: {
   resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   try {
@@ -60,6 +62,7 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
   resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   return await resolveOutboundSessionRoute(params);
@@ -69,11 +72,13 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
 export function channelCanResolveOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  agentId: string;
 }): boolean {
   return Boolean(
     resolveOutboundChannelPlugin({
       channel: params.channel,
       cfg: params.cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
     })?.messaging?.resolveOutboundSessionRoute,
   );

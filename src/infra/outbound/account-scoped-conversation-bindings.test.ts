@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createAccountScopedConversationBindingManager,
@@ -12,6 +13,13 @@ type TestBindingKind = "subagent" | "acp";
 const stateKey = Symbol("openclaw.accountScopedConversationBindingExpiry.test");
 const startedAt = 1_700_000_000_000;
 const baseCfg = {
+  session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
+} satisfies OpenClawConfig;
+const explicitFleetCfg = {
+  agents: {
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  },
   session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
 } satisfies OpenClawConfig;
 
@@ -76,6 +84,22 @@ describe("account-scoped conversation binding expiry", () => {
     expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);
     expect(service.resolveByConversation(conversation)).toBeNull();
     expect(service.listBySession(binding.targetSessionKey)).toEqual([]);
+  });
+
+  it("uses an agent-scoped target without resolving an ambient fleet owner", () => {
+    const manager = createManager({ cfg: explicitFleetCfg });
+
+    expect(
+      bindConversation(manager, { targetSessionKey: "agent:ops:subagent:child" }).agentId,
+    ).toBe("ops");
+  });
+
+  it("still requires an owner for an unscoped target in an explicit fleet", () => {
+    const manager = createManager({ cfg: explicitFleetCfg });
+
+    expect(() => bindConversation(manager, { targetSessionKey: "subagent:child" })).toThrow(
+      AgentSelectionRequiredError,
+    );
   });
 
   it("enforces maximum age even when activity refreshes the idle deadline", () => {
