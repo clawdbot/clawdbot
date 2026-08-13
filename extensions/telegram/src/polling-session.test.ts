@@ -952,6 +952,7 @@ describe("TelegramPollingSession", () => {
       token: "tok",
       config: {},
       accountId: "default",
+      ownerAgentId: "ops",
       runtime: undefined,
       proxyFetch: undefined,
       abortSignal: abort.signal,
@@ -970,6 +971,7 @@ describe("TelegramPollingSession", () => {
     expect(
       mockObjectArg(createTelegramBotMock, "createTelegramBot").minimumClientTimeoutSeconds,
     ).toBe(45);
+    expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").ownerAgentId).toBe("ops");
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
     expect(computeBackoffMock).toHaveBeenCalledWith(
       {

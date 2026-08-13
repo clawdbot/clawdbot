@@ -599,6 +599,7 @@ describe("startTelegramWebhook", () => {
       {
         secret: TELEGRAM_SECRET,
         accountId: "opie",
+        ownerAgentId: "ops",
         config: cfg,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
         setStatus,
@@ -609,6 +610,7 @@ describe("startTelegramWebhook", () => {
           "createTelegramBot params",
         );
         expect(botParams.accountId).toBe("opie");
+        expect(botParams.ownerAgentId).toBe("ops");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
         expect(botParams.telegramTransport).toBeDefined();
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
