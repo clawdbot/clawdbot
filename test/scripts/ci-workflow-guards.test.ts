@@ -4947,6 +4947,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parsedWorkflow.jobs.preflight.outputs.frozen_target).toBe(
       "${{ steps.manifest.outputs.frozen_target }}",
     );
+    expect(preflightGuards).toContain(
+      'if [[ "$FROZEN_TARGET" == "true" ]]; then\n' +
+        "                pnpm dup:check:coverage\n" +
+        "              else\n" +
+        "                pnpm dup:check\n" +
+        "              fi",
+    );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(preflightGuards).toContain('has_package_script "check:coercion-helpers"');
