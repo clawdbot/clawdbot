@@ -3,15 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
-/**
- * Lists deduplicated auth-profile store agent dirs that may contain SecretRefs.
- * Covers implicit main, discovered state-dir agents, and config-declared agent dirs.
- */
-export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
-  const paths = new Set<string>();
+type AuthProfileStoreTarget = { agentDir?: string; path: string };
+
+/** Lists canonical auth-profile databases that may contain SecretRefs. */
+export function listAuthProfileStoreTargets(
+  config: OpenClawConfig,
+  stateDir: string,
+): AuthProfileStoreTarget[] {
+  const targets = new Map<string, AuthProfileStoreTarget>();
   // Scope default auth store discovery to the provided stateDir instead of
   // ambient process env, so scans do not include unrelated host-global stores.
   const scopedEnv = {
@@ -19,7 +22,13 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_AGENT_DIR: undefined,
   };
-  paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
+  const addTarget = (agentDir?: string) => {
+    const pathname = agentDir
+      ? resolveAuthProfileDatabasePath(agentDir)
+      : resolveSharedAuthStorePath(scopedEnv);
+    targets.set(path.resolve(pathname), { ...(agentDir ? { agentDir } : {}), path: pathname });
+  };
+  addTarget();
 
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -27,19 +36,14 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
       if (!entry.isDirectory()) {
         continue;
       }
-      paths.add(path.join(agentsRoot, entry.name, "agent"));
+      addTarget(path.join(agentsRoot, entry.name, "agent"));
     }
   }
 
   // Configured agent dirs may live outside stateDir; include them after state-dir discovery.
   for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(path.dirname(resolveSharedAuthStorePath(scopedEnv)));
-      continue;
-    }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(resolveUserPath(agentDir));
+    addTarget(resolveUserPath(resolveAgentDir(config, agentId)));
   }
 
-  return [...paths];
+  return [...targets.values()];
 }

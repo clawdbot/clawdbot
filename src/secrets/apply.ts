@@ -31,7 +31,7 @@ import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
-import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
+import { listAuthProfileStoreTargets as listDiscoveredAuthProfileStoreTargets } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
@@ -61,7 +61,7 @@ type ApplyWrite = {
 };
 
 type AuthStoreSnapshot = {
-  agentDir: string;
+  agentDir?: string;
   persistence: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
   owned?: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
 };
@@ -72,7 +72,7 @@ type ProjectedState = {
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
   envRawByPath: Map<string, string>;
   changedFiles: Set<string>;
   warnings: string[];
@@ -92,7 +92,7 @@ type ConfigTargetMutationResult = {
   providerTargets: Set<string>;
   configChanged: boolean;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
 };
 
 type MutableAuthProfileStore = Record<string, unknown> & {
@@ -310,7 +310,7 @@ async function projectPlanState(params: {
     nextConfig,
     stateDir,
     authStoreByPath: new Map<string, Record<string, unknown>>(),
-    authStoreAgentDirByPath: new Map<string, string>(),
+    authStoreAgentDirByPath: new Map<string, string | undefined>(),
     changedFiles,
   });
   if (targetMutations.configChanged) {
@@ -369,7 +369,7 @@ function applyConfigTargetMutations(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
   changedFiles: Set<string>;
 }): ConfigTargetMutationResult {
   const resolvedTargets = params.planTargets.map((target) => ({
@@ -455,7 +455,7 @@ function scrubAuthStoresForProviderTargets(params: {
   providerTargets: Set<string>;
   scrubbedValues: Set<string>;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
   changedFiles: Set<string>;
   warnings: string[];
   enabled: boolean;
@@ -534,7 +534,7 @@ function resolveAuthStoreForTarget(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
 }): { path: string; store: MutableAuthProfileStore } {
   const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
@@ -582,11 +582,8 @@ function resolveAuthStoreTargetForAgent(params: {
 function listAuthProfileStoreTargets(
   config: OpenClawConfig,
   stateDir: string,
-): Array<{ agentDir: string; path: string }> {
-  return listAuthProfileStoreAgentDirs(config, stateDir).map((agentDir) => ({
-    agentDir,
-    path: resolveAuthProfileDatabasePath(agentDir),
-  }));
+): Array<{ agentDir?: string; path: string }> {
+  return listDiscoveredAuthProfileStoreTargets(config, stateDir);
 }
 
 function ensureAuthProfileContainer(params: {
@@ -646,7 +643,7 @@ function applyAuthProfileTargetMutation(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreAgentDirByPath: Map<string, string>;
+  authStoreAgentDirByPath: Map<string, string | undefined>;
   scrubbedValues: Set<string>;
 }): boolean {
   if (params.resolved.entry.configFile !== "auth-profiles.json") {
@@ -871,6 +868,7 @@ export async function runSecretsApply(params: {
   }
 
   const io = createSecretsConfigIO({ env });
+  const stateDir = resolveStateDir(env, os.homedir);
   const snapshots = new Map<string, FileSnapshot>();
   const authStoreSnapshots = new Map<string, AuthStoreSnapshot>();
   const capture = (pathname: string) => {
@@ -878,11 +876,11 @@ export async function runSecretsApply(params: {
       snapshots.set(pathname, captureFileSnapshot(pathname));
     }
   };
-  const captureAuthStore = (pathname: string, agentDir: string) => {
+  const captureAuthStore = (pathname: string, agentDir?: string) => {
     if (!authStoreSnapshots.has(pathname)) {
       authStoreSnapshots.set(pathname, {
         agentDir,
-        persistence: captureAuthProfileStorePersistenceSnapshot(agentDir),
+        persistence: captureAuthProfileStorePersistenceSnapshot(agentDir, { stateDir }),
       });
     }
   };
@@ -915,7 +913,7 @@ export async function runSecretsApply(params: {
     for (const [pathname, value] of projected.authStoreByPath.entries()) {
       const agentDir = projected.authStoreAgentDirByPath.get(pathname);
       const store = coercePersistedAuthProfileStore(value);
-      if (agentDir && store) {
+      if (projected.authStoreAgentDirByPath.has(pathname) && store) {
         const snapshot = authStoreSnapshots.get(pathname);
         if (!snapshot) {
           throw new Error(`missing captured auth profile store for ${pathname}`);
@@ -924,6 +922,7 @@ export async function runSecretsApply(params: {
           store,
           snapshot: snapshot.persistence,
           agentDir,
+          stateDir,
         });
         // Persisted rows commit before runtime publication. Record their exact
         // ownership first so a publication failure can still roll them back.
@@ -952,6 +951,7 @@ export async function runSecretsApply(params: {
           snapshot.persistence,
           snapshot.owned,
           snapshot.agentDir,
+          { stateDir },
         );
       } catch {
         // Best effort only; preserve original error.

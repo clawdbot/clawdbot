@@ -1,14 +1,11 @@
-/** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
 import {
   listLegacyAuthProfileArchives,
   listLegacyAuthProfileSources,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import {
-  readPersistedAuthProfileStoreRaw,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
@@ -23,7 +20,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { findSecretStorePlaintextResidueFindings } from "./audit-store.js";
 import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
-import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
+import { listAuthProfileStoreTargets } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
@@ -252,11 +249,12 @@ function collectConfigSecrets(params: {
 }
 
 function collectAuthStoreSecrets(params: {
-  agentDir: string;
+  agentDir?: string;
+  authStorePath: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
 }): void {
-  const authStorePath = resolveAuthProfileDatabasePath(params.agentDir);
+  const authStorePath = params.authStorePath;
   if (!fs.existsSync(authStorePath)) {
     return;
   }
@@ -415,8 +413,8 @@ function collectLegacyAuthSourceFindings(params: {
   collector: AuditCollector;
 }): void {
   const seen = new Set<string>();
-  const agentDirs = listAuthProfileStoreAgentDirs(params.config, params.stateDir);
-  for (const agentDir of agentDirs) {
+  const targets = listAuthProfileStoreTargets(params.config, params.stateDir);
+  for (const { agentDir } of targets) {
     for (const source of listLegacyAuthProfileSources({ agentDir, env: params.env })) {
       if (seen.has(source.path)) {
         continue;
@@ -431,7 +429,13 @@ function collectLegacyAuthSourceFindings(params: {
       });
     }
   }
-  for (const archive of listLegacyAuthProfileArchives({ agentDirs, env: params.env })) {
+  const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
+  for (const archive of listLegacyAuthProfileArchives({
+    agentDirs: targets
+      .flatMap(({ agentDir }) => (agentDir ? [agentDir] : []))
+      .concat(sharedMainDir),
+    env: params.env,
+  })) {
     if (seen.has(archive.path)) {
       continue;
     }
@@ -635,9 +639,7 @@ export async function runSecretsAudit(
   } = {},
 ): Promise<SecretsAuditReport> {
   const env = params.env ?? process.env;
-  const allowExec = Boolean(params.allowExec);
-  const io = createSecretsConfigIO({ env });
-  const snapshot = await io.readConfigFileSnapshot();
+  const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
   const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
 
@@ -666,9 +668,10 @@ export async function runSecretsAudit(
       collector,
       env,
     });
-    for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
+    for (const target of listAuthProfileStoreTargets(config, stateDir)) {
       collectAuthStoreSecrets({
-        agentDir,
+        agentDir: target.agentDir,
+        authStorePath: target.path,
         collector,
         defaults,
       });
@@ -683,7 +686,7 @@ export async function runSecretsAudit(
       collector,
       config,
       env,
-      allowExec,
+      allowExec: Boolean(params.allowExec),
     });
     resolution = {
       refsChecked: unresolvedRefResult.refsChecked,

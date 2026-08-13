@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -236,6 +237,35 @@ describe("agents delete command", () => {
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expectSessionStore(cfg, sessions, "main");
+    });
+  });
+
+  it("deletes main normally after shared auth ownership moves to state SQLite", async () => {
+    await withStateDirEnv("openclaw-agents-delete-relocated-auth-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "main",
+        sessions: {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      expectSessionStore(cfg, {}, "main");
     });
   });
 
