@@ -8,7 +8,6 @@ import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js"
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
-import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -21,6 +20,7 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -30,7 +30,6 @@ import {
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { resolveSecretInputRef } from "./types.secrets.js";
 import {
@@ -367,13 +366,16 @@ function validateConfigObjectWithPluginsBase(
       );
       // Ownership must ignore a denied or disabled replacement, exactly as auto-enable does, or a
       // valid fallback config is checked against the replacement's schema and rejected.
-      const eligibilityConfig = ensureCompatConfig();
-      // Policy lists accept a plugin's channel ids and legacy ids; Gateway startup canonicalizes
-      // them through the registry, so ownership has to resolve them the same way.
-      const resolvePluginAlias = createManifestPluginAliasResolver(info.registry);
+      // Ownership must land on the plugin activation would run, or a valid config is checked
+      // against a schema the runtime never applies.
+      const ownershipPolicy = createConfiguredChannelOwnershipPolicy({
+        config: ensureCompatConfig(),
+        registry: info.registry,
+        env: opts.env ?? process.env,
+      });
       for (const entry of collectChannelSchemaMetadataWithOwnership(
         info.registry,
-        (pluginId) => !isPluginPolicyDisabled(eligibilityConfig, pluginId, resolvePluginAlias),
+        ownershipPolicy,
       )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {

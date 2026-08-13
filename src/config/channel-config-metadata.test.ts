@@ -1,7 +1,11 @@
 /** Covers which plugin owns a channel's surfaced config schema when several claim the same id. */
 import { describe, expect, it } from "vitest";
+import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
+import {
+  collectChannelSchemaMetadataWithOwnership,
+  type ChannelOwnershipPolicy,
+} from "./channel-config-metadata.js";
 
 type ClaimantParams = {
   id: string;
@@ -38,22 +42,30 @@ function claimant({
   };
 }
 
+function policyFor(overrides: Partial<ChannelOwnershipPolicy>): ChannelOwnershipPolicy {
+  return {
+    isPluginActive: () => true,
+    resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
+    ...overrides,
+  };
+}
+
 function entryFor(
   plugins: ReturnType<typeof claimant>[],
   channelId = "clickclack",
-  canReplace?: (pluginId: string) => boolean,
+  policy?: ChannelOwnershipPolicy,
 ) {
   const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
-  return collectChannelSchemaMetadataWithOwnership(registry, canReplace).find(
+  return collectChannelSchemaMetadataWithOwnership(registry, policy).find(
     (entry) => entry.id === channelId,
   );
 }
 
 function ownerOf(
   plugins: ReturnType<typeof claimant>[],
-  canReplace?: (pluginId: string) => boolean,
+  policy?: ChannelOwnershipPolicy,
 ): string | undefined {
-  return entryFor(plugins, "clickclack", canReplace)?.schemaPluginId;
+  return entryFor(plugins, "clickclack", policy)?.schemaPluginId;
 }
 
 describe("collectChannelSchemaMetadataWithOwnership", () => {
@@ -148,12 +160,71 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         "clickclack-plus": claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] }),
       };
       const ordered = plugins.map((id) => byId[id as keyof typeof byId]);
+      const policy = policyFor({ isPluginActive: (id) => id !== "clickclack-plus" });
 
-      expect(ownerOf(ordered, (pluginId) => pluginId !== "clickclack-plus")).toBe(
-        "clickclack-core",
-      );
+      expect(ownerOf(ordered, policy)).toBe("clickclack-core");
     },
   );
+
+  // Codex review P1 on #123209: eligibility was consulted only inside the equal-origin tie-break,
+  // so a disabled replacement installed CLOSER than its fallback took the schema through plain
+  // origin precedence. Auto-enable activates the fallback there, and validation then rejected the
+  // fallback's own config. Operator policy has to outrank install origin in both orderings.
+  it.each([
+    { order: "fallback first", plugins: ["clickclack-core", "clickclack-plus"] },
+    { order: "replacement first", plugins: ["clickclack-plus", "clickclack-core"] },
+  ])(
+    "leaves the channel with a farther active fallback when the closer replacement is disabled ($order)",
+    ({ plugins }) => {
+      const byId = {
+        "clickclack-core": claimant({ id: "clickclack-core", origin: "bundled" }),
+        "clickclack-plus": claimant({
+          id: "clickclack-plus",
+          origin: "global",
+          preferOver: ["clickclack-core"],
+        }),
+      };
+      const ordered = plugins.map((id) => byId[id as keyof typeof byId]);
+      const policy = policyFor({ isPluginActive: (id) => id !== "clickclack-plus" });
+
+      expect(ownerOf(ordered, policy)).toBe("clickclack-core");
+    },
+  );
+
+  // Codex review P2 on #123209: comparing each record only against the current owner let a
+  // replacement chain settle by registry order. `shouldSkipPreferredPluginAutoEnable` scans every
+  // configured candidate, so it drops both B and C and leaves A active.
+  it.each([
+    { order: "A, C, B", plugins: ["chain-a", "chain-c", "chain-b"] },
+    { order: "B, A, C", plugins: ["chain-b", "chain-a", "chain-c"] },
+    { order: "C, B, A", plugins: ["chain-c", "chain-b", "chain-a"] },
+  ])(
+    "resolves an A-replaces-B-replaces-C chain the same way in any order ($order)",
+    ({ plugins }) => {
+      const byId = {
+        "chain-a": claimant({ id: "chain-a", preferOver: ["chain-b"] }),
+        "chain-b": claimant({ id: "chain-b", preferOver: ["chain-c"] }),
+        "chain-c": claimant({ id: "chain-c" }),
+      };
+
+      expect(ownerOf(plugins.map((id) => byId[id as keyof typeof byId]))).toBe("chain-a");
+    },
+  );
+
+  // Codex review P2 on #123209: auto-enable falls back to the built-in channel registration and an
+  // external plugin catalog when the manifest declares no preference. Ownership has to read the
+  // same resolved facts or the two disagree for catalog-declared replacements.
+  it("honors a replacement preference that comes from outside the manifest", () => {
+    const core = claimant({ id: "clickclack-core" });
+    const replacement = claimant({ id: "clickclack-plus" });
+    const policy = policyFor({
+      resolveChannelPreferOverIds: (record) =>
+        record.id === "clickclack-plus" ? ["clickclack-core"] : [],
+    });
+
+    expect(ownerOf([replacement, core], policy)).toBe("clickclack-plus");
+    expect(ownerOf([core, replacement], policy)).toBe("clickclack-plus");
+  });
 
   // Codex review P2 on #123209: channelCatalogMeta describes exactly one channel, so its
   // preference must not let the plugin claim a different channel it also ships.

@@ -7,7 +7,7 @@ import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registr
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
@@ -123,6 +123,30 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   return findChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
+/**
+ * Replacement preference for one plugin record on one channel, across every source auto-enable
+ * consults: the installed manifest first, then the built-in channel registration, then an external
+ * plugin catalog. Channel schema ownership resolves through the same function so validation and
+ * the runtime cannot disagree about which plugin owns a contested channel.
+ */
+export function resolveChannelPreferOverIds(params: {
+  record: PluginManifestRecord | undefined;
+  channelId: string;
+  env: NodeJS.ProcessEnv;
+}): readonly string[] {
+  const manifestPreferOver = params.record
+    ? resolveManifestChannelPreferOverIds(params.record, params.channelId)
+    : [];
+  if (manifestPreferOver.length) {
+    return manifestPreferOver;
+  }
+  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(params.channelId);
+  if (builtInChannelPreferOver.length) {
+    return builtInChannelPreferOver;
+  }
+  return resolveExternalCatalogPreferOver(params.channelId, params.env);
+}
+
 function resolvePreferredOverIds(
   candidate: PluginAutoEnableCandidate,
   env: NodeJS.ProcessEnv,
@@ -130,18 +154,13 @@ function resolvePreferredOverIds(
 ): string[] {
   const channelId =
     candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
-  const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
-  const manifestPreferOver = installedPlugin
-    ? resolveManifestChannelPreferOverIds(installedPlugin, channelId)
-    : [];
-  if (manifestPreferOver.length) {
-    return [...manifestPreferOver];
-  }
-  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
-  if (builtInChannelPreferOver.length) {
-    return [...builtInChannelPreferOver];
-  }
-  return resolveExternalCatalogPreferOver(channelId, env);
+  return [
+    ...resolveChannelPreferOverIds({
+      record: registry.plugins.find((record) => record.id === candidate.pluginId),
+      channelId,
+      env,
+    }),
+  ];
 }
 
 function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {

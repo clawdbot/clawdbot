@@ -1,14 +1,13 @@
 // Builds runtime config schema defaults from agent and workspace state.
-import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
+import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
-import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
@@ -19,17 +18,10 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   });
 }
 
-/**
- * The operator-facing schema must describe the plugin the runtime actually activates. A channel
- * whose declared replacement is denied or disabled falls back to the replaced plugin, so config UI
- * would otherwise offer fields that `config validate` then rejects.
- */
-function canReplaceChannelOwner(
-  config: OpenClawConfig,
-  registry: PluginManifestRegistry,
-): (pluginId: string) => boolean {
-  const resolveAlias = createManifestPluginAliasResolver(registry);
-  return (pluginId) => !isPluginPolicyDisabled(config, pluginId, resolveAlias);
+// The operator-facing schema must describe the plugin the runtime actually activates, or config UI
+// offers fields that `config validate` then rejects.
+function ownershipPolicy(config: OpenClawConfig, registry: PluginManifestRegistry) {
+  return createConfiguredChannelOwnershipPolicy({ config, registry, env: process.env });
 }
 
 /**
@@ -51,7 +43,7 @@ export function buildRuntimeConfigSchemaFromRegistry(
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
-  return buildRuntimeConfigSchemaFromRegistry(registry, canReplaceChannelOwner(config, registry));
+  return buildRuntimeConfigSchemaFromRegistry(registry, ownershipPolicy(config, registry));
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
@@ -62,6 +54,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
-    channels: collectChannelSchemaMetadataCore(registry, canReplaceChannelOwner(config, registry)),
+    channels: collectChannelSchemaMetadataCore(registry, ownershipPolicy(config, registry)),
   });
 }
