@@ -49,7 +49,7 @@ describe("minimal npm extended-stable workflow", () => {
   it("bounds every git fetch operation", () => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
-    expect(gitFetchLines).toHaveLength(7);
+    expect(gitFetchLines).toHaveLength(8);
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);
@@ -78,7 +78,11 @@ describe("minimal npm extended-stable workflow", () => {
   it("binds intentional Plugin SDK release changes to the reported digest", () => {
     const parsed = workflow();
     const input = parsed.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
-    const apiDiff = step(parsed.jobs?.preflight_openclaw_npm, "Verify Plugin SDK API changes");
+    const preflightDiff = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Verify Plugin SDK API changes",
+    );
+    const publishDiff = step(parsed.jobs?.publish_openclaw_npm, "Verify Plugin SDK API changes");
 
     expect(input).toEqual({
       default: "",
@@ -87,14 +91,19 @@ describe("minimal npm extended-stable workflow", () => {
       required: false,
       type: "string",
     });
-    expect(apiDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+    expect(preflightDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
       "${{ inputs.plugin_sdk_api_acknowledgement }}",
     );
-    expect(apiDiff.env?.PREFLIGHT_ONLY).toBe("${{ inputs.preflight_only && 'true' || 'false' }}");
-    expect(apiDiff.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
-    expect(apiDiff.run).toContain("--require-acknowledgement");
-    expect(apiDiff.run).toContain('if [ "$PREFLIGHT_ONLY" != "true" ]');
-    expect(apiDiff.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(publishDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(preflightDiff.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(preflightDiff.run).not.toContain("--require-acknowledgement");
+    expect(publishDiff.run).toContain("--require-acknowledgement");
+    expect(publishDiff.run).toContain(
+      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "refs/tags/${previous_tag}:refs/tags/${previous_tag}"',
+    );
+    expect(publishDiff.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
   });
 
   it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {
