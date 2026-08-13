@@ -1,11 +1,88 @@
-import { createSimpleChannelSecretContract } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  collectSecretInputAssignment,
+  createChannelSecretTargetRegistryEntries,
+  getChannelSurface,
+  hasOwnProperty,
+  type ResolverContext,
+  type SecretDefaults,
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const channelSecrets = createSimpleChannelSecretContract({
+const CREDENTIAL_FIELDS = ["privateKey", "authTag"] as const;
+
+function accountSecretOwner(accountId: string) {
+  return {
+    ownerKind: "account" as const,
+    ownerId: `buzz:${normalizeAccountId(accountId)}`,
+    requiredForGateway: false,
+    disposition: "isolate" as const,
+  };
+}
+
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "buzz",
-  label: "Buzz",
-  accountFields: [],
-  channelFields: ["privateKey", "authTag"],
-  mode: "channel-surface",
+  account: CREDENTIAL_FIELDS,
+  channel: CREDENTIAL_FIELDS,
 });
 
-export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;
+export function collectRuntimeConfigAssignments(params: {
+  config: { channels?: Record<string, unknown> };
+  defaults?: SecretDefaults;
+  context: ResolverContext;
+}): void {
+  const resolved = getChannelSurface(params.config, "buzz");
+  if (!resolved) {
+    return;
+  }
+  const { channel: buzz, surface } = resolved;
+  const defaultAccount = surface.hasExplicitAccounts
+    ? surface.accounts.find(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+    : undefined;
+  const defaultAccountEnabled = surface.channelEnabled && (defaultAccount?.enabled ?? true);
+
+  for (const field of CREDENTIAL_FIELDS) {
+    collectSecretInputAssignment({
+      value: buzz[field],
+      path: `channels.buzz.${field}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: defaultAccountEnabled && !hasOwnProperty(defaultAccount?.account ?? {}, field),
+      inactiveReason:
+        "Buzz channel or default account is disabled, or the scoped default account overrides the legacy root credential.",
+      owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
+      apply: (value) => {
+        buzz[field] = value;
+      },
+    });
+  }
+
+  if (!surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of surface.accounts) {
+    for (const field of CREDENTIAL_FIELDS) {
+      if (!hasOwnProperty(account, field)) {
+        continue;
+      }
+      collectSecretInputAssignment({
+        value: account[field],
+        path: `channels.buzz.accounts.${accountId}.${field}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled,
+        inactiveReason: "Buzz account is disabled.",
+        owner: accountSecretOwner(accountId),
+        apply: (value) => {
+          account[field] = value;
+        },
+      });
+    }
+  }
+}
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

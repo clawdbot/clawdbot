@@ -4,16 +4,27 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
+  moveSingleAccountChannelSectionToDefaultAccount,
+  normalizeAccountId,
+  patchScopedAccountConfig,
   patchTopLevelChannelConfigSection,
+  promptAccountId,
   runSingleChannelSecretStep,
   type ChannelSetupWizardAdapter,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
 import { waitForBuzzRoomAccess } from "./room-access-wait.js";
 import { discoverBuzzRooms, type BuzzDiscoveredRoom } from "./room-discovery.js";
-import { isSameBuzzIdentity } from "./setup-core.js";
+import { buzzSetupContract, isSameBuzzIdentity } from "./setup-core.js";
 import { verifyBuzzAfterSetup } from "./setup-verify.js";
-import { decodeBuzzPrivateKey, resolveBuzzAccount, resolveBuzzPublicKey } from "./types.js";
+import {
+  decodeBuzzPrivateKey,
+  listBuzzAccountIds,
+  resolveBuzzAccount,
+  resolveBuzzAccountConfig,
+  resolveBuzzPublicKey,
+  resolveDefaultBuzzAccountId,
+} from "./types.js";
 
 const channel = "buzz" as const;
 type BuzzSetupResult = Awaited<ReturnType<ChannelSetupWizardAdapter["configure"]>>;
@@ -27,8 +38,37 @@ type BuzzSetupDependencies = {
   verifyAfterWrite?: typeof verifyBuzzAfterSetup;
 };
 
-function patchBuzzConfig(cfg: OpenClawConfig, patch: Record<string, unknown>): OpenClawConfig {
+function patchBuzzChannelConfig(
+  cfg: OpenClawConfig,
+  patch: Record<string, unknown>,
+): OpenClawConfig {
   return patchTopLevelChannelConfigSection({ cfg, channel, patch });
+}
+
+function patchBuzzAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  patch: Record<string, unknown>;
+  clearFields?: readonly string[];
+}): OpenClawConfig {
+  return patchScopedAccountConfig({
+    cfg: params.cfg,
+    channelKey: channel,
+    accountId: params.accountId,
+    patch: params.patch,
+    ...(params.clearFields ? { clearFields: params.clearFields } : {}),
+    scopeDefaultToAccounts: Boolean(params.cfg.channels?.buzz?.accounts),
+  });
+}
+
+function ensureBuzzAccountScope(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  return accountId !== DEFAULT_ACCOUNT_ID || cfg.channels?.buzz?.accounts
+    ? moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: channel,
+        setupSurface: buzzSetupContract,
+      })
+    : cfg;
 }
 
 function validateRelayUrl(value: string): string | undefined {
@@ -54,13 +94,37 @@ function isRemoteInsecureRelayUrl(value: string): boolean {
   return url.protocol === "ws:" && !isLoopback;
 }
 
-function isBuzzSetupConfigured(cfg: OpenClawConfig): boolean {
-  const buzzConfig = cfg.channels?.buzz;
+function isBuzzSetupConfigured(cfg: OpenClawConfig, accountId: string): boolean {
+  const account = resolveBuzzAccount({ cfg, accountId });
   return Boolean(
-    (buzzConfig?.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim()) &&
-    (hasConfiguredSecretInput(buzzConfig?.privateKey, cfg.secrets?.defaults) ||
-      process.env.BUZZ_PRIVATE_KEY?.trim()),
+    account.relayUrl &&
+    (account.privateKey ||
+      hasConfiguredSecretInput(account.config.privateKey, cfg.secrets?.defaults)),
   );
+}
+
+async function resolveBuzzSetupAccountId(params: {
+  cfg: OpenClawConfig;
+  prompter: BuzzSetupPrompter;
+  accountOverride?: string;
+  shouldPromptAccountIds: boolean;
+}): Promise<string> {
+  const override = params.accountOverride?.trim();
+  const defaultAccountId = resolveDefaultBuzzAccountId(params.cfg);
+  if (override) {
+    return normalizeAccountId(override);
+  }
+  if (!params.shouldPromptAccountIds || listBuzzAccountIds(params.cfg).length === 0) {
+    return defaultAccountId;
+  }
+  return await promptAccountId({
+    cfg: params.cfg,
+    prompter: params.prompter,
+    label: "Buzz",
+    currentId: defaultAccountId,
+    listAccountIds: listBuzzAccountIds,
+    defaultAccountId,
+  });
 }
 
 async function promptRelayUrl(params: {
@@ -112,29 +176,29 @@ async function resolveRelayUrl(params: {
   });
 }
 
-function resolvedConfiguredKey(cfg: OpenClawConfig): string | undefined {
-  const value = cfg.channels?.buzz?.privateKey;
+function resolvedConfiguredKey(cfg: OpenClawConfig, accountId: string): string | undefined {
+  const value = resolveBuzzAccount({ cfg, accountId }).config.privateKey;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function resolvedCurrentKey(cfg: OpenClawConfig): string | undefined {
-  return cfg.channels?.buzz?.privateKey === undefined
-    ? process.env.BUZZ_PRIVATE_KEY?.trim() || undefined
-    : resolvedConfiguredKey(cfg);
+function resolvedCurrentKey(cfg: OpenClawConfig, accountId: string): string | undefined {
+  return resolveBuzzAccount({ cfg, accountId }).privateKey || undefined;
 }
 
 async function resolvePrivateKey(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   prompter: BuzzSetupPrompter;
   secretInputMode?: "plaintext" | "ref";
   generate: typeof generateSecretKey;
-  generatedPrivateKeys: WeakMap<BuzzSetupPrompter, string>;
+  generatedPrivateKeys: WeakMap<BuzzSetupPrompter, Map<string, string>>;
   runSecretStep: typeof runSingleChannelSecretStep;
 }): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey?: string }> {
+  const account = resolveBuzzAccount({ cfg: params.cfg, accountId: params.accountId });
   const hasExistingIdentity =
-    hasConfiguredSecretInput(params.cfg.channels?.buzz?.privateKey, params.cfg.secrets?.defaults) ||
-    Boolean(process.env.BUZZ_PRIVATE_KEY?.trim());
-  const currentPrivateKey = resolvedCurrentKey(params.cfg);
+    hasConfiguredSecretInput(account.config.privateKey, params.cfg.secrets?.defaults) ||
+    Boolean(account.privateKey);
+  const currentPrivateKey = resolvedCurrentKey(params.cfg, params.accountId);
   if (hasExistingIdentity) {
     const resolvedPrivateKey = currentPrivateKey;
     if (resolvedPrivateKey) {
@@ -145,13 +209,23 @@ async function resolvePrivateKey(params: {
   if (params.secretInputMode !== "ref") {
     // Back navigation replays the full channel setup function. Keep one generated
     // identity per wizard session so replay cannot invalidate already granted access.
-    let privateKey = params.generatedPrivateKeys.get(params.prompter);
+    let generatedByAccount = params.generatedPrivateKeys.get(params.prompter);
+    if (!generatedByAccount) {
+      generatedByAccount = new Map();
+      params.generatedPrivateKeys.set(params.prompter, generatedByAccount);
+    }
+    let privateKey = generatedByAccount.get(params.accountId);
     if (!privateKey) {
       privateKey = nip19.nsecEncode(params.generate());
-      params.generatedPrivateKeys.set(params.prompter, privateKey);
+      generatedByAccount.set(params.accountId, privateKey);
     }
     return {
-      cfg: patchBuzzConfig(params.cfg, { enabled: true, privateKey, authTag: undefined }),
+      cfg: patchBuzzAccountConfig({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        patch: { privateKey },
+        clearFields: ["authTag"],
+      }),
       resolvedPrivateKey: privateKey,
     };
   }
@@ -164,8 +238,8 @@ async function resolvePrivateKey(params: {
     secretInputMode: params.secretInputMode,
     accountConfigured: false,
     hasConfigToken: false,
-    allowEnv: true,
-    envValue: process.env.BUZZ_PRIVATE_KEY,
+    allowEnv: params.accountId === DEFAULT_ACCOUNT_ID,
+    envValue: params.accountId === DEFAULT_ACCOUNT_ID ? process.env.BUZZ_PRIVATE_KEY : undefined,
     envPrompt: "Use BUZZ_PRIVATE_KEY?",
     keepPrompt: "Keep the existing Buzz bot private key?",
     inputPrompt: "Buzz bot private key (nsec or 64-character hex)",
@@ -173,30 +247,30 @@ async function resolvePrivateKey(params: {
     applyUseEnv: (cfg) => {
       const envPrivateKey = process.env.BUZZ_PRIVATE_KEY?.trim();
       const keepAuthTag = isSameBuzzIdentity(currentPrivateKey, envPrivateKey);
-      const { privateKey: _privateKey, authTag, ...buzz } = cfg.channels?.buzz ?? {};
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          buzz: {
-            ...buzz,
-            enabled: true,
-            ...(keepAuthTag && authTag !== undefined ? { authTag } : {}),
-          },
-        },
-      } as OpenClawConfig;
+      return patchBuzzAccountConfig({
+        cfg,
+        accountId: params.accountId,
+        patch:
+          keepAuthTag && account.config.authTag !== undefined
+            ? { authTag: account.config.authTag }
+            : {},
+        clearFields: ["privateKey", "authTag"],
+      });
     },
     applySet: (cfg, value: SecretInput, resolvedValue) =>
-      patchBuzzConfig(cfg, {
-        enabled: true,
-        privateKey: value,
-        ...(isSameBuzzIdentity(currentPrivateKey, resolvedValue) ? {} : { authTag: undefined }),
+      patchBuzzAccountConfig({
+        cfg,
+        accountId: params.accountId,
+        patch: { privateKey: value },
+        ...(isSameBuzzIdentity(currentPrivateKey, resolvedValue)
+          ? {}
+          : { clearFields: ["authTag"] }),
       }),
   });
   const resolvedPrivateKey =
     secretStep.resolvedValue ??
     (secretStep.action === "keep"
-      ? (resolvedConfiguredKey(secretStep.cfg) ?? currentPrivateKey)
+      ? (resolvedConfiguredKey(secretStep.cfg, params.accountId) ?? currentPrivateKey)
       : undefined);
   if (resolvedPrivateKey) {
     decodeBuzzPrivateKey(resolvedPrivateKey);
@@ -228,9 +302,9 @@ async function promptRooms(params: {
   });
 }
 
-function pauseBuzzSetup(cfg: OpenClawConfig): BuzzSetupResult {
+function pauseBuzzSetup(cfg: OpenClawConfig, accountId: string): BuzzSetupResult {
   return {
-    cfg: patchBuzzConfig(cfg, { enabled: false }),
+    cfg: patchBuzzAccountConfig({ cfg, accountId, patch: { enabled: false } }),
     completion: "paused",
   };
 }
@@ -270,14 +344,19 @@ export function createBuzzSetupWizard(
   const runSecretStep = dependencies.runSecretStep ?? runSingleChannelSecretStep;
   const waitForRoomAccess = dependencies.waitForRoomAccess ?? waitForBuzzRoomAccess;
   const verifyAfterWrite = dependencies.verifyAfterWrite ?? verifyBuzzAfterSetup;
-  const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, string>();
+  const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, Map<string, string>>();
 
   return {
     channel,
-    getStatus: async ({ cfg }) => {
-      const buzzConfig = cfg.channels?.buzz;
-      const configured = isBuzzSetupConfigured(cfg);
-      const enabled = buzzConfig?.enabled !== false;
+    getStatus: async ({ cfg, accountOverrides }) => {
+      const accountId = accountOverrides.buzz?.trim()
+        ? normalizeAccountId(accountOverrides.buzz)
+        : resolveDefaultBuzzAccountId(cfg);
+      const account = resolveBuzzAccount({ cfg, accountId });
+      const configured =
+        (accountId === DEFAULT_ACCOUNT_ID || listBuzzAccountIds(cfg).includes(accountId)) &&
+        isBuzzSetupConfigured(cfg, accountId);
+      const enabled = account.enabled;
       const status = !configured
         ? "needs relay URL and bot identity"
         : enabled
@@ -290,19 +369,28 @@ export function createBuzzSetupWizard(
         selectionHint: status,
       };
     },
-    configure: async ({ cfg, prompter, options }) => {
-      const existingBuzzConfig = cfg.channels?.buzz;
+    configure: async ({ cfg, prompter, options, accountOverrides, shouldPromptAccountIds }) => {
+      const accountId = await resolveBuzzSetupAccountId({
+        cfg,
+        prompter,
+        accountOverride: accountOverrides.buzz,
+        shouldPromptAccountIds,
+      });
+      let next = ensureBuzzAccountScope(cfg, accountId);
+      const existingAccount = resolveBuzzAccount({ cfg: next, accountId });
+      const existingBuzzConfig = resolveBuzzAccountConfig(next, accountId);
       const hasExistingAccessConfig =
         existingBuzzConfig?.groupPolicy !== undefined ||
         existingBuzzConfig?.groupAllowFrom !== undefined ||
         existingBuzzConfig?.groups !== undefined;
-      const useFreshAccessDefaults = !isBuzzSetupConfigured(cfg) && !hasExistingAccessConfig;
-      const configuredRelayUrl =
-        existingBuzzConfig?.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim();
+      const useFreshAccessDefaults =
+        !isBuzzSetupConfigured(next, accountId) && !hasExistingAccessConfig;
+      const configuredRelayUrl = existingAccount.relayUrl || undefined;
       const relayUrl = await resolveRelayUrl({ configuredValue: configuredRelayUrl, prompter });
-      let next = patchBuzzConfig(cfg, { enabled: true, relayUrl });
+      next = patchBuzzAccountConfig({ cfg: next, accountId, patch: { enabled: true, relayUrl } });
       const identity = await resolvePrivateKey({
         cfg: next,
+        accountId,
         prompter,
         secretInputMode: options?.secretInputMode,
         generate,
@@ -321,12 +409,12 @@ export function createBuzzSetupWizard(
           "OpenClaw cannot resolve the configured private-key reference during setup, so room access cannot be verified. The relay URL and identity reference will be saved with Buzz disabled. Make the secret available and rerun setup.",
           "Buzz setup paused",
         );
-        return pauseBuzzSetup(next);
+        return pauseBuzzSetup(next, accountId);
       }
 
       let discoveredRooms: BuzzDiscoveredRoom[] = [];
       let discoveryError: string | undefined;
-      const authTag = resolveBuzzAccount({ cfg: next }).authTag;
+      const authTag = resolveBuzzAccount({ cfg: next, accountId }).authTag;
       const discoverAuthorizedRooms = async (): Promise<BuzzDiscoveredRoom[]> => {
         try {
           const rooms = await discoverRooms({
@@ -392,7 +480,8 @@ export function createBuzzSetupWizard(
         }
       }
 
-      const configuredGroups = cfg.channels?.buzz?.groups ?? {};
+      const configuredAccount = resolveBuzzAccount({ cfg: next, accountId });
+      const configuredGroups = configuredAccount.config.groups ?? {};
       const roomIds = await promptRooms({
         rooms: discoveredRooms,
         configuredRoomIds: Object.keys(configuredGroups),
@@ -403,9 +492,9 @@ export function createBuzzSetupWizard(
           "No rooms were selected. Relay URL and bot identity will be saved with Buzz disabled.",
           "Buzz setup paused",
         );
-        return pauseBuzzSetup(next);
+        return pauseBuzzSetup(next, accountId);
       }
-      const existingDefault = cfg.channels?.buzz?.defaultTo;
+      const existingDefault = configuredAccount.config.defaultTo;
       const defaultTo =
         roomIds.length === 1
           ? roomIds[0]!
@@ -418,32 +507,36 @@ export function createBuzzSetupWizard(
               initialValue:
                 existingDefault && roomIds.includes(existingDefault) ? existingDefault : roomIds[0],
             });
-      next = patchBuzzConfig(next, {
-        ...(useFreshAccessDefaults ? { groupPolicy: "open", groupAllowFrom: undefined } : {}),
-        groups: Object.fromEntries(
-          roomIds.map((roomId) => [
-            roomId,
-            {
-              enabled: configuredGroups[roomId]?.enabled ?? true,
-              requireMention: configuredGroups[roomId]?.requireMention ?? !useFreshAccessDefaults,
-            },
-          ]),
-        ),
-        defaultTo,
+      next = patchBuzzAccountConfig({
+        cfg: next,
+        accountId,
+        patch: {
+          ...(useFreshAccessDefaults ? { groupPolicy: "open", groupAllowFrom: undefined } : {}),
+          groups: Object.fromEntries(
+            roomIds.map((roomId) => [
+              roomId,
+              {
+                enabled: configuredGroups[roomId]?.enabled ?? true,
+                requireMention: configuredGroups[roomId]?.requireMention ?? !useFreshAccessDefaults,
+              },
+            ]),
+          ),
+          defaultTo,
+        },
       });
       options?.onPostWriteHook?.({
         channel,
-        accountId: DEFAULT_ACCOUNT_ID,
+        accountId,
         run: async ({ runtime }) =>
           await verifyAfterWrite({
-            accountId: DEFAULT_ACCOUNT_ID,
+            accountId,
             target: defaultTo,
             runtime,
           }),
       });
-      return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
+      return { cfg: next, accountId };
     },
-    disable: (cfg) => patchBuzzConfig(cfg, { enabled: false }),
+    disable: (cfg) => patchBuzzChannelConfig(cfg, { enabled: false }),
   };
 }
 

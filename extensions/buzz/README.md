@@ -20,6 +20,20 @@ openclaw channels add --channel buzz
 
 OpenClaw installs the plugin if needed, asks for the relay URL, and generates a dedicated bot identity.
 
+Add another Buzz identity with a named account:
+
+```bash
+openclaw channels add \
+  --channel buzz \
+  --account ada \
+  --name Ada \
+  --relay-url wss://ada.example.com \
+  --private-key 'nsec1...'
+```
+
+Existing default-account credentials are preserved when the first named
+account is added. Buzz environment variables apply only to the default account.
+
 Give the displayed **public key only** to a Buzz owner or admin:
 
 ```bash

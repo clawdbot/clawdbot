@@ -45,6 +45,7 @@ export function applyAccountNameToChannelSection(params: {
   const accountId = normalizeAccountId(params.accountId);
   const base = getChannelSection(params.cfg, params.channelKey);
   const accounts = base?.accounts ?? {};
+  const accountKey = resolveExistingAccountKey(accounts, accountId);
   const useAccounts =
     params.alwaysUseAccounts ||
     accountId !== DEFAULT_ACCOUNT_ID ||
@@ -58,7 +59,7 @@ export function applyAccountNameToChannelSection(params: {
       : (base ?? {});
   return writeChannelSection(params.cfg, params.channelKey, {
     ...baseWithoutName,
-    accounts: { ...accounts, [accountId]: { ...accounts[accountId], name: trimmed } },
+    accounts: { ...accounts, [accountKey]: { ...accounts[accountKey], name: trimmed } },
   });
 }
 
@@ -277,14 +278,15 @@ export function patchScopedAccountConfig(params: {
   }
 
   const accounts = base?.accounts ?? {};
-  const existingAccount = clearFields(accounts[accountId] ?? {});
+  const accountKey = resolveExistingAccountKey(accounts, accountId);
+  const existingAccount = clearFields(accounts[accountKey] ?? {});
   // Preserve an explicit disabled account while enabling newly created accounts by default.
   return writeChannelSection(params.cfg, params.channelKey, {
     ...base,
     ...(ensureChannelEnabled ? { enabled: true } : {}),
     accounts: {
       ...accounts,
-      [accountId]: {
+      [accountKey]: {
         ...existingAccount,
         ...(ensureAccountEnabled
           ? {
@@ -326,6 +328,9 @@ function resolveExistingAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
 ): string {
+  if (Object.hasOwn(accounts, targetAccountId)) {
+    return targetAccountId;
+  }
   return (
     Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
     targetAccountId

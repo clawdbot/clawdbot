@@ -233,8 +233,11 @@ export const buzzOutboundAdapter = {
     replyToId?: string | number | null;
   }) => {
     const runtime = getBuzzRuntime();
-    const resolvedAccountId = accountId ?? resolveDefaultBuzzAccountId(cfg);
-    const account = resolveBuzzAccount({ cfg, accountId: resolvedAccountId });
+    const account = resolveBuzzAccount({
+      cfg,
+      accountId: accountId ?? resolveDefaultBuzzAccountId(cfg),
+    });
+    const resolvedAccountId = account.accountId;
     if (!account.enabled) {
       throw new Error(`Buzz is disabled for account ${resolvedAccountId}`);
     }
@@ -273,7 +276,10 @@ export async function sendBuzzTyping(params: {
   accountId?: string | null;
   threadId?: string | number | null;
 }): Promise<void> {
-  const resolvedAccountId = params.accountId ?? resolveDefaultBuzzAccountId(params.cfg);
+  const resolvedAccountId = resolveBuzzAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultBuzzAccountId(params.cfg),
+  }).accountId;
   const bus = activeBuses.get(resolvedAccountId);
   if (!bus) {
     return;

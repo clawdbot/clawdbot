@@ -201,6 +201,7 @@ function createNamedAccountConfigBase<
     enabled: boolean;
   }) => OpenClawConfig;
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
+  resolveMutationAccountId?: (cfg: Config, accountId: string) => string;
 }): ChannelCrudConfigAdapter<ResolvedAccount> {
   return {
     listAccountIds(cfg) {
@@ -216,19 +217,43 @@ function createNamedAccountConfigBase<
       return params.defaultAccountId(cfg as Config);
     },
     setAccountEnabled({ cfg, accountId, enabled }) {
+      const normalizedAccountId = normalizeAccountId(accountId);
       return params.setAccountEnabled({
         cfg,
-        accountId: normalizeAccountId(accountId),
+        accountId:
+          params.resolveMutationAccountId?.(cfg as Config, normalizedAccountId) ??
+          normalizedAccountId,
         enabled,
       }) as Config;
     },
     deleteAccount({ cfg, accountId }) {
+      const normalizedAccountId = normalizeAccountId(accountId);
       return params.deleteAccount({
         cfg,
-        accountId: normalizeAccountId(accountId),
+        accountId:
+          params.resolveMutationAccountId?.(cfg as Config, normalizedAccountId) ??
+          normalizedAccountId,
       }) as Config;
     },
   };
+}
+
+function resolveExistingScopedAccountKey(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  accountId: string;
+}): string {
+  const section = params.cfg.channels?.[params.sectionKey] as
+    | { accounts?: Record<string, unknown> }
+    | undefined;
+  const accounts = section?.accounts;
+  if (!accounts || Object.hasOwn(accounts, params.accountId)) {
+    return params.accountId;
+  }
+  return (
+    Object.keys(accounts).find((key) => normalizeAccountId(key) === params.accountId) ??
+    params.accountId
+  );
 }
 
 function resolveAccessorAccountWithFallback<
@@ -307,6 +332,13 @@ export function createScopedChannelConfigBase<
     resolveAccount: params.resolveAccount,
     inspectAccount: params.inspectAccount,
     defaultAccountId: params.defaultAccountId,
+    resolveMutationAccountId(cfg, accountId) {
+      return resolveExistingScopedAccountKey({
+        cfg,
+        sectionKey: params.sectionKey,
+        accountId,
+      });
+    },
     setAccountEnabled({ cfg, accountId, enabled }) {
       return setAccountEnabledInConfigSectionInSection({
         cfg,

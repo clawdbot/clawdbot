@@ -282,6 +282,28 @@ describe("patchScopedAccountConfig credential clearing", () => {
     expect(channel.enabled).toBe(true);
     expect(accountRecord(channel, "work")).toEqual({ enabled: true, token: "new-token" });
   });
+
+  it("updates an existing account without changing its key casing", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            accounts: {
+              Work: { name: "Old name", token: "old-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: "work",
+      patch: { token: "new-token" },
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(accountsRecord(channel)).toEqual({
+      Work: { name: "Old name", enabled: true, token: "new-token" },
+    });
+  });
 });
 
 describe("createPatchedAccountSetupAdapter", () => {

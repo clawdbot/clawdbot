@@ -321,6 +321,7 @@ describe("Buzz guided setup", () => {
     expect(discoverRooms).not.toHaveBeenCalled();
     expect(result.cfg.channels?.buzz?.privateKey).toEqual(secretRef);
     expect(result.cfg.channels?.buzz?.enabled).toBe(false);
+    expect(result.accountId).toBeUndefined();
     expect(result.completion).toBe("paused");
   });
 
@@ -391,5 +392,87 @@ describe("Buzz guided setup", () => {
     );
     expect(result.cfg.channels?.buzz?.enabled).toBe(true);
     expect(result.cfg.channels?.buzz?.defaultTo).toBe(ROOM_A);
+  });
+
+  it("configures a named account without replacing the existing default identity", async () => {
+    const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "Ada Room" }]);
+    const wizard = createBuzzSetupWizard({
+      discoverRooms,
+      generateSecretKey: () => GENERATED_KEY,
+    });
+    const prompter = createPrompter();
+    vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
+
+    const result = await wizard.configure({
+      cfg: {
+        channels: {
+          buzz: {
+            enabled: true,
+            relayUrl: "wss://default.example.com",
+            privateKey: "11".repeat(32),
+          },
+        },
+      } as OpenClawConfig,
+      runtime: createRuntime(),
+      prompter,
+      accountOverrides: { buzz: "Ada" },
+      shouldPromptAccountIds: true,
+      forceAllowFrom: false,
+    });
+
+    const namedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
+    expect(result.accountId).toBe("ada");
+    expect(result.cfg.channels?.buzz).toMatchObject({
+      enabled: true,
+      accounts: {
+        default: {
+          relayUrl: "wss://default.example.com",
+          privateKey: "11".repeat(32),
+        },
+        ada: {
+          enabled: true,
+          relayUrl: "wss://buzz.example.com",
+          privateKey: namedPrivateKey,
+          groups: { [ROOM_A]: { enabled: true, requireMention: false } },
+          defaultTo: ROOM_A,
+        },
+      },
+    });
+    expect(discoverRooms).toHaveBeenCalledWith({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: namedPrivateKey,
+    });
+  });
+
+  it("re-enables a named account after paused setup succeeds", async () => {
+    const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "Ada Room" }]);
+    const wizard = createBuzzSetupWizard({ discoverRooms });
+    const prompter = createPrompter();
+
+    const result = await wizard.configure({
+      cfg: {
+        channels: {
+          buzz: {
+            accounts: {
+              ada: {
+                enabled: false,
+                relayUrl: "wss://ada.example.com",
+                privateKey: "11".repeat(32),
+                groups: { [ROOM_A]: {} },
+                defaultTo: ROOM_A,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: createRuntime(),
+      prompter,
+      accountOverrides: { buzz: "ada" },
+      shouldPromptAccountIds: true,
+      forceAllowFrom: false,
+    });
+
+    expect(result.accountId).toBe("ada");
+    expect(result.cfg.channels?.buzz?.accounts?.ada?.enabled).toBe(true);
   });
 });

@@ -1,12 +1,18 @@
 import { getPublicKey, nip19 } from "nostr-tools";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BuzzConfig, BuzzConfigInput } from "./config-schema.js";
+import type {
+  BuzzAccountConfig,
+  BuzzAccountConfigInput,
+  BuzzConfigInput,
+} from "./config-schema.js";
 import { parseBuzzTarget } from "./target.js";
 
 export interface ResolvedBuzzAccount {
@@ -18,14 +24,16 @@ export interface ResolvedBuzzAccount {
   privateKey: string;
   authTag: string;
   publicKey: string;
-  config: BuzzConfig;
+  config: BuzzAccountConfig;
 }
 
 function resolveChannelConfig(cfg: OpenClawConfig): BuzzConfigInput | undefined {
   return (cfg.channels as Record<string, unknown> | undefined)?.buzz as BuzzConfigInput | undefined;
 }
 
-function normalizeBuzzGroups(groups: BuzzConfigInput["groups"]): BuzzConfig["groups"] {
+function normalizeBuzzGroups(
+  groups: BuzzAccountConfigInput["groups"],
+): BuzzAccountConfig["groups"] {
   if (!groups) {
     return undefined;
   }
@@ -33,6 +41,32 @@ function normalizeBuzzGroups(groups: BuzzConfigInput["groups"]): BuzzConfig["gro
     Object.entries(groups).map(([channelId, group]) => [parseBuzzTarget(channelId), group]),
   );
 }
+
+const BUZZ_ACCOUNT_OWNED_KEYS = [
+  "name",
+  "relayUrl",
+  "privateKey",
+  "authTag",
+  "groups",
+  "defaultTo",
+] as const;
+
+const { listAccountIds: listBuzzAccountIds, resolveDefaultAccountId: resolveDefaultBuzzAccountId } =
+  createAccountListHelpers<BuzzAccountConfigInput>("buzz", {
+    normalizeAccountId,
+    fallbackAccountIdWhenEmpty: false,
+    hasImplicitDefaultAccount: (cfg) => {
+      const config = resolveChannelConfig(cfg);
+      return Boolean(
+        config?.relayUrl?.trim() ||
+        hasConfiguredSecretInput(config?.privateKey, cfg.secrets?.defaults) ||
+        process.env.BUZZ_RELAY_URL?.trim() ||
+        process.env.BUZZ_PRIVATE_KEY?.trim(),
+      );
+    },
+  });
+
+export { listBuzzAccountIds, resolveDefaultBuzzAccountId };
 
 export function decodeBuzzPrivateKey(value: string): Uint8Array {
   const trimmed = value.trim();
@@ -50,34 +84,57 @@ export function resolveBuzzPublicKey(privateKey: string): string {
   return getPublicKey(decodeBuzzPrivateKey(privateKey));
 }
 
-export function listBuzzAccountIds(cfg: OpenClawConfig): string[] {
-  const config = resolveChannelConfig(cfg);
-  const relayUrl = config?.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim();
-  const privateKeyConfigured =
-    hasConfiguredSecretInput(config?.privateKey, cfg.secrets?.defaults) ||
-    Boolean(process.env.BUZZ_PRIVATE_KEY?.trim());
-  return relayUrl || privateKeyConfigured ? [DEFAULT_ACCOUNT_ID] : [];
-}
+export function resolveBuzzAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): BuzzAccountConfigInput {
+  const channelConfig = resolveChannelConfig(cfg);
+  const accountConfig = resolveNormalizedAccountEntry(
+    channelConfig?.accounts,
+    accountId,
+    normalizeAccountId,
+  );
+  const isDefaultAccount = normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
 
-export function resolveDefaultBuzzAccountId(_cfg: OpenClawConfig): string {
-  return DEFAULT_ACCOUNT_ID;
+  return mergeAccountConfig({
+    channelConfig,
+    accountConfig,
+    omitKeys: ["defaultAccount", ...(isDefaultAccount ? [] : BUZZ_ACCOUNT_OWNED_KEYS)],
+  });
 }
 
 export function resolveBuzzAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedBuzzAccount {
-  const rawConfig = resolveChannelConfig(params.cfg) ?? {};
-  const config: BuzzConfig = {
+  const requestedAccountId = params.accountId?.trim();
+  const accountId = requestedAccountId
+    ? normalizeAccountId(requestedAccountId)
+    : resolveDefaultBuzzAccountId(params.cfg);
+  const channelConfig = resolveChannelConfig(params.cfg);
+  const rawConfig = resolveBuzzAccountConfig(params.cfg, accountId);
+  const config: BuzzAccountConfig = {
     ...rawConfig,
     groupPolicy: rawConfig.groupPolicy ?? "allowlist",
     groups: normalizeBuzzGroups(rawConfig.groups),
   };
-  const relayUrl = config.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim() || "";
+  const allowEnvFallback = accountId === DEFAULT_ACCOUNT_ID;
+  const relayUrl =
+    config.relayUrl?.trim() ||
+    (allowEnvFallback ? process.env.BUZZ_RELAY_URL?.trim() : undefined) ||
+    "";
   const privateKey =
-    normalizeSecretInputString(config.privateKey) || process.env.BUZZ_PRIVATE_KEY?.trim() || "";
+    normalizeSecretInputString(config.privateKey) ||
+    (allowEnvFallback && config.privateKey === undefined
+      ? process.env.BUZZ_PRIVATE_KEY?.trim()
+      : undefined) ||
+    "";
   const authTag =
-    normalizeSecretInputString(config.authTag) || process.env.BUZZ_AUTH_TAG?.trim() || "";
+    normalizeSecretInputString(config.authTag) ||
+    (allowEnvFallback && config.authTag === undefined
+      ? process.env.BUZZ_AUTH_TAG?.trim()
+      : undefined) ||
+    "";
   let publicKey = "";
   if (privateKey) {
     try {
@@ -87,9 +144,9 @@ export function resolveBuzzAccount(params: {
     }
   }
   return {
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId,
     name: normalizeOptionalString(config.name) ?? "OpenClaw",
-    enabled: config.enabled !== false,
+    enabled: channelConfig?.enabled !== false && config.enabled !== false,
     configured: Boolean(relayUrl && privateKey),
     relayUrl,
     privateKey,

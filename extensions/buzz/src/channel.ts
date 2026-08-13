@@ -1,4 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -11,6 +11,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { buzzConfigAdapter } from "./channel-config.js";
 import { BuzzConfigSchema } from "./config-schema.js";
 import {
   listBuzzDirectoryGroupsFromConfig,
@@ -33,12 +34,7 @@ import {
   normalizeBuzzTarget,
   parseBuzzTarget,
 } from "./target.js";
-import {
-  listBuzzAccountIds,
-  resolveBuzzAccount,
-  resolveDefaultBuzzAccountId,
-  type ResolvedBuzzAccount,
-} from "./types.js";
+import { resolveDefaultBuzzAccountId, type ResolvedBuzzAccount } from "./types.js";
 
 const buzzMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "buzz",
@@ -79,25 +75,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     configSchema: BuzzConfigSchema,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,
-    config: {
-      listAccountIds: listBuzzAccountIds,
-      resolveAccount: (cfg, accountId) => resolveBuzzAccount({ cfg, accountId }),
-      defaultAccountId: resolveDefaultBuzzAccountId,
-      isConfigured: (account) => account.configured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: account.configured,
-          extra: {
-            baseUrl: account.relayUrl,
-            publicKey: account.publicKey,
-          },
-        }),
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveBuzzAccount({ cfg, accountId }).config.groupAllowFrom,
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveBuzzAccount({ cfg, accountId }).config.defaultTo,
-    },
+    config: buzzConfigAdapter,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -120,15 +98,18 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         currentSessionKey,
       }) => {
         const normalized = buildBuzzTarget(parseBuzzTarget(target));
+        const resolvedAccountId = accountId
+          ? normalizeAccountId(accountId)
+          : resolveDefaultBuzzAccountId(cfg);
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
           channel: "buzz",
-          accountId,
+          accountId: resolvedAccountId,
           recipientSessionExact: true,
           peer: { kind: "group", id: normalized },
           chatType: "group",
-          from: `buzz:${accountId ?? "default"}`,
+          from: `buzz:${resolvedAccountId}`,
           to: normalized,
         });
         return buildThreadAwareOutboundSessionRoute({

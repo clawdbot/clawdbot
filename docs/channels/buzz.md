@@ -41,8 +41,9 @@ Buzz uses Nostr keypairs for identity:
   in sender allowlists.
 
 The relay URL points to one Buzz workspace. Each room has a UUID, and OpenClaw
-treats each configured UUID as a separate group conversation. One Gateway and
-bot identity can serve many rooms; you do not need a Gateway per agent or room.
+treats each configured UUID as a separate group conversation. One Buzz account
+can serve many rooms, and one Gateway can run multiple Buzz bot identities; you
+do not need a Gateway per agent, identity, or room.
 
 ## Before you start
 
@@ -347,6 +348,65 @@ Guided setup is recommended. The equivalent configuration looks like:
 }
 ```
 
+### Multiple Buzz accounts
+
+Start guided setup and select or create the named account when prompted:
+
+```sh
+openclaw channels add --channel buzz
+```
+
+Guided setup discovers the rooms available to that bot and writes the selected
+rooms into the named account. A non-interactive account still needs its
+account-scoped `groups` and `defaultTo` configuration before the Gateway can
+start it.
+
+When the command adds the first named account to an existing single-account
+configuration, OpenClaw moves the existing default account's identity, room,
+and access settings into `accounts.default`, then writes the new identity to
+its named account. Channel-wide settings such as `enabled` and `configWrites`
+remain at the root, and both identities remain configured.
+
+A multi-account configuration can also keep policy fields at the root as
+shared defaults:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groupPolicy: "allowlist",
+      defaultAccount: "ada",
+      accounts: {
+        default: {
+          name: "OpenClaw",
+          relayUrl: "wss://buzz.example.com",
+          privateKey: "nsec1...",
+          groups: {
+            "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {},
+          },
+        },
+        ada: {
+          name: "Ada",
+          relayUrl: "wss://ada.example.com",
+          privateKey: "nsec1...",
+          groups: {
+            "940d0c32-4eb7-46d7-9d5b-d975aaef87f7": {},
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Each account can define its relay URL, private key, authorization tag, room map,
+display name, and default target. These identity and routing fields never
+inherit from the root into named accounts. Root-level policy fields remain
+shared defaults. Root-level identity fields remain compatible with the literal
+`default` account, where `accounts.default` can override them. `BUZZ_RELAY_URL`,
+`BUZZ_PRIVATE_KEY`, and `BUZZ_AUTH_TAG` also apply only to the literal `default`
+account; named accounts must store their own values or SecretRefs.
+
 For a narrower sender policy:
 
 ```json5
@@ -370,8 +430,10 @@ hexadecimal form.
 ### Bot key storage
 
 The default guided path reuses the current bot identity or generates a private
-key and stores it in `channels.buzz.privateKey`, following OpenClaw's current
-plaintext config convention.
+key and stores it in the selected Buzz account, following OpenClaw's current
+plaintext config convention. A legacy default account uses
+`channels.buzz.privateKey`; named accounts use
+`channels.buzz.accounts.<account>.privateKey`.
 
 For an existing key, setup can use plaintext or an existing `env`, `file`, or
 `exec` SecretRef. See [Secrets management](/gateway/secrets) for provider setup.

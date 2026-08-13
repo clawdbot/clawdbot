@@ -403,6 +403,43 @@ describe("createScopedChannelConfigBase", () => {
       accounts: undefined,
     });
   });
+
+  it("preserves an existing account key when mutations use normalized casing", () => {
+    const base = createScopedChannelConfigBase({
+      sectionKey: "demo",
+      listAccountIds: () => ["work"],
+      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
+      defaultAccountId: resolveDefaultAccountId,
+      clearBaseFields: [],
+    });
+    const cfg = {
+      channels: {
+        demo: {
+          accounts: {
+            Work: { token: "secret" },
+          },
+        },
+      },
+    };
+
+    expect(
+      base.setAccountEnabled!({
+        cfg,
+        accountId: "work",
+        enabled: false,
+      }).channels?.demo,
+    ).toEqual({
+      accounts: {
+        Work: { token: "secret", enabled: false },
+      },
+    });
+    expect(
+      base.deleteAccount!({
+        cfg,
+        accountId: "work",
+      }).channels?.demo,
+    ).toEqual({ accounts: undefined });
+  });
 });
 
 describe("createScopedChannelConfigAdapter", () => {

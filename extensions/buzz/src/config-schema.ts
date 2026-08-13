@@ -1,5 +1,6 @@
 import {
   buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -14,7 +15,9 @@ const BuzzGroupConfigSchema = z
   })
   .strict();
 
-const RawBuzzConfigSchema = z
+// Account policy fields intentionally override root defaults, matching the
+// shared multi-account channel contract (including configWrites).
+const BuzzAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -27,7 +30,7 @@ const RawBuzzConfigSchema = z
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: GroupPolicySchema.optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z
       .record(
@@ -39,6 +42,15 @@ const RawBuzzConfigSchema = z
   })
   .strict();
 
+const BuzzRootConfigSchema = BuzzAccountConfigSchema.extend({
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+}).strict();
+
+const RawBuzzConfigSchema = buildMultiAccountChannelSchema(BuzzRootConfigSchema, {
+  accountSchema: BuzzAccountConfigSchema.partial(),
+});
+
 export const BuzzConfigSchema = buildChannelConfigSchema(RawBuzzConfigSchema);
+export type BuzzAccountConfigInput = z.input<typeof BuzzAccountConfigSchema>;
+export type BuzzAccountConfig = z.output<typeof BuzzRootConfigSchema>;
 export type BuzzConfigInput = z.input<typeof RawBuzzConfigSchema>;
-export type BuzzConfig = z.output<typeof RawBuzzConfigSchema>;
