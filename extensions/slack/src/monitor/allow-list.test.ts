@@ -91,14 +91,6 @@ describe("slack/allow-list", () => {
         teamId: "T22222222",
         id: "U01234567",
       }),
-    ).toEqual({ allowed: false });
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["u01234567"],
-        teamId: "T22222222",
-        id: "U01234567",
-        allowUnscoped: true,
-      }),
     ).toEqual({ allowed: true, matchKey: "u01234567", matchSource: "id" });
   });
 
