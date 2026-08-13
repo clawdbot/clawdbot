@@ -77,6 +77,7 @@ export type ChangedLaneResult = {
 
 type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
+  pathsAreRawGitTokens?: boolean;
 };
 
 type PackageJsonGitParams = {
@@ -121,7 +122,10 @@ export function detectChangedLanes(
   changedPaths: string[],
   options: DetectChangedLanesOptions = {},
 ): ChangedLaneResult {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
+  const pathNormalizer = options.pathsAreRawGitTokens
+    ? (changedPath: string) => changedPath
+    : normalizeChangedPath;
+  const paths = [...new Set(changedPaths.map(pathNormalizer).filter(Boolean))]
     .toSorted((left, right) => left.localeCompare(right))
     .filter((changedPath) => changedPath !== "--");
   const lanes = createEmptyChangedLanes();
@@ -145,7 +149,11 @@ export function detectChangedLanes(
     paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
   ) {
     lanes.releaseMetadata = true;
-    lanes.docs = paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "docs");
+    lanes.docs = paths.some(
+      (changedPath) =>
+        getChangedPathFacts(changedPath, { preserveRawPath: options.pathsAreRawGitTokens === true })
+          .surface === "docs",
+    );
     for (const changedPath of paths) {
       reasons.push(`${changedPath}: release metadata`);
     }
@@ -153,7 +161,9 @@ export function detectChangedLanes(
   }
 
   for (const changedPath of paths) {
-    const facts = getChangedPathFacts(changedPath);
+    const facts = getChangedPathFacts(changedPath, {
+      preserveRawPath: options.pathsAreRawGitTokens === true,
+    });
     if (BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)) {
       lanes.bundledChannelConfigMetadata = true;
       reasons.push(`${changedPath}: bundled channel config metadata input`);
@@ -291,6 +301,7 @@ export function detectChangedLanesForPaths(params: {
   head?: string;
   staged?: boolean;
   mergeHeadFirstParent?: boolean;
+  pathsAreRawGitTokens?: boolean;
 }): ChangedLaneResult {
   const resolvedBase = params.staged
     ? params.base
@@ -308,7 +319,10 @@ export function detectChangedLanesForPaths(params: {
         staged: params.staged,
       })
     : null;
-  return detectChangedLanes(params.paths, { packageJsonChangeKind });
+  return detectChangedLanes(params.paths, {
+    packageJsonChangeKind,
+    pathsAreRawGitTokens: params.pathsAreRawGitTokens === true,
+  });
 }
 
 /**
@@ -320,6 +334,7 @@ export function listChangedPathsFromGit(params: {
   includeWorktree?: boolean;
   cwd?: string;
   mergeHeadFirstParent?: boolean;
+  preserveRawGitTokens?: boolean;
 }): string[] {
   const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
@@ -331,27 +346,28 @@ export function listChangedPathsFromGit(params: {
     preferFirstParent: params.mergeHeadFirstParent === true,
   });
   const base = typeof resolvedBase === "string" ? resolvedBase : "";
+  const preserveRawGitTokens = params.preserveRawGitTokens === true;
   if (!base) {
     return [];
   }
   let rangePaths: string[];
   let noMergeBase = false;
   try {
-    rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+    rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd, preserveRawGitTokens);
   } catch (error) {
     if (!isGitNoMergeBaseError(error)) {
       throw error;
     }
     noMergeBase = true;
-    rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
+    rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd, preserveRawGitTokens);
   }
   if (params.includeWorktree === false) {
     return rangePaths;
   }
   const worktreePaths = [
-    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
-    ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
+    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd, preserveRawGitTokens),
+    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd, preserveRawGitTokens),
+    ...runGitLsFiles(["--others", "--exclude-standard"], cwd, preserveRawGitTokens),
   ];
   // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
   // worktree delta instead of turning that into an accidental whole-repo gate.
@@ -368,14 +384,23 @@ export function listChangedPathsFromGit(params: {
   );
 }
 
-function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+function runGitNameOnlyDiff(
+  extraArgs: string[],
+  cwd = process.cwd(),
+  preserveRawGitTokens = false,
+): string[] {
+  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return parseGitPathOutput(output, preserveRawGitTokens);
+}
+
+function parseGitPathOutput(output: string, preserveRawGitTokens: boolean): string[] {
+  const paths = output.split("\0").filter((changedPath) => changedPath.length > 0);
+  return preserveRawGitTokens ? paths : paths.map(normalizeChangedPath).filter(Boolean);
 }
 
 function gitOutputText(value: unknown) {
@@ -395,27 +420,38 @@ function isGitNoMergeBaseError(error: unknown) {
   return text.includes("no merge base");
 }
 
-function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["ls-files", ...extraArgs], {
+function runGitLsFiles(
+  extraArgs: string[],
+  cwd = process.cwd(),
+  preserveRawGitTokens = false,
+): string[] {
+  const output = execFileSync("git", ["ls-files", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return parseGitPathOutput(output, preserveRawGitTokens);
 }
 
 /**
  * Lists staged changed paths for pre-commit checks.
  */
-export function listStagedChangedPaths(cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-  });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+export function listStagedChangedPaths(
+  cwd = process.cwd(),
+  options: { preserveRawGitTokens?: boolean } = {},
+) {
+  const output = execFileSync(
+    "git",
+    ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRD"],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    },
+  );
+  return parseGitPathOutput(output, options.preserveRawGitTokens === true);
 }
 
 /**
@@ -670,11 +706,12 @@ if (isDirectRun()) {
     args.paths.length > 0
       ? args.paths
       : args.staged
-        ? listStagedChangedPaths()
+        ? listStagedChangedPaths(undefined, { preserveRawGitTokens: true })
         : listChangedPathsFromGit({
             base: args.base,
             head: args.head,
             mergeHeadFirstParent: args.mergeHeadFirstParent,
+            preserveRawGitTokens: true,
           });
   const result = detectChangedLanesForPaths({
     paths,
@@ -682,6 +719,7 @@ if (isDirectRun()) {
     head: args.head,
     staged: args.staged,
     mergeHeadFirstParent: args.mergeHeadFirstParent,
+    pathsAreRawGitTokens: args.paths.length === 0,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

@@ -310,12 +310,21 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (!args.staged || args.paths.length > 0) {
     return argv;
   }
-  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const stagedPaths = listStagedChangedPaths(options.cwd, { preserveRawGitTokens: true });
   const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
   }
-  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
+  return [
+    ...timedArgs,
+    "--paths-are-raw-git-tokens",
+    "--base",
+    "HEAD",
+    "--head",
+    "HEAD",
+    "--",
+    ...stagedPaths,
+  ];
 }
 
 export function shouldRunNpmLockGuard(paths: string[]) {
@@ -1130,8 +1139,7 @@ function printSummary(timings: ChangedCheckTiming[], options: ChangedCheckRunOpt
 function parseArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
-  const explicitPaths =
-    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -1139,6 +1147,7 @@ function parseArgs(argv: string[]) {
     dryRun: false,
     timed: false,
     noChanges: false,
+    pathsAreRawGitTokens: false,
     help: false,
     paths: new Array<string>(),
   };
@@ -1152,6 +1161,7 @@ function parseArgs(argv: string[]) {
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
       booleanFlag("--no-changes", "noChanges"),
+      booleanFlag("--paths-are-raw-git-tokens", "pathsAreRawGitTokens"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -1160,12 +1170,15 @@ function parseArgs(argv: string[]) {
         if (arg.startsWith("-")) {
           throw new Error(`Unknown option: ${arg}`);
         }
-        target.paths.push(normalizeChangedPath(arg));
+        target.paths.push(arg);
         return "handled";
       },
     },
   );
   parsed.paths.push(...explicitPaths);
+  if (!parsed.pathsAreRawGitTokens) {
+    parsed.paths = parsed.paths.map(normalizeChangedPath);
+  }
   return parsed;
 }
 
@@ -1212,8 +1225,12 @@ async function main() {
         : args.paths.length > 0
           ? args.paths
           : args.staged
-            ? listStagedChangedPaths()
-            : listChangedPathsFromGit({ base: args.base, head: args.head });
+            ? listStagedChangedPaths(undefined, { preserveRawGitTokens: true })
+            : listChangedPathsFromGit({
+                base: args.base,
+                head: args.head,
+                preserveRawGitTokens: true,
+              });
     } catch (error) {
       // A sparse/fresh checkout may not have the requested base ref yet. The remote
       // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
@@ -1234,6 +1251,7 @@ async function main() {
         base: args.base,
         head: args.head,
         staged: args.staged,
+        pathsAreRawGitTokens: args.pathsAreRawGitTokens || args.paths.length === 0,
       });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {

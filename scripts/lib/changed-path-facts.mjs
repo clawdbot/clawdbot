@@ -44,10 +44,12 @@ export function normalizeChangedPath(inputPath) {
 /**
  * Returns shared path facts without imposing a caller's lane-selection policy.
  * @param {unknown} inputPath
+ * @param {{ preserveRawPath?: boolean }} [options]
  * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
  */
-export function getChangedPathFacts(inputPath) {
-  const path = typeof inputPath === "string" ? inputPath.trim() : "";
+export function getChangedPathFacts(inputPath, options = {}) {
+  const path =
+    typeof inputPath === "string" ? (options.preserveRawPath ? inputPath : inputPath.trim()) : "";
   const surface = SURFACE_PATTERNS.find(([, pattern]) => pattern.test(path))?.[0] ?? "unknown";
 
   return {
