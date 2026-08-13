@@ -169,23 +169,6 @@ final class OnboardingAISetupModel {
         self.detectError = detectError
     }
 
-    func recoverConfiguredGatewayVerification(
-        modelRef: String,
-        status: String?,
-        error: String?)
-    {
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.updateConfiguredGatewayBlockerState(
-            .verificationFailed(ConfiguredGatewayVerificationFailure(
-                modelRef: modelRef,
-                status: status,
-                error: error)),
-            phase: .detecting,
-            detectError: nil)
-        self.started = true
-        self.scheduleDetection()
-    }
-
     /// Restore only the pending handoff state. A configured model label is not
     /// proof that the ambiguous activation completed or that inference works.
     func resumeConfiguredInference(modelRef: String) {

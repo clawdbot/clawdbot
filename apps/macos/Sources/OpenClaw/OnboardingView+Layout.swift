@@ -185,118 +185,157 @@ extension OnboardingView {
 
             switch outcome {
             case let .configured(modelRef, _):
-                switch pendingState {
-                case .activating, .activationExpired, .completed:
-                    // A live setup/verification already owns this marker. A
-                    // reconnect must not downgrade connected state or fork a
-                    // second resume operation.
-                    guard !self.aiSetup.connected else { return }
-                    self.resumePendingSystemAgent(modelRef: modelRef)
-                    return
-                case .verified:
-                    // Inference was observed, but the dropped activation can
-                    // still be mutating until the same durable deadline.
-                    self.waitForPendingInferenceSetup()
-                    return
-                case .none:
-                    // A concurrent probe can clear an expired marker while
-                    // the dispatched activation is still returning. Keep the
-                    // setup-owned handoff, and prove inference on this route.
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
-                }
-                guard Self.shouldOpenConfiguredGatewayDashboard(
-                    onboardingVisible: self.onboardingVisible,
-                    expectedMode: expectedMode,
-                    currentMode: self.state.connectionMode,
+                self.handleConfiguredGatewayProbeSuccess(
+                    modelRef: modelRef,
+                    pendingState: pendingState,
                     systemAgentResumePending: systemAgentResumePending,
-                    setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
-                else { return }
-                self.onboardingVisible = false
-                self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete()
-                OnboardingController.shared.close()
-                AppNavigationActions.openDashboard()
+                    expectedMode: expectedMode)
             case let .verificationFailed(modelRef, status, error, _):
-                // A configured model is not usable when its live turn fails.
-                // An ambiguous activation receipt retains mutation ownership;
-                // otherwise recovery may list choices but never auto-activate one.
-                guard !self.aiSetup.ownsInferenceTransition ||
-                    self.aiSetup.configuredGatewayVerificationFailure != nil
-                else { return }
-                switch pendingState {
-                case .activating, .completed:
-                    self.resumePendingSystemAgent(modelRef: modelRef)
-                case .verified:
-                    self.waitForPendingInferenceSetup()
-                case .activationExpired:
-                    guard expectedPendingState != .none,
-                          let expectedRouteIdentity,
-                          OnboardingSystemAgentResumeStore.clear(
-                              ifOwnedBy: expectedRouteIdentity,
-                              activationOwner: expectedActivationOwner,
-                              defaults: self.systemAgentDefaults)
-                    else { return }
-                    self.resumeConfiguredGatewayVerificationRecovery(
-                        modelRef: modelRef,
-                        status: status,
-                        error: error)
-                case .none:
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
-                    // A receipt visible before this request was cleared by a
-                    // concurrent owner. Its completion path, not this stale
-                    // failure, decides when replacement setup is safe.
-                    guard expectedPendingState == .none else { return }
-                    self.resumeConfiguredGatewayVerificationRecovery(
-                        modelRef: modelRef,
-                        status: status,
-                        error: error)
-                }
+                self.handleConfiguredGatewayVerificationFailure(
+                    modelRef: modelRef,
+                    status: status,
+                    error: error,
+                    pendingState: pendingState,
+                    expectedPendingState: expectedPendingState,
+                    expectedRouteIdentity: expectedRouteIdentity,
+                    expectedActivationOwner: expectedActivationOwner)
             case .missing:
-                // A route-bound activation/verification can complete while the
-                // earlier agents.list request is suspended. Never let that
-                // stale absence reset connected inference or its handoff marker.
-                guard !self.aiSetup.connected else { return }
-                switch pendingState {
-                case .activating, .verified:
-                    // A dropped activation may still be committing. Keep this
-                    // route read-only until its durable maximum deadline.
-                    self.waitForPendingInferenceSetup()
-                    return
-                case .activationExpired, .completed:
-                    // The absence result was dispatched for the receipt visible
-                    // at probe start. A replacement attempt owns its own retry.
-                    guard expectedPendingState != .none,
-                          let expectedRouteIdentity,
-                          OnboardingSystemAgentResumeStore.clear(
-                              ifOwnedBy: expectedRouteIdentity,
-                              activationOwner: expectedActivationOwner,
-                              defaults: self.systemAgentDefaults)
-                    else { return }
-                    self.resumePendingInferenceSetup()
-                    return
-                case .none:
-                    break
-                }
-                if startAISetupWhenMissing,
-                   knownAISetupPage || self.activePageIndex == self.aiPageIndex
-                {
-                    if self.aiSetup.configuredGatewayVerificationFailure != nil {
-                        self.resumePendingInferenceSetup()
-                    } else {
-                        self.aiSetup.startIfNeeded()
-                    }
-                }
+                self.handleMissingConfiguredGatewayInference(
+                    pendingState: pendingState,
+                    expectedPendingState: expectedPendingState,
+                    expectedRouteIdentity: expectedRouteIdentity,
+                    expectedActivationOwner: expectedActivationOwner,
+                    startAISetupWhenMissing: startAISetupWhenMissing,
+                    knownAISetupPage: knownAISetupPage)
             case .unavailable, .authIssue:
                 self.showConfiguredGatewayProbeBlocker(outcome)
             case .superseded:
                 break
             }
+        }
+    }
+
+    private func handleConfiguredGatewayProbeSuccess(
+        modelRef: String,
+        pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        systemAgentResumePending: Bool,
+        expectedMode: AppState.ConnectionMode)
+    {
+        switch pendingState {
+        case .activating, .activationExpired, .completed:
+            // A live setup/verification already owns this marker. A reconnect
+            // must not downgrade connected state or fork a second resume operation.
+            guard !self.aiSetup.connected else { return }
+            self.resumePendingSystemAgent(modelRef: modelRef)
+            return
+        case .verified:
+            // Inference was observed, but the dropped activation can still be
+            // mutating until the same durable deadline.
+            self.waitForPendingInferenceSetup()
+            return
+        case .none:
+            // A concurrent probe can clear an expired marker while the dispatched
+            // activation is still returning. Keep its handoff and prove inference.
+            if self.aiSetup.pendingActivationVerification {
+                self.resumePendingSystemAgent(modelRef: modelRef)
+                return
+            }
+        }
+        guard Self.shouldOpenConfiguredGatewayDashboard(
+            onboardingVisible: self.onboardingVisible,
+            expectedMode: expectedMode,
+            currentMode: self.state.connectionMode,
+            systemAgentResumePending: systemAgentResumePending,
+            setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
+        else { return }
+        self.onboardingVisible = false
+        self.configuredGatewayProbe.invalidate()
+        OnboardingController.markComplete()
+        OnboardingController.shared.close()
+        AppNavigationActions.openDashboard()
+    }
+
+    private func handleConfiguredGatewayVerificationFailure(
+        modelRef: String,
+        status: String?,
+        error: String?,
+        pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedRouteIdentity: String?,
+        expectedActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?)
+    {
+        // A configured model is not usable when its live turn fails. An ambiguous
+        // activation receipt retains mutation ownership; other recovery is read-only.
+        guard !self.aiSetup.ownsInferenceTransition ||
+            self.aiSetup.configuredGatewayVerificationFailure != nil
+        else { return }
+        switch pendingState {
+        case .activating, .completed:
+            self.resumePendingSystemAgent(modelRef: modelRef)
+        case .verified:
+            self.waitForPendingInferenceSetup()
+        case .activationExpired:
+            guard expectedPendingState != .none,
+                  let expectedRouteIdentity,
+                  OnboardingSystemAgentResumeStore.clear(
+                      ifOwnedBy: expectedRouteIdentity,
+                      activationOwner: expectedActivationOwner,
+                      defaults: self.systemAgentDefaults)
+            else { return }
+            self.resumeConfiguredGatewayVerificationRecovery(
+                modelRef: modelRef,
+                status: status,
+                error: error)
+        case .none:
+            if self.aiSetup.pendingActivationVerification {
+                self.resumePendingSystemAgent(modelRef: modelRef)
+                return
+            }
+            // A receipt visible before this request was cleared by a concurrent
+            // owner. Its completion path, not this stale failure, owns replacement.
+            guard expectedPendingState == .none else { return }
+            self.resumeConfiguredGatewayVerificationRecovery(
+                modelRef: modelRef,
+                status: status,
+                error: error)
+        }
+    }
+
+    private func handleMissingConfiguredGatewayInference(
+        pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedRouteIdentity: String?,
+        expectedActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?,
+        startAISetupWhenMissing: Bool,
+        knownAISetupPage: Bool)
+    {
+        // A route-bound transition can complete while agents.list is suspended.
+        // Never let that stale absence reset connected inference or its receipt.
+        guard !self.aiSetup.connected else { return }
+        switch pendingState {
+        case .activating, .verified:
+            self.waitForPendingInferenceSetup()
+            return
+        case .activationExpired, .completed:
+            guard expectedPendingState != .none,
+                  let expectedRouteIdentity,
+                  OnboardingSystemAgentResumeStore.clear(
+                      ifOwnedBy: expectedRouteIdentity,
+                      activationOwner: expectedActivationOwner,
+                      defaults: self.systemAgentDefaults)
+            else { return }
+            self.resumePendingInferenceSetup()
+            return
+        case .none:
+            break
+        }
+        guard startAISetupWhenMissing,
+              knownAISetupPage || self.activePageIndex == self.aiPageIndex
+        else { return }
+        if self.aiSetup.configuredGatewayVerificationFailure != nil {
+            self.resumePendingInferenceSetup()
+        } else {
+            self.aiSetup.startIfNeeded()
         }
     }
 
