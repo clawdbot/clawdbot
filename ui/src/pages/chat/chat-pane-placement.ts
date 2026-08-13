@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -5,9 +6,26 @@ import {
   requestCloudWorkerStop,
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+
+export function resolveChatPaneDesktopTarget(
+  session: GatewaySessionRow | undefined,
+): string | null {
+  if (!session) {
+    return null;
+  }
+  const placement = session.placement;
+  if (isCloudWorkerPlacementState(placement?.state)) {
+    return "environmentId" in placement
+      ? (normalizeOptionalString(placement.environmentId) ?? null)
+      : null;
+  }
+  const execNode = normalizeOptionalString(session.execNode);
+  return execNode ? `node:${execNode}` : "gateway";
+}
 
 export function resolveChatPanePlacement(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;

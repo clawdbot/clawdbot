@@ -25,7 +25,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
-import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
+import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -192,13 +192,19 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         ? { "continue-in-terminal": continueInTerminalDisabledReason }
         : {}),
     };
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const openDesktopPanel = () =>
+    const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
+    const desktopPanelAvailable =
+      desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const openDesktopPanel = () => {
+      if (!desktopEnvironmentId) {
+        return;
+      }
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
-          detail: { open: true },
+          detail: { open: true, environmentId: desktopEnvironmentId },
         }),
       );
+    };
     const browserPanelAction = sessionWorkspace.onToggleBrowser
       ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
           <button
