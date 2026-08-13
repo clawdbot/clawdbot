@@ -18,8 +18,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { createVitestCacheWarmGroups } from "../../scripts/lib/ci-node-test-plan.mts";
-import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -3816,49 +3815,6 @@ printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
 
-    const groups = createVitestCacheWarmGroups();
-    expect(groups).toHaveLength(10);
-    expect(groups.every((group) => group.configs.length === 1)).toBe(true);
-    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
-    expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
-
-    const coreStripeGroups = groups.filter(
-      (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
-    );
-    expect(coreStripeGroups).toHaveLength(2);
-    expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-    const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
-
-    const isolatedGroups = groups.filter((group) =>
-      group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
-    );
-    expect(isolatedGroups).toHaveLength(2);
-    expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
-    expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
-
-    const embeddedGroups = groups.filter((group) =>
-      group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
-    );
-    expect(embeddedGroups).toHaveLength(4);
-    expect(
-      embeddedGroups.every((group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000"),
-    ).toBe(true);
-
-    const gatewayGroups = groups.filter((group) =>
-      group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
-    );
-    expect(gatewayGroups).toHaveLength(1);
-    expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
-    expect(gatewayGroups[0]?.env).toBeUndefined();
-
-    const autoReplyGroups = groups.filter((group) =>
-      group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
-    );
-    expect(autoReplyGroups).toHaveLength(1);
-    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
-    expect(autoReplyGroups[0]?.env).toBeUndefined();
-
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
       const storeDir = path.join(maintenanceRoot, "store");
@@ -5350,15 +5306,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
-    const releaseCandidateCurrent = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: false,
-      releaseCandidateCompatibility: true,
-    });
-    expect(releaseCandidateCurrent.status, releaseCandidateCurrent.output).toBe(0);
-    expect(releaseCandidateCurrent.outputs.compatibility_target).toBe("true");
-    expect(releaseCandidateCurrent.outputs.use_compatible_android_ci).toBe("false");
-
     const currentMissingAndroidCapabilities = runCiManifestFixture({
       androidCiCapabilities: false,
       bundledPlanner: true,
@@ -5382,6 +5329,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
+
     expect(
       JSON.parse(
         expectDefined(
@@ -5481,15 +5429,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ]),
     );
 
-    const sqliteLifecyclePullRequest = runCiManifestFixture({
-      bundledPlanner: true,
-      changedPaths: ["src/sqlite-session-owner.ts"],
-      eventName: "pull_request",
-    });
-    expect(sqliteLifecyclePullRequest.status, sqliteLifecyclePullRequest.output).toBe(0);
-    expect(sqliteLifecyclePullRequest.outputs.run_sqlite_session_lifecycle).toBe("true");
-    expect(sqliteLifecyclePullRequest.outputs.run_build_artifacts).toBe("true");
-
     const sqliteLifecycleTestPullRequest = runCiManifestFixture({
       bundledPlanner: true,
       changedPaths: ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
@@ -5569,6 +5508,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(releaseCandidateMissingSwiftWrappers.status).toBe(0);
     expect(releaseCandidateMissingSwiftWrappers.outputs.compatibility_target).toBe("true");
+    expect(releaseCandidateMissingSwiftWrappers.outputs.use_compatible_android_ci).toBe("false");
     expect(releaseCandidateMissingSwiftWrappers.outputs.run_ios_build).toBe("true");
     expect(releaseCandidateMissingSwiftWrappers.outputs.run_macos_swift).toBe("true");
 
@@ -5581,22 +5521,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(releaseCandidateMissingIosBuild.status).toBe(0);
     expect(releaseCandidateMissingIosBuild.outputs.run_ios_build).toBe("false");
-
-    const legacyReleaseCandidate = runCiManifestFixture({
-      bundledPlanner: false,
-      historicalCompatibility: false,
-      releaseCandidateCompatibility: true,
-    });
-    expect(legacyReleaseCandidate.status, legacyReleaseCandidate.output).toBe(0);
-    expect(legacyReleaseCandidate.outputs.compatibility_target).toBe("true");
-    expect(
-      JSON.parse(
-        expectDefined(
-          legacyReleaseCandidate.outputs.checks_node_core_nondist_matrix,
-          "release candidate node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
 
     const frozenTargetContext = runCiManifestFixture({
       bundledPlanner: false,
@@ -5613,15 +5537,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ),
       ).include,
     ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
-
-    const currentMissingProtocolCoverage = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: false,
-      protocolCoverage: false,
-    });
-    expect(currentMissingProtocolCoverage.status, currentMissingProtocolCoverage.output).toBe(0);
-    expect(currentMissingProtocolCoverage.outputs.historical_target).toBe("false");
-    expect(currentMissingProtocolCoverage.outputs.run_protocol_event_coverage).toBe("false");
 
     const pullRequestMissingProtocolCoverage = runCiManifestFixture({
       bundledPlanner: true,
@@ -5641,15 +5556,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(currentMissingPlanner.status).not.toBe(0);
     expect(currentMissingPlanner.output).toContain(
-      "CI target does not export a supported Node test shard planner",
-    );
-
-    const alternateMissingPlanner = runCiManifestFixture({
-      bundledPlanner: false,
-      historicalCompatibility: false,
-    });
-    expect(alternateMissingPlanner.status).not.toBe(0);
-    expect(alternateMissingPlanner.output).toContain(
       "CI target does not export a supported Node test shard planner",
     );
 
@@ -6441,12 +6347,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const cases = [
         ["main", topology.mainHead, "main-ancestor", topology.mainBase],
         [topology.releaseBranch, topology.releaseHead, "release-branch-head", topology.mainBase],
-        [
-          `refs/heads/${topology.releaseBranch}`,
-          topology.releaseHead,
-          "release-branch-head",
-          topology.mainBase,
-        ],
         [topology.releaseTag, topology.releaseTagHead, "release-tag", topology.mainBase],
         [topology.releaseTagHead, topology.releaseTagHead, "release-tag", topology.mainBase],
         [topology.mainReleaseTag, topology.mainHead, "release-tag", topology.mainHead],

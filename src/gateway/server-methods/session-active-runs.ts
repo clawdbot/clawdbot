@@ -41,7 +41,7 @@ export function collectTrackedActiveSessionRuns(
 }
 
 function isTrackedActiveSessionRunForKey(
-  active: TrackedActiveSessionRun,
+  active: Pick<TrackedActiveSessionRun, "sessionKey" | "agentId">,
   key: string,
   agentId?: string,
   defaultAgentId?: string,
@@ -95,31 +95,18 @@ export function hasRegisteredChatRunForSessionKey(params: {
   agentId: string | undefined;
   defaultAgentId?: string;
 }): boolean {
-  if (!(params.context.chatAbortControllers instanceof Map)) {
-    return false;
-  }
-  const requestedAgentId = resolveChatRunOwnerAgentId({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    defaultAgentId: params.defaultAgentId,
-  });
-  if (!requestedAgentId) {
-    return false;
-  }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey?.trim() !== params.sessionKey) {
-      continue;
-    }
-    const activeAgentId = resolveChatRunOwnerAgentId({
-      agentId: active.agentId,
-      sessionKey: active.sessionKey,
-      defaultAgentId: params.defaultAgentId,
-    });
-    if (!requestedAgentId || requestedAgentId === activeAgentId) {
-      return true;
-    }
-  }
-  return false;
+  const controllers = params.context.chatAbortControllers;
+  return (
+    controllers instanceof Map &&
+    [...controllers.values()].some((active) =>
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.sessionKey,
+        params.agentId,
+        params.defaultAgentId,
+      ),
+    )
+  );
 }
 
 /** Returns true when either requested or canonical session key has a visible active run. */
@@ -204,15 +191,4 @@ export function resolveVisibleActiveSessionRunState(params: {
     active: runIds.length > 0 || hasProjectedRun || embeddedRunInProgress,
     runIds,
   };
-}
-
-export function hasVisibleActiveSessionRun(params: {
-  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
-  requestedKey: string;
-  canonicalKey: string;
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): boolean {
-  return resolveVisibleActiveSessionRunState(params).active;
 }

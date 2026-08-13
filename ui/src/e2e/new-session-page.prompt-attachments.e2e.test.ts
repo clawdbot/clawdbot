@@ -36,6 +36,7 @@ suite.define(() => {
   it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
+      await page.emulateMedia({ reducedMotion: "reduce" });
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
@@ -642,8 +643,8 @@ suite.define(() => {
 
       const draft = page.locator(".new-session-page__scroll");
       const message = page.locator(".new-session-page__message");
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeSummary = page.locator("#new-session-place-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__project-popover");
+      const placeSummary = page.locator("#new-session-project-trigger");
 
       await message.fill(submittedMessage);
       await placeSummary.click();

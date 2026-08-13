@@ -52,7 +52,7 @@ export function readArtifactBase64Payload(
   value: string | undefined,
   opts: { includeData: boolean },
 ): ArtifactBase64Payload | undefined {
-  if (!value) {
+  if (value === undefined) {
     return undefined;
   }
   let encodedLength = 0;
@@ -82,9 +82,6 @@ export function readArtifactBase64Payload(
     if (data !== undefined) {
       data += normalizeArtifactBase64Char(char);
     }
-  }
-  if (encodedLength === 0) {
-    return undefined;
   }
   const remainder = encodedLength % 4;
   if ((padding > 0 && remainder !== 0) || remainder === 1) {

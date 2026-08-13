@@ -1359,6 +1359,77 @@ openclaw-chat-sidebar-region,
   padding: 16px;
 }
 
+.chat-subagent-detail {
+  min-height: 0;
+}
+
+.chat-subagent-detail__header {
+  gap: 10px;
+}
+
+.chat-subagent-detail__heading {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.chat-subagent-detail__heading .sidebar-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-detail__meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-subagent-detail__tool {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-detail__content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-subagent-detail__transcript {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-subagent-detail__transcript > .chat-thread {
+  padding: 12px 0 6px;
+  border-radius: 0;
+}
+
+.chat-subagent-detail__transcript .chat-thread-inner {
+  width: calc(100% - 16px);
+}
+
+.chat-subagent-detail__state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-subagent-detail__state--error {
+  color: var(--danger);
+}
+
+.chat-subagent-detail__fallback .chat-tasks-rail__detail-blocks {
+  gap: 12px;
+}
+
 /* Full-height panel kinds need a bounded wrapper so their inner content can
    shrink and scroll instead of expanding past the rail. */
 .sidebar-panel-host--fill {

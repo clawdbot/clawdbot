@@ -153,7 +153,8 @@ export function hasAbortableSessionRun(host: {
   return Boolean(
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
     ),
   );
 }

@@ -3,7 +3,13 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  resetSubagentRegistryForTests,
+  testing as subagentRegistryTesting,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -227,6 +233,11 @@ async function expectListedGlobalSessionActiveRun(params: {
 }
 
 describe("sessions.abort agent scope", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    subagentRegistryTesting.setDepsForTest();
+  });
+
   beforeEach(() => {
     chatAbortMock.mockReset();
     resolveSessionKeyForRunMock.mockReset();
@@ -245,6 +256,10 @@ describe("sessions.abort agent scope", () => {
     abortEmbeddedAgentRunMock.mockReset();
     clearSessionQueuesMock.mockReset();
     clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+    subagentRegistryTesting.setDepsForTest({
+      persistSubagentRunsToDisk: () => {},
+      persistSubagentRunsToDiskOrThrow: () => {},
+    });
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -312,6 +327,56 @@ describe("sessions.abort agent scope", () => {
       sessionKey: "agent:beta:dashboard:target",
       runId: "run-beta",
       agentId: "beta",
+    });
+  });
+
+  it("kills controlled subagents after the parent run has already ended", async () => {
+    const actualChatAbort =
+      await vi.importActual<typeof import("./chat-abort-handler.js")>("./chat-abort-handler.js");
+    chatAbortMock.mockImplementationOnce(actualChatAbort.handleChatAbortRequestWithLifecycle);
+    const childSessionKey = "agent:main:subagent:orphaned-after-parent-stop";
+    addSubagentRunForTests({
+      runId: "run-orphaned-child",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterAgentId: "main",
+      requesterTurnRunId: "ended-parent-run",
+      task: "orphaned child",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
+    });
+    const context = createContext({
+      extra: {
+        agentRunSeq: new Map(),
+        broadcast: vi.fn(),
+        cancelRunBoundApprovals: vi.fn(),
+        chatQueuedTurns: new Map(),
+        chatRunState: { resolveBuffer: () => ({ text: "" }) } as never,
+        dedupe: new Map(),
+        getSessionEventSubscriberConnIds: () => new Set(),
+        nodeSendToSession: vi.fn(),
+        removeChatRun: vi.fn(),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.abort",
+      { key: "agent:main:main" },
+      { context, reqId: "req-orphaned-child" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+      undefined,
+      undefined,
+    );
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      endedReason: "subagent-killed",
+      killReconciliation: { suppressTaskDelivery: true },
     });
   });
 

@@ -355,21 +355,21 @@ wa-popover.new-session-page__select::part(body) {
   white-space: nowrap;
 }
 
-/* Place browsing uses the same shell as its root menu, with inset root rows. */
-wa-popover.new-session-page__place-popover {
+/* Project browsing uses a wider shell for paths and remote result details. */
+wa-popover.new-session-page__project-popover {
   --max-width: min(420px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__place-popover::part(body) {
+wa-popover.new-session-page__project-popover::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
 }
 
-/* part(body) hides overflow for the browser view's square corners, so the
-   root menu needs its own scroll region or long place lists become unreachable. */
-.new-session-page__place-root {
+/* Popovers need their own scroll region because project and destination
+   catalogs can grow beyond the available viewport. */
+.new-session-page__picker-root {
   max-height: min(420px, 60vh);
   padding: var(--menu-padding);
   overflow-y: auto;

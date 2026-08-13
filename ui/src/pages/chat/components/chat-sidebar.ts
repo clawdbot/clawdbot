@@ -137,15 +137,17 @@ function setRetainedFileDraft(content: FileSidebarContent, draft: RetainedFileDr
   retainedFileDrafts.set(key, draft);
 }
 
-export type SidebarContent =
+type ChatDetailContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent;
 
-function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
-  fullMessageRequest: NonNullable<SidebarContent["fullMessageRequest"]>;
+export type SidebarContent = ChatDetailContent | { kind: "subagent"; taskId: string };
+
+function hasFullMessageRequest(content: ChatDetailContent): content is ChatDetailContent & {
+  fullMessageRequest: SidebarFullMessageRequest;
 } {
   return Boolean(
     content.fullMessageRequest && (content.kind === "markdown" || content.kind === "canvas"),
@@ -179,7 +181,9 @@ function toPlainTextCodeFence(value: string, language = ""): string {
   return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
-function buildRawSidebarContent(content: SidebarContent | null | undefined): SidebarContent | null {
+function buildRawSidebarContent(
+  content: ChatDetailContent | null | undefined,
+): ChatDetailContent | null {
   if (!content) {
     return null;
   }
@@ -487,7 +491,7 @@ function renderFileSidebarContent(
 }
 
 function resolveSidebarCanvasSandbox(
-  content: SidebarContent,
+  content: ChatDetailContent,
   embedSandboxMode: EmbedSandboxMode,
 ): string {
   return content.kind === "canvas"
@@ -508,7 +512,7 @@ function openSidebarImage(
 }
 
 type MarkdownSidebarProps = {
-  content: SidebarContent | null;
+  content: ChatDetailContent | null;
   error: string | null;
   fileView?: FileViewControls;
   onClose: () => void;
@@ -696,7 +700,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 }
 
 class ChatDetailPanel extends OpenClawLightDomElement {
-  @property({ attribute: false }) content: SidebarContent | null = null;
+  @property({ attribute: false }) content: ChatDetailContent | null = null;
   @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -708,7 +712,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
   @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
-  @state() private visibleContent: SidebarContent | null = null;
+  @state() private visibleContent: ChatDetailContent | null = null;
   @state() private error: string | null = null;
   @state() private fileSearchOpen = false;
   @state() private fileSearchQuery = "";
@@ -1238,7 +1242,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       });
   };
 
-  private async upgradeToFullMessage(content: SidebarContent, version: number) {
+  private async upgradeToFullMessage(content: ChatDetailContent, version: number) {
     if (!hasFullMessageRequest(content) || !this.loadFullMessage) {
       return;
     }
