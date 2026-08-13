@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
+import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
   LocalTurnPlacementClaim,
   SessionPlacementAdmissionProvider,
@@ -8,11 +9,13 @@ import type {
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -22,7 +25,6 @@ import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
-  latestDurableWorkspaceConflict,
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
@@ -31,8 +33,6 @@ import {
 import {
   failHandedOffTurn,
   WorkerTurnExecutionError,
-  WorkerWorkspaceReconciliationError,
-  workerTurnRecoveryError as recoveryError,
   type ActiveWorkerPlacement,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
@@ -48,21 +48,15 @@ import {
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
-  formatWorkspaceConflictSummary,
-  WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-} from "./workspace-conflicts.js";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import {
   createWorkerWorkspaceOperationCoordinator,
   type WorkerWorkspaceOperationCoordinator,
 } from "./workspace-operation-coordinator.js";
-import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
-  finalizeWorkspaceResultConflicts,
-  settleStagedWorkspaceResult,
+  executeRemoteExecTurn,
+  reconcileWorkspaceAfterTurn,
+  recoverWorkspaceBeforeTurn,
+  WorkerWorkspaceReconciliationError,
 } from "./workspace-result-finalize.js";
-import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
 
@@ -125,49 +119,7 @@ async function executeWorkerTurn(params: {
       "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
     );
   }
-  let manifestAccepted = false;
-  let workspaceConflict:
-    | { paths: string[]; stagedResultRef: string; totalCount: number; summary: string }
-    | undefined;
-  let journalOwner = {
-    sessionId: placement.sessionId,
-    environmentId: placement.environmentId,
-    ownerEpoch: placement.activeOwnerEpoch,
-    placementGeneration: placement.generation,
-  };
-  const journal = {
-    load: () => params.placements.loadWorkspaceReconciliation(journalOwner),
-    begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
-      params.placements.beginWorkspaceReconciliation(journalOwner, next),
-    commit: (manifestRef: string) => {
-      params.placements.updateWorkspaceBaseManifest({
-        claim: params.turnClaim,
-        manifestRef,
-      });
-      manifestAccepted = true;
-    },
-    abort: () => params.placements.abortWorkspaceReconciliation(journalOwner),
-  };
-  try {
-    await params.workspaceOperations.run(placement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace recovery lost its turn claim");
-      }
-      const pending = journal.load();
-      if (pending) {
-        await recoverWorkerWorkspaceReconciliation({
-          root: params.localWorkspaceDir,
-          journal: pending,
-        });
-        journal.abort();
-      }
-    });
-  } catch (error) {
-    throw new WorkerWorkspaceReconciliationError(
-      `Cloud worker workspace recovery could not complete: ${recoveryError(error)}`,
-      { cause: error },
-    );
-  }
+  await recoverWorkspaceBeforeTurn(params);
 
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
@@ -370,34 +322,11 @@ async function executeWorkerTurn(params: {
         `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
     );
   }
-  if (
-    (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
-    currentPlacement.environmentId !== placement.environmentId ||
-    currentPlacement.activeOwnerEpoch !== placement.activeOwnerEpoch
-  ) {
-    throw new Error("Cloud worker placement changed before workspace reconciliation");
-  }
-  const priorWorkspaceConflict =
-    currentPlacement.workspaceResultConflict ??
-    latestDurableWorkspaceConflict(completed.getBranch());
   const terminal = runtimeResult.transcriptLeafId
     ? completed.getEntry(runtimeResult.transcriptLeafId)
     : undefined;
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
-  }
-  const pendingWorkspaceResult = params.placements
-    .listPendingWorkspaceResults()
-    .some(
-      (pending) =>
-        pending.sessionId === params.turnClaim.sessionId &&
-        pending.claimId === params.turnClaim.claimId &&
-        pending.runId === params.turnClaim.runId,
-    );
-  if (!pendingWorkspaceResult) {
-    // The terminal live-event ACK and this fence are one SQLite transaction.
-    // Never accept process stdout as a weaker substitute for that durable owner.
-    throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const text = assistantText(terminal.message);
   const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
@@ -405,107 +334,15 @@ async function executeWorkerTurn(params: {
     .getBranch()
     .slice(baseIndex + 1)
     .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  journalOwner = {
-    sessionId: currentPlacement.sessionId,
-    environmentId: currentPlacement.environmentId,
-    ownerEpoch: currentPlacement.activeOwnerEpoch,
-    placementGeneration: currentPlacement.generation,
-  };
-  try {
-    await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace result lost its turn claim");
-      }
-      const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
-      let resumed = false;
-      try {
-        const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
-        const reconciliation = await tunnel.reconcileWorkspace({
-          localPath: params.localWorkspaceDir,
-          remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
-          baseManifestRef: currentPlacement.workspaceBaseManifestRef,
-          journal,
-          stagedResult: {
-            ref: stagedResultRef,
-            record: (ref) => params.placements.recordStagedWorkspaceResult(params.turnClaim, ref),
-          },
-        });
-        const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-        if (!manifestAccepted) {
-          throw new Error("Cloud worker workspace reconciliation was not durably accepted");
-        }
-        params.placements.acceptWorkspaceResult(params.turnClaim);
-        const recordedStagedResultRef = params.placements
-          .listPendingWorkspaceResults()
-          .find(
-            (pending) =>
-              pending.sessionId === params.turnClaim.sessionId &&
-              pending.claimId === params.turnClaim.claimId &&
-              pending.runId === params.turnClaim.runId,
-          )?.stagedResultRef;
-        if (applied?.conflictPaths.length && !recordedStagedResultRef) {
-          throw new Error("Cloud workspace conflict has no staged result reference");
-        }
-        const finalized = await finalizeWorkspaceResultConflicts({
-          placements: params.placements,
-          turnClaim: params.turnClaim,
-          conflictPaths: applied?.conflictPaths ?? [],
-          priorConflict: priorWorkspaceConflict,
-          stagedResultRef: recordedStagedResultRef,
-          root: params.localWorkspaceDir,
-          report: async (report) => {
-            if ("cleared" in report) {
-              SessionManager.open(transcriptTarget).appendCustomMessageEntry(
-                WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
-                false,
-              );
-              return;
-            }
-            workspaceConflict = {
-              ...report,
-              summary: formatWorkspaceConflictSummary(
-                report.paths,
-                report.stagedResultRef,
-                report.totalCount,
-              ),
-            };
-            SessionManager.open(transcriptTarget).appendCustomMessageEntry(
-              WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-              workspaceConflict.summary,
-              true,
-              {
-                paths: workspaceConflict.paths,
-                stagedResultRef: workspaceConflict.stagedResultRef,
-                totalCount: workspaceConflict.totalCount,
-              },
-            );
-          },
-        });
-        await settleStagedWorkspaceResult({
-          placements: params.placements,
-          turnClaim: params.turnClaim,
-          root: params.localWorkspaceDir,
-          stagedResultRef: recordedStagedResultRef,
-          conflictRetained: finalized.conflictRetained,
-          reclaim: false,
-          beforeComplete: async () => {
-            await quiescence.resume();
-            resumed = true;
-          },
-        });
-      } finally {
-        if (!resumed) {
-          await quiescence.resume();
-        }
-      }
-    });
-  } catch (error) {
-    throw new WorkerWorkspaceReconciliationError(
-      `Cloud worker finished, but its workspace result could not be reconciled: ${recoveryError(error)}`,
-      { cause: error },
-    );
-  }
+  const workspaceConflict = await reconcileWorkspaceAfterTurn({
+    placement,
+    placements: params.placements,
+    turnClaim: params.turnClaim,
+    workspaceOperations: params.workspaceOperations,
+    localWorkspaceDir: params.localWorkspaceDir,
+    transcriptTarget,
+    tunnel,
+  });
   if (workspaceConflict) {
     const reportedWorkspaceConflict = workspaceConflict;
     await Promise.resolve()
@@ -544,12 +381,57 @@ async function executeWorkerTurn(params: {
   };
 }
 
-export function createWorkerSessionTurnPlacementProvider(
-  options: WorkerTurnLauncherOptions,
-): SessionPlacementAdmissionProvider {
+export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const workspaceOperations =
     options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator();
-  return {
+  const provider: SessionPlacementAdmissionProvider & {
+    resolveSandbox(params: {
+      agentId: string;
+      config?: OpenClawConfig;
+      sessionId: string;
+      sessionKey?: string;
+      workspaceDir: string;
+    }): Promise<SandboxContext | null>;
+  } = {
+    async resolveSandbox(params) {
+      const placement = options.placements.get(params.sessionId);
+      if (
+        placement?.state !== "active" ||
+        placement.executionMode !== "remote-exec" ||
+        placement.agentId !== params.agentId ||
+        placement.sessionKey !== params.sessionKey
+      ) {
+        return null;
+      }
+      const localWorkspaceDir = await options.resolveWorkspacePath({
+        sessionId: placement.sessionId,
+        agentId: placement.agentId,
+        sessionKey: placement.sessionKey,
+      });
+      if (!options.environments.resolveSshIdentity) {
+        throw new Error("Remote-exec sandbox identity resolver is unavailable");
+      }
+      const sandbox = await createRemoteExecPlacementSandbox({
+        config: params.config,
+        environments: {
+          get: options.environments.get,
+          resolveSshIdentity: options.environments.resolveSshIdentity,
+        },
+        localWorkspaceDir,
+        placement,
+      });
+      const current = options.placements.get(params.sessionId);
+      if (
+        current?.state !== "active" ||
+        current.executionMode !== "remote-exec" ||
+        current.environmentId !== placement.environmentId ||
+        current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+        current.generation !== placement.generation
+      ) {
+        throw new Error("Remote-exec placement changed while preparing its sandbox");
+      }
+      return sandbox;
+    },
     async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
       if (!options.placements.get(claim.sessionId) && options.admitNewPlacements === false) {
         return await runLocal();
@@ -586,20 +468,47 @@ export function createWorkerSessionTurnPlacementProvider(
       // The placement owns the managed worktree. Callers can carry a default or stale
       // workspace path, but remote results must only reconcile into that canonical root.
       const localWorkspaceDir = await options.resolveWorkspacePath(identity);
-      const admitted = await claimWorkerTurn({
-        placements: options.placements,
-        identity,
-        placement,
-        runId: claim.runId,
-        ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-      });
-      placement = admitted.placement;
-      const turnClaim = admitted.turnClaim;
+      const remoteExec = placement.executionMode === "remote-exec";
+      let turnClaim: WorkerSessionTurnClaim;
+      if (remoteExec) {
+        turnClaim = options.placements.claimTurn({
+          ...identity,
+          claimId: randomUUID(),
+          runId: claim.runId,
+          owner: {
+            kind: "local",
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+          },
+        });
+        const refreshed = options.placements.get(claim.sessionId);
+        if (
+          refreshed?.state !== "active" ||
+          refreshed.executionMode !== "remote-exec" ||
+          refreshed.environmentId !== placement.environmentId ||
+          refreshed.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+          refreshed.generation !== turnClaim.placementGeneration
+        ) {
+          await releaseClaimIfOwned(options.placements, turnClaim);
+          throw new Error("Remote-exec placement changed during turn admission");
+        }
+        placement = refreshed;
+      } else {
+        const admitted = await claimWorkerTurn({
+          placements: options.placements,
+          identity,
+          placement,
+          runId: claim.runId,
+          ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+        });
+        placement = admitted.placement;
+        turnClaim = admitted.turnClaim;
+      }
       let handedOff = false;
       try {
-        // Remote turns never invoke runLocal; release queue protection only after their claim.
+        // Release queue protection only after the placement claim is durable.
         onAdmitted?.();
-        const result = await executeWorkerTurn({
+        const executionParams = {
           environments: options.environments,
           onHandoff: () => {
             handedOff = true;
@@ -610,7 +519,10 @@ export function createWorkerSessionTurnPlacementProvider(
           workspaceOperations,
           turn,
           turnClaim,
-        });
+        };
+        const result = remoteExec
+          ? await executeRemoteExecTurn({ ...executionParams, runLocal })
+          : await executeWorkerTurn(executionParams);
         return result;
       } catch (error) {
         const pendingWorkspaceResult = options.placements
@@ -632,6 +544,18 @@ export function createWorkerSessionTurnPlacementProvider(
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }
+        const settledPlacement = options.placements.get(turnClaim.sessionId);
+        if (
+          remoteExec &&
+          settledPlacement?.state === "active" &&
+          settledPlacement.environmentId === placement.environmentId &&
+          settledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
+          settledPlacement.turnClaim === null
+        ) {
+          // Reconciliation released the placement before the local harness error
+          // crossed back to this owner; do not turn a model error into box teardown.
+          throw error;
+        }
         if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
           // Recovery runs before remote launch. Preserve the journal's active
           // generation; only the new admission claim belongs to this attempt.
@@ -643,12 +567,12 @@ export function createWorkerSessionTurnPlacementProvider(
             await releaseClaimIfOwned(options.placements, turnClaim);
             throw error;
           }
-          const settledPlacement = options.placements.get(turnClaim.sessionId);
+          const workerSettledPlacement = options.placements.get(turnClaim.sessionId);
           if (
-            settledPlacement?.state === "active" &&
-            settledPlacement.environmentId === placement.environmentId &&
-            settledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
-            settledPlacement.turnClaim === null
+            workerSettledPlacement?.state === "active" &&
+            workerSettledPlacement.environmentId === placement.environmentId &&
+            workerSettledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
+            workerSettledPlacement.turnClaim === null
           ) {
             // Workspace result settlement durably released this failed model turn.
             // The outer fallback cycle owns run-terminal normalization.
@@ -670,4 +594,6 @@ export function createWorkerSessionTurnPlacementProvider(
       }
     },
   };
+  provider satisfies SessionPlacementAdmissionProvider;
+  return provider;
 }

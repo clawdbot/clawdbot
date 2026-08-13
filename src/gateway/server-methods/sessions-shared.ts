@@ -23,7 +23,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
@@ -75,10 +75,13 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  if (isWorkerPlacementSessionRuntimeSupported(runtime)) {
+  const executionMode = resolveWorkerPlacementExecutionMode(runtime);
+  if (executionMode === placement.executionMode) {
     return undefined;
   }
-  return `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
+  return executionMode
+    ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
 }
 
 export function filterSessionStoreToConfiguredAgents(

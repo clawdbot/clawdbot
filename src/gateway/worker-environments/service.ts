@@ -431,6 +431,24 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
+    resolveSshIdentity: async (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+      }
+      if (!record.leaseId || !record.sshEndpoint) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment ${environmentId} has no active SSH endpoint`,
+        );
+      }
+      const provider = providerLifecycle.providerFor(record.providerId);
+      return await providerLifecycle.identityResolverFor(
+        record,
+        provider,
+        record.leaseId,
+      )(record.sshEndpoint.keyRef);
+    },
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,

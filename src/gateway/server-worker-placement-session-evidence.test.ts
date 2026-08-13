@@ -24,6 +24,7 @@ function localPlacement(
     sessionKey,
     agentId: "main",
     state: "local",
+    executionMode: "worker-turn",
     generation: 1,
     turnClaim: null,
     environmentId: null,

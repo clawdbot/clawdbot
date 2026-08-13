@@ -375,6 +375,7 @@ describe("worker environment service", () => {
         sessionKey: "agent:main:session-bootstrap-failure",
         agentId: "main",
         profileId: "development",
+        executionMode: "worker-turn",
       }),
     ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
 

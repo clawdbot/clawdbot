@@ -2805,6 +2805,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "implicit",
     });
   });
@@ -2912,6 +2913,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "provider",
     });
   });

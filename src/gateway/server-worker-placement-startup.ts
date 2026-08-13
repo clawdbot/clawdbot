@@ -35,8 +35,8 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     import("./session-utils.js"),
   ]);
   return {
-    isWorkerPlacementSessionRuntimeSupported:
-      placementSessionRuntime.isWorkerPlacementSessionRuntimeSupported,
+    resolveWorkerPlacementExecutionMode:
+      placementSessionRuntime.resolveWorkerPlacementExecutionMode,
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
@@ -182,10 +182,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       placements: params.placements,
       environments: params.environments,
       ...workspaceConflictHandlers,
-      runLocalBarrier: async ({ sessionId, sessionKey, agentId, startDispatch }) => {
+      runLocalBarrier: async ({ sessionId, sessionKey, agentId, executionMode, startDispatch }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
-          isWorkerPlacementSessionRuntimeSupported,
+          resolveWorkerPlacementExecutionMode,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = sessionRuntime;
@@ -231,7 +231,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId: currentTarget.agentId,
               sessionKey: currentTarget.canonicalKey,
             });
-            if (!isWorkerPlacementSessionRuntimeSupported(currentRuntime)) {
+            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
@@ -270,10 +270,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         }
         return placement;
       },
-      runActivationBarrier: async ({ sessionId, sessionKey, agentId, activate }) => {
+      runActivationBarrier: async ({ sessionId, sessionKey, agentId, executionMode, activate }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
-          isWorkerPlacementSessionRuntimeSupported,
+          resolveWorkerPlacementExecutionMode,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = sessionRuntime;
@@ -318,7 +318,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId: currentTarget.agentId,
               sessionKey: currentTarget.canonicalKey,
             });
-            if (!isWorkerPlacementSessionRuntimeSupported(currentRuntime)) {
+            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
               );

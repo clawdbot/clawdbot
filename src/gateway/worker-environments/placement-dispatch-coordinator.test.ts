@@ -11,6 +11,7 @@ const REQUEST: WorkerPlacementDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "test",
+  executionMode: "worker-turn",
 };
 
 describe("worker placement dispatch coordinator", () => {

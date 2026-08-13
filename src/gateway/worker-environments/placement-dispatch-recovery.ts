@@ -190,6 +190,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         sessionId: placement.sessionId,
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
+        executionMode: placement.executionMode,
         activate: () => {
           const activated = placements.transition({
             sessionId: placement.sessionId,
