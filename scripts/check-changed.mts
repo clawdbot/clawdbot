@@ -776,13 +776,23 @@ export function createChangedCheckPlan(
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
+    // CSS is covered by targeted Stylelint below. Other non-Oxlint core/UI
+    // inputs keep the full lane so changed checks do not silently drop lint.
+    const fallbackWithoutTargets = result.paths.some((changedPath) => {
+      const surface = getChangedPathFacts(changedPath).surface;
+      return (
+        (surface === "source" || surface === "package" || surface === "ui") &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
+        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+      );
+    });
     addTargetedLint(
       createTargetedCoreLintCommand,
       LINTABLE_CORE_PATH_RE,
       "lint core",
       ["lint:core"],
       undefined,
-      lanes.core,
+      fallbackWithoutTargets,
     );
   }
   if (lanes.ui) {

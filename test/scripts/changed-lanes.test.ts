@@ -902,7 +902,7 @@ describe("scripts/changed-lanes", () => {
     {
       name: "routes the UI production config to UI prod and core test lanes",
       path: "tsconfig.ui.json",
-      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: [] },
+      expected: { includes: ["tsgo:ui", "tsgo:core:test", "lint:core"], excludes: [] },
     },
   ])("$name", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
@@ -917,6 +917,18 @@ describe("scripts/changed-lanes", () => {
     for (const command of expected.excludes) {
       expect(commands).not.toContain(command);
     }
+  });
+
+  it("falls back to core lint for a non-lintable core test asset", () => {
+    const result = detectChangedLanes([
+      "packages/ai/test/fixtures/provider-transport-parity/openai-success.snap.txt",
+    ]);
+    const commands = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+    }).commands.map((command) => command.args[0]);
+
+    expectLanes(result.lanes, { coreTests: true });
+    expect(commands).toContain("lint:core");
   });
 
   it.each(["scripts/control-ui-i18n.ts", "scripts/lib/example.ts", "tsconfig.scripts.json"])(
