@@ -129,7 +129,7 @@ describe("web readability extractor", () => {
 
   it("honors self-closing tags inside foreign content", async () => {
     const extractor = createReadabilityWebContentExtractor();
-    const nested = `<svg>${"<g/><div></g>".repeat(1_000)}</svg>`;
+    const nested = `<math>${"<mrow/><div></mrow>".repeat(1_000)}</math>`;
     const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
     const result = await extractor.extract({
       html,
