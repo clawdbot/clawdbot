@@ -1,5 +1,6 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { beforeEach, describe, expect, it } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -404,6 +405,71 @@ describe("staged plugin registry attempt", () => {
     stageProvisionalPluginRegistry(preBind);
     expect(getActivePluginRegistry()).toBe(preBind);
     expect(hasStagedProvisionalPluginRegistry()).toBe(false);
+  });
+
+  function seedAgentEventRecorder(label: string, seen: string[]) {
+    const registry = createEmptyPluginRegistry();
+    registry.agentEventSubscriptions = [
+      {
+        pluginId: `${label}-plugin`,
+        subscription: {
+          id: `${label}-subscription`,
+          handle: () => {
+            seen.push(label);
+          },
+        },
+        source: `/virtual/${label}/index.ts`,
+        rootDir: `/virtual/${label}`,
+      },
+    ];
+    return registry;
+  }
+
+  // ClawSweeper cycle 49 (P1): the staged candidate owns the process slot while it is still
+  // loading, but the global agent-event bridge resolved that slot directly. A surviving gateway's
+  // agent traffic therefore reached the CANDIDATE's plugin subscriptions, and an abort restores the
+  // slot only after those handlers already ran — plugin side effects are not revertible. Unlike
+  // request reads there is no scope to pin, so the bridge resolves the serving registry per event.
+  it("dispatches agent events to the survivor, not the candidate, while a stage is open", () => {
+    const seen: string[] = [];
+    const survivor = seedAgentEventRecorder("survivor", seen);
+    setActivePluginRegistry(survivor, "survivor-key", "gateway-bindable");
+    const preBind = createEmptyPluginRegistry();
+    stageProvisionalPluginRegistry(preBind);
+    const candidate = seedAgentEventRecorder("candidate", seen);
+    stageActivePluginRegistry(candidate, "loaded-key", "gateway-bindable");
+
+    // The candidate holds the slot, but it is still loading and serving nobody.
+    expect(getActivePluginRegistry()).toBe(candidate);
+
+    emitAgentEvent({ runId: "run-during-stage", stream: "lifecycle", data: {} });
+
+    expect(seen).toEqual(["survivor"]);
+
+    // Startup succeeded: the replacement completes and the candidate takes over the traffic.
+    // Without this the fix could "pass" by pinning the survivor forever.
+    finalizeStagedPluginRegistryReplacement();
+    emitAgentEvent({ runId: "run-after-finalize", stream: "lifecycle", data: {} });
+
+    expect(seen).toEqual(["survivor", "candidate"]);
+  });
+
+  it("returns agent events to the survivor when a staged startup aborts", async () => {
+    const seen: string[] = [];
+    const survivor = seedAgentEventRecorder("survivor", seen);
+    setActivePluginRegistry(survivor, "survivor-key", "gateway-bindable");
+    const preBind = createEmptyPluginRegistry();
+    stageProvisionalPluginRegistry(preBind);
+    const candidate = seedAgentEventRecorder("candidate", seen);
+    stageActivePluginRegistry(candidate, "loaded-key", "gateway-bindable");
+
+    // A late startup failure aborts back to the survivor, which never stopped serving.
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    emitAgentEvent({ runId: "run-after-abort", stream: "lifecycle", data: {} });
+
+    expect(seen).toEqual(["survivor"]);
   });
 
   it("defers the survivor's retirement when the loader consumes the pre-bind attempt", async () => {

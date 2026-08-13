@@ -160,6 +160,21 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
   return true;
 }
 
+/**
+ * The registry that global process-wide consumers must act on. While a defer-to-finalize stage is
+ * open the slot holds a candidate that is still loading and serving nobody, while the displaced
+ * survivor keeps handling live agent traffic. Resolving the slot instead would hand that traffic to
+ * the candidate, and an abort restores the slot only AFTER the candidate's plugin side effects have
+ * already run — they are not revertible. Request-scoped readers use resolveRequestPluginRegistry.
+ */
+function resolveServingPluginRegistry(): PluginRegistry | null {
+  const marker = stagedRegistryRevert;
+  if (marker?.deferToFinalize && marker.registry === state.activeRegistry) {
+    return marker.snapshot.activeRegistry;
+  }
+  return asPluginRegistry(state.activeRegistry);
+}
+
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
@@ -167,7 +182,8 @@ function syncPluginAgentEventBridge(): void {
     return;
   }
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    const registry = asPluginRegistry(state.activeRegistry);
+    // Resolved per event, not at install: staging re-arms the marker after this bridge is synced.
+    const registry = resolveServingPluginRegistry();
     if (registry) {
       dispatchPluginAgentEventSubscriptions({ registry, event });
     }
