@@ -406,7 +406,7 @@ export async function spawnSubagentDirect(
     // Set once the gateway accepts the child run, so a later failure can tell an
     // accepted run apart from one that never started.
     let acceptedChildRunId: string | undefined;
-    let taskRowOwnership: "required" | "gateway_owned" = "required";
+    let taskRowOwnership: "required" | "gateway_best_effort" = "required";
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
         const result =
@@ -568,6 +568,8 @@ export async function spawnSubagentDirect(
         start: async () => {
           await runWithGatewayIndependentRootWorkContinuation(async () => {
             const launch = await launchChildRun();
+            // Queued registration already owns the task row before either dispatch route starts.
+            // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
             try {
               if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {

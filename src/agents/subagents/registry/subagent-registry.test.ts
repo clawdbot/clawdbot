@@ -5256,6 +5256,7 @@ describe("subagent registry seam flow", () => {
       ...getDetachedTaskLifecycleRuntime(),
       createRunningTaskRun: () => null,
     });
+    mockPendingAgentWait();
 
     expect(() =>
       mod.registerSubagentRun({
@@ -5274,6 +5275,12 @@ describe("subagent registry seam flow", () => {
       findRequesterRun("run-task-row-rollback-old")?.killReconciliation?.supersededAt,
     ).toBeTypeOf("number");
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: "run-task-row-rollback-new" }),
+      }),
+    );
   });
 
   it("retains an already-running replacement when its durable write fails", () => {

@@ -92,16 +92,16 @@ export async function callNativeSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
 ): Promise<{
   response: SubagentGatewayResponse;
-  taskRowOwnership: "required" | "gateway_owned";
+  taskRowOwnership: "required" | "gateway_best_effort";
 }> {
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
   });
   return {
     response: result.response,
-    // The trusted marker exists only on direct dispatch. A WebSocket fallback
-    // keeps Gateway's CLI row, so registry lifecycle state must not add another.
-    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_owned",
+    // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
+    // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
+    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_best_effort",
   };
 }
 

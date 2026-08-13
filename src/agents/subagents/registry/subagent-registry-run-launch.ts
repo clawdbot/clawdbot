@@ -84,9 +84,9 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
   queued?: boolean;
-  /** Required when native in-process dispatch suppresses Gateway tracking; Gateway-owned
-      fallback launches skip the registry task row. Other callers keep best-effort creation. */
-  taskRowOwnership?: "required" | "gateway_owned";
+  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
+      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
+  taskRowOwnership?: "required" | "gateway_best_effort";
 };
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
@@ -200,13 +200,21 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.options.runs.set(runId, entry);
       this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
     };
+    const activateRegistrationLifecycle = () => {
+      this.options.ensureListener();
+      // Session-mode and persistence-recovery runs also need TTL cleanup.
+      this.options.startSweeper();
+      if (!queued) {
+        void this.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+      }
+    };
     try {
       this.options.persistOrThrow(...registeredRunIds);
     } catch (error) {
       rollbackRegistration();
       throw error;
     }
-    if (registerParams.taskRowOwnership !== "gateway_owned") {
+    if (registerParams.taskRowOwnership !== "gateway_best_effort") {
       try {
         const taskParams = {
           runtime: "subagent",
@@ -249,20 +257,17 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             this.options.persistOrThrow(...registeredRunIds);
           } catch (rollbackError) {
             restoreDurableRegistration();
+            // Durable state still owns this registration. Keep reconciliation active so
+            // caller cleanup can terminalize it instead of leaving a phantom run.
+            activateRegistrationLifecycle();
             throw rollbackError;
           }
           throw error;
         }
       }
     }
-    this.options.ensureListener();
-    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
-    this.options.startSweeper();
-    // Wait for subagent completion via gateway RPC (cross-process).
-    // The in-process lifecycle listener is a fallback for embedded runs.
-    if (!queued) {
-      void this.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
-    }
+    // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
+    activateRegistrationLifecycle();
   };
 
   readonly startQueuedSubagentRun = (

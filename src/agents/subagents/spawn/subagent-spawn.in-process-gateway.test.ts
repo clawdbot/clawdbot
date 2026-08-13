@@ -605,6 +605,61 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(requests.some((request) => request.method === "chat.abort")).toBe(false);
   });
 
+  it("keeps the queued registry row when a collector starts out of process", async () => {
+    const gatewayContext = makeGatewayContext();
+    const trackingModes: string[] = [];
+    subagentSpawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => false,
+      callGateway: async <T>(request: { method: string; params?: unknown }) => {
+        const requestParams = (request.params ?? {}) as Record<string, unknown>;
+        if (request.method === "agent") {
+          const client = createSyntheticPluginRuntimeClient();
+          expect(client.internal?.agentRunTracking).toBeUndefined();
+          trackingModes.push(
+            resolveGatewayAgentTaskTrackingMode({
+              client,
+              sessionKey: requestParams.sessionKey as string,
+              runId: requestParams.idempotencyKey as string,
+            }),
+          );
+        }
+        return {
+          runId: requestParams.idempotencyKey,
+          status: "accepted",
+        } as T;
+      },
+    });
+
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        context: gatewayContext,
+        client: externalCliClient(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        spawnSubagentDirect(
+          {
+            task: "start after registry ownership",
+            collect: true,
+            context: "isolated",
+            lightContext: true,
+            groupId: "swarm-out-of-process",
+            swarmLaunchReplayKey: "code-mode:agentSpawn:out-of-process",
+          },
+          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+        ),
+    );
+
+    expect(result.status).toBe("accepted");
+    await waitForAssertion(() => {
+      expect(trackingModes).toEqual(["none"]);
+      expect(subagentRuns.get(result.runId!)).toMatchObject({
+        collect: true,
+        swarmLaunchPending: false,
+      });
+    });
+  });
+
   it("does not abort an out-of-process run when registry persistence fails", async () => {
     const gatewayContext = makeGatewayContext();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
