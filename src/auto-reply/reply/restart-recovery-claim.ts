@@ -244,6 +244,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           storePath: params.storePath,
         });
         if (retired) {
+          diag.warn(
+            `retired stale terminal restart-recovery claim: sessionKey=${params.sessionKey} status=${entry.status} sourceRunId=${normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ?? "<none>"}`,
+          );
           params.setEntry(retired);
           return "duplicate-source";
         }
