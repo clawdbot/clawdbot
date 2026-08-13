@@ -42,6 +42,7 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
+  type ChatPaneConnectionScope,
   type ChatPageContext,
   type PaneSessionChangeOptions,
 } from "./chat-pane-shared.ts";
@@ -160,6 +161,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  protected continueInTerminalDialog: {
+    qualifiedSessionKey: string;
+    selectedGatewayUrl: string;
+    clientGatewayUrl: string;
+    scope: ChatPaneConnectionScope;
+  } | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();

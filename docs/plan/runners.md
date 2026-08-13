@@ -19,7 +19,7 @@ advances a milestone.
 | 1a  | Naming: session copy revert                                | landed      | #120667                            |
 | 1b  | Naming: devices consolidation                              | landed      | #120689                            |
 | 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                            |
-| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664                            |
+| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664, #122870                   |
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                   |
 | 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774 |
 | F   | Real-wire session boundary harness                         | landed      | #121212                            |
@@ -386,8 +386,27 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
 
 1. **1c naming cleanup**: finish nodes → devices in route ids, i18n keys,
    labels; `node-pairing.ts` facade merge. Before any new placement copy.
-2. **Continuation ergonomics** (in progress): `openclaw resume`, web
-   "Continue in terminal".
+2. **Continuation ergonomics** (in progress): `openclaw resume` plus the web
+   **Continue in terminal…** session action. The browser copies one
+   credential-free command with one bounded, versioned, URL-safe handoff
+   argument that encodes the exact qualified session key and selected Gateway
+   WebSocket URL without shell-specific quoting. The key is agent-qualified and
+   bounded to 512 user-perceived characters. Query-routed Gateway URLs are
+   intentionally excluded because authentication and stored device scope are
+   not query-aware; the UI never strips or copies the query and instead directs
+   operators to a manually authenticated target or queryless configured URL. It
+   never executes the CLI or delegates first-use authentication. Before attach,
+   Resume asks the Gateway to resolve the key, uses only the returned canonical
+   key, and rejects a missing or ambiguous handoff without starting another
+   session. Resume may reuse only the current
+   profile's auth, SecretRefs, and exact-origin device auth when the handoff URL
+   byte-for-byte matches a target owned by the configured mode: local + Control
+   UI base path or public origin + base path in local mode, and only the remote
+   URL in remote mode. TLS pin reuse is limited to direct-local and
+   configured remote identities; public origins inherit no local-listener pin.
+   Ambient Gateway auth env fallback is suppressed for handoffs. Mismatches fail
+   closed, terminal auth remains independent, and session ACLs stay
+   authoritative.
 3. **`openclaw connect`**: verb + `oc-pair://` decoder + TLS pin in payload +
    `/j/<shortcode>` join route (reserved prefix, single-use, rate-limited) +
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine

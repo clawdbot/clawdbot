@@ -4616,6 +4616,18 @@ export const en: TranslationMap = {
       openParent: "Open parent session {title}",
       panels: "Panels",
       layout: "Layout",
+      continueInTerminal: {
+        action: "Continue in terminal…",
+        title: "Continue in terminal",
+        description:
+          "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
+        authNote:
+          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
+        disconnected: "Connect to the Gateway to continue this session in a terminal.",
+        queryRouted:
+          "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+        unavailable: "This session or Gateway address cannot be continued in a terminal.",
+      },
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",
