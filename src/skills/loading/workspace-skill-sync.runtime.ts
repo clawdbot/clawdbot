@@ -46,9 +46,11 @@ function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): strin
 }
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
+const SYNCED_SKILLS_GENERATIONS_DIR_NAME = ".openclaw-generations";
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
+  generation: number;
   skillsVersion: number;
 };
 
@@ -136,11 +138,30 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
   ) {
     return null;
   }
-  return { entryKeys: value.entryKeys, skillsVersion: value.skillsVersion } as SyncedSkillsManifest;
+  let generation = 0;
+  if (value.generation !== undefined) {
+    if (
+      typeof value.generation !== "number" ||
+      !Number.isInteger(value.generation) ||
+      value.generation < 0
+    ) {
+      return null;
+    }
+    generation = value.generation;
+  }
+  return {
+    entryKeys: value.entryKeys,
+    generation,
+    skillsVersion: value.skillsVersion,
+  };
+}
+
+function resolveSyncedSkillGenerationDir(targetSkillsDir: string, generation: number): string {
+  return path.join(targetSkillsDir, SYNCED_SKILLS_GENERATIONS_DIR_NAME, String(generation));
 }
 
 function resolveSyncedSkillDestinationPath(params: {
-  targetSkillsDir: string;
+  generationDir: string;
   entry: SkillEntry;
   usedDirNames: Set<string>;
 }): string | null {
@@ -153,9 +174,89 @@ function resolveSyncedSkillDestinationPath(params: {
   const uniqueDirName = resolveUniqueSyncedSkillDirName(sourceDirName, params.usedDirNames);
   return resolveSandboxPath({
     filePath: uniqueDirName,
-    cwd: params.targetSkillsDir,
-    root: params.targetSkillsDir,
+    cwd: params.generationDir,
+    root: params.generationDir,
   }).resolved;
+}
+
+function shouldCopySyncedSkillSourceEntry(src: string): boolean {
+  const name = path.basename(src);
+  return name !== ".git" && name !== "node_modules";
+}
+
+async function copySyncedSkillDirectory(source: string, destination: string): Promise<void> {
+  await fsp.cp(source, destination, {
+    recursive: true,
+    force: true,
+    filter: shouldCopySyncedSkillSourceEntry,
+  });
+}
+
+async function listSyncedSkillGenerationIds(targetSkillsDir: string): Promise<number[]> {
+  const generationsRoot = path.join(targetSkillsDir, SYNCED_SKILLS_GENERATIONS_DIR_NAME);
+  let children: fs.Dirent[];
+  try {
+    children = await fsp.readdir(generationsRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  return children.flatMap((entry) => {
+    if (!entry.isDirectory() || !/^[1-9]\d*$/.test(entry.name)) {
+      return [];
+    }
+    return [Number(entry.name)];
+  });
+}
+
+function resolveLegacySyncedSkillRootBasenames(
+  targetSkillsDir: string,
+  skillUsagePaths: SkillUsagePath[],
+): string[] {
+  const generationsPrefix = `${SYNCED_SKILLS_GENERATIONS_DIR_NAME}${path.sep}`;
+  return skillUsagePaths.flatMap((entry) => {
+    const relative = path.relative(targetSkillsDir, entry.readPath);
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative) ||
+      relative === SYNCED_SKILLS_GENERATIONS_DIR_NAME ||
+      relative.startsWith(generationsPrefix)
+    ) {
+      return [];
+    }
+    const basename = relative.split(path.sep)[0];
+    return basename ? [basename] : [];
+  });
+}
+
+async function pruneSyncedSkillGenerations(params: {
+  targetSkillsDir: string;
+  retainGenerations: ReadonlySet<number>;
+  retainRootBasenames: ReadonlySet<string>;
+}): Promise<void> {
+  const generationsRoot = path.join(params.targetSkillsDir, SYNCED_SKILLS_GENERATIONS_DIR_NAME);
+  for (const generation of await listSyncedSkillGenerationIds(params.targetSkillsDir)) {
+    if (!params.retainGenerations.has(generation)) {
+      await fsp.rm(path.join(generationsRoot, String(generation)), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+  for (const child of await fsp.readdir(params.targetSkillsDir)) {
+    if (
+      child === SYNCED_SKILLS_MANIFEST_NAME ||
+      child === SYNCED_SKILLS_GENERATIONS_DIR_NAME ||
+      params.retainRootBasenames.has(child)
+    ) {
+      continue;
+    }
+    await fsp.rm(path.join(params.targetSkillsDir, child), { recursive: true, force: true });
+  }
 }
 
 async function ensureSyncedSkillsDirectory(targetSkillsDir: string): Promise<void> {
@@ -239,6 +340,10 @@ export async function syncWorkspaceSkills(params: {
       pluginSkillsDir: params.pluginSkillsDir,
     });
 
+    const existingGenerationIds = await listSyncedSkillGenerationIds(targetSkillsDir);
+    const previousGeneration = manifest?.generation ?? cachedUsage?.generation ?? 0;
+    const nextGeneration = Math.max(previousGeneration, ...existingGenerationIds, 0) + 1;
+    const generationDir = resolveSyncedSkillGenerationDir(targetSkillsDir, nextGeneration);
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
@@ -253,7 +358,7 @@ export async function syncWorkspaceSkills(params: {
       let destinationPath: string | null;
       try {
         destinationPath = resolveSyncedSkillDestinationPath({
-          targetSkillsDir,
+          generationDir,
           entry,
           usedDirNames,
         });
@@ -271,29 +376,15 @@ export async function syncWorkspaceSkills(params: {
       plans.push({ destinationPath, entry, identity });
     }
 
-    await fsp.rm(manifestPath, { force: true });
-    const previousUsage =
-      manifest?.skillsVersion === skillsVersion && cachedUsage?.manifestKey === manifestKey
-        ? cachedUsage
-        : undefined;
-    // Keep the previous complete catalog metadata cached until a successful
-    // publish so concurrent prompt builders do not live-scan the shared dir.
-    // Referenced files may still be replaced in place: the bind-mounted skills
-    // directory inode cannot be renamed.
-    const preservedDestinations = new Set(
-      plans.flatMap((plan) => {
-        const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return previousUsage?.destinations.get(plan.identity) === destination
-          ? destination
-            ? [destination]
-            : []
-          : [];
-      }),
+    // Publish into a new generation directory. The bind-mounted skills root
+    // inode cannot be renamed, so in-place child replacement would leave the
+    // still-published catalog pointing at missing <location> files.
+    const retainRootBasenames = new Set(
+      resolveLegacySyncedSkillRootBasenames(targetSkillsDir, cachedUsage?.skillUsagePaths ?? []),
     );
-    for (const child of await fsp.readdir(targetSkillsDir)) {
-      if (!preservedDestinations.has(child)) {
-        await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
-      }
+    const filesystemPlans = plans.filter((plan) => plan.destinationPath);
+    if (filesystemPlans.length > 0) {
+      await fsp.mkdir(generationDir, { recursive: true });
     }
 
     const skillUsagePaths: SkillUsagePath[] = [];
@@ -303,23 +394,13 @@ export async function syncWorkspaceSkills(params: {
       if (!destinationPath) {
         continue;
       }
-      if (!preservedDestinations.has(path.basename(destinationPath))) {
-        try {
-          const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
-          await fsp.cp(syncSourceDir, destinationPath, {
-            recursive: true,
-            force: true,
-            filter: (src) => {
-              const name = path.basename(src);
-              return !(name === ".git" || name === "node_modules");
-            },
-          });
-        } catch (error) {
-          copyFailed = true;
-          const message = error instanceof Error ? error.message : JSON.stringify(error);
-          skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
-          continue;
-        }
+      try {
+        await copySyncedSkillDirectory(entry.syncSourceDir ?? entry.skill.baseDir, destinationPath);
+      } catch (error) {
+        copyFailed = true;
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        continue;
       }
       skillUsagePaths.push({
         readPath: path.join(
@@ -341,29 +422,44 @@ export async function syncWorkspaceSkills(params: {
       eligibility: params.eligibility,
       skillsVersion,
     });
-    if (!copyFailed) {
-      const nextManifest: SyncedSkillsManifest = {
-        entryKeys: plans.map((plan) => plan.identity).toSorted(),
-        skillsVersion,
-      };
-      await writeJson(manifestPath, nextManifest, { trailingNewline: true });
-      writeSyncedSkillsUsageCache(targetSkillsDir, {
-        destinations: new Map(
-          plans.flatMap((plan) =>
-            plan.destinationPath
-              ? [[plan.identity, path.basename(plan.destinationPath)] as const]
-              : [],
-          ),
-        ),
-        manifestKey: JSON.stringify([skillsVersion, nextManifest.entryKeys]),
-        skillUsagePaths,
-        skillsSnapshot: nextSkillsSnapshot,
-      });
-      pruneSyncedSkillsUsageCache(100);
+    if (copyFailed) {
+      await fsp.rm(generationDir, { recursive: true, force: true });
+      // Leave the previously published complete catalog and generation in
+      // place. A failed refresh must not force concurrent readers onto a
+      // partial live tree.
+      if (cachedUsage) {
+        return {
+          skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
+          skillsSnapshot: cachedUsage.skillsSnapshot,
+        };
+      }
       return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
     }
-    // Leave any previously published complete catalog in place. A failed
-    // refresh must not force concurrent readers onto a partial live tree.
+    const nextManifest: SyncedSkillsManifest = {
+      entryKeys: plans.map((plan) => plan.identity).toSorted(),
+      generation: nextGeneration,
+      skillsVersion,
+    };
+    await writeJson(manifestPath, nextManifest, { trailingNewline: true });
+    writeSyncedSkillsUsageCache(targetSkillsDir, {
+      generation: nextGeneration,
+      manifestKey: JSON.stringify([skillsVersion, nextManifest.entryKeys]),
+      skillUsagePaths,
+      skillsSnapshot: nextSkillsSnapshot,
+    });
+    pruneSyncedSkillsUsageCache(100);
+    const retainGenerations = new Set<number>([nextGeneration]);
+    if (previousGeneration > 0) {
+      retainGenerations.add(previousGeneration);
+    }
+    if (cachedUsage?.generation && cachedUsage.generation > 0) {
+      retainGenerations.add(cachedUsage.generation);
+    }
+    await pruneSyncedSkillGenerations({
+      targetSkillsDir,
+      retainGenerations,
+      retainRootBasenames,
+    });
     return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
   });
 }

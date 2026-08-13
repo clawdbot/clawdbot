@@ -10,7 +10,7 @@ import { resolveUserPath } from "../../utils.js";
 import type { SkillSnapshot, SkillUsagePath } from "../types.js";
 
 type SyncedSkillsUsageCacheEntry = {
-  destinations: Map<string, string>;
+  generation?: number;
   manifestKey: string;
   skillUsagePaths: SkillUsagePath[];
   skillsSnapshot: SkillSnapshot;

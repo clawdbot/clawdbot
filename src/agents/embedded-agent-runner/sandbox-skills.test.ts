@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createSyntheticSourceInfo,
   escapeSkillXml,
@@ -10,6 +10,7 @@ import {
 } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import {
+  peekPublishedSyncedSkillsSnapshot,
   resolveSyncedSkillsCacheKey,
   writeSyncedSkillsUsageCache,
 } from "../../skills/loading/workspace-skill-sync-cache.js";
@@ -22,6 +23,10 @@ import {
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
+
+vi.mock("../../skills/loading/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
+}));
 
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
 const hostSkillBaseDir = "/usr/lib/node_modules/openclaw/skills/demo";
@@ -124,16 +129,15 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         skillsSnapshot: snapshot,
       });
 
-      expect(resolved.skillsSnapshot?.skills.map((skill) => skill.name)).toContain("demo");
-      expect(resolved.skillsSnapshot?.prompt).toContain(
-        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      const remappedDemo = resolved.skillsSnapshot?.resolvedSkills?.find(
+        (skill) => skill.name === "demo",
       );
+      expect(resolved.skillsSnapshot?.skills.map((skill) => skill.name)).toContain("demo");
+      expect(remappedDemo?.filePath).toContain("/workspace/.openclaw/sandbox-skills/skills/");
+      expect(remappedDemo?.filePath).toContain("/.openclaw-generations/");
+      expect(remappedDemo?.filePath).toContain("/demo/SKILL.md");
+      expect(resolved.skillsSnapshot?.prompt).toContain(remappedDemo?.filePath ?? "");
       expect(resolved.skillsSnapshot?.prompt).not.toContain(hostSkillPath);
-      expect(
-        resolved.skillsSnapshot?.resolvedSkills?.some(
-          (skill) => skill.filePath === "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-        ),
-      ).toBe(true);
       expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
       expect(resolved.skillsWorkspaceDir).toBe(targetWorkspace);
       expect(resolved.workspaceOnly).toBe(true);
@@ -164,9 +168,10 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         managedSkillsDir,
         pluginSkillsDir: path.join(sourceWorkspace, ".plugin-skills"),
       });
-      const hostFilePath = path.join(targetWorkspace, "skills", skillDirName, "SKILL.md");
-      const containerFilePath = `/workspace/.openclaw/sandbox-skills/skills/${skillDirName}/SKILL.md`;
-
+      const hostFilePath =
+        peekPublishedSyncedSkillsSnapshot(targetWorkspace)?.resolvedSkills?.find(
+          (skill) => skill.name === "demoalpha",
+        )?.filePath ?? "";
       const resolved = resolveSandboxSkillRuntimeInputs({
         sandbox: {
           enabled: true,
@@ -183,10 +188,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       });
 
       const remappedSkill = resolved.skillsSnapshot?.resolvedSkills?.find((skill) =>
-        skill.filePath.includes(`skills/${skillDirName}/SKILL.md`),
+        skill.filePath.includes(`/${skillDirName}/SKILL.md`),
       );
+      const containerFilePath = remappedSkill?.filePath ?? "";
 
-      expect(remappedSkill?.filePath).toBe(containerFilePath);
+      expect(hostFilePath).toContain(`${path.sep}.openclaw-generations${path.sep}`);
+      expect(containerFilePath).toContain("/.openclaw-generations/");
+      expect(containerFilePath).toContain(`/${skillDirName}/SKILL.md`);
       expect(resolved.skillsSnapshot?.prompt).toContain(
         `<location>${escapeSkillXml(containerFilePath)}</location>`,
       );
@@ -219,7 +227,6 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       disableModelInvocation: false,
     };
     writeSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspace), {
-      destinations: new Map(),
       manifestKey: "prose-remap",
       skillUsagePaths: [],
       skillsSnapshot: {
