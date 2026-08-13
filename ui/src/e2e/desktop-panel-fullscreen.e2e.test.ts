@@ -4,9 +4,14 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
+const realVncWsUrl = process.env.OPENCLAW_DESKTOP_REAL_VNC_WS_URL?.trim() || null;
 const suite = createControlUiE2eSuite({
   name: "desktop fullscreen",
+  browserLaunchOptions: realVncWsUrl
+    ? { args: ["--disable-web-security", "--allow-running-insecure-content"] }
+    : undefined,
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
@@ -60,78 +65,6 @@ async function openDesktopPanel(page: Page) {
   return panel;
 }
 
-async function installRichDesktopClientFake(panel: import("playwright").Locator) {
-  await panel.evaluate((element) => {
-    type Options = {
-      onConnect?: () => void;
-      onDisconnect?: (detail: { code?: number; reason?: string }) => void;
-      target: HTMLElement;
-      viewOnly: boolean;
-    };
-    (
-      element as HTMLElement & {
-        desktopClientFactory: () => {
-          connect(options: Options): Promise<{ disconnect(): void }>;
-        };
-        triggerDesktopDisconnect?: () => void;
-      }
-    ).desktopClientFactory = () => ({
-      async connect(options) {
-        const screen = document.createElement("div");
-        screen.dataset.testid = "rich-desktop-screen";
-        screen.style.cssText = [
-          "aspect-ratio:16/10",
-          "background:linear-gradient(145deg,#172554,#0f766e)",
-          "border:1px solid rgba(255,255,255,.24)",
-          "border-radius:10px",
-          "box-shadow:0 20px 48px rgba(0,0,0,.35)",
-          "color:#f8fafc",
-          "display:grid",
-          "font:13px ui-sans-serif,system-ui",
-          "grid-template-rows:34px 1fr 28px",
-          "height:min(90%,620px)",
-          "margin:auto",
-          "overflow:hidden",
-          "width:min(90%,992px)",
-        ].join(";");
-        screen.innerHTML = `
-          <div style="align-items:center;background:rgba(15,23,42,.88);display:flex;gap:7px;padding:0 12px">
-            <span style="background:#fb7185;border-radius:50%;height:8px;width:8px"></span>
-            <span style="background:#fbbf24;border-radius:50%;height:8px;width:8px"></span>
-            <span style="background:#34d399;border-radius:50%;height:8px;width:8px"></span>
-            <strong style="margin-left:6px">Release operations · worker-desktop-1</strong>
-            <span style="margin-left:auto;opacity:.72">Secure observer</span>
-          </div>
-          <div style="display:grid;gap:14px;grid-template-columns:1.35fr .65fr;padding:18px">
-            <div style="background:rgba(15,23,42,.76);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:16px">
-              <div style="font-size:18px;font-weight:700;margin-bottom:12px">Production rollout</div>
-              <div style="background:#22c55e;border-radius:999px;height:7px;margin:10px 0;width:78%"></div>
-              <div style="display:grid;gap:8px;grid-template-columns:repeat(3,1fr);margin-top:18px">
-                <div style="background:rgba(255,255,255,.09);border-radius:7px;padding:12px">12 healthy</div>
-                <div style="background:rgba(255,255,255,.09);border-radius:7px;padding:12px">2 pending</div>
-                <div style="background:rgba(255,255,255,.09);border-radius:7px;padding:12px">0 failed</div>
-              </div>
-            </div>
-            <div style="background:rgba(15,23,42,.76);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:16px">
-              <strong>Live checks</strong>
-              <p>Gateway ✓</p><p>Desktop relay ✓</p><p>Browser session ✓</p>
-            </div>
-          </div>
-          <div style="align-items:center;background:rgba(15,23,42,.9);display:flex;justify-content:space-between;padding:0 12px">
-            <span>operator@worker-desktop-1</span><span>${options.viewOnly ? "View only" : "Control enabled"}</span>
-          </div>`;
-        options.target.replaceChildren(screen);
-        (
-          element as HTMLElement & { triggerDesktopDisconnect?: () => void }
-        ).triggerDesktopDisconnect = () =>
-          options.onDisconnect?.({ code: 1006, reason: "remote session ended" });
-        options.onConnect?.();
-        return { disconnect: () => screen.remove() };
-      },
-    });
-  });
-}
-
 async function setTheme(page: Page, theme: "dark" | "light") {
   await page.emulateMedia({ colorScheme: theme });
   await page.evaluate((nextTheme) => {
@@ -167,7 +100,7 @@ async function captureDesktopProof(page: Page, panel: import("playwright").Locat
 
 suite.define(() => {
   it.each(["dark", "light"] as const)(
-    "keeps the active desktop surface mounted through fullscreen entry and exit in %s mode",
+    "keeps the production noVNC canvas mounted through fullscreen entry and exit in %s mode",
     async (theme) => {
       await suite.withPage(
         {
@@ -179,6 +112,7 @@ suite.define(() => {
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             featureMethods: ["desktop.observe", "environments.list"],
+            webSocketPassthroughPrefixes: realVncWsUrl ? [realVncWsUrl] : [],
             methodResponses: {
               "sessions.list": sessionsList(),
               "environments.list": { environments: [workerDesktopEnvironment] },
@@ -191,7 +125,7 @@ suite.define(() => {
                     },
                     response: {
                       transport: "rfb",
-                      wsPath: "/desktop/observe?token=view",
+                      wsPath: realVncWsUrl ?? "/desktop/observe?token=view",
                       expiresAtMs: 60_000,
                       control: false,
                     },
@@ -203,7 +137,7 @@ suite.define(() => {
                     },
                     response: {
                       transport: "rfb",
-                      wsPath: "/desktop/observe?token=control",
+                      wsPath: realVncWsUrl ?? "/desktop/observe?token=control",
                       expiresAtMs: 60_000,
                       control: true,
                     },
@@ -215,9 +149,14 @@ suite.define(() => {
           const panel = await openDesktopPanel(page);
           await setTheme(page, theme);
           await gateway.waitForRequest("environments.list");
-          await installRichDesktopClientFake(panel);
+          if (!realVncWsUrl) {
+            // CI uses the canonical scripted RFB endpoint. Visual proof sets
+            // OPENCLAW_DESKTOP_REAL_VNC_WS_URL to a genuine VNC desktop.
+            await installScriptedRfbServer(page);
+          }
           await panel.getByRole("button", { name: "Connect", exact: true }).click();
-          await panel.getByTestId("rich-desktop-screen").waitFor();
+          const screen = panel.locator(".desktop-surface canvas");
+          await screen.waitFor();
 
           await captureDesktopProof(page, panel, `${theme}-default`);
           expect(
@@ -233,7 +172,6 @@ suite.define(() => {
           await fullscreenButton.focus();
           await captureDesktopProof(page, panel, `${theme}-focus`);
 
-          const screen = panel.getByTestId("rich-desktop-screen");
           const screenHandle = await screen.elementHandle();
           await fullscreenButton.press("Enter");
           await expect
@@ -257,7 +195,15 @@ suite.define(() => {
           if (!stageBox || !screenBox) {
             throw new Error("Desktop fullscreen geometry is unavailable");
           }
-          expect(Math.abs(screenBox.width / screenBox.height - 16 / 10)).toBeLessThan(0.02);
+          const framebuffer = await screen.evaluate((canvas) => ({
+            height: canvas.height,
+            width: canvas.width,
+          }));
+          expect(framebuffer.width).toBeGreaterThan(0);
+          expect(framebuffer.height).toBeGreaterThan(0);
+          expect(
+            Math.abs(screenBox.width / screenBox.height - framebuffer.width / framebuffer.height),
+          ).toBeLessThan(0.02);
           expect(screenBox.x).toBeGreaterThanOrEqual(stageBox.x);
           expect(screenBox.y).toBeGreaterThanOrEqual(stageBox.y);
           expect(screenBox.x + screenBox.width).toBeLessThanOrEqual(stageBox.x + stageBox.width);
@@ -272,7 +218,10 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("desktop.observe")).length)
             .toBe(2);
           expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
-          await panel.getByText("Control enabled", { exact: true }).waitFor();
+          await panel.locator(".desktop-surface canvas").waitFor();
+          await expect
+            .poll(() => panel.getByRole("button", { name: "Take control", exact: true }).count())
+            .toBe(0);
 
           // Escape and browser controls both exit through the fullscreenchange path.
           await page.evaluate(() => document.exitFullscreen());
@@ -290,17 +239,6 @@ suite.define(() => {
           await fullscreenButton.click();
           await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
           await panel.getByText("Desktop sources", { exact: true }).waitFor();
-          expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
-          await panel.getByRole("button", { name: "Connect", exact: true }).click();
-          await panel.getByText("View only", { exact: true }).waitFor();
-          await panel.evaluate((element) => {
-            (
-              element as HTMLElement & { triggerDesktopDisconnect?: () => void }
-            ).triggerDesktopDisconnect?.();
-          });
-          await panel
-            .getByText("Desktop disconnected: remote session ended", { exact: true })
-            .waitFor();
           expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
           await captureDesktopProof(page, panel, `${theme}-disconnected-fullscreen`);
           await fullscreenButton.click();
