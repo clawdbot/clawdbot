@@ -172,7 +172,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptCompactionCount: number;
   replayState: EmbeddedRunReplayState;
   activePromptPersisted: boolean;
-  activateInternalPrompt: (prompt: string, persisted: boolean) => void;
+  activateInternalPrompt: (prompt: string) => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
@@ -268,7 +268,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.reasoningOnlyAttempts < input.maxReasoningOnlyRetryAttempts
   ) {
     retryState.reasoningOnlyAttempts += 1;
-    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction, false);
+    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
     log.warn(
       `reasoning-only assistant turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
@@ -306,7 +306,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.emptyResponseAttempts < input.maxEmptyResponseRetryAttempts
   ) {
     retryState.emptyResponseAttempts += 1;
-    input.activateInternalPrompt(nextEmptyResponseRetryInstruction, false);
+    input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
@@ -426,7 +426,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.beforeFinalizeRevisionAttempts += 1;
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
-      true,
     );
     retryState.compactionContinuationInstruction = null;
     log.warn(

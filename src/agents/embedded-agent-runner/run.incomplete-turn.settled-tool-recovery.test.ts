@@ -398,7 +398,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -472,7 +472,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(secondCall.disableTools).toBe(true);
     expect(secondCall.operation).toBe("settled-tool-finalization");
-    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });

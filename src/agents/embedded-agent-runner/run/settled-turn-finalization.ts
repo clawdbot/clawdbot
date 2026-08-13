@@ -178,6 +178,7 @@ async function runPreparedSettledTurnFinalization(input: {
         prompt: input.prompt,
         disableTools: true,
         skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       },
       input.settledAttempt,
