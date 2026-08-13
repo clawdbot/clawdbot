@@ -1869,7 +1869,7 @@ describe("chat composer workbench", () => {
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
     const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Close session workspace"]',
+      'button[aria-label="Collapse session workspace"]',
     );
     expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
     collapseToggle?.click();
