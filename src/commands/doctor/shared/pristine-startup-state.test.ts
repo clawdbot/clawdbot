@@ -106,6 +106,25 @@ afterEach(() => {
 });
 
 describe("pristine startup state", () => {
+  it("accepts a missing explicitly selected profile root", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pristine-profile-"));
+    roots.push(root);
+    const stateDir = path.join(root, ".openclaw-typo");
+    fs.mkdirSync(path.join(root, ".clawdbot"));
+
+    expect(
+      planPristineStartupStateMigrations({
+        HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toEqual({
+      skipAllStateMigrations: true,
+      skipCoreStateMigrations: true,
+    });
+    expect(fs.existsSync(stateDir)).toBe(false);
+  });
+
   it("accepts the core-only Gateway benchmark config", () => {
     const env = createFixture({
       browser: { enabled: false },
