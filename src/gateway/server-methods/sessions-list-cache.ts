@@ -2,6 +2,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
@@ -15,6 +16,7 @@ type SessionListFence = {
   lifecyclePersistenceVersion: number;
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
+  sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
   workerPlacementDiskSpaceVersion: number;
 };
@@ -35,6 +37,9 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
+    // Rows embed transcript-derived previews/titles; a committed transcript
+    // write without a session mutation must still invalidate reuse.
+    sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
@@ -46,6 +51,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
+    value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );

@@ -54,6 +54,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 
 const { sessionReadHandlers } = await import("./sessions-read.js");
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
 
 function identifiedClient(profileId: string): GatewayClient {
   return {
@@ -282,6 +283,28 @@ describe("sessions.list single-flight", () => {
         },
       });
       await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result after a committed transcript update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+
+      // A transcript commit changes row previews/derived titles without any
+      // session-entry mutation; serving the cached page would hide it forever.
+      emitSessionTranscriptUpdate({
+        target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
+      });
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });
