@@ -86,6 +86,14 @@ function publishDurableNextRunChanges(params: {
   }
 }
 
+/** Publishes scheduled-row changes after a targeted runtime transaction commits. */
+export function publishCronRuntimeRows(state: CronServiceState): void {
+  if (!state.store) {
+    return;
+  }
+  publishDurableNextRunChanges({ state, storeJobs: state.store.jobs, stateOnly: false });
+}
+
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
   hydrated: CronJob;

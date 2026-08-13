@@ -2349,37 +2349,6 @@ describe("cron service ops persist rollback", () => {
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it("restores read-maintenance fields in place when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-    const job = await add(state, {
-      ...makeCreateInput("read repair"),
-      schedule: { kind: "every", everyMs: 60_000 },
-    });
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-    job.schedule = { kind: "every", everyMs: 60_000 };
-    job.state.nextRunAtMs = Number.NaN;
-    job.state.startupCatchupAtMs = now - 1;
-    const storeIdentity = state.store;
-    const jobIdentity = job;
-    const before = structuredClone({
-      enabled: job.enabled,
-      schedule: job.schedule,
-      state: job.state,
-    });
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
-
-    await expect(list(state, { includeDisabled: true })).rejects.toThrow("disk full");
-
-    expect(state.store).toBe(storeIdentity);
-    expect(state.store?.jobs[0]).toBe(jobIdentity);
-    expect({ enabled: job.enabled, schedule: job.schedule, state: job.state }).toEqual(before);
-  });
-
   it("recovers after a failed persist so the next mutation succeeds", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
@@ -2402,7 +2371,7 @@ describe("cron service ops persist rollback", () => {
     expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it.each(["mutation", "read maintenance"] as const)(
+  it.each(["mutation"] as const)(
     "notifies about schedule auto-disable only after %s persists",
     async (triggerPath) => {
       const { storePath } = await makeStorePath();
@@ -2446,10 +2415,7 @@ describe("cron service ops persist rollback", () => {
           await saveCronJobsStore(...args);
           order.push("persist");
         });
-      const trigger = () =>
-        triggerPath === "mutation"
-          ? add(state, makeCreateInput("trigger mutation"))
-          : list(state, { includeDisabled: true });
+      const trigger = () => add(state, makeCreateInput(`trigger ${triggerPath}`));
       await expect(trigger()).rejects.toThrow("disk full");
 
       expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);

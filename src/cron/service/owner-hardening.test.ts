@@ -56,13 +56,18 @@ beforeEach(async () => {
         runCommandJob: async ({ job }) => {
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
-          if (mode === "block") await new Promise(() => {});
+          if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
           if (mode === "hold") while (!fs.existsSync(releasePath)) await sleep(10);
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
       });
       await cron.start();
+      if (mode === "barrier-block") {
+        process.stdout.write("ready\\n");
+        while (!fs.existsSync(releasePath)) await sleep(10);
+        await cron.run(jobId, "force");
+      }
       if (mode === "crash-activation") {
         const database = openOpenClawStateDatabase().db;
         database.function("crash_activation", () => {
@@ -121,7 +126,7 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode: "block" | "hold" | "hold-alive" | "trigger" | "due" | "crash-activation";
+  mode: "barrier-block" | "block" | "hold" | "hold-alive" | "trigger" | "due" | "crash-activation";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -520,6 +525,57 @@ describe("cron durable run ownership", () => {
       : [];
     expect(invocations).toHaveLength(1);
     expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+  });
+
+  it("preserves different jobs activated concurrently by two gateways", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const firstJob = makeCommandJob("gateway-a-job", now + 60_000);
+    const secondJob = makeCommandJob("gateway-b-job", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [firstJob, secondJob] });
+    const firstBarrier = path.join(scriptRoot, `gateway-a-barrier-${now}`);
+    const secondBarrier = path.join(scriptRoot, `gateway-b-barrier-${now}`);
+    const first = spawnRunner({
+      storePath,
+      jobId: firstJob.id,
+      mode: "barrier-block",
+      releasePath: firstBarrier,
+      outputPath: path.join(scriptRoot, `gateway-a-output-${now}`),
+    });
+    const second = spawnRunner({
+      storePath,
+      jobId: secondJob.id,
+      mode: "barrier-block",
+      releasePath: secondBarrier,
+      outputPath: path.join(scriptRoot, `gateway-b-output-${now}`),
+    });
+    try {
+      await Promise.all([waitForLine(first, "ready"), waitForLine(second, "ready")]);
+      const firstStarted = waitForLine(first, "started");
+      const secondStarted = waitForLine(second, "started");
+      await Promise.all([
+        fsPromises.writeFile(firstBarrier, "start"),
+        fsPromises.writeFile(secondBarrier, "start"),
+      ]);
+      await Promise.all([firstStarted, secondStarted]);
+
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs.find((job) => job.id === firstJob.id)?.state.runningAtMs).toEqual(
+        expect.any(Number),
+      );
+      expect(persisted.jobs.find((job) => job.id === secondJob.id)?.state.runningAtMs).toEqual(
+        expect.any(Number),
+      );
+      expect(receipts(storePath, firstJob.id)[0]).toMatchObject({ status: "running" });
+      expect(receipts(storePath, secondJob.id)[0]).toMatchObject({ status: "running" });
+    } finally {
+      for (const child of [first, second]) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }
+    }
   });
 
   it("fences an owner change for the full admitted-run lease", async () => {

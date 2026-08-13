@@ -653,6 +653,20 @@ export function applyOutcomeToStoredJob(
     return undefined;
   }
 
+  if (applyOutcomeToAuthoritativeJob(state, job, result, opts)) {
+    store.jobs = jobs.filter((entry) => entry.id !== job.id);
+    return job;
+  }
+  return undefined;
+}
+
+/** Applies one outcome to a row already re-read under the runtime write transaction. */
+export function applyOutcomeToAuthoritativeJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+  opts?: { deferredNotifications?: DeferredCronNotifications; emit?: boolean },
+): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
     admittedJob: result.job,
     currentJob: job,
@@ -687,7 +701,7 @@ export function applyOutcomeToStoredJob(
       // edit owns a replacement override that must survive finalization.
       job.state.pacedNextRunAtMs = undefined;
     }
-    return undefined;
+    return false;
   }
 
   const shouldDelete = applyJobResult(state, job, result, {
@@ -698,13 +712,23 @@ export function applyOutcomeToStoredJob(
   applyScriptRunResult(job, result, { triggerOwnership });
   job.state.startupCatchupAtMs = undefined;
 
-  emitJobFinished(state, job, result, result.startedAt);
-
-  if (shouldDelete) {
-    store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    return job;
+  if (opts?.emit !== false) {
+    emitJobFinished(state, job, result, result.startedAt);
   }
-  return undefined;
+
+  return shouldDelete;
+}
+
+/** Records a terminal task/event fact before the fallible runtime-row commit. */
+export function emitCronOutcomeForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
+    return;
+  }
+  emitJobFinished(state, job, result, result.startedAt);
 }
 
 function emitJobFinished(

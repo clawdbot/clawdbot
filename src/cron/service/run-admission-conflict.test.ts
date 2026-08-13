@@ -72,7 +72,7 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
   try {
     const reserved = await persistQueuedCronRunReservations({
       state,
-      jobIds: [foreignJob.id, pendingJob.id],
+      candidates: [foreignJob, pendingJob],
       reservedAtMs: now + 2,
     });
 
@@ -96,4 +96,46 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     }
     stop(state);
   }
+});
+
+it("rejects a stale reservation plan after the job already finalized", async () => {
+  const store = fixtures.makeStorePath();
+  const now = Date.parse("2026-08-13T17:00:00.000Z");
+  const planned = createDueIsolatedJob({
+    id: "finalized-before-reservation",
+    nowMs: now,
+    nextRunAtMs: now,
+  });
+  await saveCronStore(store.storePath, { version: 1, jobs: [planned] });
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => now + 1,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  await list(state);
+
+  const completed = structuredClone(planned);
+  completed.enabled = false;
+  completed.updatedAtMs = now + 1;
+  completed.state.lastRunAtMs = now;
+  completed.state.lastRunStatus = "ok";
+  completed.state.lastStatus = "ok";
+  completed.state.nextRunAtMs = undefined;
+  await saveCronStore(store.storePath, { version: 1, jobs: [completed] });
+
+  expect(
+    await persistQueuedCronRunReservations({
+      state,
+      candidates: [planned],
+      reservedAtMs: now + 1,
+    }),
+  ).toEqual([]);
+  const persisted = (await loadCronStore(store.storePath)).jobs[0];
+  expect(persisted).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
+  expect(persisted?.state.queuedAtMs).toBeUndefined();
+  stop(state);
 });

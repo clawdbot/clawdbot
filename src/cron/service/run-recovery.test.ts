@@ -86,6 +86,57 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  it("retires a dead owner receipt after timeout state already finalized", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T11:00:00.000Z");
+    const job = makeJob("timeout-settlement-owner-death", startedAtMs);
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = makeState(storePath, startedAtMs + 30_000);
+    const receipt = claimReceipt(storePath, job, startedAtMs);
+    const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAtMs);
+    const completed = structuredClone(job);
+    delete completed.state.runningAtMs;
+    completed.state.lastRunAtMs = startedAtMs;
+    completed.state.lastRunStatus = "ok";
+    completed.state.lastStatus = "ok";
+    await writeCronStoreSnapshot({ storePath, jobs: [completed] });
+    releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "repaired" });
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+      lastRunAtMs: startedAtMs,
+      lastRunStatus: "ok",
+    });
+    const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+      db
+        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ) as { status: string };
+    expect(receiptRow.status).toBe("interrupted");
+  });
+
+  it("reports a foreign queued-to-running conversion for lifecycle monitoring", async () => {
+    const { storePath } = await makeStorePath();
+    const queuedAtMs = Date.parse("2026-08-13T11:30:00.000Z");
+    const job = makeJob("queued-to-running-owner", queuedAtMs);
+    delete job.state.runningAtMs;
+    job.state.queuedAtMs = queuedAtMs;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = makeState(storePath, queuedAtMs + 1);
+    const proposal = proposeCronRunRecovery(state, job.id, queuedAtMs, undefined);
+    const running = structuredClone(job);
+    delete running.state.queuedAtMs;
+    running.state.runningAtMs = queuedAtMs + 1;
+    const receipt = claimReceipt(storePath, running, queuedAtMs + 1);
+    await writeCronStoreSnapshot({ storePath, jobs: [running] });
+
+    expect(recoverCronRunProposal(state, proposal)).toMatchObject({
+      kind: "superseded",
+      receipt: { receiptId: receipt.receiptId },
+    });
+    finishCronRunReceipt({ handle: receipt, status: "interrupted", finishedAtMs: queuedAtMs + 2 });
+  });
+
   it("does not clobber a same-millisecond successor receipt", async () => {
     const { storePath } = await makeStorePath();
     const startedAtMs = Date.parse("2026-08-13T12:00:00.000Z");

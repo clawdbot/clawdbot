@@ -1,10 +1,7 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
-import { loadedCronStoreFromRows, loadCronRows, upsertCronJobRow } from "../store/row-codec.js";
 import {
   assertNoActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
@@ -15,7 +12,7 @@ import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeJobNextRunAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   cronRunReceiptClaimHooks,
@@ -23,8 +20,9 @@ import {
   cronRunReceiptSupersedeHooks,
   prepareServiceCronRunReceiptClaim,
 } from "./run-receipts.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import {
   runsDetachedFromMainSession,
@@ -124,77 +122,10 @@ export function isQueuedCronRunReservationCurrent(
   return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
 }
 
-function restoreQueuedCronRunReservationLastError(
-  state: CronServiceState,
-  jobId: string,
-  identity: object,
-  jobState: { lastError?: string },
-): void {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  if (reservation?.identity === identity && reservation.activationPreviousLastError) {
-    jobState.lastError = reservation.activationPreviousLastError.value;
-  }
-}
-
-/** Clear a locally owned reservation, including a persisted-but-unstarted activation. */
-export function clearQueuedCronRunReservationMarker(
-  state: CronServiceState,
-  jobId: string,
-  identity: object,
-  jobState: { queuedAtMs?: number; runningAtMs?: number; lastError?: string },
-  opts?: { restoreLastError?: boolean },
-): boolean {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  if (reservation?.identity !== identity) {
-    return false;
-  }
-  const queuedMatches = reservation.markerAtMs === jobState.queuedAtMs;
-  const runningMatches = reservation.markerAtMs === jobState.runningAtMs;
-  if (!queuedMatches && !runningMatches) {
-    return false;
-  }
-  if (opts?.restoreLastError !== false) {
-    restoreQueuedCronRunReservationLastError(state, jobId, identity, jobState);
-  }
-  if (queuedMatches) {
-    delete jobState.queuedAtMs;
-  }
-  if (runningMatches) {
-    delete jobState.runningAtMs;
-  }
-  return true;
-}
-
 type QueuedCronRunReservation = {
   jobId: string;
   reservationIdentity: object;
 };
-
-export function clearOwnedQueuedCronRunMarkers(
-  state: CronServiceState,
-  reservations: readonly QueuedCronRunReservation[],
-  opts?: { restoreLastError?: boolean },
-): QueuedCronRunReservation[] {
-  const pendingReleases: QueuedCronRunReservation[] = [];
-  for (const reservation of reservations) {
-    const job = state.store?.jobs.find((entry) => entry.id === reservation.jobId);
-    if (
-      job &&
-      clearQueuedCronRunReservationMarker(
-        state,
-        reservation.jobId,
-        reservation.reservationIdentity,
-        job.state,
-        opts,
-      )
-    ) {
-      pendingReleases.push(reservation);
-    } else {
-      releaseQueuedCronRun(state, reservation.jobId, reservation.reservationIdentity);
-    }
-  }
-  return pendingReleases;
-}
 
 /** Durably clears reservations still owned by this process. Ownership stays
  * held through commit; after one retry it is dropped for restart repair. */
@@ -208,28 +139,53 @@ export async function cleanupQueuedCronRunReservations(params: {
   const { state, reservations } = params;
   const attempt = async () => {
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const rollbackSnapshot = snapshotStoreForRollback(state);
-      const pendingReleases = clearOwnedQueuedCronRunMarkers(state, reservations, {
-        restoreLastError: params.restoreLastError,
-      });
-      if (pendingReleases.length === 0 && !params.transactionHooks) {
-        return;
-      }
       const postPersistNotifications: DeferredCronNotifications = [];
-      if (params.recompute && pendingReleases.length > 0) {
-        recomputeNextRunsForMaintenance(state, {
-          ...(params.recompute === "startup-overflow"
-            ? { repairFutureCronNextRunAtMs: false }
-            : {}),
-          deferredNotifications: postPersistNotifications,
-        });
-      }
-      await persistOrRestore(state, rollbackSnapshot, {
-        postPersistNotifications,
+      const committedJobs = commitCronRuntimeRows({
+        state,
+        jobIds: reservations.map((reservation) => reservation.jobId),
+        operationLabel: "cron.run-reservation-cleanup",
         transactionHooks: params.transactionHooks,
+        mutate: ({ jobs }) => {
+          const committed: CronJob[] = [];
+          for (const reservation of reservations) {
+            const ownership = state.queuedRunReservationsByJobId.get(reservation.jobId);
+            const job = jobs.get(reservation.jobId);
+            if (!job || ownership?.identity !== reservation.reservationIdentity) {
+              continue;
+            }
+            const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
+            const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
+            if (!queuedMatches && !runningMatches) {
+              continue;
+            }
+            if (params.restoreLastError !== false && ownership.activationPreviousLastError) {
+              job.state.lastError = ownership.activationPreviousLastError.value;
+            }
+            if (queuedMatches) {
+              delete job.state.queuedAtMs;
+            }
+            if (runningMatches) {
+              delete job.state.runningAtMs;
+            }
+            if (params.recompute && job.enabled && job.state.nextRunAtMs === undefined) {
+              recomputeJobNextRunAtMs({
+                state,
+                job,
+                nowMs: state.deps.nowMs(),
+                deferredNotifications: postPersistNotifications,
+              });
+            }
+            committed.push(job);
+          }
+          return {
+            upsertJobIds: committed.map((job) => job.id),
+            value: committed,
+          };
+        },
       });
-      for (const reservation of pendingReleases) {
+      runPostPersistCronNotifications(state, postPersistNotifications);
+      applyCronRuntimeRowsToState(state, committedJobs);
+      for (const reservation of reservations) {
         releaseQueuedCronRun(state, reservation.jobId, reservation.reservationIdentity);
       }
     });
@@ -275,61 +231,59 @@ export async function supersedeActivatedCronRun(params: {
   }
 }
 
-export function isQueuedCronRunReservationMarkerCurrent(
-  state: CronServiceState,
-  jobId: string,
-  identity: object,
-  runningAtMs: number,
-): boolean {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  return reservation?.identity === identity && reservation.markerAtMs === runningAtMs;
-}
-
 /** Persists queued markers only while no gateway owns an active run receipt.
  * Each retry re-reads and updates only pending rows, so excluded foreign jobs
  * can advance without a stale full-store snapshot overwriting their state.
  */
 export async function persistQueuedCronRunReservations(params: {
   state: CronServiceState;
-  jobIds: readonly string[];
+  candidates: readonly CronJob[];
+  forcedJobIds?: ReadonlySet<string>;
   reservedAtMs: number;
 }): Promise<CronJob[]> {
-  const pendingJobIds = new Set(params.jobIds);
-  const storeKey = cronStoreKey(params.state.deps.storePath);
-  while (pendingJobIds.size > 0) {
+  const pendingJobs = new Map(params.candidates.map((job) => [job.id, structuredClone(job)]));
+  while (pendingJobs.size > 0) {
     try {
-      const committedJobs = runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const rows = loadCronRows(db, storeKey);
-          const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
-          const jobIds = [...pendingJobIds].toSorted();
+      const committedJobs = commitCronRuntimeRows({
+        state: params.state,
+        jobIds: pendingJobs.keys(),
+        operationLabel: "cron.run-reservation",
+        mutate: ({ database, jobs }) => {
+          const jobIds = [...pendingJobs.keys()].toSorted();
           for (const jobId of jobIds) {
             assertNoActiveCronRunReceiptInDatabase({
-              database: db,
+              database,
               storePath: params.state.deps.storePath,
               jobId,
             });
           }
           const committed: CronJob[] = [];
           for (const jobId of jobIds) {
-            const row = rowsByJobId.get(jobId);
-            const job = row
-              ? loadedCronStoreFromRows([row]).store.jobs.find((entry) => entry.id === jobId)
-              : undefined;
-            if (!row || !job) {
+            const job = jobs.get(jobId);
+            const planned = pendingJobs.get(jobId);
+            if (
+              !job ||
+              !planned ||
+              job.enabled !== planned.enabled ||
+              (!params.forcedJobIds?.has(jobId) &&
+                job.state.nextRunAtMs !== planned.state.nextRunAtMs) ||
+              job.state.lastRunAtMs !== planned.state.lastRunAtMs ||
+              job.state.lastRunStatus !== planned.state.lastRunStatus ||
+              job.state.queuedAtMs !== undefined ||
+              job.state.runningAtMs !== undefined ||
+              resolveCronJobConfigRevision(job) !== resolveCronJobConfigRevision(planned)
+            ) {
               continue;
             }
             job.state.queuedAtMs = params.reservedAtMs;
-            committed.push(upsertCronJobRow(db, storeKey, job, row.sort_order));
+            committed.push(job);
           }
-          return committed;
+          return {
+            upsertJobIds: committed.map((job) => job.id),
+            value: committed,
+          };
         },
-        {},
-        { operationLabel: "cron.run-reservation" },
-      );
-      if (committedJobs.length > 0) {
-        noteCronJobsStoreCommit(storeKey);
-      }
+      });
       if (params.state.stopped) {
         const committedById = new Map(committedJobs.map((job) => [job.id, job] as const));
         if (params.state.store) {
@@ -347,7 +301,7 @@ export async function persistQueuedCronRunReservations(params: {
         throw error;
       }
       enrollForeignReceipt(params.state, error.candidate);
-      pendingJobIds.delete(error.candidate.jobId);
+      pendingJobs.delete(error.candidate.jobId);
     }
   }
   await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
@@ -363,6 +317,7 @@ export async function activateQueuedCronRun(params: {
 }): Promise<
   | {
       kind: "activated";
+      job: CronJob;
       startedAt: number;
       runReceipt: ReturnType<typeof prepareServiceCronRunReceiptClaim>["handle"];
     }
@@ -377,18 +332,28 @@ export async function activateQueuedCronRun(params: {
     startedAtMs: startedAt,
   });
   const runReceipt = preparedReceipt.handle;
-  const previousLastError = job.state.lastError;
-  const activationRollbackSnapshot = snapshotStoreForRollback(state);
-  delete job.state.queuedAtMs;
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
-  // Persist running ownership before execution. A failed write restores the
-  // durable queued marker so the caller can release or recover that claim.
+  let previousLastError: string | undefined;
+  let activatedJob: CronJob | undefined;
   try {
-    await persistOrRestore(state, activationRollbackSnapshot, {
+    activatedJob = commitCronRuntimeRows({
+      state,
+      jobIds: [job.id],
+      operationLabel: "cron.run-activation",
       // The receipt and running marker are one admission fact. A crash can
       // therefore leave both for startup recovery or neither, never one alone.
       transactionHooks: cronRunReceiptClaimHooks({ state, prepared: preparedReceipt }),
+      mutate: ({ jobs }) => {
+        const current = jobs.get(job.id);
+        const markerAtMs = state.queuedRunReservationsByJobId.get(job.id)?.markerAtMs;
+        if (!current || markerAtMs === undefined || current.state.queuedAtMs !== markerAtMs) {
+          return { value: undefined, runHooks: false };
+        }
+        previousLastError = current.state.lastError;
+        delete current.state.queuedAtMs;
+        current.state.runningAtMs = startedAt;
+        current.state.lastError = undefined;
+        return { value: current, upsertJobIds: [current.id] };
+      },
     });
   } catch (error) {
     releaseLocalCronRunReceiptOwnership(runReceipt);
@@ -401,21 +366,26 @@ export async function activateQueuedCronRun(params: {
     }
     throw error;
   }
+  if (!activatedJob) {
+    releaseLocalCronRunReceiptOwnership(runReceipt);
+    return { kind: "fenced" };
+  }
+  applyCronRuntimeRowsToState(state, [activatedJob]);
   const reservation = state.queuedRunReservationsByJobId.get(job.id);
   if (reservation?.identity === reservationIdentity) {
     reservation.markerAtMs = startedAt;
     reservation.activationPreviousLastError = { value: previousLastError };
   }
   if (!state.stopped && !state.restartRecoveryPending) {
-    return { kind: "activated", startedAt, runReceipt };
+    return { kind: "activated", job: activatedJob, startedAt, runReceipt };
   }
 
   params.onUnavailable?.();
-  job.state.lastError = previousLastError;
-  const rollbackSnapshot = snapshotStoreForRollback(state);
-  delete job.state.runningAtMs;
   try {
-    await persistOrRestore(state, rollbackSnapshot, {
+    const restoredJob = commitCronRuntimeRows({
+      state,
+      jobIds: [job.id],
+      operationLabel: "cron.run-activation-unavailable",
       transactionHooks: cronRunReceiptPersistHooks({
         state,
         handle: runReceipt,
@@ -425,7 +395,19 @@ export async function activateQueuedCronRun(params: {
           error: state.stopped ? "cron service stopped" : "cron restart recovery pending",
         },
       }),
+      mutate: ({ jobs }) => {
+        const current = jobs.get(job.id);
+        if (!current || current.state.runningAtMs !== startedAt) {
+          return { value: undefined };
+        }
+        current.state.lastError = previousLastError;
+        delete current.state.runningAtMs;
+        return { value: current, upsertJobIds: [current.id] };
+      },
     });
+    if (restoredJob) {
+      applyCronRuntimeRowsToState(state, [restoredJob]);
+    }
   } catch (error) {
     await params.onUnavailableRollbackError?.();
     throw error;
@@ -517,7 +499,11 @@ export async function executeQueuedCronRun(params: {
       }
       activated = true;
       params.onActivated?.();
-      return { job, startedAt: activation.startedAt, runReceipt: activation.runReceipt };
+      return {
+        job: activation.job,
+        startedAt: activation.startedAt,
+        runReceipt: activation.runReceipt,
+      };
     });
     if (!started) {
       return undefined;

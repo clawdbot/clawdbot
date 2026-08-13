@@ -25,7 +25,6 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { start } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
@@ -176,41 +175,6 @@ describe("cron service ops regressions", () => {
       });
     } finally {
       resetGatewayWorkAdmission();
-    }
-  });
-
-  it("repairs missing job state during startup", async () => {
-    const scheduledAt = Date.now() + 60_000;
-    const store = opsRegressionFixtures.makeStorePath();
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-    });
-    state.store = {
-      version: 1,
-      jobs: [
-        {
-          ...createIsolatedRegressionJob({
-            id: "missing-state-startup",
-            name: "missing-state-startup",
-            scheduledAt,
-            schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-            payload: { kind: "agentTurn", message: "noop" },
-          }),
-          state: undefined as never,
-        },
-      ],
-    };
-
-    await expect(start(state)).resolves.toBeUndefined();
-    expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
     }
   });
 

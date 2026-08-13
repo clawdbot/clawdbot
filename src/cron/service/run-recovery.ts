@@ -17,8 +17,12 @@ import {
   isCronRunReceiptOwnerDefinitelyStale,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
-import type { CronRunStatus } from "../types.js";
-import { recomputeSingleJobNextRunAtMs } from "./jobs-scheduling.js";
+import type { CronJob, CronRunStatus } from "../types.js";
+import {
+  type CronMaintenanceOptions,
+  recomputeJobNextRunAtMs,
+  recomputeSingleJobForMaintenance,
+} from "./jobs-scheduling.js";
 import {
   type InterruptedStartupRun,
   markInterruptedStartupRun,
@@ -70,14 +74,11 @@ function repairInDatabase(params: {
 }): CronRunRecoveryResult {
   const { state, database, proposal } = params;
   const storeKey = cronStoreKey(state.deps.storePath);
-  const currentReceipt =
-    proposal.runningAtMs === undefined
-      ? undefined
-      : findActiveCronRunReceiptInDatabase({
-          database: database.db,
-          storePath: state.deps.storePath,
-          jobId: proposal.jobId,
-        });
+  const currentReceipt = findActiveCronRunReceiptInDatabase({
+    database: database.db,
+    storePath: state.deps.storePath,
+    jobId: proposal.jobId,
+  });
   if (proposal.receipt) {
     // Receipt identity is the recovery CAS. The millisecond marker is checked
     // only after this succeeds because successive runs may share a timestamp.
@@ -97,6 +98,16 @@ function repairInDatabase(params: {
     ? loadedCronStoreFromRows([row]).store.jobs.find((entry) => entry.id === proposal.jobId)
     : undefined;
   if (!row || !job) {
+    if (proposal.receipt) {
+      finishCronRunReceiptInDatabase({
+        database: database.db,
+        handle: proposal.receipt,
+        status: "interrupted",
+        finishedAtMs: state.deps.nowMs(),
+        error: "cron: owner exited after the job row was finalized",
+      });
+      return { kind: "repaired", notifications: [] };
+    }
     return { kind: "superseded" };
   }
   let changed = false;
@@ -109,6 +120,16 @@ function repairInDatabase(params: {
   const notifications: DeferredCronNotifications = [];
   if (proposal.runningAtMs !== undefined) {
     if (job.state.runningAtMs !== proposal.runningAtMs) {
+      if (proposal.receipt) {
+        finishCronRunReceiptInDatabase({
+          database: database.db,
+          handle: proposal.receipt,
+          status: "interrupted",
+          finishedAtMs: state.deps.nowMs(),
+          error: "cron: owner exited after run state was already finalized",
+        });
+        return { kind: "repaired", notifications: [] };
+      }
       return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
     }
     const task = findCronTaskRunRecoveryInDatabase({
@@ -142,7 +163,7 @@ function repairInDatabase(params: {
       });
       replacementAtMs = interrupted.replacementAtMs;
       if (job.enabled && job.state.nextRunAtMs === undefined) {
-        recomputeSingleJobNextRunAtMs({
+        recomputeJobNextRunAtMs({
           state,
           job,
           nowMs,
@@ -226,8 +247,12 @@ export function recoverCronRunProposal(
 }
 
 /** Schedules only authoritative rows that are not protected by an active run. */
-export function recomputeUnownedCronSchedules(state: CronServiceState): {
+export function recomputeUnownedCronSchedules(
+  state: CronServiceState,
+  opts?: Omit<CronMaintenanceOptions, "deferredNotifications">,
+): {
   changed: boolean;
+  jobs: CronJob[];
   notifications: DeferredCronNotifications;
 } {
   const storeKey = cronStoreKey(state.deps.storePath);
@@ -236,6 +261,7 @@ export function recomputeUnownedCronSchedules(state: CronServiceState): {
     ({ db }) => {
       const notifications: DeferredCronNotifications = [];
       let changed = false;
+      const jobs: CronJob[] = [];
       for (const row of loadCronRows(db, storeKey)) {
         if (
           findActiveCronRunReceiptInDatabase({
@@ -247,27 +273,22 @@ export function recomputeUnownedCronSchedules(state: CronServiceState): {
           continue;
         }
         const job = loadedCronStoreFromRows([row]).store.jobs[0];
-        if (
-          !job ||
-          job.state.nextRunAtMs !== undefined ||
-          job.state.queuedAtMs !== undefined ||
-          job.state.runningAtMs !== undefined
-        ) {
+        if (!job) {
           continue;
         }
         if (
-          recomputeSingleJobNextRunAtMs({
-            state,
-            job,
-            nowMs,
+          recomputeSingleJobForMaintenance(state, job, {
+            ...opts,
+            nowMs: opts?.nowMs ?? nowMs,
             deferredNotifications: notifications,
           })
         ) {
           upsertCronJobRow(db, storeKey, job, row.sort_order);
+          jobs.push(job);
           changed = true;
         }
       }
-      return { changed, notifications };
+      return { changed, jobs, notifications };
     },
     {},
     { operationLabel: "cron.schedule-unowned" },

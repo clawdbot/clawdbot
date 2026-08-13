@@ -457,7 +457,7 @@ export async function removeStaleJobFamily(
   });
 }
 
-export async function updateLoadedJob(params: {
+async function updateLoadedJob(params: {
   state: CronServiceState;
   id: string;
   patch: CronJobPatch;

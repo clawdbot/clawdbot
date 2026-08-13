@@ -9,7 +9,6 @@ import {
 } from "../store/run-receipt-store.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   activatePreparedManualRun,
@@ -29,15 +28,11 @@ import {
   supersedeActivatedCronRun,
 } from "./run-admission.js";
 import { assertServiceCronRunReceiptCurrent, cronRunReceiptPersistHooks } from "./run-receipts.js";
-import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
-import {
-  ensureLoaded,
-  persistOrRestore,
-  pruneCronJobScratchAfterCommit,
-  snapshotStoreForRollback,
-} from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   resolveCronRunScheduleOwnership,
@@ -305,32 +300,15 @@ async function finishPreparedManualRun(
           };
       const postRunRemoved = shouldDelete;
       const removedJob = shouldDelete ? structuredClone(job) : undefined;
-      // Isolated Telegram send can persist target writeback directly to disk.
-      // Reload before final persist so manual `cron run` keeps those changes.
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
         notifySetupTimeout = false;
         return;
       }
-      const rollbackSnapshot = snapshotStoreForRollback(state);
-      mergeManualRunSnapshotAfterReload({
-        state,
-        jobId,
-        snapshot: postRunSnapshot,
-        removed: postRunRemoved,
-      });
-      recomputeNextRunsForMaintenance(state, {
-        recomputeExpired: true,
-        deferredNotifications: postPersistNotifications,
-        ...(mode === "force"
-          ? {
-              preserveExpiredPacedNextRunJobId: jobId,
-            }
-          : {}),
-      });
       try {
-        await persistOrRestore(state, rollbackSnapshot, {
-          postPersistNotifications,
+        const committedJob = commitCronRuntimeRows({
+          state,
+          jobIds: [jobId],
+          operationLabel: "cron.manual-run-finalization",
           transactionHooks: cronRunReceiptPersistHooks({
             state,
             handle: prepared.runReceipt,
@@ -340,7 +318,35 @@ async function finishPreparedManualRun(
               error: coreResult.error,
             },
           }),
+          mutate: ({ jobs }) => {
+            const current = jobs.get(jobId);
+            if (!current) {
+              return { value: undefined };
+            }
+            if (postRunRemoved) {
+              return { deleteJobIds: [jobId], value: undefined };
+            }
+            if (!postRunSnapshot) {
+              return { value: undefined };
+            }
+            current.enabled = postRunSnapshot.enabled;
+            current.updatedAtMs = postRunSnapshot.updatedAtMs;
+            current.state = postRunSnapshot.state;
+            return { upsertJobIds: [jobId], value: current };
+          },
         });
+        runPostPersistCronNotifications(state, postPersistNotifications);
+        applyCronRuntimeRowsToState(
+          state,
+          committedJob ? [committedJob] : [],
+          postRunRemoved ? [jobId] : [],
+        );
+        const maintenance = recomputeUnownedCronSchedules(state, {
+          recomputeExpired: true,
+          ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
+        });
+        runPostPersistCronNotifications(state, maintenance.notifications);
+        applyCronRuntimeRowsToState(state, maintenance.jobs);
       } catch (error) {
         if (error instanceof CronRunReceiptRevisionError) {
           supersedeReason = error.message;
@@ -350,7 +356,6 @@ async function finishPreparedManualRun(
         throw error;
       }
       if (removedJob) {
-        pruneCronJobScratchAfterCommit(state, [removedJob.id]);
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }
       finalized = true;

@@ -7,11 +7,7 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type { CronJob } from "../types.js";
-import {
-  hasScheduledNextRunAtMs,
-  nextWakeAtMs,
-  recomputeNextRunsForMaintenance,
-} from "./jobs-scheduling.js";
+import { hasScheduledNextRunAtMs, nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   cleanupQueuedCronRunReservations,
@@ -21,8 +17,10 @@ import {
   reserveQueuedCronRun,
   resolveRunConcurrency,
 } from "./run-admission.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import type { CronServiceState } from "./state.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   MAX_CRON_TIMER_DELAY_MS,
@@ -198,23 +196,19 @@ async function onAdmittedTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const rollbackSnapshot = snapshotStoreForRollback(state);
-        const postPersistNotifications: DeferredCronNotifications = [];
-        const changed = recomputeNextRunsForMaintenance(state, {
+        const maintenance = recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
-          deferredNotifications: postPersistNotifications,
         });
-        if (changed) {
-          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
-        }
+        runPostPersistCronNotifications(state, maintenance.notifications);
+        applyCronRuntimeRowsToState(state, maintenance.jobs);
         return [];
       }
 
       const now = state.deps.nowMs();
       const reservedJobs = await persistQueuedCronRunReservations({
         state,
-        jobIds: due.map((job) => job.id),
+        candidates: due,
         reservedAtMs: now,
       });
       const reservedDue = reservedJobs.map((job) => ({
@@ -273,10 +267,28 @@ async function onAdmittedTimer(state: CronServiceState) {
                 stopAdmittingDueJobs = true;
               },
               onActivated: () => claimedIndexes.add(index),
-              onNotRunnable: async (job) => {
-                const rollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.queuedAtMs;
-                await persistOrRestore(state, rollbackSnapshot);
+              onNotRunnable: async () => {
+                const committedJob = commitCronRuntimeRows({
+                  state,
+                  jobIds: [due.id],
+                  operationLabel: "cron.skipped-reservation-cleanup",
+                  mutate: ({ jobs }) => {
+                    const current = jobs.get(due.id);
+                    const ownership = state.queuedRunReservationsByJobId.get(due.id);
+                    if (
+                      !current ||
+                      ownership?.identity !== due.reservationIdentity ||
+                      ownership.markerAtMs !== current.state.queuedAtMs
+                    ) {
+                      return { value: undefined };
+                    }
+                    delete current.state.queuedAtMs;
+                    return { upsertJobIds: [current.id], value: current };
+                  },
+                });
+                if (committedJob) {
+                  applyCronRuntimeRowsToState(state, [committedJob]);
+                }
                 releaseQueuedCronRun(state, due.id, due.reservationIdentity);
               },
               onSetupError: (job, errorText) => {

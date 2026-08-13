@@ -8,7 +8,7 @@ import {
   resumeForeignReceiptMonitor,
   stopForeignReceiptMonitor,
 } from "./foreign-receipt-monitor.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
@@ -19,9 +19,10 @@ import {
   type CronRunRecoveryProposal,
   type CronRunRecoveryResult,
 } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import { STARTUP_INTERRUPTED_ERROR, type InterruptedStartupRun } from "./startup-run-repair.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist, runPostPersistCronNotifications } from "./store.js";
+import type { CronServiceState } from "./state.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
 function emitInterruptedRun(state: CronServiceState, interrupted: InterruptedStartupRun): void {
@@ -168,7 +169,7 @@ export async function start(state: CronServiceState): Promise<void> {
       const maintenance = recomputeUnownedCronSchedules(state);
       runPostPersistCronNotifications(state, maintenance.notifications);
       if (maintenance.changed) {
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        applyCronRuntimeRowsToState(state, maintenance.jobs);
       }
     }
   });
@@ -187,15 +188,9 @@ export async function start(state: CronServiceState): Promise<void> {
       return;
     }
     if (listForeignReceipts(state).length === 0) {
-      const postPersistNotifications: DeferredCronNotifications = [];
-      if (
-        recomputeNextRunsForMaintenance(state, {
-          recomputeExpired: true,
-          deferredNotifications: postPersistNotifications,
-        })
-      ) {
-        await persist(state, { postPersistNotifications });
-      }
+      const maintenance = recomputeUnownedCronSchedules(state, { recomputeExpired: true });
+      runPostPersistCronNotifications(state, maintenance.notifications);
+      applyCronRuntimeRowsToState(state, maintenance.jobs);
     }
     for (const interrupted of interruptedRuns) {
       emitInterruptedRun(state, interrupted);
