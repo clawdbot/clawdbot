@@ -12,6 +12,7 @@ import {
 } from "../snapshot/recovery-journal.js";
 import {
   RESTORED_ADMISSION_DESCRIPTOR_VERSION,
+  RESTORED_RECOVERY_POINT_REQUEST_VERSION,
   RESTORED_RECOVERY_POINT_RESULT_VERSION,
   type RestoredRecoveryPointResult,
 } from "../snapshot/restored-recovery-point.js";
@@ -195,6 +196,27 @@ async function createFixture() {
     ...resultWithoutReceipt,
     restoreReceiptIdentity: sha256Hex(stableStringify(resultWithoutReceipt)),
   };
+  await writeRecoveryJournalRecord(descriptorPath, "intent", {
+    version: RESTORED_RECOVERY_POINT_REQUEST_VERSION,
+    runtimeLineage: result.runtimeLineage,
+    lifecycleOwnerGeneration: result.lifecycleOwnerGeneration,
+    destinationRuntimeGeneration: result.destinationRuntimeGeneration,
+    restoreOperationId: result.restoreOperationId,
+    destinationOwner: result.destinationOwner,
+    admissionIdentity: result.admissionIdentity,
+    recoveryPointPath: path.join(tempDir, "recovery-point"),
+    recoveryPointId: result.recoveryPointId,
+    acceptanceSetId: result.acceptanceSetId,
+    ownerInventory: {
+      version: "openclaw-runtime-sqlite-inventory/v1",
+      owner: "openclaw-state",
+      sourceRuntimeGeneration: "source-generation-7",
+      revision: "revision-1",
+      agentIds: ["main"],
+    },
+    journalRoot: journalDirectory,
+  });
+  await writeRecoveryJournalRecord(descriptorPath, "result", result);
   await writeRecoveryJournalRecord(descriptorPath, "startup", {
     version: RESTORED_ADMISSION_DESCRIPTOR_VERSION,
     journalPath: descriptorPath,

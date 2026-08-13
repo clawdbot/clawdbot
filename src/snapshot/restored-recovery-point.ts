@@ -20,12 +20,22 @@ import {
   writeRecoveryJournalRecord,
 } from "./recovery-journal.js";
 import {
-  recoveryPointOwnerInventorySchema,
   verifyRecoveryPoint,
   verifyRecoveryPointOwnerInventory,
   type RecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
+
+const recoveryPointOwnerInventoryInputSchema = z.custom<
+  ReturnType<typeof verifyRecoveryPointOwnerInventory>
+>((value) => {
+  try {
+    verifyRecoveryPointOwnerInventory(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "owner inventory is invalid");
 
 export const RESTORED_RECOVERY_POINT_REQUEST_VERSION =
   "openclaw-restored-recovery-point-request/v1";
@@ -49,7 +59,7 @@ const requestSchema = z
     recoveryPointPath: z.string().min(1),
     recoveryPointId: z.string().regex(SHA256_PATTERN),
     acceptanceSetId: z.string().regex(SHA256_PATTERN),
-    ownerInventory: recoveryPointOwnerInventorySchema,
+    ownerInventory: recoveryPointOwnerInventoryInputSchema,
     journalRoot: z.string().min(1),
   })
   .strict();
@@ -176,7 +186,9 @@ export async function loadRestoredAdmissionDescriptor(
   if (descriptor.result.startupDescriptorPath !== descriptorPath) {
     throw conflict("Restored-admission descriptor does not identify its loaded path.");
   }
-  const committedIntent = requestSchema.safeParse(await readJournalRecord(descriptorPath, "intent"));
+  const committedIntent = requestSchema.safeParse(
+    await readJournalRecord(descriptorPath, "intent"),
+  );
   if (!committedIntent.success) {
     throw conflict("Restored-admission committed intent is invalid.");
   }

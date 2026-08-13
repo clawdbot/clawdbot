@@ -51,7 +51,6 @@ import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
-  GatewayRequestContext,
   GatewayRequestHandlers,
   GatewayRequestOptions,
   SessionMutationAuthorization,
@@ -522,7 +521,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }),
     );
   }
-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method, options.context)) {
     const restartDraining = isGatewayRestartDraining();
     return await options.reject(
       errorShape(

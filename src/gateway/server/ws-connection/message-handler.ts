@@ -357,7 +357,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authRateLimiter,
           clientLabel,
           clientMeta,
-          allowStartupPendingConnect: isRestoredAdmissionOperatorConnect(data),
+          allowStartupPendingConnect: isPreparedControlConnect(data),
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
