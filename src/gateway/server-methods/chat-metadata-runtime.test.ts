@@ -9,6 +9,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
@@ -518,6 +519,39 @@ describe("gateway chat metadata runtime", () => {
       models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
     });
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("publishes replace catalog mode through chat metadata", async () => {
+    const config = {
+      agents: {
+        defaults: { models: { "vllm/*": {} } },
+        list: [{ id: "main", default: true }],
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [{ id: "llama-configured", name: "Llama Configured" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(config, config);
+    try {
+      const harness = createHarness(config, { useDefaultProjection: true });
+      harness.setOwner(createOwner(config, "llama-configured", {}, "vllm", "openai-completions"));
+
+      await harness.runtime.refresh();
+
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        catalogMode: "replace",
+        models: [expect.objectContaining({ id: "llama-configured", provider: "vllm" })],
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   test("retains a generation while auth store revisions are unchanged", async () => {

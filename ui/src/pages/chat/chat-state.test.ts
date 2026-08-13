@@ -1588,6 +1588,27 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps replace-mode catalog state through a manual metadata refresh", async () => {
+    const metadata = {
+      commands: [],
+      catalogMode: "replace" as const,
+      models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+    };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      expect(method).toBe("chat.metadata");
+      expect(params).toEqual({ agentId: "work" });
+      return metadata;
+    });
+    const state = createMetadataState(request);
+
+    await refreshChatMetadata(state);
+    invalidateChatMetadataCache(state);
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalogMode).toBe("replace");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       commands: [],
