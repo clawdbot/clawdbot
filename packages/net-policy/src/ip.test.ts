@@ -15,6 +15,7 @@ import {
   isLinkLocalIpAddress,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   isRfc1918Ipv4Address,
   normalizeIpAddress,
   parseCanonicalIpAddress,
@@ -74,6 +75,13 @@ describe("shared ip helpers", () => {
       }
       expect(extractEmbeddedIpv4FromIpv6(parsed), ipv6Literal).toBeUndefined();
     }
+  });
+
+  it("detects RFC8215 local-use NAT64 literals", () => {
+    expect(isRfc8215LocalUseNat64Ipv6Address("64:ff9b:1::8.8.8.8")).toBe(true);
+    expect(isRfc8215LocalUseNat64Ipv6Address("[64:ff9b:1:808:808:808:a9fe:a9fe]")).toBe(true);
+    expect(isRfc8215LocalUseNat64Ipv6Address("64:ff9b::8.8.8.8")).toBe(false);
+    expect(isRfc8215LocalUseNat64Ipv6Address("model.lan")).toBe(false);
   });
 
   it("treats blocked IPv6 classes as private/internal", () => {

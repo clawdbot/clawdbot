@@ -248,6 +248,12 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   return embeddedIpv4 ? PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(embeddedIpv4.range()) : false;
 }
 
+/** True for RFC 8215 local-use NAT64 IPv6 literals (`64:ff9b:1::/48`). */
+export function isRfc8215LocalUseNat64Ipv6Address(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  return Boolean(parsed && isIpv6Address(parsed) && isRfc8215Nat64LocalUseAddress(parsed));
+}
+
 /** Applies the SSRF block policy for parsed IPv6 special-use ranges. */
 export function isBlockedSpecialUseIpv6Address(
   address: ipaddr.IPv6,
@@ -256,7 +262,7 @@ export function isBlockedSpecialUseIpv6Address(
   // ipaddr.js returns "discard" at runtime for 100::/64, but its published
   // TypeScript IPv6Range union omits that literal.
   const range = address.range() as BlockedIpv6Range;
-  if (isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts))) {
+  if (isRfc8215Nat64LocalUseAddress(address)) {
     // RFC8215 local-use NAT64 can carry deployment-specific more-specific
     // prefixes, so the literal alone cannot prove which IPv4 bits a router
     // will use. Block the allocation instead of guessing a public decoy.
@@ -312,6 +318,10 @@ function isRfc8215Nat64LocalUsePrefix(parts: Ipv6Hextets): boolean {
   return parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001;
 }
 
+function isRfc8215Nat64LocalUseAddress(address: ipaddr.IPv6): boolean {
+  return isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts));
+}
+
 /** Extracts the embedded IPv4 address from mapped and transition IPv6 prefixes. */
 export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
   const parts = expectIpv6Hextets(address.parts);
@@ -321,7 +331,7 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
     case "rfc6145":
       return decodeIpv4FromHextets(parts[6], parts[7]);
     case "rfc6052":
-      if (isRfc8215Nat64LocalUsePrefix(parts)) {
+      if (isRfc8215Nat64LocalUseAddress(address)) {
         // No single embedded IPv4 exists without the deployment's active NAT64
         // prefix length. Policy blocks this allocation in the IPv6 check above.
         return undefined;
