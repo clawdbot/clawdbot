@@ -363,17 +363,16 @@ suite.define(() => {
         .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
-      const [endcapBounds, openPullRequestBounds, spinnerBounds, unreadBounds] = await Promise.all([
+      await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      const [endcapBounds, openPullRequestBounds, spinnerBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__details-endcap").boundingBox(),
         state.locator("[data-session-pr-state='open'] svg").boundingBox(),
         state.locator(".session-run-spinner").boundingBox(),
-        state.locator(".session-unread-dot").boundingBox(),
       ]);
-      if (!endcapBounds || !openPullRequestBounds || !spinnerBounds || !unreadBounds) {
-        throw new Error("Expected visible combined session state geometry");
+      if (!endcapBounds || !openPullRequestBounds || !spinnerBounds) {
+        throw new Error("Expected visible session state geometry");
       }
-      for (const iconBounds of [openPullRequestBounds, spinnerBounds, unreadBounds]) {
+      for (const iconBounds of [openPullRequestBounds, spinnerBounds]) {
         expect(iconBounds.x).toBeGreaterThanOrEqual(endcapBounds.x);
         expect(iconBounds.x + iconBounds.width).toBeLessThanOrEqual(
           endcapBounds.x + endcapBounds.width,
