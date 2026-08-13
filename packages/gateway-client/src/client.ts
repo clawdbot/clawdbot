@@ -36,6 +36,11 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import {
+  DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
+  validateGatewayRequestFrame,
+  resolveGatewayMaxPayloadBytes,
+} from "./payload-limits.js";
+import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
@@ -318,11 +323,6 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
-const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
-// The Gateway receiver accepts only 64 KiB before authentication; mirror the
-// server-side MAX_PREAUTH_PAYLOAD_BYTES contract for pre-auth connect frames.
-const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
-
 function resolveLegacyNodePlatform(platform: string): string | undefined {
   switch (platform) {
     case "macos":
@@ -392,17 +392,8 @@ export class GatewayClient {
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
-      validateRequestFrame: (frame, method) => {
-        const frameBytes = Buffer.byteLength(frame, "utf8");
-        const isConnect = method === "connect";
-        const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : this.maxPayloadBytes;
-        if (frameBytes > limit) {
-          throw new RangeError(
-            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
-              `(${frameBytes} > ${limit} bytes)`,
-          );
-        }
-      },
+      validateRequestFrame: (frame, method) =>
+        validateGatewayRequestFrame(frame, method, this.maxPayloadBytes),
       buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -950,7 +941,7 @@ export class GatewayClient {
   }
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
-    this.maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
+    this.maxPayloadBytes = resolveGatewayMaxPayloadBytes();
     const reconnectWithCurrentNodeProtocol =
       this.useLegacyNodeProtocolEnvelope &&
       this.shouldNegotiateLegacyNodeProtocol() &&
@@ -997,14 +988,7 @@ export class GatewayClient {
     }
     // The Gateway installs this advertised limit on its WebSocket receiver after auth,
     // so it bounds serialized client-to-Gateway request frames.
-    const advertisedMaxPayload = helloOk.policy?.maxPayload;
-    if (
-      typeof advertisedMaxPayload === "number" &&
-      Number.isFinite(advertisedMaxPayload) &&
-      advertisedMaxPayload > 0
-    ) {
-      this.maxPayloadBytes = advertisedMaxPayload;
-    }
+    this.maxPayloadBytes = resolveGatewayMaxPayloadBytes(helloOk.policy);
     this.lastTick = Date.now();
     this.startTickWatch();
     void assembled;

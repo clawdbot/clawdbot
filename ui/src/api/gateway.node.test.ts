@@ -936,6 +936,38 @@ describe("GatewayBrowserClient", () => {
     await expect(request).resolves.toEqual({ sessions: [] });
   });
 
+  it("keeps the default payload limit for a fractional policy", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload: 0.5 },
+      },
+    });
+    await vi.waitFor(() => expect(client.connected).toBe(true));
+    ws.sent.length = 0;
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.list");
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+    await expect(request).resolves.toEqual({ sessions: [] });
+  });
+
   it("resets the negotiated payload limit when reconnecting to a policyless Gateway", async () => {
     useNodeFakeTimers();
     const client = new GatewayBrowserClient({

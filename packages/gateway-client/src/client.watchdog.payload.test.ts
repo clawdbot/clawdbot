@@ -127,6 +127,34 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
+  test("keeps the default request payload limit for a fractional policy", async () => {
+    const { client, send } = createOpenGatewayClient(25);
+    const harness = payloadHarness(client);
+    harness.handleConnectHello(
+      {
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload: 0.5, maxBufferedBytes: 256, tickIntervalMs: 30_000 },
+      },
+      {},
+    );
+
+    const request = client.request<{ status: string }>("node.invoke", {
+      jsonl: "x".repeat(128),
+    });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+    handleGatewayMessage(client, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { status: "ok" },
+    });
+
+    await expect(request).resolves.toEqual({ status: "ok" });
+    expect(harness.maxPayloadBytes).toBe(25 * 1024 * 1024);
+    expect(send).toHaveBeenCalledTimes(1);
+    client.stop();
+  });
+
   test("resets the request payload limit when reconnecting to a policyless Gateway", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const harness = payloadHarness(client);

@@ -3,35 +3,11 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
-
-export const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
-const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
-
-export function validateGatewayRequestFrame(
-  frame: string,
-  method: string,
-  maxPayloadBytes: number,
-): void {
-  const frameBytes = new TextEncoder().encode(frame).byteLength;
-  const isConnect = method === "connect";
-  const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : maxPayloadBytes;
-  if (frameBytes > limit) {
-    throw new RangeError(
-      `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
-        `(${frameBytes} > ${limit} bytes)`,
-    );
-  }
-}
-
-export function resolveGatewayMaxPayloadBytes(
-  policy: { maxPayload?: unknown } | null | undefined,
-): number {
-  return typeof policy?.maxPayload === "number" &&
-    Number.isFinite(policy.maxPayload) &&
-    policy.maxPayload > 0
-    ? policy.maxPayload
-    : DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
-}
+export {
+  DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
+  resolveGatewayMaxPayloadBytes,
+  validateGatewayRequestFrame,
+} from "@openclaw/gateway-client/browser";
 
 export function createBrowserGatewaySocket(
   url: string,
