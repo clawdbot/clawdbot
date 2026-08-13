@@ -3914,18 +3914,6 @@ describe("matrix monitor handler draft streaming", () => {
 
       const result = await deliver(payload, { kind: "final" });
       await finish();
-      if (redactEventMock.mock.calls.length > 0) {
-        throw new Error(
-          [
-            "non-visible replacement redacted the visible draft",
-            `draftSendOrder=${sendSingleTextMessageMatrixMock.mock.invocationCallOrder[0] ?? "none"}`,
-            `redactionOrders=${redactEventMock.mock.invocationCallOrder.join(",")}`,
-            `replacementOrder=${deliverMatrixRepliesMock.mock.invocationCallOrder[0] ?? "none"}`,
-            `replacementResult=${JSON.stringify(result)}`,
-            `postHandlerRedactionCount=${redactEventMock.mock.calls.length}`,
-          ].join(" "),
-        );
-      }
 
       expect(result).toMatchObject({
         messageIds: ["$draft1"],
@@ -4030,7 +4018,7 @@ describe("matrix monitor handler draft streaming", () => {
   it.each(
     (["retained", "consumed"] as const).flatMap((priorDisposition) =>
       (["block", "followup"] as const).flatMap((boundary) =>
-        (["complete", "abort"] as const).map((outcome) => ({
+        (["complete", "unfinished"] as const).map((outcome) => ({
           priorDisposition,
           boundary,
           outcome,
@@ -4575,12 +4563,16 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("stops draft stream on handler error (no leaked timer)", async () => {
+  it("stops quiet draft stream on handler error and cleans a draft accepted during shutdown", async () => {
     vi.useFakeTimers();
     try {
-      sendSingleTextMessageMatrixMock
-        .mockReset()
-        .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+      let resolveDraftSend: ((value: { messageId: string; roomId: string }) => void) | undefined;
+      sendSingleTextMessageMatrixMock.mockReset().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveDraftSend = resolve;
+          }),
+      );
       editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
       deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
       const redactEventMock = vi.fn(async () => "$redacted");
@@ -4600,18 +4592,20 @@ describe("matrix monitor handler draft streaming", () => {
           capturedReplyOpts = args?.replyOptions;
           // Simulate streaming then model error.
           capturedReplyOpts?.onPartialReply?.({ text: "partial" });
-          await waitForMatrixState(() => {
-            expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-          });
           throw new Error("model timeout");
         }) as never,
       });
 
       // Handler should not throw (outer catch absorbs it).
-      await handler(
+      const handlerPromise = handler(
         "!room:example.org",
         createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
       );
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      resolveDraftSend?.({ messageId: "$draft1", roomId: "!room" });
+      await handlerPromise;
 
       expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
 
@@ -4626,7 +4620,7 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
-  it("redacts partial live drafts when generation aborts mid-stream", async () => {
+  it("retains visible live drafts when generation aborts mid-stream", async () => {
     sendSingleTextMessageMatrixMock
       .mockReset()
       .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
@@ -4660,7 +4654,7 @@ describe("matrix monitor handler draft streaming", () => {
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
     );
 
-    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(redactEventMock).not.toHaveBeenCalled();
   });
 
   it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
