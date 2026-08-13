@@ -176,8 +176,6 @@ export type RealtimeVoiceProviderCapabilities = {
   supportsActivationNameGating?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
-  /** Provider runs the bound OpenClaw agent directly instead of delegating through consult tools. */
-  handlesAgentTurns?: boolean;
 };
 
 export type RealtimeVoiceProviderResolveConfigContext = {

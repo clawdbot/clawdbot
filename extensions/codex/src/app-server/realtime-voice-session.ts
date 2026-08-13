@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   RealtimeWebRtcAudioPeer,
   type RealtimeVoiceBridge,
@@ -28,38 +29,6 @@ type CodexRealtimeInitialItem = {
   role: "developer" | RealtimeVoiceRole;
   text: string;
 };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  settled: boolean;
-  resolve(value: T): void;
-  reject(error: unknown): void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  let resolvePromise!: (value: T) => void;
-  let rejectPromise!: (error: unknown) => void;
-  const deferred: Deferred<T> = {
-    promise: new Promise<T>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    }),
-    settled: false,
-    resolve(value) {
-      if (!deferred.settled) {
-        deferred.settled = true;
-        resolvePromise(value);
-      }
-    },
-    reject(error) {
-      if (!deferred.settled) {
-        deferred.settled = true;
-        rejectPromise(error);
-      }
-    },
-  };
-  return deferred;
-}
 
 function readRealtimeRole(value: string | undefined): RealtimeVoiceRole | undefined {
   return value === "user" || value === "assistant" ? value : undefined;
@@ -94,7 +63,8 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private stopPromise?: Promise<void>;
   private failureTask?: Promise<void>;
   private failure?: Error;
-  private answerApplied?: Deferred<void>;
+  private answerApplied?: ReturnType<typeof createDeferred<void>>;
+  private answerAppliedSettled = false;
   private audioPeer?: RealtimeWebRtcAudioPeerContract;
   private transportGeneration = 0;
   private responseTerminalEmitted = false;
@@ -147,6 +117,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.audioPeer = peer;
       const sdp = await peer.createOffer();
       this.answerApplied = createDeferred<void>();
+      this.answerAppliedSettled = false;
       const instructions = this.request.instructions?.trim();
       const model = normalizeOptionalString(this.request.providerConfig.model);
       const voice = normalizeOptionalString(this.request.providerConfig.voice);
@@ -372,6 +343,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resetTransport(): void {
     this.retirePeer();
     this.answerApplied = undefined;
+    this.answerAppliedSettled = false;
     this.responseTerminalEmitted = false;
     this.startRequested = false;
     this.stopPromise = undefined;
@@ -425,13 +397,15 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private async applyAnswer(sdp: string): Promise<void> {
     const answerApplied = this.answerApplied;
     const peer = this.audioPeer;
-    if (!answerApplied || !peer || answerApplied.settled) {
+    if (!answerApplied || !peer || this.answerAppliedSettled) {
       return;
     }
     try {
       await peer.applyAnswer(sdp);
+      this.answerAppliedSettled = true;
       answerApplied.resolve();
     } catch (error) {
+      this.answerAppliedSettled = true;
       answerApplied.reject(error);
       void this.fail(error);
     }
@@ -489,6 +463,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.terminal = true;
     this.connected = false;
     this.pendingAudio.clear();
+    this.answerAppliedSettled = true;
     this.answerApplied?.reject(new Error("Codex realtime session closed during startup"));
     this.retirePeer();
     try {

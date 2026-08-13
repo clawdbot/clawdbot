@@ -231,10 +231,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
     this.realtimeProviderId = resolved.provider.id;
-    const providerHandlesAgentTurns = resolved.provider.capabilities?.handlesAgentTurns === true;
-    this.harness.talk.context.brain = providerHandlesAgentTurns
-      ? (resolved.provider.capabilities?.brains?.[0] ?? "agent-consult")
-      : "agent-consult";
+    const providerBrain = resolved.provider.capabilities?.brains?.[0] ?? "agent-consult";
+    const providerHandlesAgentTurns = providerBrain === "codex-realtime";
+    this.harness.talk.context.brain = providerBrain;
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const sessionPolicy = resolveRealtimeVoiceSessionPolicy({
       isAgentProxy,

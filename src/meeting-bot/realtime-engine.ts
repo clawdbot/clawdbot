@@ -26,7 +26,6 @@ import {
   meetingOutputBytesPerMs,
   prepareMeetingRealtimeAgentSession as prepareAgentSession,
   resolveMeetingRealtimeProvider,
-  resolveMeetingRealtimeTalkBrain,
 } from "./realtime-engine-support.js";
 import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
@@ -392,7 +391,10 @@ export async function startMeetingRealtimeEngine(params: {
     providers: params.providers,
   });
   const strategy = params.config.realtime.strategy;
-  const providerHandlesAgentTurns = resolved.provider.capabilities?.handlesAgentTurns === true;
+  const providerBrain =
+    resolved.provider.capabilities?.brains?.[0] ??
+    (strategy === "bidi" ? "direct-tools" : "agent-consult");
+  const providerHandlesAgentTurns = providerBrain === "codex-realtime";
   const agentSession = await prepareAgentSession(params, providerHandlesAgentTurns);
   params.logger.info(
     formatMeetingRealtimeVoiceModelLog({
@@ -419,7 +421,7 @@ export async function startMeetingRealtimeEngine(params: {
         `${params.platform.sessionIdPrefix}:${params.meetingSessionId}:command-realtime`,
       mode: "realtime",
       transport: "gateway-relay",
-      brain: resolveMeetingRealtimeTalkBrain(resolved.provider, strategy),
+      brain: providerBrain,
       provider: resolved.provider.id,
     },
     talkPayloads: {

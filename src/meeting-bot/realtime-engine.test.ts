@@ -20,7 +20,7 @@ type PendingWrite = {
 
 async function createEngineFixture(options?: {
   handleToolCall?: (params: MeetingRealtimeToolCallParams) => Promise<void>;
-  handlesAgentTurns?: boolean;
+  codexRealtime?: boolean;
   strategy?: "agent" | "bidi";
 }) {
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -40,11 +40,8 @@ async function createEngineFixture(options?: {
   const provider: RealtimeVoiceProviderPlugin = {
     id: "test",
     label: "Test",
-    capabilities: options?.handlesAgentTurns
-      ? ({
-          brains: ["codex-realtime"],
-          handlesAgentTurns: true,
-        } as RealtimeVoiceProviderPlugin["capabilities"])
+    capabilities: options?.codexRealtime
+      ? ({ brains: ["codex-realtime"] } as RealtimeVoiceProviderPlugin["capabilities"])
       : undefined,
     isConfigured: () => true,
     createBridge: (request) => {
@@ -219,7 +216,7 @@ describe("meeting realtime engine output ownership", () => {
   });
 
   it("forwards existing meeting scope and enables native audio turns for native-agent providers", async () => {
-    const fixture = await createEngineFixture({ handlesAgentTurns: true, strategy: "agent" });
+    const fixture = await createEngineFixture({ codexRealtime: true, strategy: "agent" });
     try {
       expect(ensureRealtimeVoiceAgentSessionEntry).toHaveBeenCalledWith(
         expect.objectContaining({

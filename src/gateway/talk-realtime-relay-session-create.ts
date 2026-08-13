@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -127,7 +126,7 @@ export function createTalkRealtimeRelaySession(
   const relayAgentId = relaySessionKey
     ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
     : undefined;
-  const providerHandlesAgentTurns = params.provider.capabilities?.handlesAgentTurns === true;
+  const providerHandlesAgentTurns = params.brain === "codex-realtime";
   const consultRunner =
     relaySessionKey && !providerHandlesAgentTurns
       ? createTalkClientAgentConsultRunner({
@@ -523,15 +522,10 @@ export function createTalkRealtimeRelaySession(
           final: true,
         });
       }
-      try {
-        emit(
-          { relaySessionId, type: "close", reason },
-          { type: "session.closed", payload: { reason }, final: true },
-        );
-      } finally {
-        active.releaseGatewayRootContinuation?.();
-        active.releaseGatewayRootContinuation = undefined;
-      }
+      emit(
+        { relaySessionId, type: "close", reason },
+        { type: "session.closed", payload: { reason }, final: true },
+      );
     },
   });
   bridgeRef.current = bridge;
@@ -614,7 +608,6 @@ export function createTalkRealtimeRelaySession(
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
     failSession,
     pendingVoiceTranscripts: [],
-    releaseGatewayRootContinuation: undefined,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -622,7 +615,6 @@ export function createTalkRealtimeRelaySession(
   registerTalkConnectionCleanup(params.connId, "realtime-relay", () => {
     closeTalkRealtimeRelaySessionsForConnection(params.connId);
   });
-  relay.releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   bridge.connect().catch((error: unknown) => {
     const active = relaySessions.get(relaySessionId);
     if (active !== relay) {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { parseModelRef, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   convertPcmToMulaw8k,
@@ -155,12 +156,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.enableAudio();
       return;
     }
-    let resolveBridge!: (bridge: RealtimeVoiceBridge) => void;
-    let rejectBridge!: (error: Error) => void;
-    const bridgeReady = new Promise<RealtimeVoiceBridge>((resolve, reject) => {
-      resolveBridge = resolve;
-      rejectBridge = reject;
-    });
+    const bridgeReady = createDeferred<RealtimeVoiceBridge>();
     let bridgePublished = false;
     this.run = runBoundCodexRealtimeSession({
       runtime: this.runtime,
@@ -168,7 +164,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
       abortSignal: this.abortController.signal,
       onBridgeReady: (bridge) => {
         bridgePublished = true;
-        resolveBridge(bridge);
+        bridgeReady.resolve(bridge);
       },
     })
       .then((result) => {
@@ -181,7 +177,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const normalized = error instanceof Error ? error : new Error(formatErrorMessage(error));
         this.acceptsAudio = false;
         this.pendingAudio.clear();
-        rejectBridge(normalized);
+        bridgeReady.reject(normalized);
         if (!this.closed && !this.inner) {
           this.request.onError?.(normalized);
           this.request.onClose?.("error");
@@ -189,7 +185,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
         throw normalized;
       });
     void this.run.catch(() => undefined);
-    this.inner = await bridgeReady;
+    this.inner = await bridgeReady.promise;
     if (this.closed) {
       this.inner.close();
       return;
@@ -308,7 +304,6 @@ export function buildCodexRealtimeVoiceProvider(options: {
       ],
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
-      handlesAgentTurns: true,
     },
     resolveConfig: ({ rawConfig }) => resolveCodexRealtimeConfig(rawConfig),
     isConfigured: () => true,

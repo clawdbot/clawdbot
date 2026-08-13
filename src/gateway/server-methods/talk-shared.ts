@@ -15,14 +15,8 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-} from "../../talk/agent-consult-tool.js";
-import {
-  REALTIME_VOICE_AGENT_CONTROL_TOOL,
-  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
-} from "../../talk/agent-run-control-shared.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
@@ -404,48 +398,6 @@ export function buildRealtimeInstructions(configuredInstructions?: string): stri
   // Keep the tool-use contract first, then append operator customization so
   // provider sessions preserve the same control-tool behavior.
   return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
-}
-
-export function resolveTalkRealtimeRelayBrainPolicy(params: {
-  brain: TalkBrain;
-  transport: TalkTransport;
-  requestedProvider?: string;
-}) {
-  if (
-    params.transport !== "gateway-relay" ||
-    (params.brain !== "agent-consult" && params.brain !== "codex-realtime")
-  ) {
-    return {
-      ok: false,
-      error:
-        'realtime talk.session.create requires transport="gateway-relay" and brain="agent-consult" or "codex-realtime"',
-    } as const;
-  }
-  const requestedProvider = normalizeOptionalLowercaseString(params.requestedProvider);
-  if (params.brain === "codex-realtime" && requestedProvider && requestedProvider !== "codex") {
-    return {
-      ok: false,
-      error: 'brain="codex-realtime" requires provider="codex" or unset',
-    } as const;
-  }
-  if (params.brain !== "codex-realtime" && requestedProvider === "codex") {
-    return {
-      ok: false,
-      error: 'provider="codex" requires brain="codex-realtime"',
-    } as const;
-  }
-  const nativeAgentTurns = params.brain === "codex-realtime";
-  return {
-    ok: true,
-    configuredProviderId: nativeAgentTurns ? "codex" : undefined,
-    instructions: nativeAgentTurns
-      ? (value: string) => value
-      : (value: string) => buildRealtimeInstructions(value),
-    tools: nativeAgentTurns
-      ? []
-      : [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
-    allowForcedConsult: !nativeAgentTurns,
-  } as const;
 }
 
 type RealtimeVoiceLaunchOptions = {

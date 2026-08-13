@@ -101,24 +101,19 @@ export function closeRelaySession(session: RelaySession, reason: "completed" | "
   try {
     session.bridge.close();
   } finally {
-    try {
-      // Provider teardown may throw, but the relay must still reach its durable
-      // voice and owner-visible terminal state before that error is surfaced.
-      void closeRelayVoiceSession(session);
-      broadcastToOwner(session.context, session.connId, {
-        relaySessionId: session.id,
-        type: "close",
-        reason,
-        talkEvent: session.harness.talk.emit({
-          type: "session.closed",
-          payload: { reason },
-          final: true,
-        }),
-      });
-    } finally {
-      session.releaseGatewayRootContinuation?.();
-      session.releaseGatewayRootContinuation = undefined;
-    }
+    // Provider teardown may throw, but the relay must still reach its durable
+    // voice and owner-visible terminal state before that error is surfaced.
+    void closeRelayVoiceSession(session);
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "close",
+      reason,
+      talkEvent: session.harness.talk.emit({
+        type: "session.closed",
+        payload: { reason },
+        final: true,
+      }),
+    });
   }
 }
 

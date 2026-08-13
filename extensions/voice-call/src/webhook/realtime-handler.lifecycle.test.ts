@@ -57,7 +57,7 @@ function createBridge(
 
 function createCarrierLifecycleHarness(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
-  options: { handlesAgentTurns?: boolean; initialMessage?: string } = {},
+  options: { codexRealtime?: boolean; initialMessage?: string } = {},
 ) {
   const call: CallRecord = {
     callId: "call-startup",
@@ -67,7 +67,7 @@ function createCarrierLifecycleHarness(
     state: "ringing",
     from: "+15550001111",
     to: "+15550002222",
-    ...(options.handlesAgentTurns
+    ...(options.codexRealtime
       ? { agentId: "calls", sessionKey: "agent:calls:voice:inbound:+15550001111" }
       : {}),
     startedAt: Date.now(),
@@ -87,11 +87,8 @@ function createCarrierLifecycleHarness(
     {
       id: "openai",
       label: "OpenAI",
-      capabilities: options.handlesAgentTurns
-        ? ({
-            brains: ["codex-realtime"],
-            handlesAgentTurns: true,
-          } as RealtimeVoiceProviderPlugin["capabilities"])
+      capabilities: options.codexRealtime
+        ? ({ brains: ["codex-realtime"] } as RealtimeVoiceProviderPlugin["capabilities"])
         : undefined,
       isConfigured: () => true,
       createBridge: createBridgeForCall,
@@ -125,7 +122,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       }),
     );
     const { call, handler } = createCarrierLifecycleHarness(createBridgeForCall, {
-      handlesAgentTurns: true,
+      codexRealtime: true,
       initialMessage: "Hello there",
     });
     const { server, ws } = await connectCarrierStream(handler);

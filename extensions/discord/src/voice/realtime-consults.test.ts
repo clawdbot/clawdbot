@@ -616,7 +616,7 @@ defineDiscordVoiceTests(
 
     it("passes the existing Discord session to providers that handle agent turns", async () => {
       resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
-        provider: { id: "codex", capabilities: { handlesAgentTurns: true } },
+        provider: { id: "codex", capabilities: { brains: ["codex-realtime"] } },
         providerConfig: { version: "v3", voice: "arbor" },
       } as never);
       const { bridgeParams } = await createJoinedAgentProxyFixture({

@@ -15,11 +15,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import {
-  getActiveGatewayRootWorkCount,
-  resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
@@ -209,7 +204,6 @@ describe("talk realtime gateway relay", () => {
     );
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
-    resetGatewayWorkAdmission();
   });
 
   function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
@@ -1520,23 +1514,17 @@ describe("talk realtime gateway relay", () => {
       expectRecordFields(events.find((entry) => entry.payload === payload)?.opts, { dropIfSlow });
     };
 
-    const admission = tryBeginGatewayRootWorkAdmission();
-    expect(admission).toBeDefined();
-    const session = await admission!.run(async () =>
-      createTalkRealtimeRelaySession({
-        context,
-        connId: "conn-1",
-        provider,
-        providerConfig: { model: "provider-model" },
-        instructions: "be brief",
-        tools: [],
-        model: "browser-model",
-        voice: "voice-a",
-        language: "de",
-      }),
-    );
-    admission!.release();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: { model: "provider-model" },
+      instructions: "be brief",
+      tools: [],
+      model: "browser-model",
+      voice: "voice-a",
+      language: "de",
+    });
     await Promise.resolve();
 
     const sessionFields = expectRecordFields(session, {
@@ -1688,7 +1676,6 @@ describe("talk realtime gateway relay", () => {
       reason: "barge-in",
     });
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
@@ -2660,7 +2647,7 @@ describe("talk realtime gateway relay", () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "codex",
       label: "Codex Realtime",
-      capabilities: { handlesAgentTurns: true } as never,
+      capabilities: { brains: ["codex-realtime"] } as never,
       isConfigured: () => true,
       createBridge: (request) => {
         bridgeRequest = request;

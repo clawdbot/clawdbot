@@ -1925,7 +1925,7 @@ describe("talk.session unified handlers", () => {
     const provider = {
       id: "codex",
       label: "Codex Realtime",
-      capabilities: { handlesAgentTurns: true },
+      capabilities: { brains: ["codex-realtime"] },
       isConfigured: () => true,
       createBridge: vi.fn(),
     };

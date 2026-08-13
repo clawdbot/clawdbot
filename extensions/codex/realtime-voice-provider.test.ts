@@ -17,7 +17,6 @@ describe("Codex realtime voice provider", () => {
         rawConfig: { voice: "arbor" },
       }),
     ).toEqual({ version: "v3", voice: "arbor" });
-    expect(provider.capabilities?.handlesAgentTurns).toBe(true);
     expect(provider.capabilities?.brains).toEqual(["codex-realtime"]);
   });
 

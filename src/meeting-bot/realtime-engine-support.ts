@@ -24,7 +24,6 @@ import type {
   RealtimeVoiceResponseOutcome,
 } from "../talk/provider-types.js";
 import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
-import type { TalkBrain } from "../talk/talk-events.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
@@ -135,15 +134,6 @@ export async function prepareMeetingRealtimeAgentSession(
     storePath,
   });
   return { agentId: context.agentId, sessionKey: context.sessionKey, ...authorization };
-}
-
-export function resolveMeetingRealtimeTalkBrain(
-  provider: RealtimeVoiceProviderPlugin,
-  strategy: string,
-): TalkBrain {
-  return (
-    provider.capabilities?.brains?.[0] ?? (strategy === "bidi" ? "direct-tools" : "agent-consult")
-  );
 }
 
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {

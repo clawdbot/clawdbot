@@ -663,14 +663,14 @@ export class RealtimeCallHandler {
       providerInitialGreetingInstructions,
     } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
-    const providerHandlesAgentTurns =
-      this.realtimeProvider.capabilities?.handlesAgentTurns === true;
+    const providerBrain = this.realtimeProvider.capabilities?.brains?.[0] ?? "agent-consult";
+    const providerHandlesAgentTurns = providerBrain === "codex-realtime";
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
         sessionId: `voice-call:${callId}:realtime`,
         mode: "realtime",
         transport: "gateway-relay",
-        brain: this.realtimeProvider.capabilities?.brains?.[0] ?? "agent-consult",
+        brain: providerBrain,
         provider: this.realtimeProvider.id,
       },
       talkPayloads: {
