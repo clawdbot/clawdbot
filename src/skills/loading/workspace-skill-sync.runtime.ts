@@ -35,29 +35,6 @@ import {
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 
-function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
-      return candidate;
-    }
-  }
-}
-
-function resolveCollidingSyncedSkillDirName(baseName: string, identity: string): string {
-  // Colliding basenames get a suffix derived from the skill identity rather than
-  // from iteration order. With order-based suffixes a surviving skill inherits a
-  // departed sibling's directory, so a concurrent run still advertising that
-  // location silently reads the wrong skill's content.
-  const suffix = createHash("sha256").update(identity).digest("hex").slice(0, 8);
-  return `${baseName}-${suffix}`;
-}
-
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
 
 type SyncedSkillsManifest = {
@@ -297,14 +274,17 @@ function resolveSyncedSkillDestinationPath(params: {
   targetSkillsDir: string;
   baseName: string;
   identity: string;
-  collidingBaseNames: ReadonlySet<string>;
-  usedDirNames: Set<string>;
+  claimedBaseNames: ReadonlySet<string>;
 }): string {
-  const dirName = params.collidingBaseNames.has(params.baseName)
-    ? resolveCollidingSyncedSkillDirName(params.baseName, params.identity)
+  // A basename another skill already holds — in this catalog, or in the previous
+  // one whose files are still retained — gets a suffix derived from this skill's
+  // identity. An order-based suffix would let a survivor inherit a departed
+  // sibling's directory and serve its content at a location that run advertised.
+  const dirName = params.claimedBaseNames.has(params.baseName)
+    ? `${params.baseName}-${createHash("sha256").update(params.identity).digest("hex").slice(0, 16)}`
     : params.baseName;
   return resolveSandboxPath({
-    filePath: resolveUniqueSyncedSkillDirName(dirName, params.usedDirNames),
+    filePath: dirName,
     cwd: params.targetSkillsDir,
     root: params.targetSkillsDir,
   }).resolved;
@@ -319,8 +299,6 @@ async function lstatOrUndefined(target: string): Promise<fs.Stats | undefined> {
   try {
     return await fsp.lstat(target);
   } catch {
-    // Any stat failure means "not usable here". Rethrowing would let one bad
-    // child abort the whole sandbox skill sync and leave the run with no skills.
     return undefined;
   }
 }
@@ -334,82 +312,70 @@ function resolveSyncedSkillEntryKind(
   return entry.isDirectory() ? "directory" : "file";
 }
 
-async function reconcileSyncedSkillChild(params: {
+let syncedSkillTempCounter = 0;
+
+async function publishSyncedSkillEntry(params: {
   source: string;
   destination: string;
-  /** Type conflicts block the copy; dropped entries may only go after it succeeds. */
-  mode: "type-conflicts" | "dropped-entries";
+  kind: "symlink" | "file";
+  mode: number;
 }): Promise<void> {
-  let children: fs.Dirent[];
+  // Write beside the advertised path and rename over it. `fs.cp` replaces a file
+  // in place, so a concurrent run resolving this <location> can observe a missing
+  // or truncated read; rename is atomic, so it observes either generation whole.
+  syncedSkillTempCounter += 1;
+  const staged = `${params.destination}.openclaw-staged-${process.pid}-${syncedSkillTempCounter}`;
   try {
-    children = await fsp.readdir(params.destination, { withFileTypes: true });
-  } catch {
-    return;
+    if (params.kind === "symlink") {
+      await fsp.symlink(await fsp.readlink(params.source), staged);
+    } else {
+      await fsp.copyFile(params.source, staged);
+      await fsp.chmod(staged, params.mode);
+    }
+    await fsp.rename(staged, params.destination);
+  } catch (error) {
+    await fsp.rm(staged, { recursive: true, force: true });
+    throw error;
   }
-  for (const child of children) {
-    const sourceChild = path.join(params.source, child.name);
-    const destinationChild = path.join(params.destination, child.name);
-    const sourceStats = shouldCopySyncedSkillSourceEntry(sourceChild)
-      ? await lstatOrUndefined(sourceChild)
-      : undefined;
-    if (!sourceStats) {
-      if (params.mode === "dropped-entries") {
-        await fsp.rm(destinationChild, { recursive: true, force: true });
-      }
+}
+
+async function publishSyncedSkillTree(source: string, destination: string): Promise<void> {
+  const entries = await fsp.readdir(source, { withFileTypes: true });
+  await fsp.mkdir(destination, { recursive: true });
+  const published = new Set<string>();
+  for (const entry of entries) {
+    const sourceEntry = path.join(source, entry.name);
+    if (!shouldCopySyncedSkillSourceEntry(sourceEntry)) {
       continue;
     }
-    if (resolveSyncedSkillEntryKind(sourceStats) !== resolveSyncedSkillEntryKind(child)) {
-      await fsp.rm(destinationChild, { recursive: true, force: true });
-      continue;
+    const destinationEntry = path.join(destination, entry.name);
+    const kind = resolveSyncedSkillEntryKind(entry);
+    const existing = await lstatOrUndefined(destinationEntry);
+    // rename cannot replace across kinds, and a directory never becomes a file
+    // in place. Only the entry about to be rewritten is removed.
+    if (existing && resolveSyncedSkillEntryKind(existing) !== kind) {
+      await fsp.rm(destinationEntry, { recursive: true, force: true });
     }
-    if (child.isDirectory()) {
-      await reconcileSyncedSkillChild({
-        source: sourceChild,
-        destination: destinationChild,
-        mode: params.mode,
+    if (kind === "directory") {
+      await publishSyncedSkillTree(sourceEntry, destinationEntry);
+    } else {
+      const sourceStats = await fsp.lstat(sourceEntry);
+      await publishSyncedSkillEntry({
+        source: sourceEntry,
+        destination: destinationEntry,
+        kind,
+        mode: sourceStats.mode,
       });
     }
+    published.add(entry.name);
   }
-}
-
-async function overlaySyncedSkillChild(source: string, destination: string): Promise<void> {
-  // Overlay onto the live child instead of replacing it: a concurrent run already
-  // advertised these <location> paths, and wiping the child first would leave it
-  // reading a half-built directory for the whole copy.
-  await fsp.cp(source, destination, {
-    recursive: true,
-    force: true,
-    filter: shouldCopySyncedSkillSourceEntry,
-  });
-}
-
-// `fs.cp` only unlinks on its regular-file branch. Verified on Node 24: a source
-// entry that became a directory raises ERR_FS_CP_DIR_TO_NON_DIR, one that became a
-// symlink raises EEXIST, and a destination directory facing a file or symlink
-// raises ERR_FS_CP_NON_DIR_TO_DIR. Only those are worth reconciling and retrying;
-// retrying anything else would mask the real failure.
-const SYNCED_SKILL_TYPE_CONFLICT_CODES = new Set([
-  "EEXIST",
-  "ERR_FS_CP_DIR_TO_NON_DIR",
-  "ERR_FS_CP_NON_DIR_TO_DIR",
-]);
-
-async function syncSyncedSkillChild(source: string, destination: string): Promise<void> {
-  try {
-    await overlaySyncedSkillChild(source, destination);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (!code || !SYNCED_SKILL_TYPE_CONFLICT_CODES.has(code)) {
-      throw error;
+  // Reached only once every entry above landed: deleting before that would let a
+  // vanished source empty a child concurrent runs still advertise.
+  for (const name of await fsp.readdir(destination)) {
+    if (!published.has(name)) {
+      await fsp.rm(path.join(destination, name), { recursive: true, force: true });
     }
-    // Skills ship AGENTS.md with a sibling CLAUDE.md symlink, so this shape is
-    // shipped. Clear just the conflicting entries and retry once.
-    await reconcileSyncedSkillChild({ source, destination, mode: "type-conflicts" });
-    await overlaySyncedSkillChild(source, destination);
   }
-  // Only now: deleting what the source dropped before a copy has succeeded would
-  // let a vanished source empty an already-published child.
-  await reconcileSyncedSkillChild({ source, destination, mode: "dropped-entries" });
 }
 
 /** Child directory each previously published skill occupied, keyed by directory name. */
@@ -597,15 +563,37 @@ export async function syncWorkspaceSkills(params: {
       pluginSkillsDir: params.pluginSkillsDir,
     });
 
-    const candidates: Array<{ baseName?: string; entry: SkillEntry; identity: string }> = [];
+    const publishedDirNames = resolvePublishedSyncedSkillDirNames(
+      targetSkillsDir,
+      manifest?.skillUsagePaths ?? [],
+    );
+    const currentSkillNames = new Set(entries.map((entry) => entry.skill.name));
     const baseNameCounts = new Map<string, number>();
+    for (const entry of entries) {
+      const baseName = resolveSyncedSkillDirBaseName(entry);
+      if (baseName) {
+        baseNameCounts.set(baseName, (baseNameCounts.get(baseName) ?? 0) + 1);
+      }
+    }
+    // Claimed = colliding within this catalog, plus directories the previous
+    // catalog gave to skills this run dropped; those files are retained one more
+    // refresh for in-flight readers, so a different skill must not take the name.
+    const claimedBaseNames = new Set([
+      ...[...baseNameCounts].flatMap(([baseName, count]) => (count > 1 ? [baseName] : [])),
+      ...[...publishedDirNames].flatMap(([dirName, skillName]) =>
+        currentSkillNames.has(skillName) ? [] : [dirName],
+      ),
+    ]);
+
+    const usedDirNames = new Set<string>();
+    const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
       const identity = resolveSyncedSkillIdentity(
         resolveSkillKey(entry.skill, entry),
         entry.skill.name,
       );
       if (entry.skill.filePath.startsWith("node://")) {
-        candidates.push({ entry, identity });
+        plans.push({ entry, identity });
         continue;
       }
       const baseName = resolveSyncedSkillDirBaseName(entry);
@@ -615,45 +603,15 @@ export async function syncWorkspaceSkills(params: {
         );
         continue;
       }
-      baseNameCounts.set(baseName, (baseNameCounts.get(baseName) ?? 0) + 1);
-      candidates.push({ baseName, entry, identity });
-    }
-    const collidingBaseNames = new Set(
-      [...baseNameCounts].flatMap(([baseName, count]) => (count > 1 ? [baseName] : [])),
-    );
-
-    const publishedDirNames = resolvePublishedSyncedSkillDirNames(
-      targetSkillsDir,
-      manifest?.skillUsagePaths ?? [],
-    );
-    const candidateSkillNames = new Set(candidates.map((candidate) => candidate.entry.skill.name));
-    // Reserve directories the previous catalog gave to skills this run dropped.
-    // Those files survive one refresh for in-flight readers, so handing the name
-    // to a different skill would serve foreign content at an advertised location.
-    const usedDirNames = new Set(
-      [...publishedDirNames].flatMap(([dirName, skillName]) =>
-        candidateSkillNames.has(skillName) ? [] : [dirName],
-      ),
-    );
-    const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
-    for (const candidate of candidates) {
-      const { baseName, entry, identity } = candidate;
-      if (!baseName) {
-        plans.push({ entry, identity });
-        continue;
-      }
       try {
-        plans.push({
-          destinationPath: resolveSyncedSkillDestinationPath({
-            targetSkillsDir,
-            baseName,
-            identity,
-            collidingBaseNames,
-            usedDirNames,
-          }),
-          entry,
+        const destinationPath = resolveSyncedSkillDestinationPath({
+          targetSkillsDir,
+          baseName,
           identity,
+          claimedBaseNames,
         });
+        usedDirNames.add(path.basename(destinationPath));
+        plans.push({ destinationPath, entry, identity });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
@@ -674,7 +632,7 @@ export async function syncWorkspaceSkills(params: {
       );
       let refreshed = true;
       try {
-        await syncSyncedSkillChild(entry.syncSourceDir ?? entry.skill.baseDir, destinationPath);
+        await publishSyncedSkillTree(entry.syncSourceDir ?? entry.skill.baseDir, destinationPath);
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);

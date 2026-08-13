@@ -101,11 +101,11 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       releasePause = resolve;
     });
     let pausedAfterCopy = false;
-    const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+    const originalCopyFile = nodeFs.promises.copyFile.bind(nodeFs.promises);
     const cpSpy = vi
-      .spyOn(nodeFs.promises, "cp")
-      .mockImplementation(async (source, destination, opts) => {
-        const result = await originalCp(source, destination, opts);
+      .spyOn(nodeFs.promises, "copyFile")
+      .mockImplementation(async (source, destination, mode) => {
+        const result = await originalCopyFile(source, destination, mode);
         // Pause mid-refresh so a concurrent reader observes the tree while only
         // part of the new catalog has landed.
         if (!pausedAfterCopy) {
@@ -247,16 +247,20 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     }
   });
 
-  it("leaves unchanged skill files untouched across a changed-catalog refresh", async () => {
+  it("never exposes a missing or partial SKILL.md at an advertised location", async () => {
     const sourceWorkspace = await fixtures.createCaseDir("source");
     const targetWorkspace = await fixtures.createCaseDir("target");
     const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
     const managedSkillsDir = path.join(sourceWorkspace, ".managed");
-    await writeSkill({
-      dir: path.join(sourceWorkspace, "skills", "stable"),
-      name: "stable",
-      description: "Stable skill",
-    });
+    const skillDir = path.join(sourceWorkspace, "skills", "bulky");
+    const writeBulkySkill = async (marker: string) => {
+      await writeSkill({
+        dir: skillDir,
+        name: "bulky",
+        description: "Bulky skill",
+        body: `# ${marker}\n${marker.repeat(100_000)}\n`,
+      });
+    };
     const publish = async () => {
       const skillsSnapshot = buildSkillSnapshot(sourceWorkspace, {
         bundledSkillsDir,
@@ -272,35 +276,39 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
       });
     };
 
+    await writeBulkySkill("A");
     const first = await publish();
-    const stablePath = first.skillsSnapshot.resolvedSkills?.find(
-      (skill) => skill.name === "stable",
+    const advertised = first.skillsSnapshot.resolvedSkills?.find(
+      (skill) => skill.name === "bulky",
     )?.filePath;
-    if (!stablePath) {
-      throw new Error("expected the stable skill to be published");
+    if (!advertised) {
+      throw new Error("expected the bulky skill to be published");
     }
-    const before = await fs.stat(stablePath);
+    expect(await fs.readFile(advertised, "utf8")).toContain("# A");
 
-    // A new sibling changes the catalog identities and forces a full refresh.
-    await writeSkill({
-      dir: path.join(sourceWorkspace, "skills", "added"),
-      name: "added",
-      description: "Added skill",
-    });
+    await writeBulkySkill("B");
     bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
-    const second = await publish();
-    expect(sortedSkillNames(second.skillsSnapshot.skills.map((skill) => skill.name))).toEqual([
-      "added",
-      "stable",
-    ]);
 
-    // The unchanged child keeps its inode: no wipe, so no window where a
-    // concurrent reader could miss the advertised location.
-    const after = await fs.stat(stablePath);
-    expect(after.ino).toBe(before.ino);
-    expect(
-      second.skillsSnapshot.resolvedSkills?.find((skill) => skill.name === "stable")?.filePath,
-    ).toBe(stablePath);
+    // Sample the advertised path at the moment the new bytes are on disk but the
+    // swap has not happened. Replacing the live file in place would expose a
+    // truncated or missing read here; staging plus rename cannot.
+    const originalCopyFile = nodeFs.promises.copyFile.bind(nodeFs.promises);
+    let readDuringReplace: string | undefined;
+    const copySpy = vi
+      .spyOn(nodeFs.promises, "copyFile")
+      .mockImplementation(async (source, destination, mode) => {
+        const result = await originalCopyFile(source, destination, mode);
+        readDuringReplace ??= await fs.readFile(advertised, "utf8");
+        return result;
+      });
+    try {
+      await publish();
+    } finally {
+      copySpy.mockRestore();
+    }
+
+    expect(readDuringReplace).toContain("# A");
+    expect(await fs.readFile(advertised, "utf8")).toContain("# B");
   });
 
   it("recovers when a published child's entry changes type in the source", async () => {
@@ -603,7 +611,7 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
         eligibility: { nodeSkills: { canExec: true } },
       });
       const copy = vi
-        .spyOn(nodeFs.promises, "cp")
+        .spyOn(nodeFs.promises, "copyFile")
         .mockRejectedValueOnce(new Error("injected copy failure"));
       const recovered = await syncWorkspaceSkills({
         ...syncParams,
@@ -661,12 +669,12 @@ describe("syncWorkspaceSkills incremental catalog publish", () => {
     // A skill install, plugin regeneration, or git operation can remove a source
     // tree after discovery and before its copy. That must not empty the child a
     // concurrent run already advertises.
-    const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+    const originalCopyFile = nodeFs.promises.copyFile.bind(nodeFs.promises);
     let removedSource = false;
     const cpSpy = vi
-      .spyOn(nodeFs.promises, "cp")
-      .mockImplementation(async (source, destination, opts) => {
-        const result = await originalCp(source, destination, opts);
+      .spyOn(nodeFs.promises, "copyFile")
+      .mockImplementation(async (source, destination, mode) => {
+        const result = await originalCopyFile(source, destination, mode);
         if (!removedSource) {
           removedSource = true;
           await fs.rm(path.join(sourceWorkspace, "skills", "bbb"), {

@@ -178,7 +178,7 @@ describe("syncWorkspaceSkills", () => {
 
     const first = await syncWorkspaceSkills(params);
     await fs.rm(path.join(sourceWorkspace, "skills"), { recursive: true, force: true });
-    const copy = vi.spyOn(fs, "cp");
+    const copy = vi.spyOn(fs, "copyFile");
     const second = await syncWorkspaceSkills(params);
     const copyCount = copy.mock.calls.length;
     copy.mockRestore();
@@ -239,7 +239,7 @@ describe("syncWorkspaceSkills", () => {
       }),
     );
 
-    const copy = vi.spyOn(fs, "cp");
+    const copy = vi.spyOn(fs, "copyFile");
     const { skillUsagePaths: usagePaths } = await syncWorkspaceSkills(syncParams);
     const copyCount = copy.mock.calls.length;
     copy.mockRestore();
@@ -415,7 +415,7 @@ describe("syncWorkspaceSkills", () => {
       snapshotVersion: nextVersion,
     });
     const copy = vi
-      .spyOn(nodeFs.promises, "cp")
+      .spyOn(nodeFs.promises, "copyFile")
       .mockRejectedValueOnce(new Error("injected copy failure"));
     await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
     copy.mockRestore();
@@ -489,7 +489,7 @@ describe("syncWorkspaceSkills", () => {
       snapshotVersion: nextVersion,
     });
     const copy = vi
-      .spyOn(nodeFs.promises, "cp")
+      .spyOn(nodeFs.promises, "copyFile")
       .mockRejectedValueOnce(new Error("injected copy failure"));
     const recovered = await syncWorkspaceSkills({
       ...syncParams,
@@ -657,7 +657,7 @@ describe("syncWorkspaceSkills", () => {
       snapshotVersion: nextVersion,
     });
     const copy = vi
-      .spyOn(nodeFs.promises, "cp")
+      .spyOn(nodeFs.promises, "copyFile")
       .mockRejectedValueOnce(new Error("injected copy failure"));
     const recovered = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
@@ -733,7 +733,7 @@ describe("syncWorkspaceSkills", () => {
       snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
     });
     const copy = vi
-      .spyOn(nodeFs.promises, "cp")
+      .spyOn(nodeFs.promises, "copyFile")
       .mockRejectedValueOnce(new Error("injected copy failure"));
     const synced = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
