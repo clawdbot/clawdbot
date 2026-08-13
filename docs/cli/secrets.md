@@ -82,6 +82,18 @@ openclaw secrets store set TLS_PRIVATE_KEY \
 
 `set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
 
+Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags; this policy-only form does not ask for or replace an existing secret value:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+openclaw secrets store set SERVICE_TOKEN \
+  --allow-host api.example.com \
+  --allow-host uploads.example.com
+openclaw secrets store set SERVICE_TOKEN --clear-allowed-hosts
+```
+
+Hosts are normalized to lowercase ASCII/punycode. Schemes, paths, ports, and wildcards are rejected. `store list` shows allowed hosts because they are policy metadata, not secret material.
+
 ### Read values
 
 ```bash

@@ -5653,6 +5653,11 @@ export const en: TranslationMap = {
   secretsStore: {
     name: "Name",
     value: "Value",
+    allowedHosts: "Allowed hosts",
+    allowedHostsPlaceholder: "api.example.com",
+    allowedHostsHint:
+      "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
+    noAllowedHosts: "None",
     updated: "Last updated",
     by: "{time} by {name}",
     actions: "Actions",

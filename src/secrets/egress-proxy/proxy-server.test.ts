@@ -38,6 +38,21 @@ let proxy: SecretEgressProxyHandle;
 let run: Readonly<{ instanceId: string; runId: string }>;
 let proxyEnv: Record<string, string>;
 
+function registerSentinel(params: {
+  sentinel: string;
+  allowedHosts: readonly string[];
+  name?: string;
+  targetProxy?: SecretEgressProxyHandle;
+}): Record<string, string> {
+  return (params.targetProxy ?? proxy).registerRun(run, [
+    {
+      name: params.name ?? "SERVICE_API_KEY",
+      sentinel: params.sentinel,
+      allowedHosts: params.allowedHosts,
+    },
+  ]);
+}
+
 async function listen(server: Server): Promise<number> {
   servers.push(server);
   return await new Promise<number>((resolve, reject) => {
@@ -264,6 +279,7 @@ describe("secret egress proxy", () => {
   it("substitutes an authenticated header and strips proxy authorization upstream", async () => {
     const secret = "header-secret-value";
     const sentinel = mintSecretSentinel(secret, { label: "egress-header" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["LOCALHOST"] });
     expect(fs.statSync(caDir).mode & 0o777).toBe(0o700);
     expect(fs.statSync(path.join(caDir, "root-ca-key.pem")).mode & 0o777).toBe(0o600);
 
@@ -278,6 +294,38 @@ describe("secret egress proxy", () => {
       expect.objectContaining({ kind: "forwarded", host: "localhost", substituted: true }),
     );
   });
+
+  it.each([
+    { label: "an unbound host", allowedHosts: ["api.example.com"] },
+    { label: "no bound hosts", allowedHosts: [] },
+  ])(
+    "refuses substitution for $label before the real value reaches the origin",
+    async (testCase) => {
+      const secret = `never-forward-${testCase.label}`;
+      const sentinel = mintSecretSentinel(secret, { label: `egress-${testCase.label}` });
+      proxyEnv = registerSentinel({
+        sentinel,
+        allowedHosts: testCase.allowedHosts,
+        name: "SERVICE_API_KEY",
+      });
+
+      const result = await requestThroughTunnel({
+        headers: { Authorization: `Bearer ${sentinel}` },
+      });
+
+      expect(result).toMatchObject({ status: 502 });
+      expect(result.body).toContain(
+        "openclaw secrets store set SERVICE_API_KEY --allow-host localhost",
+      );
+      expect(originRequests).toEqual([]);
+      expect(JSON.stringify(originRequests)).not.toContain(secret);
+      expect(auditEvents.at(-1)).toMatchObject({
+        kind: "refused",
+        host: "localhost",
+        reason: "destination-not-allowed",
+      });
+    },
+  );
 
   it.each(["url", "header", "body"] as const)(
     "refuses an unresolved sentinel in the %s",
@@ -304,6 +352,7 @@ describe("secret egress proxy", () => {
   it("substitutes a streamed body larger than the maximum carry window", async () => {
     const secret = "stream-boundary-secret";
     const sentinel = mintSecretSentinel(secret, { label: "egress-stream" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
     const split = SECRET_SENTINEL_PREFIX.length + 3;
     const prefix = "x".repeat(SECRET_SENTINEL_MAX_LENGTH + 1024);
     const suffix = "y".repeat(2048);
@@ -351,6 +400,7 @@ describe("secret egress proxy", () => {
   it("revokes Basic authorization with the exact owning run and keeps audits payload-free", async () => {
     const secret = "audit-secret-value";
     const sentinel = mintSecretSentinel(secret, { label: "egress-audit" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
     await requestThroughTunnel({ headers: { "X-Secret": sentinel } });
     await expect(
       forwardedRequest(basicProxyAuth(registeredPassword(proxyEnv)), "http"),

@@ -310,6 +310,14 @@ Store values are not encrypted at rest. They are stored unencrypted in the share
 
 The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
 
+Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+```
+
+Repeat `--allow-host` to replace the binding with multiple hosts, or use `--clear-allowed-hosts` to remove every binding. A refused request names the secret and prints the exact `store set ... --allow-host ...` command needed for that destination.
+
 Enable it explicitly, then restart the Gateway:
 
 ```bash
@@ -338,8 +346,10 @@ When enabled, OpenClaw adds these values to Gateway and sandbox exec environment
 
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random per-run password. The token expires when the exact agent run closes, including cancellation and replacement. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or expired credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
+The run snapshot registers each sentinel together with its secret name and allowed hosts. After proxy authentication, the proxy looks up the matched sentinel in that run's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
+
 <Warning>
-This is an egress-substitution boundary, not destination authorization or containment for a malicious agent. An authenticated run is trusted to use every store sentinel placed in its environment. It could deliberately send a sentinel to an HTTPS endpoint that reflects request credentials and recover the plaintext from the response. Enable this feature only for trusted agent/tool execution; use external policy enforcement or process isolation when destination confinement is required. Plain HTTP requests are always refused.
+Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
 </Warning>
 
 The CA is generated once per Gateway start under the state directory. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests fail closed when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
@@ -352,6 +362,8 @@ Current limits:
 - WebSocket rewriting is not supported.
 - Non-443 HTTPS substitution is not a supported compatibility target.
 - Identity-scoped secrets are not supported; only the team store participates.
+- Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
+- Plain HTTP is refused; it is not upgraded or substituted.
 - Sandbox/container reachability is not implemented. Local container sandboxes default to `network: "none"`, and their loopback address is not the Gateway host. The variables are present, but the proxy is normally unreachable.
 - Remote `node` exec and provider-native harness subprocesses do not use this proxy.
 - Background subprocesses lose proxy authorization when their owning agent run ends, even if the process itself is still alive.

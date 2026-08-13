@@ -42,15 +42,30 @@ type SecretEgressProxyAuditEvent = {
   reason?: SecretEgressRefusalReason | "bypass";
 };
 
+export type SecretEgressSentinelBinding = Readonly<{
+  name: string;
+  sentinel: string;
+  allowedHosts: readonly string[];
+}>;
+
 export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
-  registerRun: (run: Readonly<{ instanceId: string; runId: string }>) => Record<string, string>;
+  registerRun: (
+    run: Readonly<{ instanceId: string; runId: string }>,
+    bindings?: readonly SecretEgressSentinelBinding[],
+  ) => Record<string, string>;
   revokeRun: (run: Readonly<{ instanceId: string; runId: string }>) => void;
   stop: () => Promise<void>;
 };
 
 type ConnectTarget = { hostname: string; port: number };
+type RegisteredRun = {
+  digest: Buffer;
+  key: string;
+  sentinelBindings: Map<string, { allowedHosts: Set<string>; name: string }>;
+  token: string;
+};
 
 function normalizeHostname(raw: string): string {
   const trimmed = raw.trim().toLowerCase().replace(/\.+$/, "");
@@ -152,46 +167,90 @@ function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSAL_BODY)
   res.end(body);
 }
 
-function swapRequestText(value: string, urlMode: boolean): { value: string; substituted: boolean } {
-  if (!containsSecretSentinel(value)) {
-    return { value, substituted: false };
+function resolveRegisteredSentinel(params: {
+  sentinel: string;
+  host: string;
+  registered: RegisteredRun;
+}): string | undefined {
+  const binding = params.registered.sentinelBindings.get(params.sentinel);
+  if (!binding) {
+    return undefined;
+  }
+  if (!binding.allowedHosts.has(params.host)) {
+    throw new SecretEgressSubstitutionError("destination-not-allowed", {
+      host: params.host,
+      secretName: binding.name,
+    });
+  }
+  return resolveSecretSentinel(params.sentinel);
+}
+
+function swapRequestText(params: {
+  value: string;
+  urlMode: boolean;
+  host: string;
+  registered: RegisteredRun;
+}): { value: string; substituted: boolean } {
+  if (!containsSecretSentinel(params.value)) {
+    return { value: params.value, substituted: false };
   }
   let substituted = false;
-  const swapped = value.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
-    const resolved = resolveSecretSentinel(sentinel);
-    if (resolved === undefined) {
-      return sentinel;
-    }
-    substituted = true;
-    return urlMode ? encodeURIComponent(resolved) : resolved;
-  });
+  const swapped = params.value.replace(
+    new RegExp(SECRET_SENTINEL_PATTERN.source, "g"),
+    (sentinel) => {
+      const resolved = resolveRegisteredSentinel({
+        sentinel,
+        host: params.host,
+        registered: params.registered,
+      });
+      if (resolved === undefined) {
+        return sentinel;
+      }
+      substituted = true;
+      return params.urlMode ? encodeURIComponent(resolved) : resolved;
+    },
+  );
   if (containsSecretSentinel(swapped)) {
     throw new SecretEgressSubstitutionError("unresolved-sentinel");
   }
   return { value: swapped, substituted };
 }
 
-function swapRequestHeaders(headers: IncomingHttpHeaders): {
+function swapRequestHeaders(params: {
+  headers: IncomingHttpHeaders;
+  host: string;
+  registered: RegisteredRun;
+}): {
   headers: IncomingHttpHeaders;
   substituted: boolean;
 } {
   const output: IncomingHttpHeaders = {};
   let substituted = false;
-  for (const [name, rawValue] of Object.entries(headers)) {
+  for (const [name, rawValue] of Object.entries(params.headers)) {
     const lowerName = name.toLowerCase();
     if (lowerName === "proxy-authorization" || lowerName === "proxy-connection") {
       continue;
     }
     if (Array.isArray(rawValue)) {
       output[name] = rawValue.map((value) => {
-        const swapped = swapRequestText(value, false);
+        const swapped = swapRequestText({
+          value,
+          urlMode: false,
+          host: params.host,
+          registered: params.registered,
+        });
         substituted ||= swapped.substituted;
         return swapped.value;
       });
       continue;
     }
     if (rawValue !== undefined) {
-      const swapped = swapRequestText(rawValue, false);
+      const swapped = swapRequestText({
+        value: rawValue,
+        urlMode: false,
+        host: params.host,
+        registered: params.registered,
+      });
       substituted ||= swapped.substituted;
       output[name] = swapped.value;
     }
@@ -229,12 +288,14 @@ export async function startSecretEgressProxyServer(params: {
     ca: [...rootCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
-  const tokens = new Map<string, { digest: Buffer; token: string }>();
+  const tokens = new Map<string, RegisteredRun>();
   const sockets = new Set<Socket>();
   const tlsServers = new Map<string, Promise<HttpsServer>>();
 
   const audit = (event: SecretEgressProxyAuditEvent) => params.onAudit(event);
-  const authorize = (headers: IncomingHttpHeaders): SecretEgressRefusalReason | null => {
+  const authorize = (
+    headers: IncomingHttpHeaders,
+  ): RegisteredRun | Exclude<SecretEgressRefusalReason, "destination-not-allowed"> => {
     const rawHeader = headers["proxy-authorization"];
     if (rawHeader === undefined) {
       return "missing-proxy-auth";
@@ -246,7 +307,7 @@ export async function startSecretEgressProxyServer(params: {
     const candidate = tokenDigest(password);
     for (const registered of tokens.values()) {
       if (timingSafeEqual(candidate, registered.digest)) {
-        return null;
+        return registered;
       }
     }
     return "invalid-proxy-auth";
@@ -256,6 +317,7 @@ export async function startSecretEgressProxyServer(params: {
     request: IncomingMessage;
     response: ServerResponse;
     target: URL;
+    registered: RegisteredRun;
   }) => {
     const host = normalizeHostname(forward.target.hostname);
     if (forward.target.protocol !== "https:") {
@@ -273,9 +335,18 @@ export async function startSecretEgressProxyServer(params: {
     let target: URL;
     let headers: IncomingHttpHeaders;
     try {
-      const swappedUrl = swapRequestText(forward.target.toString(), true);
+      const swappedUrl = swapRequestText({
+        value: forward.target.toString(),
+        urlMode: true,
+        host,
+        registered: forward.registered,
+      });
       target = new URL(swappedUrl.value);
-      const swappedHeaders = swapRequestHeaders(forward.request.headers);
+      const swappedHeaders = swapRequestHeaders({
+        headers: forward.request.headers,
+        host,
+        registered: forward.registered,
+      });
       headers = swappedHeaders.headers;
       headers.host = target.host;
       substituted = swappedUrl.substituted || swappedHeaders.substituted;
@@ -283,7 +354,11 @@ export async function startSecretEgressProxyServer(params: {
       const reason =
         error instanceof SecretEgressSubstitutionError ? error.reason : "unresolved-sentinel";
       audit({ kind: "refused", host, substituted, reason });
-      sendHttpRefusal(forward.response);
+      sendHttpRefusal(
+        forward.response,
+        502,
+        error instanceof SecretEgressSubstitutionError ? `${error.message}\n` : REFUSAL_BODY,
+      );
       forward.request.resume();
       return;
     }
@@ -292,6 +367,8 @@ export async function startSecretEgressProxyServer(params: {
       onSubstitution: () => {
         substituted = true;
       },
+      resolveSentinel: (sentinel) =>
+        resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
     });
     let refused = false;
     let forwardedLogged = false;
@@ -331,7 +408,11 @@ export async function startSecretEgressProxyServer(params: {
       const reason =
         error instanceof SecretEgressSubstitutionError ? error.reason : "unresolved-sentinel";
       audit({ kind: "refused", host, substituted, reason });
-      sendHttpRefusal(forward.response);
+      sendHttpRefusal(
+        forward.response,
+        502,
+        error instanceof SecretEgressSubstitutionError ? `${error.message}\n` : REFUSAL_BODY,
+      );
     });
     upstream.once("error", () => {
       if (refused) {
@@ -344,8 +425,8 @@ export async function startSecretEgressProxyServer(params: {
     forward.request.pipe(bodyTransform).pipe(upstream);
   };
 
-  const tlsServerFor = (target: ConnectTarget): Promise<HttpsServer> => {
-    const key = `${target.hostname}:${target.port}`;
+  const tlsServerFor = (target: ConnectTarget, registered: RegisteredRun): Promise<HttpsServer> => {
+    const key = `${registered.key}\0${target.hostname}:${target.port}`;
     let server = tlsServers.get(key);
     if (!server) {
       server = generateLocalProxyLeaf({
@@ -358,7 +439,7 @@ export async function startSecretEgressProxyServer(params: {
             request.url ?? "/",
             `https://${target.hostname}${target.port === 443 ? "" : `:${target.port}`}`,
           );
-          forwardRequest({ request, response, target: targetUrl });
+          forwardRequest({ request, response, target: targetUrl, registered });
         }),
       );
       tlsServers.set(key, server);
@@ -381,9 +462,9 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
     const host = normalizeHostname(target.hostname);
-    const authFailure = authorize(request.headers);
-    if (authFailure) {
-      audit({ kind: "refused", host, substituted: false, reason: authFailure });
+    const authorization = authorize(request.headers);
+    if (typeof authorization === "string") {
+      audit({ kind: "refused", host, substituted: false, reason: authorization });
       response.writeHead(407, {
         "Proxy-Authenticate": `Basic realm="${PROXY_AUTH_REALM}"`,
         Connection: "close",
@@ -394,7 +475,7 @@ export async function startSecretEgressProxyServer(params: {
       request.resume();
       return;
     }
-    forwardRequest({ request, response, target });
+    forwardRequest({ request, response, target, registered: authorization });
   });
 
   proxy.on("connection", (socket) => {
@@ -411,13 +492,13 @@ export async function startSecretEgressProxyServer(params: {
         clientSocket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
         return;
       }
-      const authFailure = authorize(request.headers);
-      if (authFailure) {
+      const authorization = authorize(request.headers);
+      if (typeof authorization === "string") {
         audit({
           kind: "refused",
           host: target.hostname,
           substituted: false,
-          reason: authFailure,
+          reason: authorization,
         });
         sendProxyAuthRequired(clientSocket);
         return;
@@ -442,7 +523,7 @@ export async function startSecretEgressProxyServer(params: {
         return;
       }
       try {
-        const tlsServer = await tlsServerFor(target);
+        const tlsServer = await tlsServerFor(target, authorization);
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) {
           clientSocket.unshift(head);
@@ -476,20 +557,32 @@ export async function startSecretEgressProxyServer(params: {
   return {
     caCertPath: ca.certPath,
     proxyOrigin,
-    registerRun: (run) => {
+    registerRun: (run, bindings = []) => {
       const key = runKey(run);
       let registered = tokens.get(key);
       if (!registered) {
         const token = randomBytes(32).toString("base64url");
-        registered = { digest: tokenDigest(token), token };
+        registered = {
+          digest: tokenDigest(token),
+          key,
+          sentinelBindings: new Map(),
+          token,
+        };
         tokens.set(key, registered);
       }
+      registered.sentinelBindings = new Map(
+        bindings.map((binding) => [
+          binding.sentinel,
+          {
+            allowedHosts: new Set(binding.allowedHosts.map(normalizeHostname)),
+            name: binding.name,
+          },
+        ]),
+      );
       // Basic is deliberately used because curl and Go net/http derive it from
       // proxy-URL credentials. Base64 is acceptable here: loopback is the only
       // listener, the token is run-scoped, and a process that can read it from
       // this env can already read the sentinels that authorize substitution.
-      // That run authority permits use, not destination confinement; this proxy
-      // keeps plaintext out of ambient child state but cannot constrain a malicious child.
       const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${registered.token}@127.0.0.1:${address.port}`;
       return {
         HTTPS_PROXY: proxyUrl,

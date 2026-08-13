@@ -1,7 +1,6 @@
 import { Transform, type TransformCallback } from "node:stream";
 import {
   looksLikeSecretSentinel,
-  resolveSecretSentinel,
   SECRET_SENTINEL_MAX_LENGTH,
   SECRET_SENTINEL_PREFIX,
   SECRET_SENTINEL_SUFFIX,
@@ -15,12 +14,20 @@ export type SecretEgressRefusalReason =
   | "missing-proxy-auth"
   | "non-https-request"
   | "non-https-port"
+  | "destination-not-allowed"
   | "unresolved-sentinel"
   | "upstream-error";
 
 export class SecretEgressSubstitutionError extends Error {
-  constructor(readonly reason: SecretEgressRefusalReason) {
-    super("Secret egress proxy refused an unresolved secret sentinel");
+  constructor(
+    readonly reason: SecretEgressRefusalReason,
+    readonly details?: { host: string; secretName: string },
+  ) {
+    super(
+      details
+        ? `Secret "${details.secretName}" is not allowed for host "${details.host}". Run: openclaw secrets store set ${details.secretName} --allow-host ${details.host}`
+        : "Secret egress proxy refused an unresolved secret sentinel",
+    );
     this.name = "SecretEgressSubstitutionError";
   }
 }
@@ -29,6 +36,7 @@ function processPendingBuffer(params: {
   buffer: Buffer;
   flush: boolean;
   onSubstitution: () => void;
+  resolveSentinel: (sentinel: string) => string | undefined;
   push: (chunk: Buffer) => void;
 }): Buffer {
   let pending = params.buffer;
@@ -61,7 +69,7 @@ function processPendingBuffer(params: {
     }
     const sentinel = pending.subarray(0, sentinelEnd).toString("ascii");
     const resolved = looksLikeSecretSentinel(sentinel)
-      ? resolveSecretSentinel(sentinel)
+      ? params.resolveSentinel(sentinel)
       : undefined;
     if (resolved === undefined) {
       throw new SecretEgressSubstitutionError("unresolved-sentinel");
@@ -73,7 +81,10 @@ function processPendingBuffer(params: {
 }
 
 /** Rewrites process-local sentinels across arbitrary request-body chunk boundaries. */
-export function createSecretEgressBodyTransform(params: { onSubstitution: () => void }): Transform {
+export function createSecretEgressBodyTransform(params: {
+  onSubstitution: () => void;
+  resolveSentinel: (sentinel: string) => string | undefined;
+}): Transform {
   let pending: Buffer = Buffer.alloc(0);
   return new Transform({
     transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: TransformCallback) {
@@ -83,6 +94,7 @@ export function createSecretEgressBodyTransform(params: { onSubstitution: () => 
           buffer: pending.length > 0 ? Buffer.concat([pending, input]) : input,
           flush: false,
           onSubstitution: params.onSubstitution,
+          resolveSentinel: params.resolveSentinel,
           push: (output) => this.push(output),
         });
         callback();
@@ -96,6 +108,7 @@ export function createSecretEgressBodyTransform(params: { onSubstitution: () => 
           buffer: pending,
           flush: true,
           onSubstitution: params.onSubstitution,
+          resolveSentinel: params.resolveSentinel,
           push: (output) => this.push(output),
         });
         callback();

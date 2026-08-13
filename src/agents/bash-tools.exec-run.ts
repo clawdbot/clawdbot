@@ -410,7 +410,10 @@ export function createExecTool(
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
-          secretEgressEnv = registerSecretEgressProxyRun(defaults.operationalRunInstance);
+          secretEgressEnv = registerSecretEgressProxyRun(
+            defaults.operationalRunInstance,
+            storeEnv.secretEgressBindings ?? [],
+          );
         }
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
