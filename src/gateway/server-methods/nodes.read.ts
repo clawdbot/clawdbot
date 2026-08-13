@@ -16,7 +16,7 @@ import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
-import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
@@ -79,6 +79,7 @@ function currentSessionHostNodeIds(params: {
 async function listNodesForClient(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
+  nodeId?: string;
   pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
   pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
   pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
@@ -101,7 +102,10 @@ async function listNodesForClient(params: {
     );
     return null;
   });
-  const nodes = listKnownNodes(catalog).map((node) =>
+  const catalogNodes = params.nodeId
+    ? [getKnownNode(catalog, params.nodeId)].filter(isVisibleNode)
+    : listKnownNodes(catalog);
+  const nodes = catalogNodes.map((node) =>
     node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
@@ -295,12 +299,13 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       const nodes = await listNodesForClient({
         client,
         context,
+        nodeId: id,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes,
       });
-      const node = nodes.find((candidate) => candidate.nodeId === id);
+      const node = nodes[0];
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
