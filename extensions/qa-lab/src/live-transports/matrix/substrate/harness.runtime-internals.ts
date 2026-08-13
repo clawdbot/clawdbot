@@ -92,6 +92,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
+    let probeConsumedDeadline = false;
     try {
       // Race both network paths so neither stalled probe can starve or delay
       // a healthy peer. The outer deadline also bounds injected fetch fakes.
@@ -114,13 +115,20 @@ export async function waitForReachableMatrixBaseUrl(params: {
           }),
         ),
       );
-    } catch {
-      // Poll again after every candidate fails or the discovery deadline expires.
+    } catch (error) {
+      // A stalled probe consumed the entire remaining budget; its timeout can
+      // fire marginally before Date.now() crosses the deadline, so re-polling
+      // here would start a doomed extra probe. Fast candidate failures re-poll.
+      probeConsumedDeadline =
+        error instanceof Error && error.message.startsWith("Matrix health probes timed out");
     } finally {
       probeController.abort();
     }
     if (reachableCandidate) {
       return reachableCandidate;
+    }
+    if (probeConsumedDeadline) {
+      break;
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {

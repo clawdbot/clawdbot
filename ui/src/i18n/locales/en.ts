@@ -8,6 +8,7 @@ export const en: TranslationMap = {
     ok: "OK",
     yes: "Yes",
     no: "No",
+    default: "Default",
     assistant: "Assistant",
     active: "Active",
     loading: "Loading…",
@@ -718,6 +719,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
+    neverConnected: "Never connected",
+    offlineFor: "Offline for {duration}",
+    lastSeen: "Last seen {time}",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",
@@ -947,6 +951,8 @@ export const en: TranslationMap = {
     cloudWorkerPlacement: "Cloud worker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspace conflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspace conflicts",
+    cloudWorkerDiskWarning: "Cloud session disk space is low",
+    cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename session",
@@ -4524,6 +4530,14 @@ export const en: TranslationMap = {
   },
   chat: {
     cloudWorkerFailed: "Cloud worker failed: {error}",
+    diskSpace: {
+      warningTitle: "Cloud session disk space is low",
+      criticalTitle: "Cloud session disk space is critically low",
+      warningBody:
+        "{percent}% used · {free} free. Delete unneeded files or stop the cloud worker before large writes.",
+      criticalBody:
+        "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
+    },
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
       steerRunNoLongerActive:

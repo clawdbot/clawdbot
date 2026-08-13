@@ -1,5 +1,6 @@
 // Slack tests cover prepare plugin behavior.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
@@ -1230,8 +1231,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
-  function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
+  function createThreadSlackCtx(params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+    replies: unknown;
+  }) {
     return createInboundSlackCtx({
+      accountId: params.accountId,
       cfg: params.cfg,
       appClient: { conversations: { replies: params.replies } } as App["client"],
       defaultRequireMention: false,
@@ -1239,9 +1245,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
-  function createThreadAccount(): ResolvedSlackAccount {
+  function createThreadAccount(accountId = "default"): ResolvedSlackAccount {
     return {
-      accountId: "default",
+      accountId,
       enabled: true,
       identity: "bot",
       botTokenSource: "config",
@@ -3900,6 +3906,49 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
     }
+  });
+
+  it("keeps account-bound thread freshness on the routed agent", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    const expectedStorePath = path.join(dir, "foundation", "sessions.json");
+    const cfg = {
+      agents: { entries: { main: {}, foundation: {} } },
+      bindings: [
+        {
+          agentId: "foundation",
+          match: { channel: "slack", accountId: "foundation" },
+        },
+        { agentId: "main", match: { channel: "slack", accountId: "*" } },
+      ],
+      session: { store: storeTemplate },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createThreadSlackCtx({
+      accountId: "foundation",
+      cfg,
+      replies,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount("foundation"),
+      createThreadReplyMessage({
+        text: "bound thread reply",
+        ts: "101.000",
+        thread_ts: "100.000",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.route.agentId).toBe("foundation");
+    expect(prepared.turn.storePath).toBe(expectedStorePath);
   });
 
   const threadRouteScenarios = [

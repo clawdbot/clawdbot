@@ -796,6 +796,7 @@ openclaw-app {
    a page owns; installed/app-like windows are desktop chrome and keep the arrow.
    Controls consume --cursor-action rather than hardcoding a cursor, and real
    hyperlinks keep the UA pointer in every mode. */
+/* stylelint-disable-next-line no-duplicate-selectors -- cursor policy block, see comment above */
 :root {
   --cursor-action: pointer;
 }

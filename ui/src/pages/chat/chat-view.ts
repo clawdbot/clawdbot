@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type {
+  SessionPlacementDiskSpace,
   SessionSharingRole,
   SessionSuggestion,
   SessionSuggestionResolution,
@@ -160,6 +161,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
     error: string | null;
+    diskSpace?: SessionPlacementDiskSpace;
     runError?: { summary: string } | null;
     inlineApproval?: ExecApprovalRequest | null;
     approvalBusy?: boolean;

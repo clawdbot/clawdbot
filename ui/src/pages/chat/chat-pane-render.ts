@@ -108,6 +108,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const placement = selectedSession?.placement;
+    const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
     const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
     const placementRunError = terminalReason
       ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
@@ -386,6 +387,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
+      diskSpace,
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,

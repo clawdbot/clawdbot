@@ -289,6 +289,8 @@ Mechanics only; policy lives above.
 
 - TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
+- Static-analysis fixes must strengthen the owning type/runtime contract or remove an unsafe operation. Never satisfy a checker by rephrasing or moving an assertion, widening a generic, adding a marker type, or replacing typed access with `Reflect`/property probes.
+- New lint rules need a stated semantic invariant, must use type information when available, and start in a clean owner scope with no baseline. If a rule mainly rewards syntax changes or has an easy equivalent-expression bypass, do not add it.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
 - Cross-function state: when valid combos matter, return a closed mode/result shape. Avoid parallel nullable fields or derived booleans that callers must keep in sync; make impossible states unrepresentable.

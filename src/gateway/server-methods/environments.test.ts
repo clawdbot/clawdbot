@@ -58,28 +58,29 @@ function mockContext(
     environmentId: string,
     onCleanupError?: (error: unknown) => void,
   ) => Promise<TestWorkerRecord> = vi.fn(async () => workerRecord({ state: "destroyed" })),
+  connectedNodes: unknown[] = [
+    {
+      nodeId: "node-live",
+      connId: "conn-live",
+      displayName: "Live Node",
+      platform: "ios",
+      caps: ["camera"],
+      commands: ["system.run"],
+      workerRuns: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: ["worker-heartbeat-v1"],
+      },
+      connectedAtMs: 123,
+    },
+  ],
 ) {
   return {
     logGateway: {
       warn: vi.fn(),
     },
     nodeRegistry: {
-      listConnectedForPairingStates: () => [
-        {
-          nodeId: "node-live",
-          connId: "conn-live",
-          displayName: "Live Node",
-          platform: "ios",
-          caps: ["camera"],
-          commands: ["system.run"],
-          workerRuns: {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.8.12",
-            protocolFeatures: ["worker-heartbeat-v1"],
-          },
-          connectedAtMs: 123,
-        },
-      ],
+      listConnectedForPairingStates: () => connectedNodes,
     },
     workerEnvironmentService,
     getRuntimeConfig: () => ({
@@ -167,13 +168,19 @@ async function callEnvironmentMethod(
       environmentId: string,
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
+    connectedNodes?: unknown[];
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service, options.reconcileActive, options.forceDestroyEnvironment),
+    context: mockContext(
+      options.service,
+      options.reconcileActive,
+      options.forceDestroyEnvironment,
+      options.connectedNodes,
+    ),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -234,6 +241,9 @@ describe("environment gateway methods", () => {
           status: "available",
           platform: "ios",
           sessionHost: true,
+          lastConnectedAtMs: 123,
+          lastSeenAtMs: 123,
+          lastSeenReason: "connect",
           trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
@@ -260,6 +270,53 @@ describe("environment gateway methods", () => {
       .environments;
     expect(environments.find((entry) => entry.id === "node:node-live")?.sessionHost).toBe(true);
     expect(environments.find((entry) => entry.id === "node:node-offline")?.sessionHost).toBe(false);
+  });
+
+  it("preserves never-connected and clean-disconnect history for offline nodes", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [
+        {
+          nodeId: "node-never",
+          displayName: "Never Node",
+          commands: ["system.run"],
+          lastSeenAtMs: 2_000,
+          lastSeenReason: "device-token-auth",
+        },
+        {
+          nodeId: "node-lost",
+          displayName: "Lost Node",
+          commands: ["system.run"],
+          lastConnectedAtMs: 1_000,
+          lastDisconnectedAtMs: 4_000,
+          lastSeenAtMs: 3_000,
+          lastSeenReason: "silent_push",
+        },
+      ],
+    } as never);
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { connectedNodes: [] },
+    );
+
+    expect(ok).toBe(true);
+    const environments = (payload as { environments: Array<Record<string, unknown>> }).environments;
+    expect(environments.find((entry) => entry.id === "node:node-never")).toMatchObject({
+      status: "unavailable",
+      lastSeenAtMs: 2_000,
+      lastSeenReason: "device-token-auth",
+    });
+    expect(environments.find((entry) => entry.id === "node:node-never")).not.toHaveProperty(
+      "lastConnectedAtMs",
+    );
+    expect(environments.find((entry) => entry.id === "node:node-lost")).toMatchObject({
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 4_000,
+      lastSeenAtMs: 3_000,
+      lastSeenReason: "silent_push",
+    });
   });
 
   it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
@@ -420,6 +477,9 @@ describe("environment gateway methods", () => {
       status: "available",
       platform: "ios",
       sessionHost: true,
+      lastConnectedAtMs: 123,
+      lastSeenAtMs: 123,
+      lastSeenReason: "connect",
       trust: "persistent",
       capabilities: ["camera", "system.run"],
     });

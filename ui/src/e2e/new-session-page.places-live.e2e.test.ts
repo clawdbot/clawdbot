@@ -39,6 +39,9 @@ suite.define(() => {
   });
 
   it("refreshes destinations from gateway events while the picker stays open", async () => {
+    const lifecycleNowMs = Date.now();
+    const disconnectedAtMs = lifecycleNowMs - 2 * 60_000;
+    const connectedAtMs = disconnectedAtMs - 3 * 60_000;
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -124,10 +127,102 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(environmentRequests);
-      await place.getByRole("button", { name: "New Mac" }).waitFor();
+      const newMac = place.locator('[data-value="node:new-mac"]');
+      await newMac.waitFor();
       await place.getByRole("button", { name: "Local" }).waitFor();
       await place.getByText("Your devices", { exact: true }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
+
+      const disconnectNodeRequests = (await gateway.getRequests("node.list")).length;
+      await gateway.setMethodResponse("node.list", {
+        nodes: [
+          {
+            nodeId: "existing-mac",
+            displayName: "Existing Mac",
+            connected: true,
+            commands: ["system.run"],
+          },
+          {
+            nodeId: "new-mac",
+            displayName: "New Mac",
+            connected: false,
+            commands: ["system.run"],
+            lastConnectedAtMs: connectedAtMs,
+            lastDisconnectedAtMs: disconnectedAtMs,
+          },
+        ],
+      });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [
+          { id: "gateway", type: "local", status: "available" },
+          { id: "node:existing-mac", type: "node", status: "available" },
+          {
+            id: "node:new-mac",
+            type: "node",
+            status: "unavailable",
+            lastConnectedAtMs: connectedAtMs,
+            lastDisconnectedAtMs: disconnectedAtMs,
+          },
+        ],
+        profiles: [],
+      });
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          { deviceId: "existing-mac", mode: "node", reason: "connect", ts: 3 },
+          { deviceId: "new-mac", mode: "node", reason: "disconnect", ts: 4 },
+        ],
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(disconnectNodeRequests);
+      await expect.poll(() => newMac.isDisabled()).toBe(true);
+      await expect
+        .poll(() => newMac.locator(".new-session-page__menu-fact").first().textContent())
+        .toMatch(/^Offline for /);
+      await captureUiProof(page, "picker-device-offline.png");
+
+      const reconnectNodeRequests = (await gateway.getRequests("node.list")).length;
+      await gateway.setMethodResponse("node.list", {
+        nodes: [
+          {
+            nodeId: "existing-mac",
+            displayName: "Existing Mac",
+            connected: true,
+            commands: ["system.run"],
+          },
+          {
+            nodeId: "new-mac",
+            displayName: "New Mac",
+            connected: true,
+            commands: ["system.run"],
+            lastConnectedAtMs: lifecycleNowMs,
+          },
+        ],
+      });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [
+          { id: "gateway", type: "local", status: "available" },
+          { id: "node:existing-mac", type: "node", status: "available" },
+          {
+            id: "node:new-mac",
+            type: "node",
+            status: "available",
+            lastConnectedAtMs: lifecycleNowMs,
+          },
+        ],
+        profiles: [],
+      });
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          { deviceId: "existing-mac", mode: "node", reason: "connect", ts: 5 },
+          { deviceId: "new-mac", mode: "node", reason: "connect", ts: 6 },
+        ],
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(reconnectNodeRequests);
+      await expect.poll(() => newMac.isDisabled()).toBe(false);
+      await captureUiProof(page, "picker-device-reconnected.png");
 
       const refreshedEnvironmentRequests = (await gateway.getRequests("environments.list")).length;
       await gateway.setMethodResponse("environments.list", {
