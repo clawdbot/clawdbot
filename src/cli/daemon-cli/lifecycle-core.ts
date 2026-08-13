@@ -130,13 +130,15 @@ async function resolveServiceLoadedOrFail(params: {
   try {
     return await params.service.isLoaded({ env: process.env });
   } catch (err) {
-    // An installed definition still identifies the native manager when the
-    // loaded-state probe is unavailable; restart and Gateway health stay authoritative.
-    if (
-      params.acceptInstalledDefinition &&
-      (await params.service.readCommand(process.env).catch(() => null))
-    ) {
-      return true;
+    if (params.acceptInstalledDefinition) {
+      // The adapter owns platform-specific install discovery; systemd spans
+      // user, system, marker-owned, and dueling definitions.
+      const installed = params.service.hasInstalledDefinition
+        ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
+        : Boolean(await params.service.readCommand(process.env).catch(() => null));
+      if (installed) {
+        return true;
+      }
     }
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;

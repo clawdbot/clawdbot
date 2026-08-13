@@ -268,25 +268,25 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
-  it("restarts an installed managed service when its loaded-state probe is unavailable", async () => {
+  it("restarts an installed system-scope service when its loaded-state probe is unavailable", async () => {
     service.isLoaded.mockRejectedValue(
       new Error(
         "systemctl is-enabled unavailable: Command failed during launch or output capture (EACCES)",
       ),
     );
-    service.readCommand.mockResolvedValue({
-      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-      environment: {},
-    });
+    service.readCommand.mockResolvedValue(null);
+    const hasInstalledDefinition = vi.fn(async () => true);
     const postRestartCheck = vi.fn(async () => {});
 
     await expect(
       runServiceRestart({
         ...createServiceRunArgs(),
+        service: { ...service, hasInstalledDefinition } as GatewayService,
         postRestartCheck,
       }),
     ).resolves.toBe(true);
 
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(postRestartCheck).toHaveBeenCalledTimes(1);
     expect(readJsonLog<{ ok?: boolean; result?: string }>()).toMatchObject({
