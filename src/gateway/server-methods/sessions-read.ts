@@ -11,13 +11,11 @@ import {
   validateSessionsResolveParams,
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
@@ -35,7 +33,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
@@ -44,11 +45,7 @@ import {
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-} from "../session-store-key.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
@@ -60,7 +57,7 @@ import type {
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -77,6 +74,7 @@ import {
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
+import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import {
   filterSessionStoreToConfiguredAgents,
   loadSessionEntriesForTarget,
@@ -101,33 +99,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const canSearchSessionKey = (sessionKey: string) =>
       !isIncognitoSessionKey(sessionKey) ||
       canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
-    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const sessionKeys = params.sessionKeys?.map((sessionKey) =>
-      requestedAgentId
-        ? resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
-        : resolveSessionStoreKey({ cfg, sessionKey }),
-    );
-    const agentIds = new Set(
-      sessionKeys?.map((sessionKey) =>
-        requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-          ? requestedAgentId
-          : resolveSessionStoreAgentId(cfg, sessionKey),
-      ),
-    );
-    if (
-      agentIds.size > 1 ||
-      (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
-      );
+    const scope = resolveSessionSearchScope(cfg, params);
+    if (!scope.ok) {
+      respond(false, undefined, scope.error);
       return;
     }
-    const agentId =
-      requestedAgentId ?? agentIds.values().next().value ?? resolveDefaultAgentId(cfg);
-    const configured = isConfiguredSessionStoreAgentId(cfg, agentId);
+    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
     if (requestedAgentId && !params.sessionKeys && configured) {
       respond(
         false,
@@ -162,7 +139,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         restrictIncognito && configured && scopedSessionKeys === undefined
           ? listSessionEntriesReadOnly({
               agentId,
-              storePath: resolveStorePath(cfg.session?.store, { agentId }),
+              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
             })
               .map((entry) => entry.sessionKey)
               .filter(canSearchSessionKey)
@@ -267,7 +244,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
-                loadCombinedSessionStoreForGateway(cfg, {
+                loadCombinedSessionStoreForGatewayCore(cfg, {
                   agentId: p.agentId,
                   projection: "list",
                 }),
@@ -395,7 +372,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           );
           const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
           const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-          const defaultAgentId = resolveDefaultAgentId(cfg);
           const sessions = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
             () => {
@@ -412,8 +388,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   requestedKey: session.key,
                   canonicalKey: session.key,
                   sessionId: session.sessionId,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-                  defaultAgentId,
+                  agentId: session.agentId,
+                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
                   trackedActiveRuns,
                   projectedAgentRunIndex,
                 });
@@ -568,10 +544,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
+      const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
       try {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
+          agentId: requestedAgent.agentId,
         });
         // Fixed stores share a legacy path but resolve to owner-specific SQLite databases. Keep
         // synthetic misses from poisoning another agent's real store entry in this batch.
@@ -581,6 +563,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key,
+          agentId: requestedAgent.agentId,
           store,
         });
         const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
@@ -620,7 +603,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+    });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -666,7 +658,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, candidates: resolved.candidates }, undefined);
       return;
     }
-    respond(true, { ok: true, key: resolved.key }, undefined);
+    respond(true, { ok: true, key: resolved.key, agentId: resolved.agentId }, undefined);
   },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {

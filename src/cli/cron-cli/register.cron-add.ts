@@ -1,4 +1,5 @@
 // Cron status/list/add command registration and create-payload normalization.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,7 +12,6 @@ import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
@@ -255,13 +255,11 @@ export function registerCronAddCommand(cron: Command) {
                 };
               }
               if (scriptPath) {
-                const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
-                  opts.scriptTimeoutSeconds,
-                );
+                const scriptTimeoutSeconds = parseStrictPositiveInteger(opts.scriptTimeoutSeconds);
                 if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
                   throw new Error("Invalid --script-timeout-seconds (must be a positive integer).");
                 }
-                const scriptToolBudget = parseStrictPositiveIntOrUndefined(opts.scriptToolBudget);
+                const scriptToolBudget = parseStrictPositiveInteger(opts.scriptToolBudget);
                 if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
                   throw new Error("Invalid --script-tool-budget (must be a positive integer).");
                 }
@@ -273,7 +271,7 @@ export function registerCronAddCommand(cron: Command) {
                   toolsAllow,
                 };
               }
-              const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
+              const timeoutSeconds = parseStrictPositiveInteger(opts.timeoutSeconds);
               if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
                 throw new Error("Invalid --timeout-seconds (must be a positive integer).");
               }
@@ -285,7 +283,7 @@ export function registerCronAddCommand(cron: Command) {
                     ? opts.outputTimeoutSeconds
                     : undefined);
                 const noOutputTimeoutSeconds =
-                  parseStrictPositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
+                  parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
                 if (
                   rawNoOutputTimeoutSeconds !== undefined &&
                   noOutputTimeoutSeconds === undefined
@@ -294,7 +292,7 @@ export function registerCronAddCommand(cron: Command) {
                     "Invalid --no-output-timeout-seconds (must be a positive integer).",
                   );
                 }
-                const outputMaxBytes = parseStrictPositiveIntOrUndefined(opts.outputMaxBytes);
+                const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
                 if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
                   throw new Error("Invalid --output-max-bytes (must be a positive integer).");
                 }

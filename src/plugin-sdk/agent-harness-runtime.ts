@@ -216,14 +216,18 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractToolErrorMessage,
+} from "../agents/embedded-agent-messaging-extraction.js";
+export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultError,
+} from "../agents/embedded-agent-tool-media.js";
+export {
+  extractToolErrorMessage,
   sanitizeToolResult,
-} from "../agents/embedded-agent-subscribe.tools.js";
+} from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
+  isToolResultError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
@@ -352,7 +356,8 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
-  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  const { loadCodexBundleMcpThreadConfigCore: load } =
+    await import("../agents/codex-mcp-config.js");
   return load(params);
 }
 
@@ -365,6 +370,7 @@ export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../age
  */
 export async function prepareHarnessNativeMcpAppPreview(params: {
   runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  agentId?: string;
   serverName: string;
   toolName: string;
   uiResourceUri: string;
@@ -381,6 +387,7 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
     await import("../agents/mcp-ui-resource.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
     uiResourceUri: params.uiResourceUri,
@@ -407,12 +414,12 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
  */
 export async function materializeRequesterScopedMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
   >[0],
 ): Promise<
   Awaited<
     ReturnType<
-      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
     >
   >
 > {
@@ -420,7 +427,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   if (!shouldLoad) {
     return undefined;
   }
-  const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
+  const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

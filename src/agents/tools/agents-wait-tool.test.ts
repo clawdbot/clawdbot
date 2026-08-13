@@ -314,6 +314,30 @@ describe("agents_wait", () => {
     expect(isToolResultError(denied)).toBe(true);
   });
 
+  it("rejects a foreign collector with the same bare requester key", async () => {
+    const foreign = collectorRun("foreign-global", "global", { status: "done" });
+    foreign.requesterAgentId = "ops";
+    records.set(foreign.runId, foreign);
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "global",
+      agentId: "research",
+      config: {
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        tools: { swarm: true },
+      },
+    });
+
+    const result = await tool.execute("wait", {
+      ids: [foreign.runId],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      errors: [{ runId: foreign.runId, error: "not_owner" }],
+      success: false,
+    });
+  });
+
   it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
     const tool = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",

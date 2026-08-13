@@ -1,6 +1,6 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -21,6 +21,7 @@ import {
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
   SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -29,13 +30,15 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
@@ -158,7 +161,7 @@ export function buildGatewaySessionRow(params: {
     // titles leaks account names into the sidebar while the generated title is pending.
     (isDashboardSession ? undefined : originLabel);
   const sessionAgentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
+    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
   );
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
@@ -229,7 +232,7 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
@@ -274,7 +277,7 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     freshSessionTotalTokens !== undefined ||
     (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
@@ -326,14 +329,14 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
         entry,
         rowContext: params.rowContext,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
+      }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(
@@ -460,6 +463,10 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
+    restartRecoveryStatus: (entry as InternalSessionEntry | undefined)?.mainRestartRecovery
+      ?.tombstone
+      ? "tombstoned"
+      : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
@@ -482,7 +489,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
-    hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
+    hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

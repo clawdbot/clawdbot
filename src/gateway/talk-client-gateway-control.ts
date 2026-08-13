@@ -26,6 +26,11 @@ import type {
   RealtimeVoiceGatewayControl,
   RealtimeVoiceToolCallEvent,
 } from "../talk/provider-types.js";
+import {
+  createRealtimeVoiceSessionHarness,
+  handleRealtimeVoiceHarnessBridgeEvent,
+} from "../talk/realtime-session-harness.js";
+import type { TalkEvent } from "../talk/talk-events.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { formatError } from "./server-utils.js";
@@ -291,8 +296,10 @@ export function createTalkClientAgentConsultRunner(params: {
 
 export function createTalkClientGatewayControlOwner(params: {
   voiceSessionId: string;
+  providerId?: string;
   sessionKey: string;
   connId: string;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway">;
   runAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
   appendTranscript: (entry: {
     entryId: string;
@@ -306,7 +313,6 @@ export function createTalkClientGatewayControlOwner(params: {
     text: string;
     mode?: unknown;
   }) => Promise<RealtimeVoiceAgentControlResult>;
-  warn: (message: string) => void;
 }): GatewayControlOwner {
   let bridge: RealtimeVoiceBridge | undefined;
   let closeProvider: (() => Promise<void>) | undefined;
@@ -316,6 +322,33 @@ export function createTalkClientGatewayControlOwner(params: {
   const entryPrefix = `gateway-${randomUUID()}`;
   const consultQueue = createRealtimeControlQueue();
   const consultControllers = new Map<string, AbortController>();
+  const warn = (message: string) => params.context.logGateway.warn(message);
+  const talkPayload = () => ({ voiceSessionId: params.voiceSessionId });
+  const harness = createRealtimeVoiceSessionHarness({
+    talk: {
+      sessionId: params.voiceSessionId,
+      mode: "realtime",
+      transport: "webrtc",
+      brain: "agent-consult",
+      provider: params.providerId,
+    },
+    talkPayloads: {
+      turnStarted: talkPayload,
+      turnEnded: (reason) => ({ ...talkPayload(), reason }),
+      inputAudioDelta: (audio) => ({ ...talkPayload(), byteLength: audio.byteLength }),
+      outputAudioStarted: talkPayload,
+      outputAudioDelta: (audio) => ({ ...talkPayload(), byteLength: audio.byteLength }),
+      outputAudioDone: (reason) => ({ ...talkPayload(), reason }),
+    },
+    onTalkEvent: (talkEvent: TalkEvent) =>
+      params.context.broadcastToConnIds(
+        "talk.event",
+        { voiceSessionId: params.voiceSessionId, talkEvent },
+        new Set([params.connId]),
+        { dropIfSlow: talkEvent.final !== true },
+      ),
+    captureBridgeEvents: false,
+  });
 
   const submit = async (callId: string, result: unknown): Promise<void> => {
     if (!bridge) {
@@ -370,7 +403,7 @@ export function createTalkClientGatewayControlOwner(params: {
     hasActiveRun: () => consultControllers.size > 0,
     execute: applyControl,
     speak: (message) => bridge?.sendUserMessage?.(message),
-    warn: params.warn,
+    warn,
   });
 
   const handleToolCall = (event: RealtimeVoiceToolCallEvent): void => {
@@ -387,7 +420,7 @@ export function createTalkClientGatewayControlOwner(params: {
         return;
       }
       void admission.completion.catch((error: unknown) => {
-        params.warn(`talk Gateway control consult failed: ${formatError(error)}`);
+        warn(`talk Gateway control consult failed: ${formatError(error)}`);
       });
       return;
     }
@@ -405,18 +438,35 @@ export function createTalkClientGatewayControlOwner(params: {
     void submit(event.callId, {
       error: `Unsupported realtime Talk tool: ${event.name}`,
     }).catch((error: unknown) => {
-      params.warn(`talk Gateway control rejection failed: ${formatError(error)}`);
+      warn(`talk Gateway control rejection failed: ${formatError(error)}`);
     });
   };
 
   const handleTranscript = (role: "user" | "assistant", text: string, final: boolean): void => {
-    if (closed || !final || !text.trim()) {
+    if (closed || !text.trim()) {
+      return;
+    }
+    const turnId = harness.ensureTurn();
+    harness.emit({
+      type:
+        role === "assistant"
+          ? final
+            ? "output.text.done"
+            : "output.text.delta"
+          : final
+            ? "transcript.done"
+            : "transcript.delta",
+      turnId,
+      payload: role === "assistant" ? { text } : { role, text },
+      final,
+    });
+    if (!final) {
       return;
     }
     transcriptSequence += 1;
     const entryId = `${entryPrefix}-${transcriptSequence}`;
     void params.appendTranscript({ entryId, role, text }).catch((error: unknown) => {
-      params.warn(`talk Gateway control transcript failed: ${formatError(error)}`);
+      warn(`talk Gateway control transcript failed: ${formatError(error)}`);
     });
     if (role === "user") {
       runControl.handleSpoken(text, params.flushTranscript());
@@ -430,12 +480,46 @@ export function createTalkClientGatewayControlOwner(params: {
       bindBridge: (nextBridge) => {
         bridge = nextBridge;
       },
+      onEvent: (event) => {
+        const legacyOutcome = handleRealtimeVoiceHarnessBridgeEvent(harness, event);
+        if (
+          legacyOutcome &&
+          (legacyOutcome.status === "failed" || legacyOutcome.status === "incomplete")
+        ) {
+          warn(`talk Gateway control ${legacyOutcome.message}`);
+        }
+        if (
+          event.direction === "server" &&
+          (event.type === "conversation.output_audio.delta" ||
+            event.type === "response.audio.delta" ||
+            event.type === "response.output_audio.delta")
+        ) {
+          const turnId = harness.ensureTurn();
+          harness.talk.startOutputAudio({ turnId, payload: talkPayload() });
+        }
+      },
       onTranscript: handleTranscript,
       onToolCall: handleToolCall,
-      onError: (error) => params.warn(`talk Gateway control provider error: ${error.message}`),
+      onResponseDone: (outcome) => {
+        const terminal = harness.finishResponse(outcome);
+        if (terminal.ok && (outcome.status === "failed" || outcome.status === "incomplete")) {
+          warn(`talk Gateway control ${outcome.message}`);
+        }
+      },
+      onReady: () => harness.emit({ type: "session.ready", payload: talkPayload() }),
+      onError: (error) => {
+        warn(`talk Gateway control provider error: ${error.message}`);
+        harness.emit({
+          type: "session.error",
+          payload: { ...talkPayload(), message: error.message },
+          final: true,
+        });
+      },
       onClose: () => {
+        harness.emit({ type: "session.closed", payload: talkPayload(), final: true });
+        harness.close();
         void owner.close({ skipProvider: true }).catch((error: unknown) => {
-          params.warn(`talk Gateway control close failed: ${formatError(error)}`);
+          warn(`talk Gateway control close failed: ${formatError(error)}`);
         });
       },
     },
@@ -447,14 +531,14 @@ export function createTalkClientGatewayControlOwner(params: {
         void previous
           .close({ preserveLogicalSession: true, preserveRuns: true })
           .catch((error: unknown) => {
-            params.warn(`talk replaced Gateway transport close failed: ${formatError(error)}`);
+            warn(`talk replaced Gateway transport close failed: ${formatError(error)}`);
           });
       }
       registerTalkConnectionCleanup(params.connId, "browser-control", () => {
         for (const current of owners.values()) {
           if (current.connId === params.connId) {
             void current.close().catch((error: unknown) => {
-              params.warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
+              warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
             });
           }
         }
@@ -468,6 +552,7 @@ export function createTalkClientGatewayControlOwner(params: {
       // can re-enter close without starting a second cleanup.
       closing = Promise.resolve().then(async () => {
         closed = true;
+        harness.close();
         if (owners.get(params.voiceSessionId) === owner) {
           owners.delete(params.voiceSessionId);
         }

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -16,7 +16,6 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
-import { resolveThinkingDefault } from "../../model-selection.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -114,7 +113,7 @@ const hoisted = vi.hoisted(() => {
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntry: async (scope: unknown, patch: SessionEntry) =>
+      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
         await upsertSessionEntryMock(scope, patch),
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
@@ -197,7 +196,7 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/paths.js", () => ({
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
@@ -206,7 +205,7 @@ vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/config.js", () => ({
@@ -235,8 +234,7 @@ vi.mock("../registry/subagent-registry.js", () => ({
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));
 
-vi.mock("../registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../registry/subagent-registry-read.js")>()),
+vi.mock("../registry/subagent-registry-read.js", () => ({
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
@@ -691,16 +689,6 @@ function enableTelegramCurrentConversationBindings(): void {
 }
 
 describe("spawnAcpDirect", () => {
-  beforeAll(() => {
-    resolveThinkingDefault({
-      cfg: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-      },
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
-  });
-
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
@@ -1150,6 +1138,7 @@ describe("spawnAcpDirect", () => {
           },
         ],
         defaults: {
+          thinkingDefault: "off",
           subagents: {
             allowAgents: ["codex"],
             maxSpawnDepth: 2,
@@ -1173,7 +1162,7 @@ describe("spawnAcpDirect", () => {
       agent: "codex",
       runtimeOptions: {
         model: "anthropic/claude-sonnet-4-6",
-        thinking: "adaptive",
+        thinking: "off",
       },
     });
   });

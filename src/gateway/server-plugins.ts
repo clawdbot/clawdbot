@@ -441,7 +441,7 @@ export function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;

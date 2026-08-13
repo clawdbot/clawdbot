@@ -8,6 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
@@ -297,10 +298,6 @@ async function requestHttp(params: {
     timer.unref?.();
     req.end();
   });
-}
-
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function describeProbeError(error: unknown): string {
@@ -600,10 +597,10 @@ async function sampleGateway(params: {
       ok: readyz.ok && readyz.status === 200,
       status: readyz.status,
       degraded: typeof eventLoop?.degraded === "boolean" ? eventLoop.degraded : null,
-      degradedSinceMs: numberOrNull(eventLoop?.degradedSinceMs),
-      delayP99Ms: numberOrNull(eventLoop?.delayP99Ms),
-      utilization: numberOrNull(eventLoop?.utilization),
-      cpuCoreRatio: numberOrNull(eventLoop?.cpuCoreRatio),
+      degradedSinceMs: asFiniteNumber(eventLoop?.degradedSinceMs) ?? null,
+      delayP99Ms: asFiniteNumber(eventLoop?.delayP99Ms) ?? null,
+      utilization: asFiniteNumber(eventLoop?.utilization) ?? null,
+      cpuCoreRatio: asFiniteNumber(eventLoop?.cpuCoreRatio) ?? null,
     },
     sessionsList: {
       atMs,

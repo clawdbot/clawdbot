@@ -29,6 +29,7 @@ and what the automatic resume looks like.
 | Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
 | Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                        |
 | Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
+| Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
 
 ## Graceful restarts drain first
 
@@ -41,6 +42,19 @@ restarts therefore interrupt nothing at all.
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
+
+## Host sleep and process freezes
+
+When a gateway host wakes from sleep, a virtual machine resumes, or the process
+continues after a long pause, the gateway detects the freeze within about 30
+seconds. It restarts channel connections and refreshes cached health and
+presence so clients do not wait for stale sockets or snapshots to expire.
+
+The macOS app and Linux companion cooperate with a local gateway by preparing a
+short suspension lease before the host sleeps and resuming it after wake. Remote
+gateways are not suspended when the app host sleeps. A deliberate suspension
+through `gateway.suspend.*` keeps recovery deferred until the controller resumes
+the gateway.
 
 ## How interrupted work is detected
 
@@ -245,6 +259,8 @@ channels.start --params '{"channel":"<id>"}'`
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
   dying process.
+- Gateway terminal PTYs, including operator- and agent-owned terminals. They
+  are process-local and end when the Gateway restarts.
 - Standalone embedded turns cannot take over a main session with pending
   restart recovery because they do not share the gateway's lifecycle owner.
   Run the turn through the gateway or reset it there with `/new` or `/reset`.

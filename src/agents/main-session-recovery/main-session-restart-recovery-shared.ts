@@ -1,8 +1,9 @@
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
@@ -64,9 +65,7 @@ export function normalizeStringSet(values: Iterable<string> | undefined): Set<st
   return normalized;
 }
 
-export function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+export const normalizeFiniteTimestamp = asFiniteNumber;
 
 export function hasCurrentProcessOwner(params: {
   activeSessionIds: Set<string>;
@@ -94,7 +93,7 @@ export async function resolveRestartRecoveryStorePaths(params: {
     const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
     const configuredStorePaths = new Set(
       configuredAgentIds.map((agentId) =>
-        path.resolve(resolveStorePath(params.cfg?.session?.store, { agentId, env })),
+        path.resolve(resolveSessionStorePathCore(params.cfg?.session?.store, { agentId, env })),
       ),
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);

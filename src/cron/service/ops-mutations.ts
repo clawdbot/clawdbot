@@ -4,6 +4,7 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   type CronActiveJobMarker,
   isCronJobActive,
@@ -372,8 +373,16 @@ export async function add(
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
+    const explicitOwnerAgentId =
+      normalizeOptionalAgentId(normalizedInput.agentId) ??
+      parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
+    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
+    const creationInput =
+      !explicitOwnerAgentId && retainedLegacyAgentId === agentId
+        ? { ...normalizedInput, agentId }
+        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, normalizedInput, {
+    const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,

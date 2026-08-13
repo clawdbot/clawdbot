@@ -17,6 +17,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  categoryClearReturnsToGroups: boolean;
 };
 
 /**
@@ -52,6 +53,7 @@ const EMPTY_SESSION: SessionMenuData = {
   unread: false,
   archived: false,
   category: null,
+  categoryClearReturnsToGroups: false,
 };
 
 class SessionMenu extends OpenClawLightDomElement {
@@ -241,7 +243,16 @@ class SessionMenu extends OpenClawLightDomElement {
         entry(group, session.category === group, `move-to-group:${encodeURIComponent(group)}`),
       )}
       ${session.category
-        ? entry(t("sessionsView.removeFromGroup"), false, "move-to-group:", false)
+        ? entry(
+            t(
+              session.categoryClearReturnsToGroups
+                ? "sessionsView.moveBackToGroups"
+                : "sessionsView.removeFromGroup",
+            ),
+            false,
+            "move-to-group:",
+            false,
+          )
         : nothing}
       ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
     `;

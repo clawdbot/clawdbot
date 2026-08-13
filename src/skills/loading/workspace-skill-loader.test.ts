@@ -28,7 +28,7 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
   const fsLocal = await import("node:fs");
   const pathLocal = await import("node:path");
   return {
-    loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
+    loadPluginManifestRegistryCore: (params: { workspaceDir?: string }) => {
       const extensionsRoot = pathLocal.join(params.workspaceDir ?? "", ".openclaw", "extensions");
       const plugins = [];
       for (const id of ["open-prose", "browser"]) {

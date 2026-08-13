@@ -46,6 +46,7 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
 
 function requestModelsList(params: {
   view: "default" | "configured" | "provider-config" | "all";
+  agentId?: string;
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;
@@ -71,11 +72,13 @@ function requestModelsList(params: {
       method: "models.list",
       params: {
         view: params.view,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
       },
     },
     params: {
       view: params.view,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
     },
     respond: respond as RespondFn,
@@ -106,6 +109,63 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("loads the requested agent catalog", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { id: "writer-model", name: "Writer Model", provider: "test" },
+    ]);
+    const { request } = requestModelsList({
+      view: "configured",
+      agentId: "writer",
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "writer", model: "test/writer-model" },
+          ],
+        },
+      },
+      loadGatewayModelCatalog,
+    });
+
+    await request;
+
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "writer" }),
+    );
+  });
+
+  it("returns typed selection-required until an explicit fleet selects an agent", async () => {
+    const runtimeConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+    const missing = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => []),
+    });
+    await missing.request;
+    expect(missing.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+
+    const selected = requestModelsList({
+      view: "configured",
+      agentId: "research",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => []),
+    });
+    await selected.request;
+    expect(selected.respond).toHaveBeenCalledWith(true, { models: [] }, undefined);
+  });
+
   it("uses the replacement owner config for the whole catalog projection", async () => {
     const initialConfig = {
       agents: { defaults: { models: { "test/old": {} } } },
@@ -292,6 +352,14 @@ describe("models.list", () => {
               reasoning: true,
               input: ["text", "image"],
               available: true,
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "minimal", label: "minimal" },
+                { id: "low", label: "low" },
+                { id: "medium", label: "medium" },
+                { id: "high", label: "high" },
+              ],
+              thinkingDefault: "medium",
             },
           ],
         },
@@ -1555,6 +1623,47 @@ describe("models.list", () => {
       },
       undefined,
     );
+  });
+
+  it("projects ordered thinking profiles without exposing raw compatibility metadata", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "reasoning-model",
+            name: "Reasoning Model",
+            provider: "demo-provider",
+            reasoning: true,
+            compat: {
+              supportedReasoningEfforts: ["max", "xhigh"],
+              privateRouteHint: "do-not-publish",
+            },
+          },
+        ]),
+      ),
+      reqId: "req-models-list-thinking-profile",
+    });
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        id: "reasoning-model",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+          { id: "xhigh", label: "xhigh" },
+          { id: "max", label: "max" },
+          { id: "ultra", label: "ultra" },
+        ],
+        thinkingDefault: "medium",
+      }),
+    ]);
+    expect(payload.models[0]).not.toHaveProperty("compat");
   });
 
   it("does not reinterpret context tokens or expose model input metadata", async () => {

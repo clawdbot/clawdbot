@@ -165,6 +165,7 @@ export async function statusCommand(
     memory,
     memoryPlugin,
     pluginCompatibility,
+    env,
   } = scan;
 
   const {
@@ -325,6 +326,7 @@ export async function statusCommand(
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
+      env: env ?? {},
       opts,
       surface: overviewSurface,
       osSummary,

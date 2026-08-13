@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -486,7 +486,9 @@ function listDeclaredQaRunnerPlugins(
 > {
   // Private QA is a source-checkout harness. Its command tree must be derived
   // from repo-owned manifests before Commander pre-action hooks can run.
-  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  const registry = env
+    ? loadBundledPluginManifestRegistry({ env })
+    : loadPluginManifestRegistryCore();
   return registry.plugins
     .filter(
       (

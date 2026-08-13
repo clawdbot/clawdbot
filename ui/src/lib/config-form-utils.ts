@@ -18,10 +18,6 @@ function keepValue(value: unknown): SanitizeResult {
   return { omitted: false, value };
 }
 
-function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
-  return record != null && Object.hasOwn(record, key);
-}
-
 function sanitizeRedactedValue(params: {
   value: unknown;
   originalFormValue: unknown;
@@ -70,7 +66,8 @@ function sanitizeRedactedValue(params: {
       originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
         ? originalFormRecord[key]
         : undefined;
-    const originalRawPathExists = hasOwnRecordValue(originalRawRecord, key);
+    const originalRawPathExists =
+      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
     const sanitized = sanitizeRedactedValue({
       value: item,
       originalFormValue,

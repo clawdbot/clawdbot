@@ -204,11 +204,11 @@
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
   overflow-y: auto;
-  padding: 6px;
+  padding: var(--menu-padding);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
   color: var(--text);
 }
 
@@ -433,6 +433,7 @@
 
 .model-setup-wizard {
   display: grid;
+  min-width: 0;
   max-height: min(720px, calc(100dvh - 48px));
   overflow: hidden;
   border: 1px solid var(--border);
@@ -453,6 +454,8 @@
 
 .model-setup-wizard__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 14px;
   overflow: auto;
 }

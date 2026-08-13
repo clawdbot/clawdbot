@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
@@ -20,7 +21,6 @@ import {
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {

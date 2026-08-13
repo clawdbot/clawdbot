@@ -11,11 +11,7 @@ import {
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -34,7 +30,7 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   listSessionEntriesReadOnly,
@@ -84,8 +80,10 @@ import {
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
-import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 import { projectSessionsPatchEntry, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
@@ -235,6 +233,8 @@ export async function createGatewaySession(params: {
   generatedDisplayName?: string;
   model?: string;
   thinkingLevel?: string;
+  /** Registry identity recorded only when this request creates a logical session node. */
+  projectId?: string;
   incognito?: boolean;
   visibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
@@ -293,8 +293,44 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
+  const projectId = normalizeOptionalString(params.projectId);
+  const explicitAgentId = normalizeOptionalString(params.agentId);
+  const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
+  if (
+    explicitAgentId &&
+    explicitKeyAgentId &&
+    normalizeAgentId(explicitKeyAgentId) !== normalizeAgentId(explicitAgentId)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `sessions.create key agent (${explicitKeyAgentId}) does not match agentId (${normalizeAgentId(explicitAgentId)})`,
+      ),
+    };
+  }
+  const requestedKeyAgent = requestedKey
+    ? resolveRequestedSessionAgentId(params.cfg, requestedKey, explicitAgentId, {
+        allowUnconfiguredExplicitAgent: true,
+      })
+    : undefined;
+  if (requestedKeyAgent && !requestedKeyAgent.ok) {
+    return requestedKeyAgent;
+  }
+  // Resolve the main alias under an explicit selection before compatibility ownership.
+  const implicitSelectionKey = explicitAgentId
+    ? `agent:${normalizeAgentId(explicitAgentId)}:main`
+    : "main";
+  const implicitAgent = requestedKeyAgent
+    ? undefined
+    : resolveRequestedSessionAgentId(params.cfg, implicitSelectionKey, explicitAgentId, {
+        allowUnconfiguredExplicitAgent: true,
+      });
+  if (implicitAgent && !implicitAgent.ok) {
+    return implicitAgent;
+  }
   const agentId = normalizeAgentId(
-    normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
+    explicitAgentId ?? requestedKeyAgent?.agentId ?? implicitAgent?.agentId,
   );
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
@@ -324,22 +360,6 @@ export async function createGatewaySession(params: {
         error: errorShape(
           ErrorCodes.INVALID_REQUEST,
           "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
-        ),
-      };
-    }
-  }
-  if (requestedKey) {
-    const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-    if (
-      requestedAgentId &&
-      requestedAgentId !== agentId &&
-      normalizeOptionalString(params.agentId)
-    ) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `sessions.create key agent (${requestedAgentId}) does not match agentId (${agentId})`,
         ),
       };
     }
@@ -376,12 +396,12 @@ export async function createGatewaySession(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
       };
     }
-    const durableStorePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const durableEntryExists = listSessionEntriesReadOnly({
       agentId,
       storePath: durableStorePath,
     }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
-    if (durableEntryExists || loadSessionEntryReadOnly(explicitTargetKey).entry) {
+    if (durableEntryExists || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return {
         ok: false,
         error: errorShape(
@@ -473,25 +493,21 @@ export async function createGatewaySession(params: {
   let parentSelectedAgentId: string | undefined;
   let parentSessionTarget: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
   if (parentSessionKey) {
-    const parentCanonicalKey = resolveSessionStoreKey({
-      cfg: params.cfg,
-      sessionKey: parentSessionKey,
-    });
-    if (parentCanonicalKey === "global") {
-      const parentRequestedAgent = resolveRequestedSessionAgentId(
-        params.cfg,
-        parentSessionKey,
-        params.agentId,
-      );
-      if (!parentRequestedAgent.ok) {
-        return parentRequestedAgent;
-      }
-      parentSelectedAgentId = parentRequestedAgent.agentId;
-    }
-    const parent = loadSessionEntryReadOnly(
+    const parentRequestedAgent = resolveRequestedSessionAgentId(
+      params.cfg,
       parentSessionKey,
-      parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+      !parseAgentSessionKey(parentSessionKey) &&
+        ["global", "unknown"].includes(parentSessionKey.toLowerCase())
+        ? explicitAgentId
+        : undefined,
     );
+    if (!parentRequestedAgent.ok) {
+      return parentRequestedAgent;
+    }
+    parentSelectedAgentId = parentRequestedAgent.agentId;
+    const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+      agentId: parentSelectedAgentId,
+    });
     if (!parent.entry?.sessionId) {
       return {
         ok: false,
@@ -521,9 +537,7 @@ export async function createGatewaySession(params: {
     parentSessionTarget = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: parentSessionKey,
-      ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
-        ? { agentId: parentSelectedAgentId }
-        : {}),
+      ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     });
   }
   const parentIncognito =
@@ -623,9 +637,7 @@ export async function createGatewaySession(params: {
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(
-      parentSelectedAgentId ??
-        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ??
-        resolveDefaultAgentId(params.cfg),
+      parentSelectedAgentId ?? resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? agentId,
     );
     const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
     if (canonicalParentSessionKey === parentMainKey) {
@@ -643,9 +655,7 @@ export async function createGatewaySession(params: {
       const execCwd = normalizeOptionalString(params.execCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
-        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
-          ? { agentId: parentSelectedAgentId }
-          : {}),
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
         reason: "new",
         commandSource: params.commandSource,
         ...(params.creation ? { creation: params.creation } : {}),
@@ -705,7 +715,7 @@ export async function createGatewaySession(params: {
         params.fork === true ||
         params.authorizedPluginId !== undefined)
     ) {
-      const currentParent = loadSessionEntryReadOnly(
+      const currentParent = loadGatewaySessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );
@@ -762,9 +772,7 @@ export async function createGatewaySession(params: {
     if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
       const parentEntry = currentParentSessionEntry;
       const parentAgentId = normalizeAgentId(
-        parentSelectedAgentId ??
-          resolveAgentIdFromSessionKey(canonicalParentSessionKey) ??
-          resolveDefaultAgentId(params.cfg),
+        parentSelectedAgentId ?? resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? agentId,
       );
       const workspaceDir = resolveAgentWorkspaceDir(params.cfg, parentAgentId);
       if (hasInternalHookListeners("command", "new")) {
@@ -790,7 +798,7 @@ export async function createGatewaySession(params: {
     }
 
     const target = creationTarget;
-    const currentTargetEntry = loadSessionEntryReadOnly(target.canonicalKey, {
+    const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
     const preparationResult = params.prepareLifecycle
@@ -1005,6 +1013,7 @@ export async function createGatewaySession(params: {
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
+          ...(projectId && createdNewEntry ? { projectId } : {}),
           ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {

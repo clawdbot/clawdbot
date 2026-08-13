@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
@@ -12,7 +13,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
@@ -205,6 +206,7 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
   await tar.t({
     file: archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
@@ -226,16 +228,13 @@ async function extractManifest(params: {
   await tar.t({
     file: params.archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     filter: (entryPath) => entryPath === params.manifestEntryPath,
     onReadEntry: (entry) => {
       manifestContentPromise =
         entry.size > MAX_MANIFEST_BYTES
           ? Promise.resolve(limitError)
-          : entry
-              .concat()
-              .catch((error: unknown) =>
-                error instanceof Error ? error : new Error(String(error)),
-              );
+          : entry.concat().catch((error: unknown) => toStringifiedError(error));
     },
   });
 
@@ -649,6 +648,7 @@ async function verifySqliteSnapshots(params: {
     await tar.x({
       file: params.archivePath,
       gzip: true,
+      maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
       cwd: tempDir,
       strict: true,
       preserveOwner: false,
@@ -709,12 +709,9 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
-export async function backupVerifyCommand(
-  runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
-): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(opts.archive);
+/** Verify a backup archive and return its normalized, integrity-checked inventory. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(archive);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
@@ -775,6 +772,16 @@ export async function backupVerifyCommand(
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
   };
+
+  return result;
+}
+
+/** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
+export async function backupVerifyCommand(
+  runtime: RuntimeEnv,
+  opts: BackupVerifyOptions,
+): Promise<BackupVerifyResult> {
+  const result = await verifyBackupArchive(opts.archive);
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);

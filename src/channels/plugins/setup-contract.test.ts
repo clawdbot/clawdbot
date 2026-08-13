@@ -222,6 +222,12 @@ describe("defineChannelSetupContract", () => {
           choices: ["socket", "http"],
           cli: { flags: "--mode <mode>", description: "Connection mode" },
         },
+        useEnv: {
+          kind: "boolean",
+          cli: { flags: "--use-env", description: "Use environment credentials" },
+          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
+          envVarMode: "any",
+        },
       },
       adapter: {
         applyAccountConfig: ({ cfg }) => cfg,
@@ -241,6 +247,13 @@ describe("defineChannelSetupContract", () => {
           kind: "choice",
           choices: ["socket", "http"],
           cli: { flags: "--mode <mode>", description: "Connection mode" },
+        },
+        {
+          key: "useEnv",
+          kind: "boolean",
+          cli: { flags: "--use-env", description: "Use environment credentials" },
+          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
+          envVarMode: "any",
         },
       ],
     });

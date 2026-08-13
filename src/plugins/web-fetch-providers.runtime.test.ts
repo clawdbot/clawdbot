@@ -125,8 +125,8 @@ describe("resolvePluginWebFetchProviders", () => {
   });
 
   beforeEach(() => {
-    vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
-      createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+    vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistryCore").mockReturnValue(
+      createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -157,10 +157,10 @@ describe("resolvePluginWebFetchProviders", () => {
   });
 
   it("falls back to the plugin loader for non-bundled provider owners", () => {
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -258,10 +258,10 @@ describe("resolvePluginWebFetchProviders", () => {
       "default",
       "/tmp/runtime-workspace",
     );
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -273,7 +273,7 @@ describe("resolvePluginWebFetchProviders", () => {
       env,
     });
 
-    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith({
+    expect(manifestRegistryModule.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
       config: rawConfig,
       workspaceDir: "/tmp/runtime-workspace",
       env,
@@ -298,10 +298,10 @@ describe("resolvePluginWebFetchProviders", () => {
   it("resolves web-fetch providers for each active registry workspace", () => {
     const env = createWebFetchEnv();
     const config = createFirecrawlAllowConfig();
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R

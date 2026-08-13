@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
+import {
+  decodeIdentityPreferences,
+  encodeIdentityPreferences,
+  loadBrowserPreferences,
+  loadNewSessionPreference,
+  patchNewSessionPreference,
+  replaceBrowserPreference,
+} from "./preferences.ts";
 
 describe("new-session browser preferences", () => {
   beforeEach(() => {
@@ -43,5 +50,24 @@ describe("new-session browser preferences", () => {
       JSON.stringify({ agents: { main: { folder: 42, model: [], worktree: "yes" } } }),
     );
     expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
+  });
+
+  it("round-trips normalized browser preferences through identity keys", () => {
+    patchNewSessionPreference("ws://one.example", "Main", { folder: "/local", worktree: true });
+    const browser = loadBrowserPreferences("ws://one.example");
+    expect(encodeIdentityPreferences(browser)).toEqual({
+      "new-session.v1:main": { folder: "/local", worktree: true },
+    });
+    expect(
+      decodeIdentityPreferences({
+        unrelated: { folder: "/ignored" },
+        "new-session.v1:main": { folder: "/gateway", model: "openai/test" },
+      }),
+    ).toEqual({ main: { folder: "/gateway", model: "openai/test" } });
+
+    replaceBrowserPreference("ws://one.example", "main", { folder: "/gateway" });
+    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
+      folder: "/gateway",
+    });
   });
 });

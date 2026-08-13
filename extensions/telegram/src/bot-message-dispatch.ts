@@ -517,7 +517,8 @@ export const dispatchTelegramMessage = async (
     status.finalizeInBackground(
       {
         outcome:
-          !turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback)
+          turn.agentRunFailed ||
+          (!turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback))
             ? "error"
             : "done",
       },

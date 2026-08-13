@@ -3,7 +3,7 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -65,16 +65,7 @@ type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
 function readDependencyRecord(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const dependencies: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string") {
-      dependencies[key] = raw;
-    }
-  }
-  return dependencies;
+  return filterStringRecord(value) ?? {};
 }
 
 function isSafePackageName(name: string): boolean {

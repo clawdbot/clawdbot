@@ -38,12 +38,6 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
 
-// Runtime auth state is operator-controlled durability. Coerce every persisted
-// field through closed enums/numbers so bad rows do not poison auth selection.
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
 function normalizeEnumValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -113,21 +107,21 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     return undefined;
   }
   const stats: ProfileUsageStats = {
-    lastUsed: normalizeFiniteNumber(raw.lastUsed),
-    blockedUntil: normalizeFiniteNumber(raw.blockedUntil),
+    lastUsed: asFiniteNumber(raw.lastUsed),
+    blockedUntil: asFiniteNumber(raw.blockedUntil),
     blockedReason: normalizeEnumValue(raw.blockedReason, AUTH_BLOCKED_REASONS),
     blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
-    cooldownUntil: normalizeFiniteNumber(raw.cooldownUntil),
+    cooldownUntil: asFiniteNumber(raw.cooldownUntil),
     cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
-    disabledUntil: normalizeFiniteNumber(raw.disabledUntil),
+    disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),
-    errorCount: normalizeFiniteNumber(raw.errorCount),
+    errorCount: asFiniteNumber(raw.errorCount),
     failureCounts: normalizeFailureCounts(raw.failureCounts),
-    lastFailureAt: normalizeFiniteNumber(raw.lastFailureAt),
-    lastProbeAt: normalizeFiniteNumber(raw.lastProbeAt),
+    lastFailureAt: asFiniteNumber(raw.lastFailureAt),
+    lastProbeAt: asFiniteNumber(raw.lastProbeAt),
   };
   for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
     if (stats[key] === undefined) {

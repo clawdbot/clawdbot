@@ -301,14 +301,6 @@ describe("qa suite", () => {
     );
   });
 
-  it("parses progress env booleans", () => {
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("true")).toBe(true);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("on")).toBe(true);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
-    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
-  });
-
   it("stops an owned lab when readiness never becomes healthy", async () => {
     const stop = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -608,6 +600,15 @@ describe("qa suite", () => {
         evidence?: unknown;
       };
       expect(summary.evidence).toBeUndefined();
+      if (process.platform !== "win32") {
+        for (const artifactPath of [
+          artifacts.reportPath,
+          artifacts.evidencePath,
+          artifacts.summaryPath,
+        ]) {
+          expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+        }
+      }
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }

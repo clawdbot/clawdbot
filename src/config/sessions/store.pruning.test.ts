@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
@@ -158,7 +158,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -175,10 +174,8 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
-      resumed: { laneId: "main" },
       cleared: false,
     });
   });
@@ -196,7 +193,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "circuit_open",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -952,7 +948,7 @@ describe("resolveMaintenanceConfigFromInput", () => {
   });
 
   it("retains session history when a zero maxDiskBytes disables the budget", async () => {
-    await withTempDir({ prefix: "openclaw-zero-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-zero-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const transcriptPath = path.join(dir, "old-session.jsonl");
       await fs.writeFile(transcriptPath, JSON.stringify({ role: "user", content: "hello" }));

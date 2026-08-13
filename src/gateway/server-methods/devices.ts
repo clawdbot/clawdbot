@@ -40,6 +40,7 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -213,6 +214,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
+  ...scopeUpgradeHandlers,
   "device.pair.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateDevicePairListParams, "device.pair.list", respond)) {
       return;
@@ -356,6 +358,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = approved.device.deviceId.trim();
+    // Operator reapproval leaves the narrow requester live. Wake its identity-bound waiter only
+    // after durable token rotation, before any node-generation teardown can run.
+    context.scopeUpgradeCoordinator?.notify(requestId, "approved");
     if (approved.nodePairingGenerationChanged) {
       invalidateNodeWakeState(normalizedDeviceId);
       // Mark the retired node generation before publishing success so buffered
@@ -445,6 +450,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
+    context.scopeUpgradeCoordinator?.notify(requestId, "rejected");
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.rejected",
       authz,

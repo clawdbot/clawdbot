@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
 type SessionAutomationSource = {
   /** Current in-memory cron jobs; undefined until the cron store is loaded. */
@@ -77,14 +78,23 @@ function buildAutomationKeys(
       continue;
     }
     for (const key of resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId })) {
-      keys.add(key);
+      const agentId = job.owner?.agentId ?? defaultAgentId;
+      if (parseAgentSessionKey(key)) {
+        keys.add(key);
+      } else if (agentId) {
+        keys.add(`${normalizeAgentId(agentId)}\0${key}`);
+      }
     }
   }
   return keys;
 }
 
 /** True when an enabled cron job is bound to the canonical session key. */
-export function sessionHasAutomation(sessionKey: string, cfg: OpenClawConfig): boolean {
+export function sessionHasAutomation(
+  sessionKey: string,
+  cfg: OpenClawConfig,
+  agentId?: string,
+): boolean {
   const jobs = source?.getJobs();
   if (!source || !jobs || jobs.length === 0) {
     return false;
@@ -97,5 +107,10 @@ export function sessionHasAutomation(sessionKey: string, cfg: OpenClawConfig): b
       keys: buildAutomationKeys(jobs, cfg, source.getDefaultAgentId()),
     };
   }
-  return memo.keys.has(sessionKey);
+  const identity = parseAgentSessionKey(sessionKey)
+    ? sessionKey
+    : agentId
+      ? `${normalizeAgentId(agentId)}\0${sessionKey}`
+      : undefined;
+  return identity ? memo.keys.has(identity) : false;
 }

@@ -169,6 +169,28 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
+  it("keeps provider catalog outcomes on the published live snapshot", async () => {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[2] as {
+        onProviderCatalogOutcome?: (outcome: {
+          provider: string;
+          status: "ready" | "auth-rejected" | "unavailable";
+        }) => void;
+      };
+      options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
+      return { agentDir: "/tmp/provider-outcome-agent", wrote: false };
+    });
+
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: {},
+      agentDir: "/tmp/provider-outcome-agent",
+    });
+
+    expect(snapshot.modelCatalog.providerOutcomes).toEqual([
+      { provider: "openai", status: "auth-rejected" },
+    ]);
+  });
+
   it("captures static provider-hook rows in the same lifecycle generation", async () => {
     mocks.loadStaticCatalog.mockResolvedValueOnce([
       {

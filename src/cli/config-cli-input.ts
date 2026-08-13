@@ -1,4 +1,5 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +13,6 @@ import {
 } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { hasErrnoCode } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -20,12 +20,12 @@ import {
   validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
   parseConfigSetValue,
   type PathSegment,
-  toDotPath,
   validatePathSegments,
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode, ConfigSetDryRunResult } from "./config-set-dryrun.js";

@@ -19,7 +19,7 @@ import {
   loadSessionEntry,
   loadExactSessionEntry,
   loadTranscriptEventsSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
@@ -1069,9 +1069,11 @@ describe("gateway server chat", () => {
         routeVariants: [],
       })),
     });
+    testState.agentsConfig = config.agents;
     openDirectChatSession();
     try {
       await writeSessionStore({
+        agentId: "work",
         entries: { "agent:work:main": { sessionId: "sess-work", updatedAt: Date.now() } },
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
@@ -1082,12 +1084,13 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(responses[0]?.ok).toBe(true);
+      expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
       expect(
         (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
       ).toBe(undefined);
       expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
     } finally {
+      testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
     }
   });
@@ -1452,7 +1455,7 @@ describe("gateway server chat", () => {
               }
             | undefined;
           expect(payload?.metadata?.models).toEqual([
-            {
+            expect.objectContaining({
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
@@ -1460,7 +1463,7 @@ describe("gateway server chat", () => {
               contextWindow: 400_000,
               reasoning: false,
               available: true,
-            },
+            }),
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
           expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
@@ -3185,7 +3188,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             abortedLastRun: false,
             updatedAt: Date.now(),
           }));
@@ -3252,7 +3255,7 @@ describe("gateway server chat", () => {
         () => expect(context.dedupe.has(pendingChatSendDedupeKey(idempotencyKey))).toBe(true),
         FAST_WAIT_OPTS,
       );
-      await patchSessionEntry({ sessionKey: "agent:main:main", storePath }, () => ({
+      await patchSessionEntryCore({ sessionKey: "agent:main:main", storePath }, () => ({
         restartRecoveryTerminalRunIds: [idempotencyKey],
         updatedAt: Date.now(),
       }));
@@ -3323,7 +3326,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             sessionId: "replacement-session",
             restartRecoveryDeliveryRunId: "replacement-recovery",
             restartRecoveryDeliverySourceRunId: "replacement-source",
@@ -5647,7 +5650,9 @@ describe("gateway server chat", () => {
       await writeGatewayConfig({
         session: { scope: "global" },
         agents: {
-          entries: { main: { default: true }, work: {} },
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "work" } },
+          entries: { main: {}, work: {} },
         },
       });
       await connectOk(ws);

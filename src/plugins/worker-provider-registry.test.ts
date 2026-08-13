@@ -88,6 +88,23 @@ describe("worker provider registry", () => {
     );
   });
 
+  it("rejects a non-boolean provision-before-installation declaration", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      provisionBeforeInstallation: "sometimes",
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration provisionBeforeInstallation must be a boolean",
+      }),
+    );
+  });
+
   it("rejects a non-function optional SSH identity resolver", () => {
     const pluginRegistry = createTestRegistry();
     const provider = {

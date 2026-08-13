@@ -1,9 +1,10 @@
 // Serves a workspace directory's own project icon so the Control UI can render
 // real project identity instead of a generic folder glyph.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
+import { close } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileTypeFromBuffer } from "file-type";
 import {
   openRootFileFollowingParents,
@@ -26,28 +27,40 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 /**
- * Conventional project icon locations, ordered by framework specificity and then
- * by rendering fidelity (vector before raster). Resolution stops at the first
- * hit, so this list is the whole filesystem cost of a workspace: keeping it
- * bounded is what makes icon lookup a one-time-per-workspace operation.
+ * Conventional project icon locations in deterministic product precedence.
+ * Resolution stops at the first valid hit, so this fixed list is the whole
+ * filesystem cost of opening a workspace and never becomes a recursive scan.
  */
 const WORKSPACE_ICON_RELATIVE_PATHS = [
+  "favicon.svg",
+  "favicon.ico",
+  "favicon.png",
   "public/favicon.svg",
   "public/favicon.ico",
   "public/favicon.png",
+  "public/favicon-32.png",
   "public/apple-touch-icon.png",
   "static/favicon.svg",
   "static/favicon.ico",
   "static/favicon.png",
+  "ui/public/favicon-32.png",
+  "ui/public/favicon.svg",
+  "ui/public/favicon.ico",
+  "ui/public/favicon.png",
+  "app/favicon.ico",
+  "app/favicon.png",
   "app/icon.svg",
   "app/icon.png",
-  "app/favicon.ico",
+  "app/icon.ico",
+  "src/favicon.ico",
+  "src/favicon.svg",
+  "src/app/favicon.ico",
   "src/app/icon.svg",
   "src/app/icon.png",
-  "src/app/favicon.ico",
-  "favicon.svg",
-  "favicon.ico",
-  "favicon.png",
+  "assets/icon.svg",
+  "assets/icon.png",
+  "assets/logo.svg",
+  "assets/logo.png",
 ] as const;
 
 /** Icons are small by construction; anything larger is not a favicon. */
@@ -55,8 +68,10 @@ export const WORKSPACE_ICON_MAX_BYTES = 512 * 1024;
 /** Vector icons are markup the renderer must parse, so they get a tighter cap. */
 export const SVG_ICON_MAX_BYTES = 64 * 1024;
 const WORKSPACE_ICON_CACHE_MAX_ENTRIES = 32;
+const SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES = 128;
 const SVG_MIME_TYPE = "image/svg+xml";
 const ICO_MIME_TYPE = "image/x-icon";
+const closeFileDescriptor = promisify(close);
 
 /** Sniffable raster types the Control UI can render inside an <img> element. */
 const ALLOWED_RASTER_ICON_MIME_TYPES = new Set([
@@ -78,9 +93,11 @@ type WorkspaceIcon = {
 type WorkspaceIconResolution = WorkspaceIcon | null;
 
 let workspaceIconCache = new Map<string, Promise<WorkspaceIconResolution>>();
+let sessionWorkspaceIconCache = new Map<string, Promise<WorkspaceIconResolution>>();
 
 export function clearWorkspaceIconCacheForTest(): void {
   workspaceIconCache = new Map();
+  sessionWorkspaceIconCache = new Map();
 }
 
 /**
@@ -138,7 +155,7 @@ async function readWorkspaceIconCandidate(
   } catch {
     return undefined;
   } finally {
-    fs.closeSync(opened.fd);
+    await closeFileDescriptor(opened.fd);
   }
   if (body.byteLength === 0) {
     return undefined;
@@ -189,6 +206,41 @@ const getSessionsFilesModule = createLazyRuntimeModule(
   () => import("./server-methods/sessions-files.js"),
 );
 
+/**
+ * Prepares the immutable icon snapshot while opening a chat. The HTTP asset
+ * request only reads this map: no session-store or filesystem work is allowed
+ * on that hot path, and icon changes become visible after Gateway restart.
+ */
+export async function prepareSessionWorkspaceIcon(params: {
+  sessionKey: string;
+  agentId?: string;
+}): Promise<void> {
+  const preparation = (async (): Promise<WorkspaceIconResolution> => {
+    const workspaceRoot = (await getSessionsFilesModule()).resolveLocalSessionWorkspaceRoot(params);
+    return workspaceRoot ? await resolveWorkspaceIcon(workspaceRoot) : null;
+  })();
+  sessionWorkspaceIconCache.delete(params.sessionKey);
+  // A failed optional preparation still becomes a stable fallback snapshot;
+  // the returned promise rejects separately so chat.startup can record it.
+  sessionWorkspaceIconCache.set(
+    params.sessionKey,
+    preparation.catch(() => null),
+  );
+  pruneMapToMaxSize(sessionWorkspaceIconCache, SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES);
+  await preparation;
+}
+
+function readPreparedSessionWorkspaceIcon(
+  sessionKey: string,
+): Promise<WorkspaceIconResolution> | undefined {
+  const prepared = sessionWorkspaceIconCache.get(sessionKey);
+  if (prepared) {
+    sessionWorkspaceIconCache.delete(sessionKey);
+    sessionWorkspaceIconCache.set(sessionKey, prepared);
+  }
+  return prepared;
+}
+
 /** `matched` claims the response so a malformed key 404s instead of reaching the SPA. */
 type WorkspaceIconRequest = { matched: false } | { matched: true; sessionKey: string | null };
 
@@ -216,9 +268,8 @@ function parseWorkspaceIconRequest(
 }
 
 /**
- * Serves the icon of the workspace a session runs in. The request names a
- * session, never a path: the served file is whatever the process-cached
- * resolution already picked inside that session's own workspace root.
+ * Serves the icon snapshot prepared when the chat opened. The request names a
+ * session, never a path, and performs no filesystem or session-store work.
  */
 export async function handleWorkspaceIconHttpRequest(
   req: IncomingMessage,
@@ -272,15 +323,23 @@ export async function handleWorkspaceIconHttpRequest(
     return true;
   }
 
-  const workspaceRoot = parsed.sessionKey
-    ? (await getSessionsFilesModule()).resolveLocalSessionWorkspaceRoot({
-        sessionKey: parsed.sessionKey,
-      })
-    : undefined;
-  const icon = workspaceRoot ? await resolveWorkspaceIcon(workspaceRoot) : null;
+  if (!parsed.sessionKey) {
+    res.setHeader("cache-control", "no-store");
+    respondNotFound(res);
+    return true;
+  }
+  const prepared = readPreparedSessionWorkspaceIcon(parsed.sessionKey);
+  if (!prepared) {
+    // The header can paint before chat.startup finishes. Keep this state
+    // retryable so it cannot be cached as the workspace's resolved fallback.
+    res.statusCode = 503;
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("retry-after", "1");
+    res.end("workspace icon snapshot is not ready");
+    return true;
+  }
+  const icon = await prepared;
   if (!icon) {
-    // A workspace can gain an icon later, and this route has no revalidation
-    // token for an absent one; caching the miss would hide it until expiry.
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);
     return true;

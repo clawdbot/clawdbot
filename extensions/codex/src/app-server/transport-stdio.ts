@@ -11,6 +11,12 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
+  "NODE_PATH",
+  "LD_AUDIT",
+  "LD_LIBRARY_PATH",
+  "LD_PRELOAD",
+]);
 const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 type CodexAppServerSpawnRuntime = {
@@ -71,7 +77,19 @@ export function resolveCodexAppServerSpawnEnv(
       delete env[key];
     }
   }
+  for (const key of Object.keys(env)) {
+    if (isCodexRuntimeInjectionEnvironmentKey(key)) {
+      // Package managers and agent hosts may inject loader paths into their children. Codex does
+      // not need them, so strip them before attestation and spawn instead of self-failing setup.
+      delete env[key];
+    }
+  }
   return env;
+}
+
+function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
+  const key = rawKey.toUpperCase();
+  return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
 }
 
 /** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */

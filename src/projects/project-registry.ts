@@ -18,7 +18,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 
-type ProjectRegistryRecord = {
+export type ProjectRegistryRecord = {
   id: string;
   displayName: string;
   repoRoot: string;
@@ -81,6 +81,53 @@ function rowToProject(row: ProjectRow): ProjectRegistryRecord {
     ...(row.origin_url ? { originUrl: row.origin_url } : {}),
     source: row.source as "registered" | "cloned",
   };
+}
+
+function insertProjectRegistry(
+  input: {
+    displayName: string;
+    repoRoot: string;
+    originUrl?: string;
+    source: "registered" | "cloned";
+  },
+  options: OpenClawStateDatabaseOptions,
+): ProjectRegistryRecord {
+  ensureProjectRegistrySchema(options);
+  return runOpenClawStateWriteTransaction(
+    ({ db: sqlite }) => {
+      const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
+      if (input.source === "cloned" && input.originUrl) {
+        const duplicate = executeSqliteQueryTakeFirstSync(
+          sqlite,
+          db.selectFrom("projects").selectAll().where("origin_url", "=", input.originUrl),
+        );
+        if (duplicate) {
+          return rowToProject(duplicate);
+        }
+      }
+      const existing = new Set(
+        executeSqliteQuerySync(sqlite, db.selectFrom("projects").select("id")).rows.map(
+          (row) => row.id,
+        ),
+      );
+      const baseId = slugifyWorktreeTitle(input.displayName) ?? "project";
+      const id = allocateProjectId(baseId, existing);
+      const now = Date.now();
+      const row = {
+        id,
+        display_name: input.displayName,
+        repo_root: input.repoRoot,
+        origin_url: input.originUrl ?? null,
+        source: input.source,
+        created_at_ms: now,
+        updated_at_ms: now,
+      };
+      executeSqliteQuerySync(sqlite, db.insertInto("projects").values(row));
+      return rowToProject(row);
+    },
+    options,
+    { operationLabel: "projects.registry.insert" },
+  );
 }
 
 function workspaceProject(cfg: OpenClawConfig, agentId: string): ProjectRegistryRecord {
@@ -150,32 +197,30 @@ export async function registerProjectRegistry(
 ): Promise<ProjectRegistryRecord> {
   const checkout = await resolveProjectCheckout(input.path);
   const displayName = input.name?.trim() || path.basename(checkout.repoRoot) || "Project";
-  const baseId = slugifyWorktreeTitle(displayName) ?? "project";
-  ensureProjectRegistrySchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
-      const existing = new Set(
-        executeSqliteQuerySync(sqlite, db.selectFrom("projects").select("id")).rows.map(
-          (row) => row.id,
-        ),
-      );
-      const id = allocateProjectId(baseId, existing);
-      const now = Date.now();
-      const row = {
-        id,
-        display_name: displayName,
-        repo_root: checkout.repoRoot,
-        origin_url: checkout.originUrl ?? null,
-        source: "registered" as const,
-        created_at_ms: now,
-        updated_at_ms: now,
-      };
-      executeSqliteQuerySync(sqlite, db.insertInto("projects").values(row));
-      return rowToProject(row);
+  return insertProjectRegistry(
+    {
+      displayName,
+      repoRoot: checkout.repoRoot,
+      originUrl: checkout.originUrl,
+      source: "registered",
     },
     options,
-    { operationLabel: "projects.registry.register" },
+  );
+}
+
+export async function registerClonedProjectRegistry(
+  input: { path: string; name: string; originUrl: string },
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<ProjectRegistryRecord> {
+  const checkout = await resolveProjectCheckout(input.path);
+  return insertProjectRegistry(
+    {
+      displayName: input.name,
+      repoRoot: checkout.repoRoot,
+      originUrl: input.originUrl,
+      source: "cloned",
+    },
+    options,
   );
 }
 

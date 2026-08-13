@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -195,7 +196,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     });
   }
 
-  protected async restoreArchivedSession(sessionKey: string) {
+  protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
     const scope = this.captureConnectionScope();
     if (!scope || scope.state.sessionKey !== sessionKey) {
       return;
@@ -214,7 +215,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     let failure: string | null = null;
     try {
       // The patch can resolve falsy on failure; the capability error explains it.
-      const patched = await scope.sessions.patch(sessionKey, { archived: false }, { agentId });
+      const patched = await scope.sessions.patch(
+        sessionKey,
+        { archived: false },
+        { agentId, expectedSessionId },
+      );
       if (!patched) {
         failure = scope.sessions.state.error;
       }
@@ -279,8 +284,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+    const timestamp = parseDateStringTimestampMs(item.timestamp) ?? null;
     const text = item.text?.trim() ? item.text : null;
     if (item.type === "userMessage") {
       return text

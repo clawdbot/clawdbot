@@ -9,7 +9,7 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -391,6 +391,7 @@ async function runSetupWizardOnce(
   });
   const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
+  const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
   const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
   const remoteSeedConfig: OpenClawConfig =
     opts.remoteUrl === undefined && opts.remoteToken === undefined
@@ -403,7 +404,7 @@ async function runSetupWizardOnce(
               ...baseConfig.gateway?.remote,
               ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
               ...(opts.remoteToken !== undefined
-                ? { token: normalizeOptionalString(opts.remoteToken) }
+                ? { token: optionRemoteToken }
                 : remoteUrlChanged
                   ? { token: undefined }
                   : {}),
@@ -417,30 +418,30 @@ async function runSetupWizardOnce(
     seededRemoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(seededRemoteUrl) === undefined
       ? seededRemoteUrl
       : "";
-  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
-  try {
-    const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: remoteSeedConfig,
-      value: remoteSeedConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-      env: process.env,
-    });
-    if (resolvedRemoteGatewayToken) {
-      remoteGatewayToken = resolvedRemoteGatewayToken;
-    }
-  } catch (error) {
+  const remoteProbeAuth = remoteUrl
+    ? await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: remoteSeedConfig,
+        env: process.env,
+        mode: "remote",
+        explicitAuth: { token: optionRemoteToken },
+        ...(remoteUrlChanged
+          ? { urlOverride: optionRemoteUrl, urlOverrideSource: "cli" as const }
+          : {}),
+      })
+    : null;
+  if (remoteProbeAuth?.warning) {
     await prompter.note(
-      [
-        "Could not resolve gateway.remote.token SecretRef for setup probe.",
-        formatErrorMessage(error),
-      ].join("\n"),
+      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+        "\n",
+      ),
       "Gateway auth",
     );
   }
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: remoteGatewayToken,
+        token: remoteProbeAuth?.auth.token,
+        ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })
     : null;
 

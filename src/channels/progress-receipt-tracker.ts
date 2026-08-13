@@ -29,6 +29,8 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
     lastCommentaryText = "";
   };
 
+  const elapsedSeconds = () => Math.max(1, Math.round((now() - startedAt) / 1000));
+
   return {
     noteReasoning() {
       reasoningOpen = true;
@@ -58,9 +60,15 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
       }
     },
     reset,
+    get toolCalls() {
+      return toolCalls;
+    },
+    get elapsedSeconds() {
+      return elapsedSeconds();
+    },
     buildSummaryLine() {
       closeReasoning();
-      const seconds = Math.max(1, Math.round((now() - startedAt) / 1000));
+      const seconds = elapsedSeconds();
       return [
         ...(reasoningSteps > 0
           ? [`🧠 ${reasoningSteps} thought${reasoningSteps === 1 ? "" : "s"}`]

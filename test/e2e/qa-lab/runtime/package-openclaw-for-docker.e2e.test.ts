@@ -241,6 +241,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
@@ -472,7 +473,7 @@ describe("package-openclaw-for-docker", () => {
     const packageJsonPath = path.join(sourceDir, "package.json");
     const originalPackageJson = `${JSON.stringify(
       {
-        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "1.2.3" },
+        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "workspace:1.2.3" },
         devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
@@ -494,7 +495,15 @@ describe("package-openclaw-for-docker", () => {
         outputDir,
         async (command: string, args: string[], cwd: string) => {
           expect({ args, command, cwd }).toEqual({
-            args: ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+            args: [
+              "--dir",
+              "packages/ai",
+              "pack",
+              "--loglevel=error",
+              "--use-stderr",
+              "--pack-destination",
+              outputDir,
+            ],
             command: "pnpm",
             cwd: sourceDir,
           });
@@ -506,7 +515,10 @@ describe("package-openclaw-for-docker", () => {
             fs.writeFileSync(
               path.join(destination, "package.json"),
               `${JSON.stringify({
-                dependencies: { "dep-a": "1.2.3" },
+                dependencies: {
+                  "@openclaw/private-runtime": "0.0.0-private",
+                  "dep-a": "1.2.3",
+                },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
               })}\n`,
@@ -522,6 +534,8 @@ describe("package-openclaw-for-docker", () => {
         devDependencies?: Record<string, string>;
       };
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
+      expect(packageJson.dependencies["@openclaw/private-runtime"]).toBeUndefined();
+      expect(packageJson.dependencies["dep-a"]).toBe("1.2.3");
       expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBe("workspace:*");
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);
@@ -540,6 +554,37 @@ describe("package-openclaw-for-docker", () => {
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps real AI runtime pack failures visible for installer diagnostics", async () => {
+    const sourceDir = tempDirs.make("openclaw-docker-ai-failure-source-");
+    const outputDir = tempDirs.make("openclaw-docker-ai-failure-output-");
+    const packageJsonPath = path.join(sourceDir, "package.json");
+    const originalPackageJson = `${JSON.stringify({
+      dependencies: { "@openclaw/ai": "workspace:*" },
+      name: "openclaw",
+    })}\n`;
+    fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDir, "packages", "ai", "package.json"),
+      '{"name":"@openclaw/ai"}\n',
+    );
+    fs.writeFileSync(packageJsonPath, originalPackageJson);
+    let stderr = "";
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr += String(chunk);
+      return true;
+    });
+
+    try {
+      await expect(prepareBundledAiRuntimePackage(sourceDir, outputDir)).rejects.toThrow(
+        "pnpm --dir packages/ai pack --loglevel=error --use-stderr",
+      );
+      expect(stderr).toContain("ERR_PNPM_PACKAGE_VERSION_NOT_FOUND");
+      expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);
+    } finally {
+      stderrWrite.mockRestore();
     }
   });
 

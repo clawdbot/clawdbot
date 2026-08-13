@@ -737,7 +737,7 @@ describe("exec tool backgrounding", () => {
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
+          output += pollResult.output ?? "";
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);

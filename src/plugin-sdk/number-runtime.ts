@@ -3,10 +3,13 @@
 export { formatByteSize } from "../../packages/normalization-core/src/format.js";
 export {
   asDateTimestampMs,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   isFutureDateTimestampMs,
-  parseDateTimestampMs,
+  parseDateFirstTimestampMs,
+  parseDateStringTimestampMs,
   parseFiniteNumber,
   clampTimerTimeoutMs,
   clampPositiveTimerTimeoutMs,

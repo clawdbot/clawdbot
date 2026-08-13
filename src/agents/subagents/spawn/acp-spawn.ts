@@ -6,10 +6,10 @@ import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spaw
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -33,7 +33,6 @@ import {
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
-import { resolveDefaultAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -449,7 +448,7 @@ export async function spawnAcpDirect(
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
-    ? resolveAgentIdFromSessionKey(parentSessionKey, resolveDefaultAgentId(cfg))
+    ? resolveAgentIdFromSessionKey(parentSessionKey, requesterAgentId)
     : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
@@ -495,7 +494,7 @@ export async function spawnAcpDirect(
         via: "spawn",
         actor: { type: "agent", id: requesterInternalKey },
       });
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
         ? {
             spawnDepth: admission.childSessionPatch.spawnDepth,
@@ -506,7 +505,7 @@ export async function spawnAcpDirect(
           }
         : {};
       childCreationEntry =
-        (await upsertSessionEntry(
+        (await upsertSessionEntryCore(
           { storePath, sessionKey },
           {
             ...creationStamp,

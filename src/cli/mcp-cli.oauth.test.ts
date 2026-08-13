@@ -4,9 +4,12 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,
+  countMcpOAuthPrincipals,
   completeMcpOAuthAuthorization,
   createWorkspace,
+  lastErrorLine,
   lastLogLine,
+  mockError,
   mockLog,
   readMcpOAuthCredentialsStatus,
   resetMcpCliTestState,
@@ -27,12 +30,7 @@ describe("mcp cli OAuth", () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       readMcpOAuthCredentialsStatus.mockResolvedValueOnce({
-        hasTokens: true,
-        requiresAuthorization: false,
-        hasClientInformation: true,
-        hasCodeVerifier: false,
-        hasDiscoveryState: true,
-        hasLastAuthorizationUrl: true,
+        state: "authorized",
       });
 
       await runMcpCommand([
@@ -49,12 +47,8 @@ describe("mcp cli OAuth", () => {
         name: "docs",
         auth: "oauth",
         authStatus: {
-          hasTokens: true,
-          requiresAuthorization: false,
-          hasClientInformation: true,
-          hasCodeVerifier: false,
-          hasDiscoveryState: true,
-          hasLastAuthorizationUrl: true,
+          hasTokens: false,
+          state: "authorized",
         },
       });
     });
@@ -65,12 +59,7 @@ describe("mcp cli OAuth", () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       readMcpOAuthCredentialsStatus.mockResolvedValue({
-        hasTokens: true,
-        requiresAuthorization: true,
-        hasClientInformation: true,
-        hasCodeVerifier: false,
-        hasDiscoveryState: true,
-        hasLastAuthorizationUrl: true,
+        state: "requires-authorization",
       });
 
       await runMcpCommand([
@@ -85,7 +74,7 @@ describe("mcp cli OAuth", () => {
 
       const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
       expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
-      expect(statusLines).toContain("  oauth: tokens=yes authorization=required client=yes");
+      expect(statusLines).toContain("  oauth: requires-authorization");
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "doctor", "--json"]);
@@ -106,6 +95,35 @@ describe("mcp cli OAuth", () => {
           },
         ],
       });
+    });
+  });
+
+  it("shows connected requester principals in list and status output", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      countMcpOAuthPrincipals.mockReturnValue(2);
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "calendar",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth","oauth":{"identity":"per-requester"}}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "list"]);
+      expect(mockLog.mock.calls.map(([line]) => String(line))).toContain(
+        "- calendar (2 connected principals)",
+      );
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "status", "--json"]);
+      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
+        name: "calendar",
+        connectedPrincipals: 2,
+      });
+      expect(readMcpOAuthCredentialsStatus).not.toHaveBeenCalled();
     });
   });
 
@@ -175,6 +193,37 @@ describe("mcp cli OAuth", () => {
         }),
       );
       expect(lastLogLine()).toBe('MCP OAuth credentials cleared for "docs".');
+    });
+  });
+
+  it("rejects operator login and logout for per-requester OAuth", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "calendar",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth","oauth":{"identity":"per-requester"}}',
+      ]);
+      mockError.mockClear();
+      completeMcpOAuthAuthorization.mockClear();
+      clearMcpOAuthCredentials.mockClear();
+
+      await expect(runMcpCommand(["mcp", "login", "calendar", "--code", "abc123"])).rejects.toThrow(
+        "__exit__:1",
+      );
+      expect(lastErrorLine()).toBe(
+        'MCP server "calendar" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.',
+      );
+      expect(completeMcpOAuthAuthorization).not.toHaveBeenCalled();
+
+      mockError.mockClear();
+      await expect(runMcpCommand(["mcp", "logout", "calendar"])).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe(
+        'MCP server "calendar" uses per-requester OAuth. Remove or replace the server to clear requester credentials.',
+      );
+      expect(clearMcpOAuthCredentials).not.toHaveBeenCalled();
     });
   });
 

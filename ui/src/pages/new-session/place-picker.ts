@@ -2,14 +2,27 @@ import { html, nothing } from "lit";
 import type {
   FsListDirResult,
   ProjectRecord,
+  ProjectRecent,
+  RemoteProject,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
-import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
-import { folderDisplayName, isKnownWorkspacePath } from "./path.ts";
+import {
+  renderCloudProfileMenuItems,
+  renderConnectMachineMenuItem,
+  renderSessionMenuItem,
+} from "./cloud-target.ts";
+import type {
+  BrowserTarget,
+  DraftBranches,
+  DraftCloudProfile,
+  DraftEnvironment,
+  DraftNode,
+} from "./discovery.ts";
+import { folderDisplayName } from "./path.ts";
+import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
-import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
+import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
 function parentFolderDisplayName(path: string): string | undefined {
   const trimmed = path.replace(/[\\/]+$/u, "");
@@ -21,131 +34,13 @@ function parentFolderDisplayName(path: string): string | undefined {
   return folderDisplayName(parent) || undefined;
 }
 
-function renderBrowseView(params: {
-  listing: FsListDirResult | null;
-  target: BrowserTarget;
-  loading: boolean;
-  error: string | null;
-  pathDraft: string;
-  usablePath: string | null;
-  registerProjectPath: string | null;
-  registeringProject: boolean;
-  onPathDraftChange: (value: string) => void;
-  onNavigate: (path: string | undefined) => void;
-  onBack: () => void;
-  onRegisterProject: (path: string) => void;
-  onClose: () => void;
-  onApplyFolder: (path: string, nodeId: string) => void;
-}) {
-  const entries = params.listing?.entries ?? [];
-  const registerProjectPath = params.registerProjectPath;
-  return html`
-    <div
-      class="new-session-page__browser"
-      @keydown=${(event: KeyboardEvent) => {
-        if (event.key !== "Escape") {
-          return;
-        }
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        params.onBack();
-      }}
-    >
-      <div class="new-session-page__browser-head">
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("newSession.browserUp")}
-          aria-label=${t("newSession.browserUp")}
-          @click=${() => {
-            if (params.listing?.parent) {
-              params.onNavigate(params.listing.parent);
-            } else {
-              params.onBack();
-            }
-          }}
-        >
-          ${icons.arrowLeft}
-        </button>
-        <input
-          class="new-session-page__browser-path"
-          type="text"
-          aria-label=${t("newSession.folder")}
-          placeholder=${params.target.label}
-          .value=${params.pathDraft}
-          @input=${(event: Event) => {
-            params.onPathDraftChange((event.target as HTMLInputElement).value);
-          }}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              params.onNavigate(params.pathDraft.trim() || undefined);
-            }
-          }}
-        />
-        ${params.loading
-          ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-nav"
-          title=${t("common.close")}
-          aria-label=${t("common.close")}
-          @click=${params.onClose}
-        >
-          ${icons.x}
-        </button>
-      </div>
-      ${params.error ? html`<div class="new-session-page__error">${params.error}</div>` : nothing}
-      <div class="new-session-page__browser-list" role="group" aria-label=${t("newSession.folder")}>
-        ${params.listing && entries.length === 0 && !params.loading
-          ? html`<div class="new-session-page__browser-empty">${t("newSession.browserEmpty")}</div>`
-          : nothing}
-        ${entries.map(
-          (entry) => html`
-            <button
-              type="button"
-              class="new-session-page__browser-entry ${entry.hidden
-                ? "new-session-page__browser-entry--hidden"
-                : ""}"
-              title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-              @click=${() => params.onNavigate(entry.path)}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-              <span>${entry.name}</span>
-            </button>
-          `,
-        )}
-      </div>
-      <div class="new-session-page__browser-actions">
-        ${registerProjectPath
-          ? html`
-              <button
-                type="button"
-                class="new-session-page__browser-register"
-                ?disabled=${params.registeringProject}
-                @click=${() => params.onRegisterProject(registerProjectPath)}
-              >
-                ${t("newSession.registerProject")}
-              </button>
-            `
-          : nothing}
-        <button
-          type="button"
-          class="new-session-page__browser-use"
-          ?disabled=${params.usablePath === null || params.registeringProject}
-          @click=${() => {
-            if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath, params.target.nodeId);
-              params.onClose();
-            }
-          }}
-        >
-          ${t("newSession.browserUse")}
-        </button>
-      </div>
-    </div>
-  `;
+/** Detects pasted clone URLs; the Gateway remains authoritative for host validation. */
+export function projectCloneInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("-") || /\s/u.test(trimmed)) {
+    return null;
+  }
+  return /^(?:https:\/\/|ssh:\/\/git@|git@[^:]+:)/iu.test(trimmed) ? trimmed : null;
 }
 
 export function renderPlaceSelect(params: {
@@ -154,13 +49,22 @@ export function renderPlaceSelect(params: {
   canWrite: boolean;
   folder: string;
   workspace: string;
-  workspaceRoots: readonly string[];
   projects: readonly ProjectRecord[];
+  recents: readonly ProjectRecent[];
+  projectQuery: string;
+  projectSearchAvailable: boolean;
+  projectAddAvailable: boolean;
+  remoteProjects: readonly RemoteProject[];
+  projectSearchCredential: "configured" | "missing" | null;
+  projectSearchLoading: boolean;
+  projectSearchError: string | null;
+  projectCloneBusy: boolean;
+  projectCloneError: string | null;
   projectId: string;
-  sessions: readonly RecentPlaceSource[];
   execNodes: DraftNode[];
+  environments: readonly DraftEnvironment[] | null;
   gatewayName: string;
-  cloudProfiles: DraftCloudProfile[];
+  cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
   execNode: string;
   syncFolder: string;
@@ -193,18 +97,32 @@ export function renderPlaceSelect(params: {
   onSelectExecNode: (nodeId: string) => void;
   onSelectCloudProfile: (profileId: string) => void;
   onSelectProject: (projectId: string) => void;
+  onProjectQueryInput: (query: string) => void;
+  onCloneProject: (gitUrl: string) => void;
   onApplyFolder: (folder: string, execNode: string) => void;
   onBrowse: (target: BrowserTarget) => void;
   onBrowserPathDraftChange: (value: string) => void;
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
+  onConnectMachine: () => void;
   onClose: () => void;
   onToggleWorktree: () => void;
   onBaseRefInput: (baseRef: string) => void;
   onWorktreeNameInput: (name: string) => void;
 }) {
   const folder = params.folder.trim();
+  const projectQuery = params.projectQuery.trim();
+  const cloneInput = projectCloneInput(params.projectQuery);
+  const normalizedProjectQuery = projectQuery.toLowerCase();
+  const localProjects = normalizedProjectQuery
+    ? params.projects.filter((project) =>
+        [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
+          .join("\n")
+          .toLowerCase()
+          .includes(normalizedProjectQuery),
+      )
+    : params.projects;
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
   const folderLabel = selectedProject
     ? selectedProject.displayName
@@ -217,6 +135,7 @@ export function renderPlaceSelect(params: {
   const activeProfile = params.cloudProfiles.find(
     (profile) => profile.id === params.cloudProfileId,
   );
+  const { deviceNodes, deviceFacts, cloudProfiles } = resolvePlacePickerSections(params);
   const gatewayLabel = params.gatewayName
     ? t("newSession.gatewayNamed", { name: params.gatewayName })
     : t("newSession.gateway");
@@ -227,28 +146,34 @@ export function renderPlaceSelect(params: {
       : gatewayLabel;
   const label = params.showDestinations ? `${folderLabel} · ${destinationLabel}` : folderLabel;
   const effectiveFolder = folder || params.workspace;
-  const recents = recentPlaces(params.sessions, {
-    workspace: params.workspace,
-    execNodes: params.execNodes,
-    allowGatewayFolder: (recentFolder) =>
-      params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, recentFolder),
-  });
+  const recents = params.recents.filter(
+    (recent) =>
+      recent.kind !== "folder" ||
+      !recent.execNode ||
+      deviceNodes.some((node) => node.nodeId === recent.execNode),
+  );
   const recentItems = recents.map((recent) => {
-    const node = params.execNodes.find((candidate) => candidate.nodeId === recent.execNode);
+    const node =
+      recent.kind === "folder" && recent.execNode
+        ? deviceNodes.find((candidate) => candidate.nodeId === recent.execNode)
+        : undefined;
     const recentLabel =
       params.showDestinations && node
-        ? `${folderDisplayName(recent.folder)} · ${node.displayName}`
-        : folderDisplayName(recent.folder);
+        ? `${recent.displayName} · ${node.displayName}`
+        : recent.displayName;
     return { ...recent, label: recentLabel, node };
   });
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.label, [
-    (recent) => parentFolderDisplayName(recent.folder),
-    (recent) => recent.folder,
+    (recent) => (recent.kind === "folder" ? parentFolderDisplayName(recent.folder) : undefined),
+    (recent) => (recent.kind === "folder" ? recent.folder : undefined),
     (recent) => recent.node?.modelIdentifier,
     (recent) => recent.node?.remoteIp,
-    (recent) => `${recent.folder}${recent.execNode ? ` · ${recent.execNode.slice(0, 8)}` : ""}`,
+    (recent) =>
+      recent.kind === "folder"
+        ? `${recent.folder}${recent.execNode ? ` · ${recent.execNode.slice(0, 8)}` : ""}`
+        : recent.projectId,
   ]);
-  const nodeSuffixes = disambiguate(params.execNodes, (node) => node.displayName, [
+  const nodeSuffixes = disambiguate(deviceNodes, (node) => node.displayName, [
     (node) => node.modelIdentifier,
     (node) => node.remoteIp,
     (node) => node.nodeId.slice(0, 8),
@@ -259,6 +184,28 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
+        params.onBrowse(browseTarget);
+      }
+    }}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -308,7 +255,7 @@ export function renderPlaceSelect(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       ${params.browserTarget
-        ? renderBrowseView({
+        ? renderPlaceBrowser({
             listing: params.browserListing,
             target: params.browserTarget,
             loading: params.browserLoading,
@@ -341,73 +288,141 @@ export function renderPlaceSelect(params: {
                     params.submitting,
                   )
                 : nothing}
-              ${params.projects.length > 0
+              <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
+              <label class="new-session-page__project-search">
+                <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
+                <input
+                  type="search"
+                  placeholder=${t("newSession.projectSearchPlaceholder")}
+                  .value=${params.projectQuery}
+                  ?disabled=${params.submitting || params.pendingCloud || params.projectCloneBusy}
+                  @input=${(event: Event) =>
+                    params.onProjectQueryInput((event.target as HTMLInputElement).value)}
+                  @keydown=${(event: KeyboardEvent) => {
+                    if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
+                      event.preventDefault();
+                      params.onCloneProject(cloneInput);
+                    }
+                  }}
+                />
+              </label>
+              ${localProjects.map((project) =>
+                renderSessionMenuItem(
+                  {
+                    value: `project:${project.id}`,
+                    label: project.displayName,
+                    icon: icons.gitBranch,
+                    checked: params.projectId === project.id,
+                    title: project.repoRoot,
+                    onSelect: () => params.onSelectProject(project.id),
+                  },
+                  params.submitting || params.projectCloneBusy,
+                ),
+              )}
+              ${cloneInput && params.projectAddAvailable
+                ? renderSessionMenuItem(
+                    {
+                      value: "project-clone-url",
+                      label: cloneInput,
+                      icon: icons.gitBranch,
+                      sub: t("newSession.cloneProject"),
+                      checked: false,
+                      keepOpen: true,
+                      onSelect: () => params.onCloneProject(cloneInput),
+                    },
+                    params.submitting || params.projectCloneBusy,
+                  )
+                : nothing}
+              ${!cloneInput && projectQuery.length >= 2 && params.projectSearchAvailable
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-                    ${params.projects.map((project) =>
+                    <div class="new-session-page__menu-title">
+                      ${t("newSession.githubProjects")}
+                    </div>
+                    ${params.projectSearchCredential === "missing"
+                      ? html`<div class="new-session-page__menu-note">
+                          ${t("newSession.githubTokenHint")}
+                        </div>`
+                      : nothing}
+                    ${params.projectSearchLoading
+                      ? html`<div class="new-session-page__project-status" role="status">
+                          ${t("common.loading")}
+                        </div>`
+                      : nothing}
+                    ${params.projectSearchError
+                      ? html`<div class="new-session-page__project-error" role="alert">
+                          ${params.projectSearchError}
+                        </div>`
+                      : nothing}
+                    ${params.remoteProjects.map((project) =>
                       renderSessionMenuItem(
                         {
-                          value: `project:${project.id}`,
-                          label: project.displayName,
+                          value: `remote-project:${project.fullName}`,
+                          label: project.fullName,
                           icon: icons.gitBranch,
-                          checked: params.projectId === project.id,
-                          title: project.repoRoot,
-                          onSelect: () => params.onSelectProject(project.id),
+                          sub: project.description ?? t("newSession.cloneProject"),
+                          checked: false,
+                          title: project.webUrl,
+                          keepOpen: true,
+                          onSelect: () => params.onCloneProject(project.cloneUrl),
                         },
-                        params.submitting,
+                        params.submitting || params.projectCloneBusy || !params.projectAddAvailable,
                       ),
                     )}
                   `
-                : params.canWrite && !params.isAdmin
-                  ? html`
-                      <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-                      <div class="new-session-page__menu-note">
-                        ${t("newSession.projectsAdminHint")}
-                      </div>
-                    `
-                  : nothing}
+                : nothing}
+              ${params.projectCloneBusy
+                ? html`<div class="new-session-page__project-status" role="status">
+                    ${t("newSession.cloningProject")}
+                  </div>`
+                : nothing}
+              ${params.projectCloneError
+                ? html`<div class="new-session-page__project-error" role="alert">
+                    ${params.projectCloneError}
+                  </div>`
+                : nothing}
+              ${params.projects.length === 0 && params.canWrite && !params.isAdmin
+                ? html`<div class="new-session-page__menu-note">
+                    ${t("newSession.projectsAdminHint")}
+                  </div>`
+                : nothing}
               ${recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>
                     ${recentItems.map((recent, index) => {
                       return renderSessionMenuItem(
                         {
-                          value: `recent:${recent.execNode}:${recent.folder}`,
+                          value:
+                            recent.kind === "project"
+                              ? `recent-project:${recent.projectId}`
+                              : `recent:${recent.execNode ?? ""}:${recent.folder}`,
                           label: recent.label,
+                          icon: recent.kind === "project" ? icons.gitBranch : icons.folder,
                           sub: recentSuffixes[index],
                           checked:
-                            !params.projectId &&
-                            params.execNode === recent.execNode &&
-                            folder === recent.folder,
-                          title: recent.folder,
-                          onSelect: () => params.onApplyFolder(recent.folder, recent.execNode),
+                            recent.kind === "project"
+                              ? params.projectId === recent.projectId
+                              : !params.projectId &&
+                                params.execNode === (recent.execNode ?? "") &&
+                                folder === recent.folder,
+                          title: recent.kind === "project" ? undefined : recent.folder,
+                          onSelect: () =>
+                            recent.kind === "project"
+                              ? params.onSelectProject(recent.projectId)
+                              : params.onApplyFolder(recent.folder, recent.execNode ?? ""),
                         },
                         params.submitting,
                       );
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__check" aria-hidden="true"></span>
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.places")}</div>
+                    <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
                     ${renderSessionMenuItem(
                       {
                         value: "gateway",
@@ -418,53 +433,67 @@ export function renderPlaceSelect(params: {
                       },
                       params.submitting,
                     )}
-                    ${params.execNodes.map((node, index) =>
-                      renderSessionMenuItem(
-                        {
-                          value: `node:${node.nodeId}`,
-                          label: node.displayName,
-                          icon: isPhoneFamily(node.deviceFamily)
-                            ? icons.monitorSmartphone
-                            : icons.monitor,
-                          sub: nodeSuffixes[index],
-                          checked: params.execNode === node.nodeId,
-                          title: nodeTooltip(node),
-                          onSelect: () => params.onSelectExecNode(node.nodeId),
-                        },
-                        params.submitting,
-                      ),
-                    )}
-                    ${renderCloudProfileMenuItems({
-                      profiles: params.cloudProfiles,
-                      selectedId: params.cloudProfileId,
-                      submitting: params.submitting,
-                      icon: icons.server,
-                      disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
-                      disabledReason: params.cloudDisabledReason,
-                      onSelect: params.onSelectCloudProfile,
-                    })}
-                    ${params.cloudProfileId && !activeProfile
-                      ? renderSessionMenuItem(
-                          {
-                            value: `cloud:${params.cloudProfileId}`,
-                            label: t("newSession.cloudWorker", {
-                              profile: params.cloudProfileId,
-                            }),
-                            icon: icons.server,
-                            checked: true,
-                            disabled: true,
-                            title: t("newSession.catalogUnavailable"),
-                            onSelect: () => undefined,
-                          },
-                          params.submitting,
-                        )
+                    ${deviceNodes.length > 0
+                      ? html`
+                          <div class="new-session-page__menu-title">
+                            ${t("newSession.yourDevices")}
+                          </div>
+                          ${deviceNodes.map((node, index) =>
+                            renderSessionMenuItem(
+                              {
+                                value: `node:${node.nodeId}`,
+                                label: node.displayName,
+                                icon: isPhoneFamily(node.deviceFamily)
+                                  ? icons.monitorSmartphone
+                                  : icons.monitor,
+                                sub: nodeSuffixes[index],
+                                facts: deviceFacts.get(node.nodeId),
+                                checked: params.execNode === node.nodeId,
+                                title: nodeTooltip(node),
+                                onSelect: () => params.onSelectExecNode(node.nodeId),
+                              },
+                              params.submitting,
+                            ),
+                          )}
+                        `
                       : nothing}
-                    ${params.cloudProfileId && params.syncFolder
-                      ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.cloudSyncsFolder", {
-                            folder: folderDisplayName(params.syncFolder),
+                    ${cloudProfiles.length > 0 || (params.cloudProfileId && !activeProfile)
+                      ? html`
+                          <div class="new-session-page__menu-title">${t("newSession.cloud")}</div>
+                          ${renderCloudProfileMenuItems({
+                            profiles: cloudProfiles,
+                            selectedId: params.cloudProfileId,
+                            submitting: params.submitting,
+                            icon: icons.server,
+                            disabled:
+                              !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
+                            disabledReason: params.cloudDisabledReason,
+                            onSelect: params.onSelectCloudProfile,
                           })}
-                        </div>`
+                          ${params.cloudProfileId && !activeProfile
+                            ? renderSessionMenuItem(
+                                {
+                                  value: `cloud:${params.cloudProfileId}`,
+                                  label: t("newSession.cloudWorker", {
+                                    profile: params.cloudProfileId,
+                                  }),
+                                  icon: icons.server,
+                                  checked: true,
+                                  disabled: true,
+                                  title: t("newSession.catalogUnavailable"),
+                                  onSelect: () => undefined,
+                                },
+                                params.submitting,
+                              )
+                            : nothing}
+                          ${params.cloudProfileId && params.syncFolder
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.cloudSyncsFolder", {
+                                  folder: folderDisplayName(params.syncFolder),
+                                })}
+                              </div>`
+                            : nothing}
+                        `
                       : nothing}
                   `
                 : nothing}
@@ -537,6 +566,12 @@ export function renderPlaceSelect(params: {
                 : html`<div class="new-session-page__menu-note">
                     ${t("newSession.runsOn", { place: gatewayLabel })}
                   </div>`}
+              ${params.isAdmin
+                ? renderConnectMachineMenuItem({
+                    disabled: params.submitting || params.pendingCloud,
+                    onSelect: params.onConnectMachine,
+                  })
+                : nothing}
             </div>
           `}
     </wa-popover>

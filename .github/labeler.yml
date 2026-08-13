@@ -148,7 +148,6 @@
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
 "channel: raft":
   - changed-files:
@@ -323,6 +322,12 @@
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
           - "docs/tools/multi-agent-sandbox-tools.md"
+
+"deploy: cloudflare":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "scripts/cloudflare/**"
+          - "docs/install/cloudflare.md"
 
 "agents":
   - changed-files:
@@ -665,10 +670,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vercel-ai-gateway/**"
-"extensions: video-generation-core":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/video-generation-core/**"
 "extensions: volcengine":
   - changed-files:
       - any-glob-to-any-file:

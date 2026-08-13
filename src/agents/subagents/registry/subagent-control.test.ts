@@ -167,7 +167,7 @@ function setSubagentControlDepsForTest(
     abortEmbeddedAgentRun: () => false,
     isEmbeddedAgentRunActive: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-    patchSessionEntry: async (
+    patchSessionEntryCore: async (
       scope: SessionAccessScope,
       patcher: (
         entry: SessionEntry,
@@ -811,7 +811,7 @@ describe("killSubagentRunAdmin", () => {
         });
         return true;
       },
-      patchSessionEntry: async (_scope, patcher) => {
+      patchSessionEntryCore: async (_scope, patcher) => {
         const current = { sessionId: "sess-abort-lifecycle-race", updatedAt: Date.now() };
         const patch = await patcher(current, { existingEntry: { ...current } });
         abortedLastRunWrites.push(patch?.abortedLastRun === true);
@@ -878,7 +878,7 @@ describe("killSubagentRunAdmin", () => {
         });
         return true;
       },
-      patchSessionEntry: async (_scope, patcher) => {
+      patchSessionEntryCore: async (_scope, patcher) => {
         const current = { sessionId: "sess-completion-race", updatedAt: Date.now() };
         const patch = await patcher(current, { existingEntry: { ...current } });
         abortedLastRunWrites.push(patch?.abortedLastRun === true);
@@ -953,7 +953,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => true,
       abortEmbeddedAgentRun: () => true,
-      patchSessionEntry: async (scope, patcher) => {
+      patchSessionEntryCore: async (scope, patcher) => {
         if (!scope.storePath) {
           return null;
         }
@@ -1032,7 +1032,7 @@ describe("killSubagentRunAdmin", () => {
         run.pauseReason = "sessions_yield";
         return true;
       },
-      patchSessionEntry: async () => {
+      patchSessionEntryCore: async () => {
         return null;
       },
     });
@@ -1471,7 +1471,7 @@ describe("killControlledSubagentRun", () => {
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
       clearSessionQueues: clearQueues,
-      patchSessionEntry: async (_scope, patcher) => {
+      patchSessionEntryCore: async (_scope, patcher) => {
         markPersistenceStarted();
         await persistenceRelease;
         const current = { sessionId: "sess-persist-generation-race", updatedAt: Date.now() };
@@ -1624,7 +1624,7 @@ describe("killControlledSubagentRun", () => {
     addSubagentRunForTests(entry);
     const patches: Array<Partial<SessionEntry> | null> = [];
     setSubagentControlDepsForTest({
-      patchSessionEntry: async (_scope, patcher) => {
+      patchSessionEntryCore: async (_scope, patcher) => {
         const replacement: SessionEntry = {
           sessionId: "sess-kill-session-patch-reset",
           lifecycleRevision: "revision-after-reset",
@@ -2079,7 +2079,7 @@ describe("killControlledSubagentRun", () => {
     const abortedLastRunWrites: boolean[] = [];
     let persistenceWrites = 0;
     setSubagentControlDepsForTest({
-      patchSessionEntry: async (_scope, patcher) => {
+      patchSessionEntryCore: async (_scope, patcher) => {
         const current = { sessionId, updatedAt: 1, abortedLastRun: true };
         const patch = await patcher(current, { existingEntry: { ...current } });
         if (patch) {
@@ -3119,6 +3119,34 @@ describe("listControlledSubagentRuns", () => {
         parentSessionKey,
       ),
     ).toBe(2);
+  });
+
+  it("partitions duplicate bare controller keys by owning agent", () => {
+    const now = Date.now();
+    for (const agentId of ["research", "ops"]) {
+      addSubagentRunForTests({
+        runId: `run-${agentId}`,
+        childSessionKey: `agent:${agentId}:subagent:child`,
+        controllerSessionKey: "global",
+        requesterSessionKey: "global",
+        requesterAgentId: agentId,
+        requesterDisplayKey: "global",
+        task: `${agentId} task`,
+        cleanup: "keep",
+        createdAt: now,
+        startedAt: now,
+      });
+    }
+
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { research: {}, ops: {} },
+      },
+    } as OpenClawConfig;
+    expect(listControlledSubagentRuns("global", "research", cfg).map((run) => run.runId)).toEqual([
+      "run-research",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

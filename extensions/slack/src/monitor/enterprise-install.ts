@@ -42,9 +42,12 @@ export type SlackAuthTestIdentity = {
 };
 
 const SLACK_CHANNEL_ID_RE = /^[CDG][A-Z0-9]{8,}$/;
-const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+const SLACK_USER_ID_RE = /^[BUW][A-Z0-9]{8,}$/;
 
-function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: boolean }): boolean {
+function isWorkspaceScopedSlackChannelEntry(
+  value: unknown,
+  options?: { allowWildcard?: boolean },
+): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -52,14 +55,10 @@ function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: b
   if (normalized === "*") {
     return options?.allowWildcard === true;
   }
-  const prefixed = /^channel:([CDG][A-Z0-9]{8,})$/.exec(normalized);
-  if (prefixed?.[1]) {
-    return true;
-  }
-  return SLACK_CHANNEL_ID_RE.test(normalized);
+  return isWorkspaceQualifiedSlackTarget(normalized, "channel");
 }
 
-function isStableSlackAllowlistUserEntry(value: unknown): boolean {
+function isWorkspaceScopedSlackAllowlistUserEntry(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -67,8 +66,7 @@ function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  const prefixed = /^(?:slack|user):([UW][A-Z0-9]{8,})$/.exec(normalized);
-  return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
+  return isWorkspaceQualifiedSlackTarget(normalized, "user");
 }
 
 function isStableSlackToolsBySenderEntry(value: unknown): boolean {
@@ -137,30 +135,30 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   assertStableEntries({
     values: config.allowFrom,
     path: `channels.slack.accounts.${accountId}.allowFrom`,
-    predicate: isStableSlackAllowlistUserEntry,
+    predicate: isWorkspaceScopedSlackAllowlistUserEntry,
   });
   assertStableEntries({
     values: config.dm?.groupChannels,
     path: `channels.slack.accounts.${accountId}.dm.groupChannels`,
-    predicate: (value) => isStableSlackChannelEntry(value),
+    predicate: (value) => isWorkspaceScopedSlackChannelEntry(value),
   });
   if (config.reactionNotifications === "allowlist") {
     assertStableEntries({
       values: config.reactionAllowlist,
       path: `channels.slack.accounts.${accountId}.reactionAllowlist`,
-      predicate: isStableSlackAllowlistUserEntry,
+      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
     });
   }
   for (const [channelKey, channel] of Object.entries(config.channels ?? {})) {
-    if (!isStableSlackChannelEntry(channelKey, { allowWildcard: true })) {
+    if (!isWorkspaceScopedSlackChannelEntry(channelKey, { allowWildcard: true })) {
       throw new Error(
-        `Slack Enterprise Grid org installs require stable Slack channel IDs; invalid channels key ${JSON.stringify(channelKey)}`,
+        `Slack Enterprise Grid org installs require stable Slack channel IDs with workspace scope; invalid channels key ${JSON.stringify(channelKey)}`,
       );
     }
     assertStableEntries({
       values: channel?.users,
       path: `channels.slack.accounts.${accountId}.channels.${channelKey}.users`,
-      predicate: isStableSlackAllowlistUserEntry,
+      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
     });
     assertStableEntries({
       values: Object.keys(channel?.toolsBySender ?? {}),

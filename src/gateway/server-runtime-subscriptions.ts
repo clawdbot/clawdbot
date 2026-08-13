@@ -1,5 +1,4 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
@@ -29,8 +28,10 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -96,6 +97,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
   });
@@ -235,7 +237,10 @@ export function startGatewayEventSubscriptions(params: {
               resolveVisibleActiveSessionRunState({
                 context: params,
                 ...session,
-                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+                defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
+                  getRuntimeConfig(),
+                  session.requestedKey,
+                ),
               }),
           }),
       );

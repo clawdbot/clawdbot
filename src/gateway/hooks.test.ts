@@ -358,6 +358,21 @@ describe("gateway hooks helpers", () => {
     expect(resolveEffectiveHookTargetAgentId(resolved, " ")).toBe("main");
   });
 
+  test("global hook dispatch honors the persisted fixed-store owner", () => {
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: { enabled: true, token: "secret" },
+      session: { scope: "global", store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    });
+
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("ops");
+    expect(resolveEffectiveHookTargetAgentId(resolved, "research")).toBeUndefined();
+  });
+
   test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(false);

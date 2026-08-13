@@ -22,7 +22,7 @@ import {
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   createChatPaneSessionActionCallbacks,
@@ -87,6 +87,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const selectedSessionId = selectedSession?.sessionId?.trim() || undefined;
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -174,6 +175,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
@@ -277,6 +279,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       sending:
         cloudStartupPending ||
         state.chatSending ||
+        this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
       cloudStartup,
       onRetryCloudStartup: cloudStartup?.retryable
@@ -296,13 +299,13 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       observerLastReadAt: selectedSession?.lastReadAt,
       sessionRailCompanion: catalogKey
         ? undefined
-        : this.sessionCompanionThreads.view(state.sessionKey),
+        : this.sessionCompanionThreads.view(state.sessionKey, state.assistantAgentId),
       ...this.sessionRailCommandProps(state.sessionKey),
       sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
       sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>
-        this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, state.assistantAgentId),
       onSessionRailClear: () => void this.clearSessionCompanion(),
       onSessionRailModeChange: (mode) => {
         if (state.sessionKey !== this.sessionRailModeSessionKey || mode !== this.sessionRailMode) {
@@ -361,28 +364,21 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
           !selectedSessionArchived &&
+          !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
           !cloudStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
-      disabledBanner:
-        selectedSessionArchived && !catalogDisabledReason
-          ? {
-              kind: "composer-replacement",
-              text: t("chat.archivedSessionDisabled"),
-              actionLabel: t("common.unarchive"),
-              disabledReason: mutationAccess.unarchive.allowed
-                ? undefined
-                : mutationAccess.unarchive.reason,
-              onAction: () => {
-                if (mutationAccess.unarchive.allowed) {
-                  void this.restoreArchivedSession(state.sessionKey);
-                }
-              },
-            }
-          : modelSetupRequired
-            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
-            : undefined,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      disabledBanner: this.sessionDisabledBanner({
+        catalogDisabledReason,
+        modelSetupRequired,
+        restartRecoveryTombstoned,
+        selectedSessionArchived,
+        selectedSessionId,
+        sessionKey: state.sessionKey,
+        unarchiveAccess: mutationAccess.unarchive,
+      }),
+      modelSetupRequired:
+        modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
@@ -567,6 +563,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
+      replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
       onNewSession: () => void this.createSession(),
@@ -598,7 +595,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
-      gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const primary = this.renderBoardPrimary(board, chat);

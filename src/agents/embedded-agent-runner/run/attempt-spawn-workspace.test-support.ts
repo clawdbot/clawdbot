@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { expect, vi, type Mock } from "vitest";
+import { vi, type Mock } from "vitest";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -130,6 +130,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
+    getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
@@ -666,17 +667,6 @@ vi.mock("../../cache-trace.js", () => ({
 vi.mock("../../agent-tools.js", () => ({
   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
     hoisted.createOpenClawCodingToolsMock(options),
-  resolveProcessToolScopeKey: ({
-    scopeKey,
-    sessionKey,
-    sessionId,
-    agentId,
-  }: {
-    scopeKey?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    agentId?: string;
-  }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -1235,10 +1225,6 @@ export function createContextEngineBootstrapAndAssemble() {
       }),
     ),
   };
-}
-
-export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
 const testModel = {

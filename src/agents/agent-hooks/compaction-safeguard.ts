@@ -107,8 +107,7 @@ function prependPreviousSummaryForRedistill(params: {
 }
 
 function coerceTimestamp(value: unknown): number {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
+  return parseDateFirstTimestampMs(value) ?? 0;
 }
 
 function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
@@ -930,29 +929,39 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       customInstructions,
       summarizationInstructions,
     );
-    const finalizeSummary = async (
+    let workspaceContextPromise: Promise<string> | undefined;
+    const finalizeSummaryText = async (
       body: string,
       sections: { splitTurnSection?: string; preservedTurnsSection?: string },
-    ) => ({
+    ) => {
+      workspaceContextPromise ??= readWorkspaceContextForSummary(
+        runtime?.postCompactionSections,
+        runtime?.workspaceDir,
+      );
+      const suffix = assembleSuffix({
+        ...sections,
+        toolFailureSection,
+        fileOpsSummary,
+        workspaceContext: await workspaceContextPromise,
+      });
+      const bodyBudget = Math.max(0, MAX_COMPACTION_SUMMARY_CHARS - suffix.length);
+      return {
+        summary: capCompactionSummaryPreservingSuffix(body, suffix),
+        structuralSummary:
+          suffix.length >= MAX_COMPACTION_SUMMARY_CHARS
+            ? ""
+            : capCompactionSummary(body, bodyBudget),
+        bodyBudget,
+      };
+    };
+    const compactionResult = (summary: string) => ({
       compaction: {
-        summary: capCompactionSummaryPreservingSuffix(
-          body,
-          assembleSuffix({
-            ...sections,
-            toolFailureSection,
-            fileOpsSummary,
-            workspaceContext: await readWorkspaceContextForSummary(
-              runtime?.postCompactionSections,
-              runtime?.workspaceDir,
-            ),
-          }),
-        ),
+        summary,
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
         details: { readFiles, modifiedFiles },
       },
     });
-
     if (providerId) {
       const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
       if (compactionProvider) {
@@ -970,12 +979,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            return await finalizeSummary(providerResult, {
+            const finalized = await finalizeSummaryText(providerResult, {
               splitTurnSection: preparation.isSplitTurn
                 ? formatSplitTurnContextSection(turnPrefixMessages)
                 : "",
               preservedTurnsSection: formatPreservedTurnsSection(preservedMessages),
             });
+            return compactionResult(finalized.summary);
           }
           log.warn(
             `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
@@ -1105,6 +1115,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
+      const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const latestUserAsk = extractLatestUserAsk(oracleMessages);
+      const identifiers = extractOpaqueIdentifiers(
+        oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
+      );
       const {
         summarizableMessages: summaryTargetMessages,
         preservedMessages: preservedRecentMessages,
@@ -1115,10 +1130,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const latestUserAsk = extractLatestUserAsk(allMessages);
-      const identifiers = extractOpaqueIdentifiers(
-        allMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
-      );
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -1136,15 +1147,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      let lastHistorySummary = "";
-      let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
-      let lastSuccessfulSummary: string | null = null;
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-        let summaryWithoutPreservedTurns = "";
-        let summaryWithPreservedTurns = "";
         let splitTurnSectionLocal = "";
         let historySummary = "";
         try {
@@ -1159,7 +1165,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary);
 
-          summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
               ...llmSummaryParams,
@@ -1169,62 +1174,78 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               previousSummary: undefined,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
-            summaryWithoutPreservedTurns = historySummary.trim()
-              ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
-              : splitTurnSectionLocal;
           }
-          summaryWithPreservedTurns = appendSummarySection(
-            summaryWithoutPreservedTurns,
-            preservedTurnsSectionLocal,
-          );
         } catch (attemptError) {
-          if (lastSuccessfulSummary && attempt > 0) {
+          if (signal?.aborted) {
+            signal.throwIfAborted();
+          }
+          if (attempt > 0) {
             log.warn(
-              `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
-                `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
+              "Compaction safeguard: corrective generation failed; " +
+                `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
-            break;
+            setCompactionSafeguardCancelReason(
+              ctx.sessionManager,
+              "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
+            );
+            return { cancel: true };
           }
           throw attemptError;
         }
-        lastSuccessfulSummary = summaryWithPreservedTurns;
-        lastHistorySummary = historySummary;
-        lastSplitTurnSection = splitTurnSectionLocal;
+        const structuralSummary = appendSummarySection(
+          historySummary,
+          splitTurnSectionLocal ? `\n\n${splitTurnSectionLocal}` : "",
+        );
+        const finalized = await finalizeSummaryText(structuralSummary, {
+          preservedTurnsSection: preservedTurnsSectionLocal,
+        });
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
-        if (!qualityGuardEnabled || !canRegenerate) {
-          break;
+        if (!qualityGuardEnabled) {
+          return compactionResult(finalized.summary);
         }
         const quality = auditSummaryQuality({
-          summary: summaryWithoutPreservedTurns,
+          summary: finalized.summary,
+          structuralSummary: finalized.structuralSummary,
           identifiers,
           latestAsk: latestUserAsk,
           identifierPolicy,
         });
-        if (quality.ok || attempt >= totalAttempts - 1) {
-          break;
+        if (quality.ok) {
+          return compactionResult(finalized.summary);
+        }
+        if (!canRegenerate || attempt >= totalAttempts - 1) {
+          const reasonCodes = [
+            ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
+          ];
+          log.warn(
+            "Compaction safeguard: finalized summary failed quality checks; " +
+              `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
+          );
+          setCompactionSafeguardCancelReason(
+            ctx.sessionManager,
+            "Compaction safeguard finalized summary failed quality checks.",
+          );
+          return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."
             : "Fix all issues and include every required section while following the configured identifier policy.";
+        const budgetInstruction = `Keep the complete summary body within ${finalized.bodyBudget} UTF-16 code units so the finalized artifact remains valid after required suffixes.`;
         const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
           "Quality check feedback",
           `Previous summary failed quality checks (${reasons}).`,
         );
         currentInstructions = qualityFeedbackReasons
-          ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
-          : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
+          ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n${budgetInstruction}\n\n${qualityFeedbackReasons}`
+          : `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n${budgetInstruction}`;
       }
 
-      // Cap history before suffixes so diagnostics and workspace rules survive.
-      return await finalizeSummary(lastHistorySummary || lastSuccessfulSummary || "", {
-        splitTurnSection: lastSplitTurnSection,
-        preservedTurnsSection: preservedTurnsSectionLocal,
-      });
+      throw new Error("Compaction safeguard exhausted summary attempts without a decision.");
     } catch (error) {
       // Caller cancellation is terminal, not a safeguard failure. Preserve the
       // original abort so the runner can classify it without a false data-loss warning.
@@ -1283,3 +1304,4 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     testing;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

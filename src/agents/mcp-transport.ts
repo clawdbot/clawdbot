@@ -13,6 +13,7 @@ import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/tran
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
+import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
@@ -20,7 +21,7 @@ import {
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -92,7 +93,12 @@ function buildSseEventSourceFetch(
 export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,
-  options?: { cfg?: OpenClawConfig; agentDir?: string; prepareDataDir?: string },
+  options?: {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+    prepareDataDir?: string;
+    requesterScope?: SessionMcpRequesterScope;
+  },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
   if (!resolved) {
@@ -118,7 +124,16 @@ export function resolveMcpTransport(
     };
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);
-  const oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+  const requesterScope = options?.requesterScope;
+  let oauthIdentity;
+  if (resolved.oauth?.identity === "per-requester") {
+    if (!requesterScope) {
+      return null;
+    }
+    oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
+  } else {
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+  }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.
   const baseFetch = buildMcpHttpFetch({

@@ -1,15 +1,13 @@
 import { performance } from "node:perf_hooks";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
-import {
-  PreparedModelRuntimePublicationSupersededError,
-  toPreparedModelRuntimeError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   prepareAgentCatalogSource,
@@ -344,7 +342,7 @@ async function buildSnapshotBatch(
     if (sourceBuild.hasError) {
       // A superseded owner is lifecycle control flow. Preserve any genuine in-flight sibling
       // failure so auth refresh diagnostics do not disappear behind that expected cancellation.
-      throw toPreparedModelRuntimeError(
+      throw toStringifiedError(
         sourceErrors.find(
           (error) => !(error instanceof PreparedModelRuntimePublicationSupersededError),
         ) ?? sourceBuild.firstError,
@@ -528,7 +526,7 @@ export function startSerializedSnapshotBuildBatch(
     });
   }
   return {
-    pending: withTimeout(
+    pending: runAbortableTimeout(
       async () => {
         const { actualBuild } = await startBuild;
         return await actualBuild;

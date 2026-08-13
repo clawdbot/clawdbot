@@ -11,7 +11,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
-  listSessionEntries: vi.fn<
+  listSessionEntriesCore: vi.fn<
     (scope?: { agentId?: string; storePath?: string }) => Array<{
       sessionKey: string;
       entry: Record<string, unknown>;
@@ -134,18 +134,18 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
     const entry = statusSummaryMocks
-      .listSessionEntries()
+      .listSessionEntriesCore()
       .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
     return entry ? { sessionKey, entry } : undefined;
   },
-  listSessionEntries: statusSummaryMocks.listSessionEntries,
-  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
+  listSessionEntriesCore: statusSummaryMocks.listSessionEntriesCore,
+  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntriesCore,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -196,7 +196,7 @@ vi.mock("../status/link-channel.js", () => ({
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
-const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
 let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
@@ -266,8 +266,8 @@ describe("getStatusSummary", () => {
           ? { contextWindow: 1_048_576 }
           : undefined,
     );
-    statusSummaryMocks.listSessionEntries.mockReturnValue([]);
-    vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
       mainKey: "main",
@@ -320,7 +320,7 @@ describe("getStatusSummary", () => {
       waitingForRoute: true,
     },
   ])("route wait: $name", async ({ routedKeys, emptyKeys, heartbeatSession, waitingForRoute }) => {
-    statusSummaryMocks.listSessionEntries.mockReturnValue([
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
       ...routedKeys.map((sessionKey) => ({
         sessionKey,
         entry: {
@@ -341,7 +341,7 @@ describe("getStatusSummary", () => {
   });
 
   it("redacts collected session details when sensitive output is disabled", async () => {
-    statusSummaryMocks.listSessionEntries.mockReturnValue([
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
       {
         sessionKey: "agent:main:main",
         entry: {
@@ -594,7 +594,7 @@ describe("getStatusSummary", () => {
   });
 
   it("does not pass stale session contextTokens as status row overrides", async () => {
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "stale-context",
@@ -664,7 +664,7 @@ describe("getStatusSummary", () => {
       },
     },
   ])("handles $name checkpoint usage provenance", async ({ checkpoint, expected }) => {
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "checkpoint-total",
@@ -747,7 +747,7 @@ describe("getStatusSummary", () => {
 
   it("includes the selected agent runtime on recent sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",
@@ -774,7 +774,7 @@ describe("getStatusSummary", () => {
         ];
       }),
     );
-    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store));
 
     const summary = await getStatusSummary();
 
@@ -816,7 +816,7 @@ describe("getStatusSummary", () => {
         ];
       }),
     );
-    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store));
 
     const summary = await getStatusSummary();
 
@@ -844,10 +844,10 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
     });
-    vi.mocked(resolveStorePath).mockImplementation((_store, opts) => {
+    vi.mocked(resolveSessionStorePathCore).mockImplementation((_store, opts) => {
       return `/tmp/${opts?.agentId ?? "main"}/sessions.json`;
     });
-    statusSummaryMocks.listSessionEntries.mockImplementation((scope) =>
+    statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) =>
       scope?.agentId === "ops"
         ? toSessionEntrySummaries({
             main: { sessionId: "ops-session", updatedAt: 2 },
@@ -859,11 +859,11 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary({ includeChannelSummary: false });
 
-    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/tmp/main/sessions.json",
     });
-    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
       agentId: "ops",
       storePath: "/tmp/ops/sessions.json",
     });
@@ -881,8 +881,8 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
     });
-    vi.mocked(resolveStorePath).mockReturnValue("/tmp/shared-sessions.json");
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/shared-sessions.json");
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         main: { sessionId: "shared-session", updatedAt: 1 },
       }),
@@ -895,7 +895,7 @@ describe("getStatusSummary", () => {
       ["main", 1],
       ["ops", 1],
     ]);
-    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
       storePath: "/tmp/shared-sessions.json",
     });
   });
@@ -909,7 +909,7 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",
@@ -937,7 +937,7 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",
@@ -964,7 +964,7 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",
@@ -994,7 +994,7 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:worker:subagent:configured": {
           sessionId: "configured-subagent",
@@ -1023,7 +1023,7 @@ describe("getStatusSummary", () => {
       provider: "openai",
       model: "gpt-5.5-codex",
     });
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",
@@ -1074,7 +1074,7 @@ describe("getStatusSummary", () => {
           : null;
       },
     );
-    statusSummaryMocks.listSessionEntries.mockReturnValue(
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
           sessionId: "session-1",

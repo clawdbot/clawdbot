@@ -1,7 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -164,7 +164,7 @@ export async function dispatchCronDelivery(
       createOutboundSendDeps,
       resolveAgentOutboundIdentity,
       resolveCronChannelReplyTransform,
-      sendDurableMessageBatch,
+      sendDurableMessageBatchCore,
     } = await deliveryOutboundRuntimeLoader.load();
     const payloadNormalization = normalizeDirectCronDeliveryPayloads({
       deliveryPayloads,
@@ -301,7 +301,7 @@ export async function dispatchCronDelivery(
         : undefined;
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
-        const send = await sendDurableMessageBatch({
+        const send = await sendDurableMessageBatchCore({
           cfg: params.cfgWithAgentDefaults,
           channel: delivery.channel,
           to: delivery.to,
@@ -448,7 +448,7 @@ export async function dispatchCronDelivery(
           // Keep cron delivery mirrors text-first: non-audio attachment names
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
-          storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
+          storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
             // This mirror already carries the admitted run owner. Re-parsing a
             // route alias can reject legacy keys or select a different store.
             agentId: params.agentId,

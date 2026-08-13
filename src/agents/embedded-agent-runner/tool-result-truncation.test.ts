@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
@@ -17,16 +18,17 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   calculateMaxToolResultCharsWithCap,
   resolveAutoLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
+import { prepareEmbeddedAttemptPromptContext } from "./run/attempt-prompt-build.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
   clearEmbeddedSessionPromptStates,
+  cloneToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -78,7 +80,11 @@ beforeEach(async () => {
 afterEach(async () => {
   toolResultWarningDedupe.promptPressure.clear();
   toolResultWarningDedupe.sessionRecovery.clear();
-  clearEmbeddedSessionPromptStates(["session-99495", "session-99495-shrink"]);
+  clearEmbeddedSessionPromptStates([
+    "session-99495",
+    "session-99495-reclamation",
+    "session-99495-shrink",
+  ]);
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = undefined;
@@ -97,6 +103,42 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
     ...(details !== undefined ? { details } : {}),
     timestamp: nextTimestamp(),
   };
+}
+
+function preparePromptProjectionStateForTest(params: {
+  sessionId: string;
+  messages: AgentMessage[];
+  state: ToolResultPromptProjectionState;
+  raw?: boolean;
+}) {
+  const prompt = params.raw ? "raw probe" : "continue";
+  prepareEmbeddedAttemptPromptContext({
+    attempt: {
+      config: {},
+      contextTokenBudget: 128_000,
+      sessionId: params.sessionId,
+      sessionKey: `agent:main:${params.sessionId}`,
+      suppressNextUserMessagePersistence: false,
+    },
+    includeBoundaryTimestamp: false,
+    isRawModelRun: params.raw ?? false,
+    messages: params.messages,
+    prompt: {
+      effectivePrompt: prompt,
+      promptBeforePromptBuildHooks: prompt,
+      hasPromptBuildContext: false,
+      effectiveTranscriptPrompt: prompt,
+      transcriptPromptForRuntimeSplit: prompt,
+      promptForRuntimeContextSplit: prompt,
+      promptForModelBeforeRuntimeContextSplit: prompt,
+      promptForRuntimeContextBeforeAnnotation: prompt,
+    },
+    replaceSessionMessages: () => {},
+    sessionAgentId: "main",
+    setActiveSessionSystemPrompt: () => {},
+    systemPromptText: params.raw ? "" : "system",
+    toolResultPromptProjectionState: params.state,
+  });
 }
 
 describe("tool-result warning dedupe", () => {
@@ -835,6 +877,39 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
   });
 
+  it("reclaims #99495 state from canonical compaction, not filtered projections", () => {
+    const sessionId = "session-99495-reclamation";
+    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    const removed = makeToolResult("removed".repeat(100_000), "removed_after_compaction");
+    const retained = makeToolResult("retained".repeat(100_000), "retained_after_compaction");
+    const projected = truncateOversizedToolResultsInMessages(
+      [removed, retained],
+      128_000,
+      5_000,
+      20_000,
+      state,
+    );
+
+    // Provider-specific filtering is not authoritative; the removed result can return on fallback.
+    truncateOversizedToolResultsInMessages([retained], 128_000, 5_000, 20_000, state);
+    expect(state.sourceTextByKey.size).toBe(2);
+
+    preparePromptProjectionStateForTest({ sessionId, messages: [], state, raw: true });
+    expect(state.sourceTextByKey.size).toBe(2);
+
+    preparePromptProjectionStateForTest({ sessionId, messages: [retained], state });
+
+    expect(state.sourceTextByKey.size).toBe(1);
+    expect(state.frozen.size).toBe(1);
+    expect(state.replacements.size).toBe(1);
+    expect([...state.sourceTextByKey.values()].flat()).not.toContain(
+      getFirstToolResultText(removed),
+    );
+    expect(
+      truncateOversizedToolResultsInMessages([retained], 128_000, 5_000, 20_000, state).messages,
+    ).toEqual(projected.messages.slice(1));
+  });
+
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
     const state = getEmbeddedSessionPromptState("session-99495-shrink").toolResults;
     const history = [
@@ -1415,6 +1490,79 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
     expect(first.messages[0]).not.toEqual(first.messages[1]);
     expect(filtered.messages[0]).toEqual(first.messages[1]);
+    preparePromptProjectionStateForTest({
+      sessionId: "ambiguous-filtered-history",
+      messages: [duplicate("b".repeat(100))],
+      state: projectionState,
+    });
+    expect(projectionState.sourceTextByKey.size).toBe(1);
+    expect(projectionState.frozen.size).toBe(1);
+    expect(projectionState.replacements.size).toBe(0);
+    expect(projectionState.ambiguousBaseKeys.size).toBe(1);
+    expect(
+      truncateOversizedToolResultsInMessages(
+        [duplicate("b".repeat(100))],
+        128_000,
+        100,
+        100,
+        projectionState,
+      ).messages[0],
+    ).toEqual(first.messages[1]);
+    preparePromptProjectionStateForTest({
+      sessionId: "ambiguous-removed-history",
+      messages: [],
+      state: projectionState,
+    });
+    expect(projectionState.ambiguousBaseKeys.size).toBe(0);
+  });
+
+  it("drops an unselected identical-occurrence key without changing projected bytes", () => {
+    const projectionState = createPromptProjectionStateForTest();
+    const duplicate = (): ToolResultMessage => ({
+      role: "toolResult",
+      toolCallId: "identical-call",
+      toolName: "duplicate",
+      isError: false,
+      content: [{ type: "text", text: "x".repeat(100) }],
+      timestamp: 1_000,
+    });
+    const history = [duplicate(), makeAssistantMessage("separator"), duplicate()];
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+    const stateWithStaleOccurrence = cloneToolResultPromptProjectionState(projectionState);
+    expect(stateWithStaleOccurrence.frozen.size).toBe(2);
+
+    preparePromptProjectionStateForTest({
+      sessionId: "identical-occurrence-compaction",
+      messages: [duplicate()],
+      state: projectionState,
+    });
+
+    const retainedWithStale = truncateOversizedToolResultsInMessages(
+      [duplicate()],
+      128_000,
+      100,
+      100,
+      stateWithStaleOccurrence,
+    );
+    const retainedAfterPrune = truncateOversizedToolResultsInMessages(
+      [duplicate()],
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+    // After the first identical occurrence disappears, both states select :0;
+    // retaining the unreachable :1 entry cannot preserve or change provider bytes.
+    expect(retainedAfterPrune.messages).toEqual(retainedWithStale.messages);
+    expect(retainedAfterPrune.messages[0]).toEqual(first.messages[0]);
+    expect(projectionState.frozen.size).toBe(1);
+    expect(projectionState.sourceTextByKey.size).toBe(1);
   });
 });
 

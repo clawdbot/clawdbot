@@ -71,6 +71,7 @@ export function scheduleChatDashboardSessionTitle(params: {
       sessionId: titleSessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+      currentUserMessage: params.request.rawMessage,
       userMessage: titleSource,
     });
     if (updated) {

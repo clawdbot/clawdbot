@@ -6,12 +6,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
-import { withTempDir } from "../../infra/install-source-utils.js";
+import { withInstallWorkspace } from "../../infra/install-source-utils.js";
 import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
 import { untrackClawHubSkill } from "./clawhub.js";
 
@@ -131,7 +131,7 @@ async function resolveGitCommitish(params: {
 async function readSkillNameFromFrontmatter(skillDir: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-    const frontmatter = parseFrontmatter(raw);
+    const frontmatter = parseSkillFrontmatter(raw);
     return normalizeOptionalString(frontmatter.name) ?? null;
   } catch {
     return null;
@@ -276,7 +276,7 @@ async function installGitSkill(params: {
     return { ok: false, error: `Unsupported git skill spec: ${params.spec}` };
   }
 
-  return await withTempDir("openclaw-git-skill-", async (tmpDir) => {
+  return await withInstallWorkspace("openclaw-git-skill-", async (tmpDir) => {
     const repoDir = path.join(tmpDir, "repo");
     const exportDir = path.join(tmpDir, "export");
     params.logger?.info?.(

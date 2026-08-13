@@ -59,6 +59,10 @@ import {
   runInstallSourceScan,
   sourceFamilyForInstallPolicySource,
 } from "./install-shared.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+} from "./install-transaction.js";
 import type {
   InstallPluginResult,
   PluginInstallLogger,
@@ -184,6 +188,7 @@ export async function installPluginFromManagedNpmRoot(
         quarantine: ManagedNpmProjectQuarantine;
       }
     | undefined;
+  let deferredTransaction = false;
   try {
     rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({ npmRoot });
   } catch (error) {
@@ -615,16 +620,67 @@ export async function installPluginFromManagedNpmRoot(
       return dependencyResult;
     }
     preparedDependency = dependencyResult;
-    return await runManagedNpmInstall(preparedDependency);
+    const result = await runManagedNpmInstall(preparedDependency);
+    if (!result.ok || !isPluginInstallCommitDeferred(params)) {
+      return result;
+    }
+    deferredTransaction = true;
+    let settled = false;
+    const cleanup = async () => {
+      await cleanupManagedNpmRootPreparedDependency({
+        packageName: params.packageName,
+        preparedDependency,
+        logger,
+      });
+      await cleanupManagedNpmPluginInstallRollbackSnapshot({
+        snapshot: rollbackSnapshot,
+        logger,
+      });
+    };
+    return attachPluginInstallTransaction(
+      { ...result },
+      {
+        async commit() {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          await cleanup();
+        },
+        async rollback() {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          await rollbackManagedNpmPluginInstall({
+            npmRoot,
+            packageName: params.packageName,
+            targetDir: installRoot,
+            timeoutMs,
+            logger,
+            peerDependencySnapshot: rollbackPeerDependencySnapshot,
+            snapshot: recovery ? undefined : rollbackSnapshot,
+          });
+          await rollbackManagedNpmRootPreparedDependency({
+            packageName: params.packageName,
+            preparedDependency: dependencyResult,
+            logger,
+          });
+          await cleanup();
+        },
+      },
+    );
   } finally {
-    await cleanupManagedNpmRootPreparedDependency({
-      packageName: params.packageName,
-      preparedDependency,
-      logger,
-    });
-    await cleanupManagedNpmPluginInstallRollbackSnapshot({
-      snapshot: rollbackSnapshot,
-      logger,
-    });
+    if (!deferredTransaction) {
+      await cleanupManagedNpmRootPreparedDependency({
+        packageName: params.packageName,
+        preparedDependency,
+        logger,
+      });
+      await cleanupManagedNpmPluginInstallRollbackSnapshot({
+        snapshot: rollbackSnapshot,
+        logger,
+      });
+    }
   }
 }

@@ -17,7 +17,7 @@ import {
 } from "./config-activation-shared.js";
 import {
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
@@ -82,7 +82,7 @@ export function normalizePluginId(id: string): string {
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
+  return normalizePluginsConfigWithResolverCore(config, createScopedPluginIdNormalizer());
 };
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */

@@ -107,7 +107,7 @@ function expectChangedBroadcast(
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
   expect(options).toEqual({
-    ...(typeof expected.agentId === "string" ? { agentId: expected.agentId } : {}),
+    agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
     dropIfSlow: true,
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });
@@ -978,6 +978,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const archived = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: true,
   });
   expectChangedBroadcast(archived.broadcastToConnIds, {
@@ -994,6 +995,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const restored = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: false,
   });
   expectChangedBroadcast(restored.broadcastToConnIds, {

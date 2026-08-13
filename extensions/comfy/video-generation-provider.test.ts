@@ -7,11 +7,15 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
-import { setComfyFetchGuardForTesting } from "./test-support.js";
 import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 function parseJsonBody(call: number): Record<string, unknown> {
@@ -89,11 +93,12 @@ function generateLocalVideo(outputNodeId?: string) {
 
 describe("comfy video-generation provider", () => {
   beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    setComfyFetchGuardForTesting(null);
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -118,7 +123,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads videos", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
@@ -205,7 +209,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("returns only MP4 video entries from mixed images buckets", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalVideoResponses({
       promptId: "local-video-mixed",
       outputs: {
@@ -243,7 +246,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("accepts uppercase WEBM names from the images bucket", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalVideoResponses({
       promptId: "local-video-webm",
       outputs: {
@@ -272,7 +274,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("rejects images-only workflow output for video generation", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalVideoResponses({
       promptId: "local-video-images-only",
       outputs: {
@@ -292,7 +293,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("preserves legacy videos bucket output without filename filtering", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalVideoResponses({
       promptId: "local-video-legacy",
       outputs: {
@@ -318,7 +318,6 @@ describe("comfy video-generation provider", () => {
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
@@ -378,7 +377,6 @@ describe("comfy video-generation provider", () => {
 
   it("uses cloud endpoints for video workflows", async () => {
     mockComfyProviderApiKey();
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-video-data"),
       contentType: "video/mp4",

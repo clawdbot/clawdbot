@@ -10,6 +10,7 @@ import {
   normalizeStringEntries,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { parseSlackTarget } from "../target-parsing.js";
 
 const SLACK_SLUG_CACHE_MAX = 512;
 const slackSlugCache = new Map<string, string>();
@@ -44,26 +45,50 @@ export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined
   if (!trimmed || trimmed === "*") {
     return undefined;
   }
+  try {
+    const target = parseSlackTarget(trimmed);
+    if (target?.kind === "user" && target.teamId) {
+      return target.id.toLowerCase();
+    }
+  } catch {
+    return undefined;
+  }
   const withoutPrefix = trimmed.replace(/^(slack:|user:)/, "");
   return /^u[a-z0-9]+$/.test(withoutPrefix) ? withoutPrefix : undefined;
 }
 
 export type SlackAllowListMatch = AllowlistMatch<
-  "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
+  | "wildcard"
+  | "workspace-id"
+  | "id"
+  | "prefixed-id"
+  | "prefixed-user"
+  | "name"
+  | "prefixed-name"
+  | "slug"
 >;
 type SlackAllowListSource = Exclude<SlackAllowListMatch["matchSource"], undefined>;
 
 export function resolveSlackAllowListMatch(params: {
   allowList: readonly string[];
+  teamId?: string;
   id?: string;
   name?: string;
   allowNameMatching?: boolean;
+  allowUnscoped?: boolean;
 }): SlackAllowListMatch {
   const compiledAllowList = compileAllowlist(params.allowList);
+  const teamId = normalizeOptionalLowercaseString(params.teamId);
   const id = normalizeOptionalLowercaseString(params.id);
   const name = normalizeOptionalLowercaseString(params.name);
   const slug = normalizeSlackSlug(name);
-  const candidates: Array<{ value?: string; source: SlackAllowListSource }> = [
+  const scopedCandidates: Array<{ value?: string; source: SlackAllowListSource }> = [
+    {
+      value: teamId && id ? `team:${teamId}:user:${id}` : undefined,
+      source: "workspace-id",
+    },
+  ];
+  const unscopedCandidates: Array<{ value?: string; source: SlackAllowListSource }> = [
     { value: id, source: "id" },
     { value: id ? `slack:${id}` : undefined, source: "prefixed-id" },
     { value: id ? `user:${id}` : undefined, source: "prefixed-user" },
@@ -75,6 +100,10 @@ export function resolveSlackAllowListMatch(params: {
         ] satisfies Array<{ value?: string; source: SlackAllowListSource }>)
       : []),
   ];
+  const candidates =
+    teamId && params.allowUnscoped !== true
+      ? scopedCandidates
+      : [...scopedCandidates, ...unscopedCandidates];
   return resolveCompiledAllowlistMatch({
     compiledAllowlist: compiledAllowList,
     candidates,
@@ -83,18 +112,22 @@ export function resolveSlackAllowListMatch(params: {
 
 export function allowListMatches(params: {
   allowList: string[];
+  teamId?: string;
   id?: string;
   name?: string;
   allowNameMatching?: boolean;
+  allowUnscoped?: boolean;
 }) {
   return resolveSlackAllowListMatch(params).allowed;
 }
 
 export function resolveSlackUserAllowed(params: {
   allowList?: Array<string | number>;
+  teamId?: string;
   userId?: string;
   userName?: string;
   allowNameMatching?: boolean;
+  allowUnscoped?: boolean;
 }) {
   const allowList = normalizeAllowListLower(params.allowList);
   if (allowList.length === 0) {
@@ -102,8 +135,37 @@ export function resolveSlackUserAllowed(params: {
   }
   return allowListMatches({
     allowList,
+    teamId: params.teamId,
     id: params.userId,
     name: params.userName,
     allowNameMatching: params.allowNameMatching,
+    allowUnscoped: params.allowUnscoped,
+  });
+}
+
+export function resolveSlackUserAllowListForTeam(params: {
+  allowList?: Array<string | number>;
+  teamId?: string;
+  preserveUnmatchedScopedEntries?: boolean;
+  allowUnscoped?: boolean;
+}): string[] {
+  const allowList = normalizeAllowListLower(params.allowList);
+  const teamId = normalizeOptionalLowercaseString(params.teamId);
+  return allowList.flatMap((entry) => {
+    if (entry === "*") {
+      return [entry];
+    }
+    if (!entry.startsWith("team:")) {
+      return params.allowUnscoped === true || params.preserveUnmatchedScopedEntries ? [entry] : [];
+    }
+    try {
+      const target = parseSlackTarget(entry);
+      if (target?.kind === "user" && target.teamId?.toLowerCase() === teamId) {
+        return params.allowUnscoped === true ? [target.id.toLowerCase()] : [entry];
+      }
+      return params.preserveUnmatchedScopedEntries ? [entry] : [];
+    } catch {
+      return params.preserveUnmatchedScopedEntries ? [entry] : [];
+    }
   });
 }

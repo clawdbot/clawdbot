@@ -65,6 +65,12 @@ const AGENT_SCHEMA_COMPATIBILITY = {
   ],
 } satisfies SqliteSchemaCompatibility;
 
+function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+  return Boolean(
+    database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
+  );
+}
+
 export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
   pathname: string,
@@ -88,6 +94,11 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+    );
+  }
+  if (hasRetiredAgentStateLeaseSchema(database)) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
   assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);

@@ -30,10 +30,13 @@ type InworldProviderConfig = {
   temperature?: number;
 };
 
-type InworldProviderOverrides = {
-  voiceId?: string;
-  modelId?: string;
-  temperature?: number;
+type InworldSynthesisRequest = {
+  text: string;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  timeoutMs: number;
+  audioEncoding: InworldAudioEncoding;
+  sampleRateHertz?: number;
 };
 
 function normalizeInworldTemperature(value: unknown): number | undefined {
@@ -70,17 +73,33 @@ function resolveInworldApiKey(primary?: string, fallback?: string): string | und
   return resolveSpeechProviderApiKey(primary, fallback, process.env.INWORLD_API_KEY);
 }
 
-function readInworldOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): InworldProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
+function readInworldOverrides(overrides: SpeechProviderOverrides | undefined) {
   return {
-    voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice),
-    modelId: trimToUndefined(overrides.modelId ?? overrides.model),
-    temperature: normalizeInworldTemperature(overrides.temperature),
+    voiceId: trimToUndefined(overrides?.voiceId ?? overrides?.voice),
+    modelId: trimToUndefined(overrides?.modelId ?? overrides?.model),
+    temperature: normalizeInworldTemperature(overrides?.temperature),
   };
+}
+
+async function synthesizeInworld(req: InworldSynthesisRequest): Promise<Buffer> {
+  const config = readInworldProviderConfig(req.providerConfig);
+  const overrides = readInworldOverrides(req.providerOverrides);
+  const apiKey = resolveInworldApiKey(config.apiKey);
+  if (!apiKey) {
+    throw new Error("Inworld API key missing");
+  }
+
+  return inworldTTS({
+    text: req.text,
+    apiKey,
+    baseUrl: config.baseUrl,
+    voiceId: overrides.voiceId ?? config.voiceId,
+    modelId: overrides.modelId ?? config.modelId,
+    audioEncoding: req.audioEncoding,
+    ...(req.sampleRateHertz === undefined ? {} : { sampleRateHertz: req.sampleRateHertz }),
+    temperature: overrides.temperature ?? config.temperature,
+    timeoutMs: req.timeoutMs,
+  });
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -181,25 +200,11 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) =>
       Boolean(resolveInworldApiKey(readInworldProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
-      const config = readInworldProviderConfig(req.providerConfig);
-      const overrides = readInworldOverrides(req.providerOverrides);
-      const apiKey = resolveInworldApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Inworld API key missing");
-      }
-
       const useOpus = req.target === "voice-note";
       const audioEncoding: InworldAudioEncoding = useOpus ? "OGG_OPUS" : "MP3";
-
-      const audioBuffer = await inworldTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        modelId: overrides.modelId ?? config.modelId,
+      const audioBuffer = await synthesizeInworld({
+        ...req,
         audioEncoding,
-        temperature: overrides.temperature ?? config.temperature,
-        timeoutMs: req.timeoutMs,
       });
 
       return {
@@ -210,24 +215,11 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readInworldProviderConfig(req.providerConfig);
-      const overrides = readInworldOverrides(req.providerOverrides);
-      const apiKey = resolveInworldApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Inworld API key missing");
-      }
-
       const sampleRate = 22_050;
-      const audioBuffer = await inworldTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        modelId: overrides.modelId ?? config.modelId,
+      const audioBuffer = await synthesizeInworld({
+        ...req,
         audioEncoding: "PCM",
         sampleRateHertz: sampleRate,
-        temperature: overrides.temperature ?? config.temperature,
-        timeoutMs: req.timeoutMs,
       });
 
       return { audioBuffer, outputFormat: "pcm", sampleRate };

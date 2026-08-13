@@ -210,8 +210,8 @@ describe("listSessionsFromStore resolver cache", () => {
         return originalPrepare(sql);
       });
       try {
-        // Cross the production 500-key chunk boundary without materializing
-        // tens of thousands of rows just to prove the same batching behavior.
+        // Composite and legacy identities share the production 500-key chunks.
+        // Cross two boundaries without materializing tens of thousands of rows.
         const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
           sessionKey: `agent:default:webchat:dm:missing-${index}`,
           entry: {
@@ -223,7 +223,7 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
         expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
         expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-        expect(acpSelects).toBe(2);
+        expect(acpSelects).toBe(3);
 
         acpSelects = 0;
         const result = listSessionsFromStore({

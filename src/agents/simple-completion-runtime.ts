@@ -36,7 +36,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModelCore,
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -242,8 +242,6 @@ export async function prepareSimpleCompletionModel(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
-  /** @deprecated Model resolution is lifecycle-backed and always asynchronous. */
-  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
@@ -294,7 +292,7 @@ export async function prepareSimpleCompletionModel(params: {
     : undefined;
   try {
     auth = resolvesAuthBeforePhysicalRoute
-      ? await resolveApiKeyForProvider({
+      ? await resolveApiKeyForProviderCore({
           provider: initialModel.provider,
           cfg: params.cfg,
           agentDir: params.agentDir,
@@ -480,7 +478,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
-  /** @deprecated Model resolution is lifecycle-backed and always asynchronous. */
+  /** @deprecated no-op; kept for plugin-SDK source compatibility, remove at next SDK-breaking window. */
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
@@ -510,7 +508,6 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     ...(params.allowBundledStaticCatalogFallback !== undefined
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
-    useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
     bindAuthOwner: params.bindAuthOwner,
     modelResolver: params.modelResolver,

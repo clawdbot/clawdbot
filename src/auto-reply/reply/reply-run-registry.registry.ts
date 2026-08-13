@@ -1,10 +1,10 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   replyMessageInjectionTargetOperation,

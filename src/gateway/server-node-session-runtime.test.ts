@@ -72,6 +72,25 @@ function registerNode(
 }
 
 describe("gateway node session runtime", () => {
+  test("publishes pairing-generation transitions to lifecycle consumers", () => {
+    const onPairingGenerationChanged = vi.fn();
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      onPairingGenerationChanged,
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    });
+    registerNode(runtime, "conn-original", "generation-a", []);
+    registerNode(runtime, "conn-replacement", "generation-b", []);
+
+    expect(onPairingGenerationChanged).toHaveBeenCalledWith({
+      nodeId: "node-a",
+      previousPairingGeneration: "generation-a",
+      nextPairingGeneration: "generation-b",
+      preserveSessionState: false,
+    });
+  });
+
   test("forwards subscribed payload json without parsing it again", async () => {
     const frames: string[] = [];
     const runtime = createRuntime(async () => "generation-a");

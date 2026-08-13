@@ -187,16 +187,32 @@ export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
   });
 }
 
-export function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
-  if (!connected || event.defaultPrevented) {
+export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connected: boolean) {
+  if (event.defaultPrevented) {
     return;
   }
   const target = event.target;
-  const currentTarget = event.currentTarget;
-  if (!(target instanceof Element) || !(currentTarget instanceof HTMLElement)) {
+  if (!(target instanceof Element)) {
+    return;
+  }
+  if (event.type === "pointerdown") {
+    // Cancel only pointer focus; click and popover-owned focus still run.
+    if (
+      event.button === 0 &&
+      target.closest("summary, wa-dropdown>[slot='trigger'], .agent-chat__session-overrides-open")
+    ) {
+      event.preventDefault();
+    }
+    return;
+  }
+  if (!connected) {
     return;
   }
   if (target.closest(COMPOSER_CHROME_INTERACTIVE_SELECTOR)) {
+    return;
+  }
+  const currentTarget = event.currentTarget;
+  if (!(currentTarget instanceof HTMLElement)) {
     return;
   }
   currentTarget
