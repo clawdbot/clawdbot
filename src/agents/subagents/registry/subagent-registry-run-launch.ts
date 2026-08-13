@@ -12,6 +12,7 @@ import {
 } from "../../../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
@@ -125,7 +126,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       requesterOrigin,
       progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
-      requesterAgentId: registerParams.requesterAgentId,
+      requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
       task: registerParams.task,
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
@@ -202,7 +203,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         label: registerParams.label,
         task: registerParams.task,
         agentId: registerParams.agentId,
-        requesterAgentId: registerParams.requesterAgentId,
+        requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
       } as const;
