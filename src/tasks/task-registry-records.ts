@@ -1,6 +1,25 @@
 // Clones and normalizes task registry records at persistence boundaries.
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
+const warmProjectedTaskRecord = Symbol.for("openclaw.taskRegistry.warmProjected");
+
+type WarmProjectedTaskRecord = TaskRecord & {
+  [warmProjectedTaskRecord]?: true;
+};
+
+export function markWarmProjectedTaskRecord(record: TaskRecord): TaskRecord {
+  Object.defineProperty(record, warmProjectedTaskRecord, {
+    configurable: false,
+    enumerable: false,
+    value: true,
+  });
+  return record;
+}
+
+export function isWarmProjectedTaskRecord(record: TaskRecord): record is WarmProjectedTaskRecord {
+  return (record as WarmProjectedTaskRecord)[warmProjectedTaskRecord] === true;
+}
+
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return {
     ...record,
@@ -50,6 +69,9 @@ export function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
   }
   if (typeof endedAt === "number") {
     normalized.endedAt = endedAt;
+  }
+  if (isWarmProjectedTaskRecord(task)) {
+    markWarmProjectedTaskRecord(normalized);
   }
   return normalized;
 }

@@ -5,7 +5,11 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  isWarmProjectedTaskRecord,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
@@ -40,7 +44,30 @@ import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 export function listTaskRecordsUnsorted(): TaskRecord[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  return hydrateTaskRecords(snapshotTaskRecords(tasks));
+}
+
+function hydrateTaskRecord(task: TaskRecord): TaskRecord {
+  if (!isWarmProjectedTaskRecord(task)) {
+    return cloneTaskRecord(task);
+  }
+  const hydrated = getTaskRegistryStore().getTask?.(task.taskId);
+  return cloneTaskRecord(normalizeTaskTimestamps(hydrated ?? task));
+}
+
+function hydrateTaskRecords(records: TaskRecord[]): TaskRecord[] {
+  const projectedTaskIds = records.filter(isWarmProjectedTaskRecord).map((task) => task.taskId);
+  if (projectedTaskIds.length === 0) {
+    return records.map((task) => cloneTaskRecord(task));
+  }
+  const hydrated = getTaskRegistryStore().getTasks?.(projectedTaskIds);
+  if (!hydrated) {
+    return records.map((task) => cloneTaskRecord(task));
+  }
+  const hydratedById = new Map(
+    hydrated.map((task) => [task.taskId, normalizeTaskTimestamps(task)]),
+  );
+  return records.map((task) => cloneTaskRecord(hydratedById.get(task.taskId) ?? task));
 }
 
 function taskMatchesRelatedSession(
@@ -145,14 +172,14 @@ export function listTaskRecordPage(params: {
     });
   const selected = matching.slice(params.offset, params.offset + params.limit);
   return {
-    tasks: selected.map((task) => cloneTaskRecord(task)),
+    tasks: hydrateTaskRecords(selected),
     hasMore: params.offset + selected.length < matching.length,
   };
 }
 
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
-  return [...tasks.values()]
+  return hydrateTaskRecords([...tasks.values()])
     .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
@@ -190,13 +217,13 @@ export function hasActiveTaskForChildSessionKey(params: {
 export function getTaskById(taskId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = tasks.get(taskId.trim());
-  return task ? cloneTaskRecord(task) : undefined;
+  return task ? hydrateTaskRecord(task) : undefined;
 }
 
 export function findTaskByRunId(runId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = pickPreferredRunIdTask(getTasksByRunId(runId));
-  return task ? cloneTaskRecord(task) : undefined;
+  return task ? hydrateTaskRecord(task) : undefined;
 }
 
 function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskRecord[] {
