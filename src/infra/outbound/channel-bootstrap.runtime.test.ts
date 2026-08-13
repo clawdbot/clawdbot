@@ -27,6 +27,9 @@ const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTes
   await import("./channel-bootstrap.runtime.js");
 const { resolveChannelOutboundDirectiveOptions, resolveOutboundDurableFinalDeliverySupport } =
   await import("./deliver-channel.js");
+const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } = await import(
+  "../../cron/isolated-agent/delivery-target.runtime.js"
+);
 
 const discordConfig = {
   channels: {
@@ -147,6 +150,61 @@ describe("bootstrapOutboundChannelPlugin", () => {
       2,
       expect.objectContaining({ workspaceDir: "/tmp/openclaw-research" }),
     );
+  });
+
+  it("carries the admitted agent runtime into cron target and session resolution", async () => {
+    installDiscordSetupShell();
+    const resolveTarget = vi.fn(async () => ({
+      to: "channel:ops",
+      kind: "channel" as const,
+      source: "directory" as const,
+    }));
+    const resolveOutboundSessionRoute = vi.fn(() => ({
+      sessionKey: "agent:ops:discord:channel:ops",
+      baseSessionKey: "agent:ops:discord:channel:ops",
+      recipientSessionExact: true as const,
+      peer: { kind: "channel" as const, id: "ops" },
+      chatType: "channel" as const,
+      from: "discord:channel:ops",
+      to: "channel:ops",
+    }));
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
+      {
+        pluginId: "discord",
+        plugin: {
+          id: "discord",
+          meta: {},
+          outbound: { sendText: async () => ({ messageId: "1" }) },
+          messaging: {
+            targetResolver: { resolveTarget },
+            resolveOutboundSessionRoute,
+          },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+
+    await expect(
+      resolveChannelTargetForDelivery({
+        cfg: explicitFleetDiscordConfig,
+        channel: "discord",
+        agentId: "ops",
+        input: "ops",
+      }),
+    ).resolves.toMatchObject({ ok: true, target: { to: "channel:ops" } });
+    await expect(
+      resolveOutboundSessionRouteForDelivery({
+        cfg: explicitFleetDiscordConfig,
+        channel: "discord",
+        agentId: "ops",
+        target: "channel:ops",
+      }),
+    ).resolves.toMatchObject({ sessionKey: "agent:ops:discord:channel:ops" });
+
+    expect(resolveTarget).toHaveBeenCalledTimes(1);
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledTimes(1);
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {

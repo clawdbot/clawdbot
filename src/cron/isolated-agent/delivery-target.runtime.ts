@@ -24,7 +24,7 @@ export async function resolveChannelTargetForDelivery(params: {
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
   // Delivery may be the first channel touch after startup; allow bootstrap so
   // plugin config and account metadata are available before target resolution.
-  resolveOutboundChannelPlugin({
+  const plugin = resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -37,6 +37,7 @@ export async function resolveChannelTargetForDelivery(params: {
       input: params.input,
       accountId: params.accountId,
       unknownTargetMode: "normalized",
+      plugin,
     });
   } catch (err) {
     return {
@@ -59,13 +60,13 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
 }): Promise<OutboundSessionRoute | null> {
   // Route lookup also bootstraps the plugin so canonical thread/session mapping
   // matches the send-time channel runtime.
-  resolveOutboundChannelPlugin({
+  const plugin = resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
     allowBootstrap: true,
   });
-  return await resolveOutboundSessionRoute(params);
+  return await resolveOutboundSessionRoute({ ...params, plugin });
 }
 
 /** Returns whether a channel can canonicalize outbound cron delivery sessions. */
